@@ -32,10 +32,10 @@
 5. 令牌的**默认 DACL** 再并 ACE：workspace-write 并「工作区能力 SID **+ Everyone**」，
    read-only 并 Everyone。受限令牌只原样继承用户的默认 DACL，而它**不含任何 restricting SID**；
    被沙箱化的进程在启动期新建对象（控制台、段、事件、管道、临时文件）时，写类访问的第二遍检查
-   只能靠对象自身 DACL 里的 restricting SID。实测（`RYTEN_SANDBOX_DIAG`，工装驱动 bisect）：
-   一条都不并 → 控制台子进程以 `0xC0000142` 死在 DLL 初始化阶段；**只并随机能力 SID** 时本地能过、
-   CI（windows-latest）过不去（workspace-write 全灭、read-only 正常）——启动期那些对象还会被
-   **别的组件**（控制台宿主等）访问，随机能力 SID 只有我们自己带得动，Everyone 才是通用的那一张；
+   只能靠对象自身 DACL 里的 restricting SID。实测（一次性诊断开关逐个关掉 workspace-write 的变量
+   做 bisect）：一条都不并 → 控制台子进程以 `0xC0000142` 死在 DLL 初始化阶段；**只并随机能力 SID**
+   时本地能过、CI（windows-latest）过不去（workspace-write 全灭、read-only 正常）——启动期那些对象
+   还会被**别的组件**（控制台宿主等）访问，随机能力 SID 只有我们自己带得动，Everyone 才是通用的那一张；
 6. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
    （Node 的管道是 overlapped 的，受限子进程同步写会 `ERROR_INVALID_PARAMETER`），
    `PeekNamedPipe` + `ReadFile` 泵回 runner 的 stdout；子进程放进 kill-on-close 的
