@@ -32,7 +32,9 @@
 5. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
    （Node 的管道是 overlapped 的，受限子进程同步写会 `ERROR_INVALID_PARAMETER`），
    `PeekNamedPipe` + `ReadFile` 泵回 runner 的 stdout；子进程放进 kill-on-close 的
-   Job Object（runner 被杀 → 整棵子树被清理）；
+   Job Object（runner 被杀 → 整棵子树被清理）。子进程**共享宿主控制台**，窗口用
+   `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏——**刻意不传 `CREATE_NO_WINDOW` /
+   `CREATE_NEW_CONSOLE`**（见下一条边界）；
 6. `TMP`/`TEMP` 指向已授权的私有临时目录；退出后撤销临时 ACE、删临时目录、镜像退出码。
 
 命令：`mode=cleanup` 可撤销工作区上的常驻 ACE（工作区 ACE 默认常驻以复用：第二次起命中
@@ -81,6 +83,11 @@ workspace-write 时再 `(allow file-write* (subpath <工作区>))`；命令经
 
 - **Windows 是部分强制**：受限令牌必须保留 `Everyone`（否则早期 DLL 初始化与 CNG 会崩），
   因此 DACL 里显式授予 Everyone 写权限的对象仍可写；NTFS 硬链接可把已授权文件别名到工作区外；
+- **Windows 不做控制台隔离**：受限令牌下 `CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE` 的子进程会在
+  DLL 初始化阶段以 `STATUS_DLL_INIT_FAILED`（`0xC0000142`，stderr 全空）死亡，因此子进程与 runner
+  **共享控制台**，只用 `STARTF_USESHOWWINDOW + SW_HIDE` 把窗口藏起来；stdio 走 runner 自己建的管道，
+  不受影响（2026-09-27 GitHub Actions 实测：打包产物自检里两条「工作区内写入」都是 exit=0xC0000142，
+  而 cleanup（不起子进程）正常；参考实现 `dsh-sandbox-windows-acl` 的已知边界有同一条记录）；
 - Windows 需要 **NTFS**（exFAT / 网络盘没有 ACL）：探针会在这种工作区里失败 → 判定不可用；
 - 沙箱会给工作区目录加一条 ACE（不可见、可复用、可用 `cleanup` 撤销）；
 - macOS 的 `sandbox-exec` 被 Apple 标记为 deprecated（但仍随每个 macOS 分发）；
@@ -120,16 +127,25 @@ node native/build-sandbox.mjs --selfcheck            # 自动找 dist/*-unpacked
 node native/build-sandbox.mjs --selfcheck dist/win-unpacked
 ```
 
-它拿**打包产物里的沙箱**真机跑一遍，覆盖 8 项断言：
+它拿**打包产物里的沙箱**真机跑一遍。两条硬规则：
 
-1. 产物里确实有 `resources/sandbox/win32-sandbox-runner.cjs`；
-2. asar 里没有第二份（单份不变式）；
-3. **对照组**：工作区外的目标路径在沙箱外本来可写（否则下面的「拒绝」断言毫无判别力）；
-4. `workspace-write`：工作区内写入成功；
-5. `workspace-write`：同一工作区再次授权（幂等检查路径）可用；
-6. `workspace-write`：工作区外写入被内核拒绝且文件不存在；
-7. `read-only`：连工作区内都写不了；
-8. `cleanup`：撤销工作区 ACE 成功。
+1. **「被拒绝」必须带运行证据**：每条拒绝断言都要求子进程先打印运行探针（`echo ran-…`）或让探针脚本
+   打印 `probe:<label>:start`——只判「非零退出 + 文件不存在」会把「进程根本没起来」也算成「被拒绝」
+   （2026-09-27 就是这个假绿掩盖了 Linux 腿的真实故障）；
+2. **对照组先证明环境本身能跑**：产物外目标可写、同一条 shell 命令在沙箱外可跑、越界用的相对路径
+   在沙箱外可写——否则下面的断言只是在测「这台机器跑不了 cmd.exe」。
+
+失败诊断一律带十六进制退出码与子进程输出尾部（`exit=0xc0000142 (STATUS_DLL_INIT_FAILED…) out="…"`）。
+
+Windows 断言（12 项）：产物里有 `win32-sandbox-runner.cjs`；asar 里没有第二份；三条例行对照组；
+`workspace-write` 工作区内写入成功；同一工作区再次授权（幂等 ACE 路径）可用；工作区外写入被拒且文件
+不存在；`read-only` 连工作区内都写不了；**非控制台子进程**（打包 Electron 的 node 模式）工作区内写入
+成功、越界写入被拒（把「只有控制台子进程起不来」与「整个受限令牌都不行」分开）；`cleanup` 撤销 ACE 成功。
+
+Linux 断言（7 项）：产物里有 `win32-sandbox-runner.cjs`；asar 里没有第二份；产物里有 Linux 启动器；
+启动器自限后 `exec` 成功；`workspace-write` 工作区内写入成功、工作区外写入被拒；`read-only` 连工作区
+内都写不了。**子进程 cwd 必须是工作区**（与产品 `spawn(cwd=workspaceRoot)` 一致）：自检早期没传 cwd，
+`echo x > inside.txt` 落到了仓库根目录，被 `--ro /` 正确拒绝，于是「工作区内写入成功」一直假失败。
 
 Windows 上它用**打包出来的 Electron 二进制**（`ELECTRON_RUN_AS_NODE=1` + `RYTEN_APP_ROOT`
 指向产物里的 `app.asar`）跑 runner —— 这正是应用的调用路径，因此能抓到「只在打包后才暴露」

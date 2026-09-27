@@ -33,7 +33,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  rmSync
+  rmSync,
+  writeFileSync
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -117,6 +118,33 @@ function expect(label, condition, detail = '') {
   }
 }
 
+/**
+ * 退出码的可读形式。
+ *
+ * 为什么必须写十六进制：受限子进程「在 loader 初始化阶段就死掉」时退出码是
+ * `0xC0000142`（`STATUS_DLL_INIT_FAILED`），十进制打印出来只是一串无意义的数字
+ * （2026-09-27 CI 上就是 `exit=3221225794`，看不出任何东西）。
+ */
+function describeExit(status) {
+  if (status === null || status === undefined) return 'exit=null（进程没起来）'
+  const unsigned = status >>> 0
+  const notable = {
+    0xc0000142: 'STATUS_DLL_INIT_FAILED：进程在 DLL/控制台初始化阶段就死了',
+    0xc0000135: 'STATUS_DLL_NOT_FOUND',
+    0xc0000005: 'STATUS_ACCESS_VIOLATION',
+    125: '启动器失败签名退出码（沙箱坏了，命令没执行）',
+    127: 'runner 失败签名退出码（沙箱坏了，命令没执行）'
+  }[unsigned]
+  const code = unsigned >= 0x100 ? `0x${unsigned.toString(16)}` : String(status)
+  return `exit=${code}${notable ? ` (${notable})` : ''}`
+}
+
+/** 一次受限执行的可诊断摘要：退出码 + 子进程输出尾部（CI 日志里没有它就查不出任何东西） */
+function describeRun(result) {
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
+  return `${describeExit(result.status)}${output ? ` out=${JSON.stringify(output.slice(-300))}` : ' out=(空)'}`
+}
+
 /** 找打包产物根目录（含 resources/sandbox 的那一层），支持 --dir 产物与 macOS .app */
 function packagedRoots(explicit) {
   if (explicit) return [resolve(explicit)]
@@ -138,6 +166,24 @@ function packagedRoots(explicit) {
   return roots
 }
 
+/**
+ * 受限子进程用的探针脚本（写进工作区，由受限子进程自己执行）。
+ *
+ * 为什么要有它：`cmd.exe` 的 `>` 重定向里塞绝对路径要处理空格与引号，语法一旦被 cmd 解析坏，
+ * 「写入被拒」与「命令根本没解析对」就长得一模一样；探针把**运行**（先打印 start）与
+ * **写入结果**（wrote / denied:<code>）分成两行结构化输出，两种失败模式在日志里可区分。
+ */
+const PROBE_SOURCE = `const fs = require('node:fs')
+const [target, label] = process.argv.slice(2)
+console.log('probe:' + label + ':start')
+try {
+  fs.writeFileSync(target, 'x')
+  console.log('probe:' + label + ':wrote')
+} catch (error) {
+  console.log('probe:' + label + ':denied:' + (error.code || 'unknown'))
+}
+`
+
 /** Windows：用**打包出来的 Electron 二进制**跑 runner（生产调用路径） */
 function selfcheckWindows(root, sandboxDir) {
   const runner = join(sandboxDir, 'win32-sandbox-runner.cjs')
@@ -147,41 +193,37 @@ function selfcheckWindows(root, sandboxDir) {
     ? join(root, 'resources', 'app.asar')
     : join(root, 'resources', 'app.asar.unpacked')
   const ws = mkdtempSync(join(tmpdir(), 'ryten-selfcheck-'))
+  // 越界目标分两个：homedir 下的绝对路径（探针用）与工作区的 `..` 相对路径
+  //（cmd 的 `>` 重定向用：不含空格，不会被引号解析坏）
   const outside = join(homedir(), 'ryten-sandbox-selfcheck.txt')
-  const run = (mode, command) =>
+  const escape = join(tmpdir(), 'ryten-selfcheck-escape.txt')
+  const probeScript = join(ws, 'sandbox-probe.cjs')
+  writeFileSync(probeScript, PROBE_SOURCE)
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', RYTEN_APP_ROOT: appRoot }
+  /** 受限调用：runner 自己把子进程 cwd 设成工作区（与产品 exec.ts 的 cwd=workspaceRoot 一致） */
+  const run = (mode, argv) =>
     spawnSync(
       runtime ?? process.execPath,
-      [
-        runner,
-        '--workspace',
-        ws,
-        '--temp',
-        tmpdir(),
-        '--mode',
-        mode,
-        '--',
-        'cmd.exe',
-        '/d',
-        '/s',
-        '/c',
-        command
-      ],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', RYTEN_APP_ROOT: appRoot }
-      }
+      [runner, '--workspace', ws, '--temp', tmpdir(), '--mode', mode, '--', ...argv],
+      { encoding: 'utf8', env }
     )
+  /** 子进程是 cmd.exe —— 产品在 Windows 上就是这么包命令的（`cmd /d /s /c <命令>`） */
+  const shell = (mode, command) => run(mode, ['cmd.exe', '/d', '/s', '/c', command])
+  /** 子进程是打包后的 Electron 自己（node 模式；GUI 子系统，不需要控制台） */
+  const probe = (mode, target, label) =>
+    run(mode, [runtime ?? process.execPath, probeScript, target, label])
 
   console.log(`  运行时：${runtime ?? process.execPath}`)
-  // 对照组：先证明「产物外」这个路径本来就是可写的——否则下面的拒绝断言毫无意义
-  rmSync(outside, { force: true })
+  for (const path of [outside, escape]) rmSync(path, { force: true })
+
+  // 对照组 1：产物外的目标路径在沙箱外本来可写——否则下面的「拒绝」断言毫无判别力
   try {
     execFileSync(process.execPath, [
       '-e',
       `require('fs').writeFileSync(${JSON.stringify(outside)}, 'x')`
     ])
     expect('对照组：工作区外的目标路径在沙箱外可写（拒绝断言才有意义）', existsSync(outside))
-    rmSync(outside, { force: true })
+    rmSync(outside, { force: true }) // 后面「越界被拒」要求这个路径不存在
   } catch (error) {
     expect(
       '对照组：工作区外目标可写',
@@ -190,42 +232,101 @@ function selfcheckWindows(root, sandboxDir) {
     )
   }
 
-  const inside = run('workspace-write', 'echo inside > inside.txt')
+  // 对照组 2：同一条 cmd 命令在沙箱外能跑——否则下面的断言只是在说「这台机器跑不了 cmd.exe」
+  rmSync(join(ws, 'control.txt'), { force: true })
+  const controlShell = spawnSync(
+    'cmd.exe',
+    ['/d', '/s', '/c', 'echo ran-control& echo x > control.txt'],
+    {
+      encoding: 'utf8',
+      cwd: ws
+    }
+  )
   expect(
-    'workspace-write：工作区内写入成功',
-    inside.status === 0 && existsSync(join(ws, 'inside.txt')),
-    `exit=${inside.status} ${inside.stderr?.slice(0, 200)}`
+    '对照组：同一条 cmd 命令在沙箱外可跑并写出文件',
+    controlShell.status === 0 &&
+      (controlShell.stdout ?? '').includes('ran-control') &&
+      existsSync(join(ws, 'control.txt')),
+    describeRun(controlShell)
   )
 
-  const again = run('workspace-write', 'echo again > again.txt')
+  // 对照组 3：cmd 用来越界的 `..` 相对路径在沙箱外可写
+  const controlEscape = spawnSync(
+    'cmd.exe',
+    ['/d', '/s', '/c', 'echo ctrl> ..\\ryten-selfcheck-escape.txt'],
+    {
+      encoding: 'utf8',
+      cwd: ws
+    }
+  )
+  expect('对照组：越界相对路径（..\\）在沙箱外可写', existsSync(escape), describeRun(controlEscape))
+  rmSync(escape, { force: true })
+
+  // 工作区内写入：除文件存在外还要求子进程打印了运行探针（证明「写成功」是子进程干的）
+  const inside = shell('workspace-write', 'echo ran-inside& echo x > inside.txt')
+  expect(
+    'workspace-write：工作区内写入成功（子进程确有运行）',
+    inside.status === 0 &&
+      (inside.stdout ?? '').includes('ran-inside') &&
+      existsSync(join(ws, 'inside.txt')),
+    describeRun(inside)
+  )
+
+  const again = shell('workspace-write', 'echo ran-again& echo again > again.txt')
   expect(
     'workspace-write：同一工作区再次授权（幂等检查路径）可用',
-    again.status === 0 && existsSync(join(ws, 'again.txt')),
-    `exit=${again.status} ${again.stderr?.slice(0, 200)}`
+    again.status === 0 &&
+      (again.stdout ?? '').includes('ran-again') &&
+      existsSync(join(ws, 'again.txt')),
+    describeRun(again)
   )
 
-  const outsideRun = run('workspace-write', `echo x > "${outside}"`)
+  // 越界写入：必须看到运行探针，否则「进程根本没起来」也会被算成「被拒绝」= 假绿
+  const escapeShell = shell(
+    'workspace-write',
+    'echo ran-escape& echo x > ..\\ryten-selfcheck-escape.txt'
+  )
   expect(
     'workspace-write：工作区外写入被内核拒绝且文件不存在',
-    outsideRun.status !== 0 && !existsSync(outside),
-    `exit=${outsideRun.status} exists=${existsSync(outside)}`
+    (escapeShell.stdout ?? '').includes('ran-escape') &&
+      escapeShell.status !== 0 &&
+      !existsSync(escape),
+    describeRun(escapeShell)
   )
 
   rmSync(join(ws, 'readonly.txt'), { force: true })
-  const readOnly = run('read-only', 'echo x > readonly.txt')
+  const readOnly = shell('read-only', 'echo ran-readonly& echo x > readonly.txt')
   expect(
     'read-only：连工作区内都写不了',
-    readOnly.status !== 0 && !existsSync(join(ws, 'readonly.txt')),
-    `exit=${readOnly.status}`
+    (readOnly.stdout ?? '').includes('ran-readonly') &&
+      readOnly.status !== 0 &&
+      !existsSync(join(ws, 'readonly.txt')),
+    describeRun(readOnly)
   )
 
-  const cleanup = run('cleanup', 'echo unused')
+  // 非控制台子进程（打包后的 Electron 自己）：把「只有控制台子进程起不来」与
+  // 「整个受限令牌都不行」分开——CI（windows-latest）上这两种结论的处置完全不同
+  rmSync(join(ws, 'probe-inside.txt'), { force: true })
+  const probeInside = probe('workspace-write', 'probe-inside.txt', 'inside')
   expect(
-    'cleanup：撤销工作区 ACE 成功',
-    cleanup.status === 0,
-    `exit=${cleanup.status} ${cleanup.stderr?.slice(0, 200)}`
+    'workspace-write：非控制台子进程（打包 Electron 的 node 模式）工作区内写入成功',
+    (probeInside.stdout ?? '').includes('probe:inside:wrote') &&
+      existsSync(join(ws, 'probe-inside.txt')),
+    describeRun(probeInside)
   )
+
+  const probeEscape = probe('workspace-write', outside, 'escape')
+  expect(
+    'workspace-write：非控制台子进程越界写入被拒绝',
+    (probeEscape.stdout ?? '').includes('probe:escape:denied') && !existsSync(outside),
+    describeRun(probeEscape)
+  )
+
+  const cleanup = shell('cleanup', 'echo unused')
+  expect('cleanup：撤销工作区 ACE 成功', cleanup.status === 0, describeRun(cleanup))
+
   rmSync(ws, { recursive: true, force: true })
+  rmSync(escape, { force: true })
   rmSync(outside, { force: true })
 }
 
@@ -240,47 +341,64 @@ function selfcheckLinux(sandboxDir) {
   expect('打包产物内含 Linux 启动器', true)
   const ws = mkdtempSync(join(tmpdir(), 'ryten-selfcheck-'))
   const outside = join(homedir(), 'ryten-sandbox-selfcheck.txt')
-  const run = (args) => spawnSync(launcher, args, { encoding: 'utf8' })
-  const probe = run(['--ro', '/', '--rw', '/dev', '--', 'true'])
+  /**
+   * 与产品下发的形态一致（`profiles.ts` 的 `linuxLandlockArgs`）：`--ro /` + `--rw /dev`，
+   * workspace-write 再加 `/tmp` 与工作区。
+   *
+   * **cwd 必须是工作区**：产品就是 `spawn(cwd=workspaceRoot)` + `/bin/sh -c <命令>`，
+   * 相对路径落在哪里由它决定。2026-09-27 CI 实测的假失败根因：自检没传 cwd，
+   * `echo x > inside.txt` 写到了仓库根目录 → 被 `--ro /` **正确拒绝**，
+   * 于是「工作区内写入成功」永远是 ✗（而「越界被拒」还因为「只要非零就算拒绝」而假绿）。
+   */
+  const run = (rwPaths, command) =>
+    spawnSync(
+      launcher,
+      [
+        '--ro',
+        '/',
+        '--rw',
+        '/dev',
+        ...rwPaths.flatMap((path) => ['--rw', path]),
+        '--',
+        '/bin/sh',
+        '-c',
+        command
+      ],
+      { encoding: 'utf8', cwd: ws }
+    )
+  const workspaceWrite = ['/tmp', ws]
+
+  const probe = run([], 'true')
+  expect('启动器可用（自我限制后 exec 成功）', probe.status === 0, describeRun(probe))
+
+  rmSync(join(ws, 'inside.txt'), { force: true })
+  const inside = run(workspaceWrite, 'echo ran-inside; echo x > inside.txt')
   expect(
-    '启动器可用（自我限制后 exec 成功）',
-    probe.status === 0,
-    `exit=${probe.status} ${probe.stderr?.slice(0, 200)}`
+    'workspace-write：工作区内写入成功（子进程确有运行）',
+    inside.status === 0 &&
+      (inside.stdout ?? '').includes('ran-inside') &&
+      existsSync(join(ws, 'inside.txt')),
+    describeRun(inside)
   )
-  const inside = run([
-    '--ro',
-    '/',
-    '--rw',
-    '/dev',
-    '--rw',
-    '/tmp',
-    '--rw',
-    ws,
-    '--',
-    'sh',
-    '-c',
-    'echo x > inside.txt'
-  ])
-  expect('workspace-write：工作区内写入成功', inside.status === 0, `exit=${inside.status}`)
-  const outsideRun = run([
-    '--ro',
-    '/',
-    '--rw',
-    '/dev',
-    '--rw',
-    '/tmp',
-    '--rw',
-    ws,
-    '--',
-    'sh',
-    '-c',
-    `echo x > ${outside}`
-  ])
+
+  rmSync(outside, { force: true })
+  const escape = run(workspaceWrite, `echo ran-outside; echo x > '${outside}'`)
   expect(
-    'workspace-write：工作区外写入被拒绝',
-    outsideRun.status !== 0 && !existsSync(outside),
-    `exit=${outsideRun.status}`
+    'workspace-write：工作区外写入被拒绝且文件不存在',
+    (escape.stdout ?? '').includes('ran-outside') && escape.status !== 0 && !existsSync(outside),
+    describeRun(escape)
   )
+
+  rmSync(join(ws, 'readonly.txt'), { force: true })
+  const readOnly = run([], 'echo ran-readonly; echo x > readonly.txt')
+  expect(
+    'read-only：连工作区内都写不了',
+    (readOnly.stdout ?? '').includes('ran-readonly') &&
+      readOnly.status !== 0 &&
+      !existsSync(join(ws, 'readonly.txt')),
+    describeRun(readOnly)
+  )
+
   rmSync(ws, { recursive: true, force: true })
   rmSync(outside, { force: true })
 }
