@@ -28,6 +28,17 @@ export function markInitComplete(): void {
   tryShowMainWindow()
 }
 
+/**
+ * 初始化是否已完成。
+ *
+ * 加载窗口用它决定「还要不要露脸」：热启动时初始化可能在加载页画出来之前就结束了，
+ * 这时如果照样显示，用户看到的就是一块还没绘制的窗口闪一下（2026-09-27 用户报的
+ * 「每次启动都闪一个窗口」）。
+ */
+export function isInitComplete(): boolean {
+  return initComplete
+}
+
 /** 标记主窗口渲染就绪（ready-to-show 时调用） */
 export function markMainWindowReady(): void {
   mainWindowReady = true

@@ -75,7 +75,8 @@ function buildWindowsRunner() {
 function compile(compiler, outFile, extraFlags) {
   const args = ['-O2', '-Wall', '-Wextra', ...extraFlags, '-o', outFile, launcherSource]
   console.log(`[sandbox] ${compiler} ${args.join(' ')}`)
-  execFileSync(compiler, args, { stdio: 'inherit' })
+  // windowsHide：跨平台构建/自检时不要在用户桌面上闪出控制台窗口（对非 Windows 无副作用）
+  execFileSync(compiler, args, { stdio: 'inherit', windowsHide: true })
 }
 
 function buildLandlockLauncher() {
@@ -205,7 +206,7 @@ function selfcheckWindows(root, sandboxDir) {
     spawnSync(
       runtime ?? process.execPath,
       [runner, '--workspace', ws, '--temp', tmpdir(), '--mode', mode, '--', ...argv],
-      { encoding: 'utf8', env }
+      { encoding: 'utf8', env, windowsHide: true }
     )
   /** 子进程是 cmd.exe —— 产品在 Windows 上就是这么包命令的（`cmd /d /s /c <命令>`） */
   const shell = (mode, command) => run(mode, ['cmd.exe', '/d', '/s', '/c', command])
@@ -218,10 +219,11 @@ function selfcheckWindows(root, sandboxDir) {
 
   // 对照组 1：产物外的目标路径在沙箱外本来可写——否则下面的「拒绝」断言毫无判别力
   try {
-    execFileSync(process.execPath, [
-      '-e',
-      `require('fs').writeFileSync(${JSON.stringify(outside)}, 'x')`
-    ])
+    execFileSync(
+      process.execPath,
+      ['-e', `require('fs').writeFileSync(${JSON.stringify(outside)}, 'x')`],
+      { windowsHide: true }
+    )
     expect('对照组：工作区外的目标路径在沙箱外可写（拒绝断言才有意义）', existsSync(outside))
     rmSync(outside, { force: true }) // 后面「越界被拒」要求这个路径不存在
   } catch (error) {
@@ -239,7 +241,8 @@ function selfcheckWindows(root, sandboxDir) {
     ['/d', '/s', '/c', 'echo ran-control& echo x > control.txt'],
     {
       encoding: 'utf8',
-      cwd: ws
+      cwd: ws,
+      windowsHide: true
     }
   )
   expect(
@@ -256,7 +259,8 @@ function selfcheckWindows(root, sandboxDir) {
     ['/d', '/s', '/c', 'echo ctrl> ..\\ryten-selfcheck-escape.txt'],
     {
       encoding: 'utf8',
-      cwd: ws
+      cwd: ws,
+      windowsHide: true
     }
   )
   expect('对照组：越界相对路径（..\\）在沙箱外可写', existsSync(escape), describeRun(controlEscape))
@@ -364,7 +368,7 @@ function selfcheckLinux(sandboxDir) {
         '-c',
         command
       ],
-      { encoding: 'utf8', cwd: ws }
+      { encoding: 'utf8', cwd: ws, windowsHide: true }
     )
   const workspaceWrite = ['/tmp', ws]
 

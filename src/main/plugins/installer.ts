@@ -149,7 +149,11 @@ function ensureDevPackagesBuilt(): void {
     const result = spawnSync(process.execPath, [script, '--plugin', id, '--dev'], {
       cwd: app.getAppPath(),
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      stdio: 'ignore'
+      stdio: 'ignore',
+      // Windows：不带 windowsHide 时子进程可能带出一个控制台窗口，用户看到的就是桌面上「闪一下」
+      // （2026-09-27 用户报「每一次启动应用都会打开一个命令行窗口，影响光感」）。
+      // 这里的子进程只跑构建脚本，不需要也不该有任何窗口。
+      windowsHide: true
     })
     if (result.status !== 0) {
       logger.error(`[Plugins] dev 打包 '${id}' 失败（status=${result.status}），该插件本轮不可用`)

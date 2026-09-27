@@ -17,7 +17,12 @@ import { getIp } from '../address'
 import { startWeatherAutoRefresh } from '../weather'
 import { listContributions } from '../plugins/contributions'
 import { APP_PRELOAD, type AppHook } from '../plugins/app-hooks'
-import { getLoadingWindow, markInitComplete, setLoadingWindow } from './window-manager'
+import {
+  getLoadingWindow,
+  isInitComplete,
+  markInitComplete,
+  setLoadingWindow
+} from './window-manager'
 
 /** 加载窗口初始化进度（步骤名 + 细粒度百分比，逐步推进） */
 function sendInitProgress(
@@ -305,6 +310,15 @@ async function performInitializationTasks(): Promise<void> {
   sendInitProgress(m.splash.stepCompleted, 100, steps.length, steps.length)
 }
 
+/**
+ * 加载页「值不值得露脸」的等待窗口（毫秒）。
+ *
+ * 热启动时初始化通常几百毫秒就结束，主窗口紧接着就位——这段时间显示加载页只会得到
+ * 「一个窗口闪一下」的观感（2026-09-27 用户报「每一次启动应用都会打开一个窗口，然后快速就关闭了，
+ * 影响光感」）。等这么久还没结束才说明真的需要它（冷启动、首次建库、迁移）。
+ */
+const SPLASH_DELAY_MS = 600
+
 export async function createLoadingWindow(): Promise<void> {
   const loadingWindow = new BrowserWindow({
     width: 360,
@@ -314,6 +328,15 @@ export async function createLoadingWindow(): Promise<void> {
     resizable: false,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
+    /**
+     * 先不显示，等页面**真的能画出来**（ready-to-show）再显示。
+     *
+     * 为什么（2026-09-27 用户报「每一次启动应用都会打开一个窗口，然后快速就关闭了，影响光感」）：
+     * 这个窗口是 `transparent + frame:false`，创建即显示时屏幕上先出现的是一块**还没绘制的**
+     * 空白/黑窗口，等 HTML 画好才变成正常加载页——热启动（初始化几百毫秒就结束）时，
+     * 用户看到的就是「一块黑窗口闪一下」。默认 `show: true` 正是这个闪现的来源。
+     */
+    show: false,
     ...{ icon },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -326,6 +349,15 @@ export async function createLoadingWindow(): Promise<void> {
   setLoadingWindow(loadingWindow)
 
   loadingWindow.setMenu(null)
+
+  // 能画出来了才显示；如果这时初始化已经结束（热启动），就干脆不显示——
+  // 否则会「刚露脸就被 close 掉」，还是一次闪烁。
+  loadingWindow.once('ready-to-show', () => {
+    setTimeout(() => {
+      if (loadingWindow.isDestroyed() || isInitComplete()) return
+      loadingWindow.show()
+    }, SPLASH_DELAY_MS)
+  })
 
   // 启动页自身的静态文案在渲染侧按 ?lang= 选择，避免首帧显示错语言
   const lang = getMainLanguage()

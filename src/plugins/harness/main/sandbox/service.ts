@@ -387,7 +387,8 @@ export function ensureExecutable(path: string): void {
   if (process.platform === 'win32') return
   try {
     const mode = statSync(path).mode
-    if ((mode & 0o111) === 0) execFileSync('chmod', ['+x', path])
+    // windowsHide 对非 Windows 无副作用；带上它只是为了守住「任何子进程都不闪控制台窗口」这条规矩
+    if ((mode & 0o111) === 0) execFileSync('chmod', ['+x', path], { windowsHide: true })
   } catch (error) {
     sandboxLog.warn(`[Sandbox] 无法给 ${path} 加可执行位:`, error)
   }
