@@ -148,6 +148,11 @@ export interface WorkshopDraftSummary {
   /** 是否已装进 userData/plugins/<id> */
   installed: boolean
   enabled: boolean
+  /**
+   * 源码落盘的工作目录（用户自己指定的目录）；缺省 = 工坊默认的
+   * `<userData>/plugin-workshop/drafts/<id>/`。见 workshop/working-dir.ts。
+   */
+  workingDir?: string
   /** 最近一次验收的摘要（没有则不出现） */
   lastReport?: { at: number; ok: boolean; failed: number; total: number }
   /** 产物与应用包/已装副本是否同构（打不出来时 undefined） */

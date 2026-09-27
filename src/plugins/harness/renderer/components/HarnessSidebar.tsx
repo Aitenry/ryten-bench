@@ -17,6 +17,7 @@ import {
   RiFolderOpenLine,
   RiFoldersLine,
   RiMoreLine,
+  RiPuzzleLine,
   RiSearchLine,
   RiSettings4Line
 } from '@remixicon/react'
@@ -25,6 +26,7 @@ import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../shared/types'
+import type { WorkshopDraftSummary } from '../../shared/workshop'
 import { harnessApi } from '../api'
 
 interface HarnessSidebarProps {
@@ -71,6 +73,23 @@ interface MnemonSidebarSnapshot {
 
 /** 会话分页大小（与 useHarnessHandlers 的 TOPICS_PAGE_SIZE 保持一致） */
 const TOPICS_PAGE_SIZE = 20
+
+/**
+ * 侧栏模式：`chat`（工作区 → 会话）/ `plugin`（插件草稿）。
+ *
+ * 持久化在 localStorage（与宿主 `ctx.use('storage')` 的插件前缀同一套约定：
+ * `rb.plugin.<id>.<key>`），重开应用还停在用户上次选的模式。
+ */
+type SidebarMode = 'chat' | 'plugin'
+const MODE_STORAGE_KEY = 'rb.plugin.harness.sidebarMode'
+
+function readSidebarMode(): SidebarMode {
+  try {
+    return window.localStorage.getItem(MODE_STORAGE_KEY) === 'plugin' ? 'plugin' : 'chat'
+  } catch {
+    return 'chat'
+  }
+}
 
 /** 会话相对时间：刚刚 / 12分钟 / 3小时 / 1天 / 09月10日（值为 null 时不着色显示）
  *  非组件函数：译文由调用方传入 t */
@@ -123,6 +142,52 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const { t } = useTranslation()
 
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  /* ── 模式（会话 / 插件）与插件草稿 ── */
+  const [mode, setMode] = useState<SidebarMode>(readSidebarMode)
+  const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
+  const [draftsLoading, setDraftsLoading] = useState(false)
+
+  const switchMode = useCallback((next: SidebarMode): void => {
+    setMode(next)
+    try {
+      window.localStorage.setItem(MODE_STORAGE_KEY, next)
+    } catch {
+      // 私隐模式/存储写满：模式只在本次会话生效，不影响功能
+    }
+  }, [])
+
+  /** 拉插件草稿清单（插件模式下打开面板、以及主进程广播变化时各拉一次） */
+  const loadDrafts = useCallback(async (): Promise<void> => {
+    setDraftsLoading(true)
+    try {
+      setDrafts(await harnessApi.workshop.list())
+    } catch {
+      // 工坊没接线（AI 助手刚停用/重载）时保持空列表：面板本来就只在插件模式用
+      setDrafts([])
+    } finally {
+      setDraftsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (mode !== 'plugin') return
+    void loadDrafts()
+    return harnessApi.workshop.onChanged(() => void loadDrafts())
+  }, [mode, loadDrafts])
+
+  /** 打开工坊里某份草稿的详情（设置弹窗 → 插件工坊 → 该草稿抽屉） */
+  const openDraft = useCallback((id: string): void => {
+    window.dispatchEvent(
+      new CustomEvent('open-system-settings', {
+        detail: { tab: 'workshop', scope: 'assistant' }
+      })
+    )
+    // 抽屉要等设置弹窗与工坊页挂载后再展开，因此下一个宏任务里再派发
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('workshop-open-draft', { detail: { id } }))
+    }, 0)
+  }, [])
 
   /* ── 工作区状态 ── */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
@@ -480,6 +545,122 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     const list = topicsOf(workspaceId)
     return query ? list.filter((t) => t.title.toLowerCase().includes(query)) : list
   }
+  /** 插件模式下的草稿清单（搜索框在两种模式里共用：这里按名字/id 过滤） */
+  const visibleDrafts = query
+    ? drafts.filter(
+        (draft) =>
+          draft.title.toLowerCase().includes(query) || draft.id.toLowerCase().includes(query)
+      )
+    : drafts
+
+  /** 草稿状态行：构建 / 验收 / 安装三件事各自的最新结果 */
+  const draftStateOf = (draft: WorkshopDraftSummary): { text: string; color: string } => {
+    if (draft.installed) {
+      return {
+        text: draft.enabled
+          ? t('harness.sidebar.pluginState.enabled')
+          : t('harness.sidebar.pluginState.disabled'),
+        color: draft.enabled ? token.colorSuccess : colorTextTertiary
+      }
+    }
+    if (draft.lastReport) {
+      return draft.lastReport.ok
+        ? { text: t('harness.sidebar.pluginState.verified'), color: token.colorSuccess }
+        : {
+            text: t('harness.sidebar.pluginState.verifyFailed', {
+              failed: draft.lastReport.failed
+            }),
+            color: token.colorError
+          }
+    }
+    if (draft.built)
+      return { text: t('harness.sidebar.pluginState.built'), color: colorTextTertiary }
+    return { text: t('harness.sidebar.pluginState.draft'), color: colorTextTertiary }
+  }
+
+  /** 草稿行：点一行 = 打开它的工坊详情（构建/验收/安装都在那里） */
+  const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
+    const state = draftStateOf(draft)
+    return (
+      <div
+        key={draft.id}
+        className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
+        style={{ paddingLeft: 6, paddingRight: 8, height: 32, color: colorText }}
+        onClick={() => openDraft(draft.id)}
+        onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+      >
+        <span
+          className="flex items-center justify-center shrink-0"
+          style={{ width: 16, color: colorTextSecondary }}
+        >
+          <RiPuzzleLine size={15} />
+        </span>
+        <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
+          {draft.title}
+        </span>
+        <span className="shrink-0 group-hover:hidden" style={{ fontSize: 11, color: state.color }}>
+          {state.text}
+        </span>
+        {/* 行内只留「工作目录」这一个动作：源码放哪儿是这一层的语义（构建/验收/安装在详情里） */}
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: [
+              {
+                key: 'pick',
+                icon: <RiFolderOpenLine size={14} />,
+                label: draft.workingDir
+                  ? t('workshopSettings.action.changeWorkdir')
+                  : t('workshopSettings.action.pickWorkdir')
+              },
+              ...(draft.workingDir
+                ? [{ key: 'reset', label: t('workshopSettings.action.resetWorkdir') }]
+                : [])
+            ],
+            onClick: ({ key, domEvent }) => {
+              domEvent.stopPropagation()
+              void (async () => {
+                const result =
+                  key === 'reset'
+                    ? await harnessApi.workshop.setWorkingDir(draft.id)
+                    : await harnessApi.workshop.pickWorkingDir(draft.id)
+                if (!result.ok) {
+                  viewMessage('workshop-workdir', 'error', result.error ?? '')
+                  return
+                }
+                const data = result.data as { canceled?: boolean; dir?: string } | undefined
+                if (data?.canceled) return
+                viewMessage(
+                  'workshop-workdir',
+                  'success',
+                  t('workshopSettings.workdir.done', { path: data?.dir ?? '' }),
+                  4
+                )
+                await loadDrafts()
+              })()
+            }
+          }}
+        >
+          <button
+            title={t('harness.sidebar.draftActions')}
+            className="ant-dropdown-trigger hidden group-hover:flex items-center justify-center shrink-0 rounded"
+            style={{
+              width: 20,
+              height: 20,
+              color: colorTextTertiary,
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RiMoreLine size={15} />
+          </button>
+        </Dropdown>
+      </div>
+    )
+  }
 
   /* 按目标分组的热记忆数量 */
   const userEntries = memorySnap?.runtime?.entries.filter((e) => e.target === 'user') ?? []
@@ -755,13 +936,16 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   return (
     <div
+      /* 稳定钩子：这块面板没有 class 名（宽度是内联样式、用户可以拖），
+         工装（test/probe-plugin-workshop-live.mjs）靠它定位侧栏 */
+      data-harness-sidebar="1"
       className="flex flex-col overflow-hidden h-full"
       style={{
         background: colorBgContainer,
         borderRadius: borderRadiusLG
       }}
     >
-      {/* 头部：工作区标题 + 搜索 / 设置 / 新建工作区 */}
+      {/* 头部：模式开关（普通 / 插件）+ 搜索 / 设置 / 新建 */}
       <div className="flex items-center px-2" style={{ minHeight: 38 }}>
         {searchMode ? (
           <div className="flex items-center gap-1 flex-1">
@@ -770,7 +954,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               size="small"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('harness.sidebar.searchPlaceholder')}
+              placeholder={
+                mode === 'plugin'
+                  ? t('harness.sidebar.searchDraftPlaceholder')
+                  : t('harness.sidebar.searchPlaceholder')
+              }
               allowClear
               variant="borderless"
               prefix={<RiSearchLine size={14} style={{ color: colorTextTertiary }} />}
@@ -787,45 +975,96 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           </div>
         ) : (
           <>
-            <span
-              className="select-none"
-              style={{ fontSize: 13, fontWeight: 500, color: colorTextSecondary }}
+            {/*
+              模式切换：这块面板装两套内容——「普通」是工作区 → 会话，「插件」是插件草稿。
+              放原来标题的位置（标题本身没有信息量，开关有）。
+            */}
+            <div
+              className="flex items-center select-none"
+              style={{ gap: 2, padding: 2, borderRadius: 6, background: colorFillAlter }}
             >
-              {t('harness.sidebar.title')}
-            </span>
+              {(['chat', 'plugin'] as const).map((item) => (
+                <button
+                  key={item}
+                  onClick={() => switchMode(item)}
+                  title={t(`harness.sidebar.mode.${item}Hint` as never)}
+                  className="rounded transition-colors"
+                  style={{
+                    fontSize: 12,
+                    height: 22,
+                    padding: '0 8px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: mode === item ? colorBgContainer : 'transparent',
+                    color: mode === item ? colorText : colorTextTertiary,
+                    fontWeight: mode === item ? 500 : 400
+                  }}
+                >
+                  {t(`harness.sidebar.mode.${item}` as never)}
+                </button>
+              ))}
+            </div>
             <span className="flex-1" />
             {iconBtn(
               t('harness.sidebar.searchTooltip'),
               () => setSearchMode(true),
               <RiSearchLine size={16} />
             )}
-            {iconBtn(
-              t('harness.sidebar.assistantSettings'),
-              // 聚焦模式：设置弹窗只显示助手相关页签（智能体 / 模型 / 技能 / 记忆）
-              () =>
-                window.dispatchEvent(
-                  new CustomEvent('open-system-settings', {
-                    detail: { tab: 'agents', scope: 'assistant' }
-                  })
-                ),
-              <RiEqualizerLine size={16} />
-            )}
-            {iconBtn(
-              t('harness.sidebar.newWorkspace'),
-              handleBrowseFolder,
-              <RiFoldersLine size={16} />
-            )}
+            {mode === 'plugin'
+              ? /* 新建草稿：走工坊页的创建表单（id 要用户起，不在侧栏硬凑） */
+                iconBtn(
+                  t('harness.sidebar.newDraft'),
+                  () => {
+                    window.dispatchEvent(
+                      new CustomEvent('open-system-settings', {
+                        detail: { tab: 'workshop', scope: 'assistant' }
+                      })
+                    )
+                    window.setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('workshop-new-draft'))
+                    }, 0)
+                  },
+                  <RiAddLine size={16} />
+                )
+              : [
+                  iconBtn(
+                    t('harness.sidebar.assistantSettings'),
+                    // 聚焦模式：设置弹窗只显示助手相关页签（智能体 / 模型 / 技能 / 记忆）
+                    () =>
+                      window.dispatchEvent(
+                        new CustomEvent('open-system-settings', {
+                          detail: { tab: 'agents', scope: 'assistant' }
+                        })
+                      ),
+                    <RiEqualizerLine size={16} />
+                  ),
+                  iconBtn(
+                    t('harness.sidebar.newWorkspace'),
+                    handleBrowseFolder,
+                    <RiFoldersLine size={16} />
+                  )
+                ]}
           </>
         )}
       </div>
 
-      {/* 工作区 → 会话树 */}
+      {/* 工作区 → 会话树 ／ 插件草稿清单 */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto py-1 history-scrollbar"
         onScroll={handleScroll}
       >
-        {visibleWorkspaces.length === 0 ? (
+        {mode === 'plugin' ? (
+          draftsLoading && drafts.length === 0 ? (
+            <SkeletonListRows rows={3} />
+          ) : visibleDrafts.length === 0 ? (
+            <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
+              {query ? t('harness.sidebar.noMatchResult') : t('harness.sidebar.noDraft')}
+            </p>
+          ) : (
+            visibleDrafts.map((draft) => renderDraft(draft))
+          )
+        ) : visibleWorkspaces.length === 0 ? (
           <p className="text-xs text-center py-8" style={{ color: colorTextTertiary }}>
             {query ? t('harness.sidebar.noMatchResult') : t('harness.sidebar.noWorkspace')}
           </p>
@@ -834,140 +1073,142 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )}
       </div>
 
-      {/* Mnemon 记忆概览 */}
-      <div className="border-t flex-shrink-0" style={{ borderColor: colorFillAlter }}>
-        <button
-          onClick={handleToggleMemory}
-          className="flex items-center justify-between w-full px-4 py-2 text-left transition-colors"
-          style={{ color: colorTextSecondary }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <RiBrain4Line size={16} />
-            {t('harness.sidebar.memory')}
-          </span>
-          <span className="flex items-center gap-2">
-            {memoryExpanded ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
-          </span>
-        </button>
+      {/* Mnemon 记忆概览（记忆属于会话侧：插件模式下整块不渲染，而不是拿 CSS 藏起来） */}
+      {mode === 'chat' && (
+        <div className="border-t flex-shrink-0" style={{ borderColor: colorFillAlter }}>
+          <button
+            onClick={handleToggleMemory}
+            className="flex items-center justify-between w-full px-4 py-2 text-left transition-colors"
+            style={{ color: colorTextSecondary }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <RiBrain4Line size={16} />
+              {t('harness.sidebar.memory')}
+            </span>
+            <span className="flex items-center gap-2">
+              {memoryExpanded ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
+            </span>
+          </button>
 
-        {memoryExpanded && (
-          <div className="overflow-y-auto history-scrollbar px-3 pb-3" style={{ maxHeight: 300 }}>
-            {memoryLoading ? (
-              <div className="px-1 py-2">
-                <SkeletonTextLines lines={5} />
-              </div>
-            ) : !memorySnap?.configured ? (
-              <div className="pt-2">
-                <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
-                  {t('harness.sidebar.memoryNotConfigured')}
-                </p>
-                <button
-                  onClick={handleOpenMemorySettings}
-                  className="flex items-center justify-center gap-1 w-full py-2 rounded text-xs transition-colors"
-                  style={{ color: '#1677ff', background: colorFillAlter }}
-                >
-                  <RiSettings4Line size={13} />
-                  {t('harness.sidebar.memoryGoSettings')}
-                </button>
-              </div>
-            ) : (
-              <div className="pt-1">
-                {/* 用户画像（USER）——仅显示数量，不展示内容 */}
-                {memorySnap.runtime && userEntries.length > 0 && (
-                  <div className="mb-2">
-                    <div
-                      className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
-                      style={{ color: colorTextSecondary }}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          className="rounded-sm"
-                          style={{ width: 3, height: 12, background: '#1677ff' }}
-                        />
-                        {t('harness.sidebar.memoryUserProfile')}
-                      </span>
-                      <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
-                        {t('harness.sidebar.memoryCount', { count: userEntries.length })}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* 项目记忆（MEMORY）——仅显示数量，不展示内容 */}
-                {memorySnap.runtime && memoryEntries.length > 0 && (
-                  <div className="mb-2">
-                    <div
-                      className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
-                      style={{ color: colorTextSecondary }}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          className="rounded-sm"
-                          style={{ width: 3, height: 12, background: '#52c41a' }}
-                        />
-                        {t('harness.sidebar.memoryProject')}
-                      </span>
-                      <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
-                        {t('harness.sidebar.memoryCount', { count: memoryEntries.length })}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {!memorySnap.runtime ||
-                  (memorySnap.runtime.entries.length === 0 && (
-                    <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
-                      {t('harness.sidebar.memoryEmpty')}
-                    </p>
-                  ))}
-
-                {/* 统计行（换行排列，不挤压） */}
-                <div
-                  className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-2 text-xs"
-                  style={{
-                    color: colorTextTertiary,
-                    borderTop: `1px solid ${colorFillAlter}`
-                  }}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <RiBrain4Line size={13} />
-                    {memorySnap.runtime
-                      ? t('harness.sidebar.memoryHotCount', {
-                          count: memorySnap.runtime.entries.length
-                        })
-                      : t('harness.sidebar.memoryHotEmpty')}
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <RiDatabase2Line size={13} />
-                    {t('harness.sidebar.memorySpaces', {
-                      active: memorySnap.bodies?.activeCount ?? 0,
-                      total: memorySnap.bodies?.total ?? 0
-                    })}
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <RiFileTextLine size={13} />
-                    {t('harness.sidebar.memoryDocuments', {
-                      count: memorySnap.documents?.total ?? 0
-                    })}
-                  </span>
+          {memoryExpanded && (
+            <div className="overflow-y-auto history-scrollbar px-3 pb-3" style={{ maxHeight: 300 }}>
+              {memoryLoading ? (
+                <div className="px-1 py-2">
+                  <SkeletonTextLines lines={5} />
                 </div>
+              ) : !memorySnap?.configured ? (
+                <div className="pt-2">
+                  <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
+                    {t('harness.sidebar.memoryNotConfigured')}
+                  </p>
+                  <button
+                    onClick={handleOpenMemorySettings}
+                    className="flex items-center justify-center gap-1 w-full py-2 rounded text-xs transition-colors"
+                    style={{ color: '#1677ff', background: colorFillAlter }}
+                  >
+                    <RiSettings4Line size={13} />
+                    {t('harness.sidebar.memoryGoSettings')}
+                  </button>
+                </div>
+              ) : (
+                <div className="pt-1">
+                  {/* 用户画像（USER）——仅显示数量，不展示内容 */}
+                  {memorySnap.runtime && userEntries.length > 0 && (
+                    <div className="mb-2">
+                      <div
+                        className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
+                        style={{ color: colorTextSecondary }}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className="rounded-sm"
+                            style={{ width: 3, height: 12, background: '#1677ff' }}
+                          />
+                          {t('harness.sidebar.memoryUserProfile')}
+                        </span>
+                        <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
+                          {t('harness.sidebar.memoryCount', { count: userEntries.length })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
-                {/* 管理入口 */}
-                <button
-                  onClick={handleOpenMemorySettings}
-                  className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
-                  style={{ color: '#1677ff', background: colorFillAlter }}
-                >
-                  <RiSettings4Line size={13} />
-                  {t('harness.sidebar.memoryManage')}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+                  {/* 项目记忆（MEMORY）——仅显示数量，不展示内容 */}
+                  {memorySnap.runtime && memoryEntries.length > 0 && (
+                    <div className="mb-2">
+                      <div
+                        className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
+                        style={{ color: colorTextSecondary }}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className="rounded-sm"
+                            style={{ width: 3, height: 12, background: '#52c41a' }}
+                          />
+                          {t('harness.sidebar.memoryProject')}
+                        </span>
+                        <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
+                          {t('harness.sidebar.memoryCount', { count: memoryEntries.length })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {!memorySnap.runtime ||
+                    (memorySnap.runtime.entries.length === 0 && (
+                      <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
+                        {t('harness.sidebar.memoryEmpty')}
+                      </p>
+                    ))}
+
+                  {/* 统计行（换行排列，不挤压） */}
+                  <div
+                    className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-2 text-xs"
+                    style={{
+                      color: colorTextTertiary,
+                      borderTop: `1px solid ${colorFillAlter}`
+                    }}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <RiBrain4Line size={13} />
+                      {memorySnap.runtime
+                        ? t('harness.sidebar.memoryHotCount', {
+                            count: memorySnap.runtime.entries.length
+                          })
+                        : t('harness.sidebar.memoryHotEmpty')}
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <RiDatabase2Line size={13} />
+                      {t('harness.sidebar.memorySpaces', {
+                        active: memorySnap.bodies?.activeCount ?? 0,
+                        total: memorySnap.bodies?.total ?? 0
+                      })}
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <RiFileTextLine size={13} />
+                      {t('harness.sidebar.memoryDocuments', {
+                        count: memorySnap.documents?.total ?? 0
+                      })}
+                    </span>
+                  </div>
+
+                  {/* 管理入口 */}
+                  <button
+                    onClick={handleOpenMemorySettings}
+                    className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
+                    style={{ color: '#1677ff', background: colorFillAlter }}
+                  >
+                    <RiSettings4Line size={13} />
+                    {t('harness.sidebar.memoryManage')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 重命名工作区弹窗 */}
       <Modal

@@ -11,7 +11,8 @@ import type {
 } from '../../shared/workshop'
 import { buildDraft, type BuildDraftOptions } from './build'
 import { createDraft, type CreateDraftOptions } from './scaffold'
-import { distDir, draftDir, isWorkshopReady, reportPath } from './paths'
+import { distDir, draftDir, draftRootOf, isWorkshopReady, reportPath, setDraftRoot } from './paths'
+import { attachWorkingDir, detachWorkingDir, type WorkingDirResult } from './working-dir'
 import {
   deleteDraft as removeDraftDir,
   deleteDraftFile,
@@ -94,6 +95,7 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
     builtAt: meta?.builtAt,
     installed: host ? host.isInstalled(id) : false,
     enabled: host ? host.isEnabled(id) : false,
+    workingDir: draftRootOf(id) ?? undefined,
     lastReport: report
       ? {
           at: report.at,
@@ -151,9 +153,15 @@ export function removeFile(id: string, rel: string): void {
   deleteDraftFile(id, rel)
 }
 
-/** 删整份草稿（含产物与报告） */
-export function removeDraft(id: string): void {
-  removeDraftDir(id)
+/**
+ * 删整份草稿（含产物与报告）。
+ *
+ * 草稿被指到用户自己的工作目录时**只解除登记**，不动那个目录里的任何文件
+ * （可能有 .git / README / 用户自己的改动）——返回值里如实报出没动过的目录。
+ */
+export function removeDraft(id: string): { removedDir: boolean; externalDir?: string } {
+  const result = removeDraftDir(id)
+  setDraftRoot(id, null)
   for (const target of [distDir(id), reportPath(id)]) {
     try {
       fs.rmSync(target, { recursive: true, force: true })
@@ -161,6 +169,19 @@ export function removeDraft(id: string): void {
       // 不存在就算了
     }
   }
+  return result
+}
+
+/** 给草稿指定工作目录（源码落到用户自己的目录里；空目录会被搬过去） */
+export function setWorkingDir(id: string, dir: string): WorkingDirResult {
+  if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在（先 plugin_draft create）`)
+  return attachWorkingDir(id, dir)
+}
+
+/** 把源码搬回工坊的默认目录（不想再用自定义目录时） */
+export function resetWorkingDir(id: string): WorkingDirResult {
+  if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在`)
+  return detachWorkingDir(id)
 }
 
 /** 构建（不抛错：诊断在返回值里） */

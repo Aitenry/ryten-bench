@@ -60,6 +60,19 @@ export interface SandboxStatusView {
   landlockLauncherPath?: string
 }
 
+/** 换/回退草稿工作目录的结果（与主进程 working-dir.ts 的返回同形） */
+export interface WorkingDirResult {
+  id: string
+  /** 生效后的源码目录 */
+  dir: string
+  /** 是否搬了文件（接管空目录时会搬） */
+  moved: boolean
+  /** true = 目标目录里已有一份同 id 的草稿，直接接管 */
+  adopted: boolean
+  /** 搬走之后留在原处的东西（可自行删除） */
+  previousDir?: string
+}
+
 /**
  * harness 插件主进程通道的薄封装。
  *
@@ -558,7 +571,14 @@ export const harnessApi = {
       invoke('plugin:harness:workshop-read-file', id, relPath) as Promise<string>,
     report: (id: string) =>
       invoke('plugin:harness:workshop-report', id) as Promise<WorkshopReport | null>,
-    create: (input: { id: string; title?: string; template?: string; description?: string }) =>
+    create: (input: {
+      id: string
+      title?: string
+      template?: string
+      description?: string
+      /** 直接建在指定工作目录里（源码落盘位置） */
+      workingDir?: string
+    }) =>
       invoke('plugin:harness:workshop-create', input) as Promise<
         WorkshopActionResult<{ id: string; files: string[]; dir: string }>
       >,
@@ -586,9 +606,16 @@ export const harnessApi = {
       >,
     openDir: (id: string) =>
       invoke('plugin:harness:workshop-open-dir', id) as Promise<WorkshopActionResult<string>>,
-    /** 一键把 4 个工坊工具加进「主智能体 → 工具」（否则助手不会用它们） */
-    enableTools: () =>
-      invoke('plugin:harness:workshop-enable-tools') as Promise<WorkshopActionResult<string[]>>,
+    /** 弹系统选择框挑一个工作目录（源码落盘位置；选中的空目录会把草稿搬过去） */
+    pickWorkingDir: (id: string) =>
+      invoke('plugin:harness:workshop-pick-working-dir', id) as Promise<
+        WorkshopActionResult<WorkingDirResult & { canceled: boolean }>
+      >,
+    /** 按显式路径设置工作目录（`dir` 为空 = 搬回工坊默认目录） */
+    setWorkingDir: (id: string, dir?: string) =>
+      invoke('plugin:harness:workshop-set-working-dir', id, dir) as Promise<
+        WorkshopActionResult<WorkingDirResult>
+      >,
     /** 草稿/产物/安装态变化（助手在对话里改了草稿时，开着的面板要跟着变） */
     onChanged: (callback: () => void): (() => void) =>
       on('plugin:harness:workshop-changed', () => callback()),

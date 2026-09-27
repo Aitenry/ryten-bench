@@ -1,12 +1,9 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, dialog, shell } from 'electron'
 import logger from 'electron-log'
-import { settingsStore } from '../../../../main/context'
 import { safeSend } from '../../../../main/safe-send'
 import type { MainIpcHandlers } from '../../../../main/plugins/context'
-import type { MainAgentConfig } from '../../shared/mcp'
 import type { WorkshopRendererProbe } from '../../shared/workshop'
 import { resolveProbeResult } from '../workshop/probe'
-import { workshopToolInfos } from '../tools/workshop'
 import {
   build,
   createDraftFromTemplate,
@@ -20,6 +17,8 @@ import {
   readFile,
   removeDraft,
   removeFile,
+  resetWorkingDir,
+  setWorkingDir,
   unpublish,
   verify,
   workshopState,
@@ -37,6 +36,9 @@ import {
  *   因此统一返回 `{ ok, error?, data? }`（`workshop-probe-result` 例外：它是渲染层回话，返回 boolean）；
  * - **任何变更后广播 `workshop-changed`**：AI 在对话里改草稿/构建/发布时，正开着设置页的
  *   用户要能立刻看到状态变化，而不是手动刷新。
+ *
+ * 工坊的 4 个 AI 工具**不在这里**挂载：它们随工具注册表走，用户在
+ * 「设置 → 智能体 → 工具」里勾选（应用里所有工具都是这一条路径，工坊不搞特殊入口）。
  */
 
 /** 主进程 → 渲染层的事件通道（必须逐个 `ctx.registerEvent` 声明才进 preload 白名单） */
@@ -141,16 +143,57 @@ export function workshopIpcHandlers(): MainIpcHandlers {
 
   handle(
     'workshop-create',
-    async (input: { id: string; title?: string; template?: string; description?: string }) =>
+    async (input: {
+      id: string
+      title?: string
+      template?: string
+      description?: string
+      workingDir?: string
+    }) =>
       await act(async () => {
         const result = createDraftFromTemplate({
           id: input?.id,
           title: input?.title,
           template: (input?.template as never) ?? 'page',
-          description: input?.description
+          description: input?.description,
+          workingDir: input?.workingDir
         })
         broadcastWorkshopChanged()
         return { id: result.meta.id, files: result.files, dir: result.dir }
+      })
+  )
+
+  /**
+   * 弹系统选择框挑一个**工作目录**（源码落盘位置）。
+   *
+   * 两条入口共用同一套接管规则（working-dir.ts）：这个原生框没法被自动化点击，
+   * 工装因此走 `workshop-set-working-dir`（显式路径）。
+   */
+  handle(
+    'workshop-pick-working-dir',
+    async (id: string) =>
+      await act(async () => {
+        const picked = await dialog.showOpenDialog({
+          title: '选择插件源码的工作目录（空文件夹，或已放着同一个插件草稿）',
+          properties: ['openDirectory', 'createDirectory']
+        })
+        if (picked.canceled || picked.filePaths.length === 0) {
+          return { canceled: true as const, id, dir: '', moved: false, adopted: false }
+        }
+        const result = setWorkingDir(id, picked.filePaths[0])
+        broadcastWorkshopChanged()
+        return { canceled: false as const, ...result }
+      })
+  )
+
+  /** 按显式路径设置（`dir` 为空 = 搬回工坊默认目录） */
+  handle(
+    'workshop-set-working-dir',
+    async (id: string, dir?: string) =>
+      await act(async () => {
+        const result = dir ? setWorkingDir(id, dir) : resetWorkingDir(id)
+        broadcastWorkshopChanged()
+        return result
       })
   )
 
@@ -195,25 +238,6 @@ export function workshopIpcHandlers(): MainIpcHandlers {
         const error = await shell.openPath(dir)
         if (error) throw new Error(error)
         return dir
-      })
-  )
-
-  /**
-   * 一键把工坊的 4 个工具放进「主智能体 → 工具」。
-   *
-   * 为什么要它：工具集是按用户在智能体页勾选的清单组装的（`effectiveMainAgentTools`），
-   * 新工具不会自己出现——不点这一下，用户会发现「助手根本不会用插件工坊」。
-   */
-  handle(
-    'workshop-enable-tools',
-    async () =>
-      await act(async () => {
-        const current = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {}
-        const names = workshopToolInfos.map((tool) => tool.name)
-        const tools = [...new Set([...(current.tools ?? []), ...names])]
-        settingsStore.set('mainAgent', { ...current, tools })
-        broadcastWorkshopChanged()
-        return tools
       })
   )
 

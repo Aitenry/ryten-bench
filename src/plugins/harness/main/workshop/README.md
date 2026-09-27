@@ -1,7 +1,7 @@
 # 插件工坊（Plugin Workshop）
 
 > 「和助手对话，把插件做出来」——助手写代码，工坊负责**构建 → 自动验收 → 装进应用**，
-> 用户只在设置页看结果。功能入口：**设置 → 助手 → 插件工坊**（`src/plugins/harness`）。
+> 用户只在设置页看结果。功能入口：**侧栏「插件」模式** 与 **设置 → 助手 → 插件工坊**。
 
 ## 它解决什么
 
@@ -17,27 +17,52 @@
 这些错误靠「看一眼代码」很难发现，靠「装上去试试」又要用户自己承担。工坊把这条链路自动化：
 **构建期能查出来的在构建期查，查不出来的用真实装载冒烟查，仍然查不出来的让真界面跑一遍。**
 
+## 两个入口
+
+| 入口 | 面向 | 做什么 |
+|------|------|--------|
+| **侧栏模式开关（普通 / 插件）** | 日常使用 | 普通 = 工作区 → 会话；插件 = 工坊草稿清单（名称 + 状态），点一行打开它的工坊详情；行尾「⋯」只放两个跟**源码位置**有关的动作（选择工作目录 / 改回工坊目录） |
+| **设置 → 助手 → 插件工坊** | 管理与排查 | 草稿列表 + 构建/验收/安装/停用/卸载/导出/删除草稿 + 逐项验收报告 + 文件树只读预览 |
+
+模式选择存在 `localStorage`（`rb.plugin.harness.sidebarMode`，与宿主 `ctx.use('storage')` 的前缀约定一致），
+重开应用还停在上次选的模式；插件模式下不渲染「记忆」区块（那是会话侧的东西）。
+
 ## 目录约定
 
 ```
 <userData>/plugin-workshop/
-  drafts/<id>/            草稿源码（助手唯一的编辑面；id = 插件 id = 目录名）
-    plugin.json           清单（entry 由构建写入，助手不手写）
-    WORKSHOP.md           契约单（生成时注入**运行期**的宿主模块白名单）
-    main/index.ts         主进程入口（可缺省，产物仍会有一个空 main.cjs）
-    renderer/plugin.tsx   渲染层入口（必需）
-    renderer/*.tsx        页面/组件（被 load() 引用的会拆成懒加载 chunk）
-    plugin.css            可选：手写样式（workshop.json 的 css='file' 时原样进包）
-    workshop.smoke.mjs    可选：通道级冒烟用例
+  registry.json           工作目录注册表（哪份草稿的源码落在用户自己的目录里）
+  drafts/<id>/            默认源码位置（没指定工作目录时）
   dist/<id>/              构建产物（= 可安装插件包，与插件仓库 dist/<id> 同构）
   reports/<id>.json       最近一次验收报告
   exports/<id>-<v>.zip    导出的可分发压缩包
 ```
 
+草稿源码也可以放在**用户自己的工作目录**里（`working-dir.ts`，能进 git、能用编辑器打开）：
+
+- `plugin_draft create` 带 `workingDir`、`plugin_draft set-working-dir`，或面板上的「选择工作目录」；
+- 目标目录必须是**空目录**（会把草稿搬过去）或**已放着一份同 id 的草稿**（直接接管为源码真源）；
+  非空且不是同一份草稿 → 拒绝并说明原因；
+- **绝不删用户目录**：换目录只搬工坊自己写进去的文件（旧的用户目录留着并在结果里报告），
+  删除草稿时也**只解除登记**，不动那个目录里的任何东西。
+
+草稿里的文件：
+
+| 文件 | 作用 |
+|------|------|
+| `plugin.json` | 清单（entry 由构建写入，助手不手写） |
+| `WORKSHOP.md` | 契约单（生成时注入**运行期**的宿主模块白名单） |
+| `main/index.ts` | 主进程入口（可缺省，产物仍会有一个空 main.cjs） |
+| `renderer/plugin.tsx` | 渲染层入口（必需） |
+| `renderer/*.tsx` | 页面/组件（被 `load()` 引用的会拆成懒加载 chunk） |
+| `plugin.css` | 可选：手写样式（`workshop.json` 的 `css='file'` 时原样进包） |
+| `workshop.smoke.mjs` | 可选：通道级冒烟用例 |
+| `plugin.json` / `workshop.json` | 清单与工坊元数据（模板/时间戳/css 模式） |
+
 ## 工作流（助手侧）
 
 ```
-plugin_draft    create/list/tree/read/write/remove（草稿与文件）
+plugin_draft    create/list/tree/read/write/remove/set-working-dir（草稿与文件）
 plugin_build    构建 + 静态体检（宿主说明符、第三方依赖、语法、chunk 绝对化、样式覆盖）
 plugin_verify   构建 + 十一项验收电池（含真实装载冒烟与渲染层探针）
 plugin_publish  install / disable / uninstall / export（装进应用并启用）
@@ -46,8 +71,9 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 四个工具刻意按**工作流的四步**切开，而不是把十几个动作塞进一个工具：每一步的失败都要给出
 「那一步专属」的可执行诊断（构建失败给 esbuild 的 `文件:行:列`，验收失败给逐项 PASS/FAIL 与建议）。
 
-前提：工具要挂到助手身上（`mainAgent.tools`）。工坊页在检测到没挂时给一个「一键启用」按钮
-（只加不减，不动用户已有的勾选）。
+前提：工具要挂到助手身上（`mainAgent.tools`，在 **设置 → 智能体 → 工具** 里勾选）。
+工坊**不提供**「一键启用」这类旁路入口——应用里所有工具都走同一条路径（2026-09-27 用户明确
+不需要设置页里那块内容）。
 
 ## 验收电池（`verify.ts`）
 
@@ -123,6 +149,6 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 
 | 工装 | 覆盖 |
 |------|------|
-| `node --experimental-strip-types test/verify-plugin-workshop.mjs` | 离线 107 条：四个模板全链路、id/路径安全、产物形态、正例验收、**反向电池**（十余种坏法逐个断言命中哪一项检查）、发布/停用/卸载/导出、探针参与验收、工具层、源码守卫 |
-| `node test/probe-plugin-workshop-live.mjs` | 真机 28 条：工坊通道与设置页、助手工具、建草稿 → 构建 → 验收（含真界面探针）→ 发布 → 菜单出现 → 通道可用 → 卸载（保留数据）→ 删草稿 |
+| `node --experimental-strip-types test/verify-plugin-workshop.mjs` | 离线 134 条：四个模板全链路、id/路径安全、产物形态、正例验收、**反向电池**（十余种坏法逐个断言命中哪一项检查）、发布/停用/卸载/导出、探针参与验收、**工作目录**（指定/搬家/接管/拒绝非空目录/删草稿不动用户目录/搬回）、工具层、源码守卫 |
+| `node test/probe-plugin-workshop-live.mjs` | 真机 34 条：工坊通道与设置页、助手工具、建草稿 → 构建 → 验收（含真界面探针）→ 发布 → 菜单出现 → 通道可用 → **侧栏普通/插件模式与草稿清单** → **工作目录搬家后仍能构建** → 卸载（保留数据）→ 删草稿 |
 | `node test/audit-plugin-host-contract.mjs` | 构建产物里的 `@host/**` 说明符与宿主表一致（工坊新增的 7 个键在这里兜底） |

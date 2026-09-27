@@ -71,22 +71,10 @@ const WorkshopSettings: React.FC = () => {
   const [detail, setDetail] = useState<WorkshopDraftDetail | null>(null)
   const [report, setReport] = useState<WorkshopReport | null>(null)
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null)
-  const [toolsEnabled, setToolsEnabled] = useState(true)
   const [creating, setCreating] = useState(false)
   const [newId, setNewId] = useState('')
   const [newTitle, setNewTitle] = useState('')
   const [newTemplate, setNewTemplate] = useState('page')
-
-  /** 工坊的 4 个工具是否已在「设置 → 智能体 → 工具」里勾上 */
-  const checkTools = useCallback(async (): Promise<void> => {
-    try {
-      const config = await harnessApi.mainAgent.get()
-      const names = ['plugin_draft', 'plugin_build', 'plugin_verify', 'plugin_publish']
-      setToolsEnabled(names.every((name) => (config.tools ?? []).includes(name)))
-    } catch {
-      setToolsEnabled(true)
-    }
-  }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -107,22 +95,41 @@ const WorkshopSettings: React.FC = () => {
 
   useEffect(() => {
     void refresh()
-    void checkTools()
-  }, [refresh, checkTools])
+  }, [refresh])
 
   // 助手在对话里改了草稿/发布了插件时，这一页要跟着变（主进程广播）
   useEffect(() => harnessApi.workshop.onChanged(() => void refresh()), [refresh])
 
   /** 打开某草稿的详情抽屉（含最近一次验收报告） */
-  const openDetail = async (id: string): Promise<void> => {
-    try {
-      setPreviewFile(null)
-      setDetail(await harnessApi.workshop.detail(id))
-      setReport(await harnessApi.workshop.report(id))
-    } catch (error) {
-      viewMessage('workshop-detail', 'error', String(error))
+  const openDetail = useCallback(
+    async (id: string): Promise<void> => {
+      try {
+        setPreviewFile(null)
+        setDetail(await harnessApi.workshop.detail(id))
+        setReport(await harnessApi.workshop.report(id))
+      } catch (error) {
+        viewMessage('workshop-detail', 'error', String(error))
+      }
+    },
+    [viewMessage]
+  )
+
+  // 侧栏「插件模式」点某一行时：打开设置弹窗并直接展开那份草稿的详情
+  useEffect(() => {
+    const handler = (event: Event): void => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id
+      if (typeof id === 'string' && id) void openDetail(id)
     }
-  }
+    window.addEventListener('workshop-open-draft', handler)
+    return () => window.removeEventListener('workshop-open-draft', handler)
+  }, [openDetail])
+
+  // 侧栏「新建草稿」：打开这里的创建表单（id 由用户起，侧栏不替他编号）
+  useEffect(() => {
+    const handler = (): void => setCreating(true)
+    window.addEventListener('workshop-new-draft', handler)
+    return () => window.removeEventListener('workshop-new-draft', handler)
+  }, [])
 
   /**
    * 统一执行一次工坊动作：置忙 → 调主进程 → 失败提示原文 → 成功后刷新列表与抽屉。
@@ -283,6 +290,43 @@ const WorkshopSettings: React.FC = () => {
     if (result.data?.id) await openDetail(result.data.id)
   }
 
+  /**
+   * 换工作目录（源码落盘位置）：空文件夹会把草稿搬过去；已经有同一份草稿的目录直接接管。
+   * 结果里带 `previousDir` 时提示一句「原处还留着一份」——不静默删用户的东西。
+   */
+  const handlePickWorkingDir = (draft: WorkshopDraftSummary): Promise<void> =>
+    runAction(
+      draft.id,
+      () => harnessApi.workshop.pickWorkingDir(draft.id),
+      (result) => {
+        if (!result || result.canceled) return
+        viewMessage(
+          `workshop-workdir-${draft.id}`,
+          'success',
+          t('workshopSettings.workdir.done', { path: result.dir }),
+          5
+        )
+        if (result.previousDir) {
+          viewMessage(
+            `workshop-workdir-left-${draft.id}`,
+            'info',
+            t('workshopSettings.workdir.leftBehind', { path: result.previousDir }),
+            6
+          )
+        }
+      }
+    )
+
+  /** 搬回工坊默认目录 */
+  const handleResetWorkingDir = (draft: WorkshopDraftSummary): Promise<void> =>
+    runAction(
+      draft.id,
+      () => harnessApi.workshop.setWorkingDir(draft.id),
+      () => {
+        void message.success(t('workshopSettings.workdir.reset'))
+      }
+    )
+
   /** 行的说明行：id · 模板 · 版本 · 文件数（用草稿自己的 id，不写笼统的「插件」） */
   const statusText = (draft: WorkshopDraftSummary): string =>
     [
@@ -304,6 +348,17 @@ const WorkshopSettings: React.FC = () => {
       label: t('workshopSettings.action.verify')
     },
     { type: 'divider' },
+    {
+      key: 'working-dir',
+      icon: <RiFolderOpenLine size={14} />,
+      label: draft.workingDir
+        ? t('workshopSettings.action.changeWorkdir')
+        : t('workshopSettings.action.pickWorkdir')
+    },
+    ...(draft.workingDir
+      ? [{ key: 'reset-workdir', label: t('workshopSettings.action.resetWorkdir') }]
+      : []),
+    { type: 'divider' as const },
     {
       key: 'publish',
       icon: <RiUploadCloud2Line size={14} />,
@@ -348,6 +403,12 @@ const WorkshopSettings: React.FC = () => {
         break
       case 'export':
         void handleExport(draft.id)
+        break
+      case 'working-dir':
+        void handlePickWorkingDir(draft)
+        break
+      case 'reset-workdir':
+        void handleResetWorkingDir(draft)
         break
       case 'uninstall':
         handleUninstall(draft)
@@ -399,36 +460,6 @@ const WorkshopSettings: React.FC = () => {
         <div style={{ marginBottom: 16, fontSize: 13, color: token.colorError }}>
           {t('workshopSettings.notReady')}
         </div>
-      )}
-
-      {!toolsEnabled && (
-        <SettingsSection
-          title={t('workshopSettings.tools.title')}
-          icon={<RiPlugLine size={14} />}
-          description={t('workshopSettings.tools.description')}
-        >
-          <SettingRow
-            title={t('workshopSettings.tools.row')}
-            description={t('workshopSettings.tools.hint')}
-            control={
-              <Button
-                type="primary"
-                size="small"
-                onClick={async () => {
-                  const result = await harnessApi.workshop.enableTools()
-                  if (!result.ok) {
-                    viewMessage('workshop-tools', 'error', result.error ?? '')
-                    return
-                  }
-                  setToolsEnabled(true)
-                  void message.success(t('workshopSettings.tools.done'))
-                }}
-              >
-                {t('workshopSettings.tools.enable')}
-              </Button>
-            }
-          />
-        </SettingsSection>
       )}
 
       <SettingsSection
@@ -524,6 +555,18 @@ const WorkshopSettings: React.FC = () => {
                     {flags}
                   </span>
                 )}
+                {draft.workingDir && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 11.5,
+                      color: token.colorTextTertiary,
+                      wordBreak: 'break-all'
+                    }}
+                  >
+                    {t('workshopSettings.workdir.label', { path: draft.workingDir })}
+                  </div>
+                )}
               </SettingRow>
             )
           })
@@ -580,8 +623,36 @@ const WorkshopSettings: React.FC = () => {
       >
         {detail && (
           <div className="flex flex-col" style={{ gap: 16 }}>
-            <div style={{ fontSize: 12, color: token.colorTextTertiary, wordBreak: 'break-all' }}>
-              {detail.dir}
+            {/* 源码位置 + 一行工作目录操作（源码放自己目录里时能一眼看出在哪） */}
+            <div className="flex items-center" style={{ gap: 8 }}>
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 12,
+                  color: token.colorTextTertiary,
+                  wordBreak: 'break-all'
+                }}
+              >
+                {detail.workingDir
+                  ? t('workshopSettings.workdir.label', { path: detail.dir })
+                  : t('workshopSettings.workdir.default', { path: detail.dir })}
+              </span>
+              <Button
+                size="small"
+                type="text"
+                icon={<RiFolderOpenLine size={14} />}
+                onClick={() => void handlePickWorkingDir(detail)}
+              >
+                {detail.workingDir
+                  ? t('workshopSettings.action.changeWorkdir')
+                  : t('workshopSettings.action.pickWorkdir')}
+              </Button>
+              {detail.workingDir && (
+                <Button size="small" type="text" onClick={() => void handleResetWorkingDir(detail)}>
+                  {t('workshopSettings.action.resetWorkdir')}
+                </Button>
+              )}
             </div>
 
             {/* 验收报告：逐项结论（失败项带建议，可直接丢回给助手） */}

@@ -27,10 +27,28 @@ export const harnessZhCN = {
     sidebar: {
       title: '工作区',
       searchPlaceholder: '搜索工作区与会话',
+      searchDraftPlaceholder: '搜索插件草稿',
       searchTooltip: '搜索工作区与会话',
       exitSearch: '退出搜索',
       assistantSettings: '助手设置',
       newWorkspace: '新建工作区',
+      mode: {
+        chat: '普通',
+        plugin: '插件',
+        chatHint: '普通模式：工作区与会话',
+        pluginHint: '插件模式：插件工坊里的草稿（点一行打开它的详情）'
+      },
+      newDraft: '新建插件草稿',
+      noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
+      draftActions: '草稿操作',
+      pluginState: {
+        draft: '草稿',
+        built: '已构建',
+        verified: '已验收',
+        verifyFailed: '验收未过 {{failed}} 项',
+        enabled: '使用中',
+        disabled: '已停用'
+      },
       noWorkspace: '尚未配置工作区',
       noMatchResult: '无匹配结果',
       noMatchTopic: '无匹配会话',
@@ -755,14 +773,6 @@ export const harnessZhCN = {
     pageDescription: '在对话里让助手替你写插件：工坊负责构建、自动验收，通过后装进应用就能用',
     notReady: '工坊当前不可用：请确认 设置 → 插件 里的「AI 助手」处于启用状态',
     actionFailed: '操作失败',
-    tools: {
-      title: '助手工具',
-      description: '工坊能力要挂到助手身上，助手才会用',
-      row: '让助手能用插件工坊',
-      hint: '把这 4 个工具放进「设置 → 智能体 → 工具」的已选清单（只加不减，不动你已有的勾选）',
-      enable: '一键启用',
-      done: '已加入助手工具清单'
-    },
     action: {
       build: '构建',
       verify: '验收',
@@ -774,7 +784,17 @@ export const harnessZhCN = {
       remove: '删除草稿',
       detail: '详情',
       menu: '更多操作',
-      openDir: '打开草稿目录'
+      openDir: '打开草稿目录',
+      pickWorkdir: '选择工作目录',
+      changeWorkdir: '更换工作目录',
+      resetWorkdir: '改回工坊目录'
+    },
+    workdir: {
+      label: '源码目录：{{path}}',
+      default: '源码在工坊目录：{{path}}',
+      done: '工作目录已设为 {{path}}',
+      leftBehind: '原目录还留着一份源码（{{path}}），可以自行删除',
+      reset: '源码已搬回工坊目录'
     },
     list: {
       title: '草稿',

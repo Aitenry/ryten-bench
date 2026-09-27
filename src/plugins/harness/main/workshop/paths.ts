@@ -59,8 +59,56 @@ export function exportsRoot(): string {
   return path.join(workshopRoot(), 'exports')
 }
 
+// ---------- 草稿的工作目录（源码落盘位置） ----------
+
+/**
+ * 草稿的工作目录注册表（`<root>/registry.json`）。
+ *
+ * 为什么需要它：草稿的源码默认落在 `<root>/drafts/<id>/`，但用户可以给某个插件**指定工作目录**
+ * （源码写在自己的目录里，能进 git、能用编辑器打开）。这份映射不能放在草稿目录里的
+ * `workshop.json`——那会变成「要先知道目录才能知道目录在哪」的循环。因此单独一份注册表，
+ * 也是「这份草稿的源码到底在哪」的**唯一**真源（`draftDir()` 读它）。
+ */
+interface WorkshopRegistry {
+  roots?: Record<string, string>
+}
+
+let registryRoot = ''
+let registry: Record<string, string> = {}
+
+/** 按需加载注册表（根目录换了就重读；configure 之后第一次用到时加载） */
+function ensureRegistry(): void {
+  const current = workshopRoot()
+  if (registryRoot === current) return
+  registryRoot = current
+  const raw = readJson<WorkshopRegistry>(path.join(current, 'registry.json'))
+  registry = raw?.roots && typeof raw.roots === 'object' ? { ...raw.roots } : {}
+}
+
+/** 某草稿是否用了自定义工作目录 */
+export function draftRootOf(id: string): string | null {
+  ensureRegistry()
+  return registry[assertDraftId(id)] ?? null
+}
+
+/** 写入/清除某草稿的工作目录（传 null = 回到工坊的 drafts 目录） */
+export function setDraftRoot(id: string, dir: string | null): void {
+  ensureRegistry()
+  const key = assertDraftId(id)
+  if (dir) registry[key] = path.resolve(dir)
+  else delete registry[key]
+  writeJson(path.join(workshopRoot(), 'registry.json'), { roots: registry })
+}
+
+/** 当前注册表里的全部「自定义工作目录」草稿（id → 目录） */
+export function customDraftRoots(): Record<string, string> {
+  ensureRegistry()
+  return { ...registry }
+}
+
+/** 草稿源码目录：自定义工作目录优先，否则是 `<root>/drafts/<id>` */
 export function draftDir(id: string): string {
-  return path.join(draftsRoot(), assertDraftId(id))
+  return draftRootOf(id) ?? path.join(draftsRoot(), assertDraftId(id))
 }
 
 export function distDir(id: string): string {

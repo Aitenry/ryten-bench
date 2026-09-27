@@ -18,10 +18,28 @@ export const harnessEnUS: typeof harnessZhCN = {
     sidebar: {
       title: 'Workspaces',
       searchPlaceholder: 'Search workspaces and conversations',
+      searchDraftPlaceholder: 'Search plugin drafts',
       searchTooltip: 'Search workspaces and conversations',
       exitSearch: 'Exit search',
       assistantSettings: 'Assistant settings',
       newWorkspace: 'New workspace',
+      mode: {
+        chat: 'Chat',
+        plugin: 'Plugins',
+        chatHint: 'Chat mode: workspaces and conversations',
+        pluginHint: 'Plugin mode: drafts in the Plugin Workshop (click one to open it)'
+      },
+      newDraft: 'New plugin draft',
+      noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
+      draftActions: 'Draft actions',
+      pluginState: {
+        draft: 'Draft',
+        built: 'Built',
+        verified: 'Verified',
+        verifyFailed: '{{failed}} check(s) failed',
+        enabled: 'In use',
+        disabled: 'Disabled'
+      },
       noWorkspace: 'No workspace configured yet',
       noMatchResult: 'No matching results',
       noMatchTopic: 'No matching conversations',
@@ -761,14 +779,6 @@ export const harnessEnUS: typeof harnessZhCN = {
     notReady:
       'The workshop is unavailable: make sure the "AI assistant" plugin is enabled in Settings → Plugins',
     actionFailed: 'Action failed',
-    tools: {
-      title: 'Assistant tools',
-      description: 'The assistant only uses the workshop once its tools are attached',
-      row: 'Let the assistant use the Plugin Workshop',
-      hint: 'Adds these 4 tools to Settings → Agents → Tools (only adds; your existing picks stay)',
-      enable: 'Enable for me',
-      done: 'Added to the assistant tool list'
-    },
     action: {
       build: 'Build',
       verify: 'Verify',
@@ -780,7 +790,17 @@ export const harnessEnUS: typeof harnessZhCN = {
       remove: 'Delete draft',
       detail: 'Details',
       menu: 'More actions',
-      openDir: 'Open draft folder'
+      openDir: 'Open draft folder',
+      pickWorkdir: 'Choose working folder',
+      changeWorkdir: 'Change working folder',
+      resetWorkdir: 'Move back into workshop'
+    },
+    workdir: {
+      label: 'Source folder: {{path}}',
+      default: 'Source lives in the workshop folder: {{path}}',
+      done: 'Working folder set to {{path}}',
+      leftBehind: 'A copy of the source stays in {{path}}; you can delete it yourself',
+      reset: 'Source moved back into the workshop folder'
     },
     list: {
       title: 'Drafts',

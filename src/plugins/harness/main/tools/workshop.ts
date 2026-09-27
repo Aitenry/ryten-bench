@@ -17,6 +17,8 @@ import {
   readFile,
   removeDraft,
   removeFile,
+  resetWorkingDir,
+  setWorkingDir,
   unpublish,
   verify,
   workshopState,
@@ -148,7 +150,8 @@ function contributionHint(report: WorkshopReport | null): string {
 const createDraftTool = (): StructuredToolInterface =>
   tool(
     async (input: {
-      action: 'create' | 'list' | 'tree' | 'read' | 'write' | 'remove-file' | 'remove'
+      action:
+        'create' | 'list' | 'tree' | 'read' | 'write' | 'remove-file' | 'remove' | 'set-working-dir'
       id?: string
       path?: string
       content?: string
@@ -157,6 +160,7 @@ const createDraftTool = (): StructuredToolInterface =>
       description?: string
       overwrite?: boolean
       css?: string
+      workingDir?: string
     }): Promise<string> => {
       const missing = notReady()
       if (missing) return missing
@@ -170,11 +174,12 @@ const createDraftTool = (): StructuredToolInterface =>
               template: (input.template as never) ?? 'page',
               description: input.description,
               css: input.css as never,
-              overwrite: input.overwrite
+              overwrite: input.overwrite,
+              workingDir: input.workingDir
             })
             return (
               `${result.overwritten ? '已按模板重建' : '已创建'}草稿 '${result.meta.id}'（模板 ${result.meta.template}）\n` +
-              `目录：${result.dir}\n` +
+              `目录：${result.dir}${input.workingDir ? '（用户指定的工作目录）' : '（工坊默认目录）'}\n` +
               `文件：${result.files.join('、')}\n` +
               `下一步：读 WORKSHOP.md 了解契约 → 改写 renderer/main 里的文件 → plugin_build。\n` +
               `提示：模板里已经有一份能跑通的骨架与冒烟用例，先在它上面改，不要从零重写。`
@@ -213,8 +218,29 @@ const createDraftTool = (): StructuredToolInterface =>
           }
           case 'remove': {
             if (!input.id) return '缺少 id'
-            removeDraft(input.id)
-            return `已删除草稿 '${input.id}'（含构建产物与验收报告；若它已装进应用，插件本体不受影响，需要的话用 plugin_publish 的 uninstall 卸掉）`
+            const result = removeDraft(input.id)
+            return (
+              `已删除草稿 '${input.id}'（含构建产物与验收报告；若它已装进应用，插件本体不受影响，需要的话用 plugin_publish 的 uninstall 卸掉）` +
+              (result.externalDir
+                ? `\n注意：它的源码在用户自己的工作目录里（${result.externalDir}），**那个目录没有被删**，只解除了工坊的登记。`
+                : '')
+            )
+          }
+          case 'set-working-dir': {
+            if (!input.id) return '缺少 id'
+            if (!input.workingDir) {
+              const result = resetWorkingDir(input.id)
+              return `已把 '${input.id}' 的源码搬回工坊目录：${result.dir}`
+            }
+            const result = setWorkingDir(input.id, input.workingDir)
+            return (
+              `草稿 '${input.id}' 的工作目录已设为：${result.dir}` +
+              (result.moved ? '（原有文件已搬过去）' : '') +
+              (result.adopted ? '（该目录里已有一份同 id 的草稿，直接接管为源码真源）' : '') +
+              (result.previousDir
+                ? `\n注意：原目录还留着一份（${result.previousDir}），可自行删除。`
+                : '')
+            )
           }
           default:
             return `未知 action：${String(input.action)}`
@@ -228,22 +254,36 @@ const createDraftTool = (): StructuredToolInterface =>
       description:
         'Author a plugin draft inside the app plugin workshop.\n' +
         '  Commands:\n' +
-        '    create - Create a draft from a template; requires id (lowercase kebab), optional title, template (page|panel|tool|minimal), description, overwrite\n' +
+        '    create - Create a draft from a template; requires id (lowercase kebab), optional title, template (page|panel|tool|minimal), description, overwrite, workingDir\n' +
         '    list - List drafts with their build/install/verify status\n' +
         '    tree - List files of a draft; requires id\n' +
         '    read - Read a draft file; requires id, path (e.g. renderer/plugin.tsx)\n' +
         '    write - Create or overwrite a draft file; requires id, path, content (full file text)\n' +
         '    remove-file - Delete one draft file; requires id, path\n' +
-        '    remove - Delete the whole draft; requires id\n' +
+        '    remove - Delete the whole draft; requires id (a user-chosen working dir is never deleted)\n' +
+        "    set-working-dir - Put the draft source into a folder of the user's own (git-friendly); requires id, workingDir (omit or empty to move it back into the workshop)\n" +
         '  A draft is a real plugin source tree: plugin.json + main/index.ts + renderer/plugin.tsx.\n' +
         '  Every draft ships a WORKSHOP.md with the exact host contract (mount points, host module keys, smoke cases) - read it before writing code.\n' +
         '  After editing, run plugin_build, then plugin_verify, then plugin_publish.',
       schema: z.object({
         action: z
-          .enum(['create', 'list', 'tree', 'read', 'write', 'remove-file', 'remove'])
+          .enum([
+            'create',
+            'list',
+            'tree',
+            'read',
+            'write',
+            'remove-file',
+            'remove',
+            'set-working-dir'
+          ])
           .describe('要执行的动作'),
         id: z.string().optional().describe('插件 id（小写 kebab，= 目录名 = plugin.json.id）'),
         path: z.string().optional().describe('草稿内相对路径，如 renderer/plugin.tsx'),
+        workingDir: z
+          .string()
+          .optional()
+          .describe('工作目录（源码落盘位置）：create 时直接建在那里；set-working-dir 时切换过去'),
         content: z.string().optional().describe('写文件时的完整文件内容'),
         title: z.string().optional().describe('展示名（create 时用）'),
         template: z
