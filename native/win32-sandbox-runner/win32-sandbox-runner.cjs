@@ -18,9 +18,12 @@
  *     （workspace-write 时再加两个能力 SID）。Windows 对写类访问做**两遍检查**：
  *     普通 SID 与 restricting SID 都通过才放行 ⇒ restricting 列表里没有的 SID 拿不到
  *     任何写权限，这就是「只能写工作区」的落地方式；
- *  5. `CreateProcessAsUserW` 以受限令牌 spawn，stdio **继承 runner 自己的**（字节直通，
- *     父进程看到的仍是普通管道），并把子进程放进 kill-on-close 的 Job Object
- *     （runner 被杀/崩溃 → Job 句柄关闭 → 子进程连同其后代一起清理）；
+ *  5. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
+ *     （Node 的管道是 overlapped 的，受限子进程同步写会 `ERROR_INVALID_PARAMETER`），
+ *     `PeekNamedPipe` + `ReadFile` 泵回 runner 的 stdout；子进程放进 kill-on-close 的
+ *     Job Object（runner 被杀 → 整棵子树被清理）；子进程**共享 runner 的控制台**并用
+ *     `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏窗口（**不传 CREATE_NO_WINDOW**：受限令牌下
+ *     控制台隔离会让子进程以 0xC0000142 死在 DLL 初始化阶段，见常量处的实测记录）；
  *  6. 子进程退出后撤销临时 ACE、删除私有临时目录，并镜像子进程退出码。
  *
  * 失败契约：runner 侧任何失败都往 stderr 打 `ryten-sandbox-run: <detail>` 并以 127 退出
@@ -30,6 +33,9 @@
  *  - restricting 列表必须保留 Everyone（早期 DLL 初始化与 CNG 依赖它），因此 DACL 里
  *    显式授予 Everyone 写权限的对象仍可写；NTFS 硬链接也能把已授权文件别名到工作区外；
  *  - 只在带 ACL 的卷上有效（exFAT / 网络盘上没有 ACL）——这种工作区由上层判定为不可用；
+ *  - 子进程与 runner **共享控制台**：受限令牌下做不了控制台隔离（`CREATE_NO_WINDOW` /
+ *    `CREATE_NEW_CONSOLE` 的子进程会在 DLL 初始化阶段以 0xC0000142 死亡），窗口用
+ *    `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏；stdio 走 runner 自己建的管道，不受影响。
  *  - 本文件是 plain CJS（不经过打包器）：它是被独立进程加载的脚本，需要 koffi 能在
  *    应用根下解析到，并运行在 Electron 的 node 模式（ELECTRON_RUN_AS_NODE=1）。
  */
@@ -43,6 +49,8 @@ const { join } = require('node:path')
 const RUNNER_SIGNATURE = 'ryten-sandbox-run'
 /** runner 失败退出码（刻意与任何命令退出码区分开） */
 const RUNNER_FAILURE_EXIT = 127
+/** 子进程在 loader/控制台初始化阶段就死掉（只做诊断提示，不改退出码语义） */
+const STATUS_DLL_INIT_FAILED = 0xc0000142
 
 /* ────────────────────────── Win32 常量 ────────────────────────── */
 
@@ -57,7 +65,23 @@ const LUA_TOKEN = 0x4
 const WRITE_RESTRICTED = 0x8
 /** CreateProcessAsUserW 标志 */
 const CREATE_UNICODE_ENVIRONMENT = 0x00000400
-const CREATE_NO_WINDOW = 0x08000000
+/**
+ * STARTUPINFO.dwFlags：让 wShowWindow 生效。
+ *
+ * **刻意不传 `CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE`**：受限令牌下这两种「控制台隔离」
+ * 会让子进程在 DLL 初始化阶段直接死掉（`STATUS_DLL_INIT_FAILED` = 0xC0000142，stderr 全空）。
+ * 2026-09-27 在 GitHub Actions（windows-latest，控制台/桌面环境与开发机不同）实测复现：
+ * 打包产物自检的两条「工作区内写入」都是 exit=0xC0000142，而 cleanup（不起子进程）正常，
+ * 说明坏的是「受限子进程起不来」而不是 runner 本身。参考实现（dsh-sandbox-windows-acl）
+ * 的已知边界写得同样直白：CREATE_NO_WINDOW / CREATE_NEW_CONSOLE 子进程在 DLL 初始化期死亡，
+ * 子进程共享宿主控制台，基于管道的 stdio 重定向不受影响。
+ *
+ * 共享控制台 + `wShowWindow = SW_HIDE` 才是正解：控制台照常存在（子进程能起来），
+ * 但窗口不显示（GUI 宿主下不会闪黑框）。这也是本文件第 5 步 `SetConsoleCtrlHandler(null, 1)`
+ * 「子进程在同一控制台里自己处理 Ctrl+C」所假设的形态。
+ */
+const STARTF_USESHOWWINDOW = 0x00000100
+const SW_HIDE = 0
 /** CreateFileW */
 const GENERIC_READ = 0x80000000
 const GENERIC_WRITE = 0x40000000
@@ -798,7 +822,8 @@ function spawnConfined(bindings, token, { command, args, cwd }) {
     lpReserved: null,
     lpDesktop: null,
     lpTitle: null,
-    dwFlags: STARTF_USESTDHANDLES,
+    dwFlags: STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW,
+    wShowWindow: SW_HIDE,
     hStdInput: kernel.GetStdHandle(STD_INPUT_HANDLE),
     hStdOutput: pipes.stdout.write,
     hStdError: pipes.stderr.write
@@ -816,7 +841,7 @@ function spawnConfined(bindings, token, { command, args, cwd }) {
     null,
     null,
     1, // bInheritHandles：让子进程拿到我们建的管道写端
-    CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+    CREATE_UNICODE_ENVIRONMENT, // 刻意不带 CREATE_NO_WINDOW / CREATE_NEW_CONSOLE（见常量注释）
     null, // 环境块继承：TMP/TEMP 已由 runner 改写
     cwd,
     startupInfo,
@@ -994,6 +1019,13 @@ async function main() {
       // 先泵输出（子进程写完 → 关闭写端 → 读端 EOF），再取退出码
       await pumpPipes(bindings, child.pipes)
       exitCode = waitForExit(bindings, child.process)
+      // 信息性提示（刻意不带 `ryten-sandbox-run:` 失败签名，避免被上层判成「后端坏了」）：
+      // 子进程在 DLL/控制台初始化阶段就死掉时，0xC0000142 这个退出码对上层完全不可解释。
+      if (exitCode === STATUS_DLL_INIT_FAILED) {
+        process.stderr.write(
+          `[ryten-sandbox] child exited with STATUS_DLL_INIT_FAILED (0xC0000142) before running\n`
+        )
+      }
     } finally {
       closePipes(bindings, child.pipes)
       kernel.CloseHandle(child.process)
