@@ -34,7 +34,13 @@ import {
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../api'
 import type { HarnessToolInfo } from '../../types'
-import type { AgentConfigInput, AgentConfigRow, McpServerView } from '../../../shared/types'
+import type { SandboxStatusView } from '../../api'
+import type {
+  AgentConfigInput,
+  AgentConfigRow,
+  McpServerView,
+  PermissionMode
+} from '../../../shared/types'
 import {
   isMcpServerGroup,
   isMcpToolName,
@@ -47,9 +53,34 @@ const { TextArea } = Input
 
 const PAGE_SIZE = 5
 
+/** 沙箱后端显示名（i18n 键是字面量，动态拼键过不了 t() 的类型校验） */
+function sandboxBackendLabel(
+  backend: string | null,
+  t: (
+    key:
+      | 'harness.sandbox.backendWindows'
+      | 'harness.sandbox.backendBwrap'
+      | 'harness.sandbox.backendLandlock'
+      | 'harness.sandbox.backendSeatbelt'
+  ) => string
+): string {
+  switch (backend) {
+    case 'windows-restricted-token':
+      return t('harness.sandbox.backendWindows')
+    case 'linux-bwrap':
+      return t('harness.sandbox.backendBwrap')
+    case 'linux-landlock':
+      return t('harness.sandbox.backendLandlock')
+    case 'macos-seatbelt':
+      return t('harness.sandbox.backendSeatbelt')
+    default:
+      return backend ?? '—'
+  }
+}
+
 const AgentSettings: React.FC = () => {
   const {
-    token: { colorTextSecondary, colorTextTertiary, colorFillAlter }
+    token: { colorTextSecondary, colorTextTertiary, colorFillAlter, colorWarning, colorSuccess }
   } = theme.useToken()
 
   const { viewMessage } = useMessage()
@@ -86,6 +117,10 @@ const AgentSettings: React.FC = () => {
    * 具体哪几个工具仍然只由 MCP 页决定。见 shared/mcp.ts 的 MCP_SERVER_GROUP_PREFIX。
    */
   const [enabledMcpTools, setEnabledMcpTools] = useState<string[]>([])
+  /** 权限档位的「新会话默认值」（改当前会话用输入框左下角的选择器） */
+  const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode | null>(null)
+  /** 沙箱后端状态（拿不到内核级隔离时命令会被拒绝执行——界面必须说出来） */
+  const [sandbox, setSandbox] = useState<SandboxStatusView | null>(null)
   /** MCP 服务器清单（出分组项用：名字、命名空间、可用工具） */
   const [mcpServers, setMcpServers] = useState<McpServerView[]>([])
 
@@ -127,18 +162,25 @@ const AgentSettings: React.FC = () => {
 
   const loadOptions = useCallback(async () => {
     try {
-      const [providerList, tools, skillList, main, settings, mcp] = await Promise.all([
-        window.api.providers.getEnabled(),
-        harnessApi.harness.getTools(),
-        harnessApi.harness.listSkills(),
-        harnessApi.mainAgent.get(),
-        window.api.systemSettings.getAll(),
-        harnessApi.mcp.list()
-      ])
+      const [providerList, tools, skillList, main, settings, mcp, permission, sandboxStatus] =
+        await Promise.all([
+          window.api.providers.getEnabled(),
+          harnessApi.harness.getTools(),
+          harnessApi.harness.listSkills(),
+          harnessApi.mainAgent.get(),
+          window.api.systemSettings.getAll(),
+          harnessApi.mcp.list(),
+          // 权限档位的「新会话默认值」（当前会话的档位在输入框左下角单独切）
+          harnessApi.harness.getPermission(null),
+          // 沙箱后端状态（不可用时命令会被拒绝执行，用户有权知道）
+          harnessApi.harness.sandboxStatus()
+        ])
       setProviders((providerList as ProviderOption[]).filter((p) => !isEmbeddingProvider(p)))
       setAvailableTools(tools)
       setSkills(skillList)
       setMcpServers(mcp)
+      setDefaultPermissionMode(permission.defaultMode)
+      setSandbox(sandboxStatus)
       const rawMain = main as Record<string, unknown>
       const rawTools = (rawMain.tools as string[]) ?? []
       const rawMcpTools = (rawMain.mcpTools as string[]) ?? []
@@ -792,6 +834,71 @@ const AgentSettings: React.FC = () => {
                 label: `${s.name}${s.description ? ` — ${s.description}` : ''}`
               }))}
             />
+          }
+        />
+        {/* 权限档位：这一行只管「之后新建会话的默认值」，当前会话在输入框左下角切换 */}
+        <SettingRow
+          title={t('harness.permission.defaultLabel')}
+          description={t('harness.permission.defaultHint')}
+          control={
+            <Select
+              size="small"
+              style={{ minWidth: 160 }}
+              value={defaultPermissionMode ?? undefined}
+              loading={defaultPermissionMode == null}
+              options={[
+                { value: 'read-only', label: t('harness.permission.readOnly') },
+                { value: 'workspace-write', label: t('harness.permission.workspaceWrite') },
+                { value: 'danger-full-access', label: t('harness.permission.fullAccess') }
+              ]}
+              onChange={(value) => {
+                const mode = value as PermissionMode
+                setDefaultPermissionMode(mode)
+                void harnessApi.harness
+                  .setPermission({ mode, scope: 'default' })
+                  .then((state) => setDefaultPermissionMode(state.defaultMode))
+                  .catch(() => {
+                    viewMessage(
+                      'main-agent-permission',
+                      'error',
+                      t('harness.permission.switchFailed')
+                    )
+                  })
+              }}
+            />
+          }
+        />
+        {/* 沙箱后端：只读状态。拿不到内核级隔离时命令会被拒绝执行（绝不静默放行） */}
+        <SettingRow
+          title={t('harness.sandbox.label')}
+          description={
+            sandbox?.usable
+              ? sandbox.enforcement === 'partial'
+                ? t('harness.sandbox.partialHint')
+                : t('harness.sandbox.fullHint')
+              : t('harness.sandbox.unavailableHint', { reason: sandbox?.reason ?? '' })
+          }
+          control={
+            <span
+              style={{
+                fontSize: 12,
+                color: sandbox?.usable
+                  ? sandbox.enforcement === 'partial'
+                    ? colorTextTertiary
+                    : colorSuccess
+                  : colorWarning
+              }}
+            >
+              {sandbox == null
+                ? '—'
+                : sandbox.usable
+                  ? `${sandboxBackendLabel(sandbox.backend, t)} · ${
+                      sandbox.enforcement === 'partial'
+                        ? t('harness.sandbox.partial')
+                        : t('harness.sandbox.full')
+                    }`
+                  : t('harness.sandbox.unavailable')}
+            </span>
           }
         />
       </SettingsSection>

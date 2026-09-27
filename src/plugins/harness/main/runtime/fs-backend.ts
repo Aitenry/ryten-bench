@@ -2,7 +2,6 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'
-import { exec } from 'child_process'
 import logger from 'electron-log'
 import { mainFormat, mainPlural } from '../../../../main/i18n'
 import { getFsToolTexts } from '../../../../main/i18n/tool-results-fs'
@@ -10,6 +9,10 @@ import { recordToolFacts } from './tool-result-facts'
 import { recordFileChange } from '../workspace/file-history'
 import { changeStats } from '../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../workspace/watcher'
+import { permissionGate } from './permission-gate'
+import { isPermissionMode } from './permission'
+import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../sandbox/exec'
+import type { SandboxMode } from '../sandbox/types'
 import {
   MAX_EXEC_CHARS,
   MAX_FILE_CHARS,
@@ -38,6 +41,29 @@ import {
 const ACCESS_DENIED_CODES = new Set(['EPERM', 'EACCES'])
 
 /**
+ * 升权重试参数（与 DSH 的 sandbox_permissions / justification 同名同义）。
+ *
+ * 为什么写在 schema 里而不是留给模型自由发挥：参数必须能被解析到工具层（zod 会剥掉
+ * 未声明的键），闸门才知道这是一次「升权重试」。但**合法用法**只有一种——同一次被
+ * 沙箱拒绝过的调用原样重试并带上它（校验见 permission.ts 的 parseEscalation）：
+ * 目标档位必须严格更宽，且必须给 justification，否则连审批弹窗都不弹。
+ */
+const sandboxPermissionField = {
+  sandbox_permissions: z
+    .enum(['read-only', 'workspace-write', 'danger-full-access'])
+    .optional()
+    .describe(
+      'Only valid as a one-shot retry of an operation the sandbox just denied: the narrowest wider sandbox mode that would let this exact call through. Requires justification; the user is asked to approve it once.'
+    ),
+  justification: z
+    .string()
+    .optional()
+    .describe(
+      'One-sentence reason for the escalated retry. Required whenever sandbox_permissions is set.'
+    )
+}
+
+/**
  * 从工具运行配置里取本次调用的 toolCallId（agent.ts 注入 `configurable.toolCallId`）。
  * 供工具把结构化事实（行数/字节/替换处数/失败原因）登记给前端卡片用——
  * 工具的返回值是**给模型的文本**，里面没有可靠的结构化信号。
@@ -57,6 +83,23 @@ function runContextOf(config: unknown): { callId?: string; topicId?: number } {
     topicId: typeof topicId === 'number' ? topicId : undefined
   }
 }
+
+/**
+ * 本次执行该用哪个沙箱档位。
+ *
+ * 优先取权限闸门注入的 `configurable.sandboxMode`（那才是「这次调用实际生效的档位」，
+ * 升权重试后会更宽）。注入缺失时回落到话题当前档位——**绝不能默认成完全权限**，
+ * 否则一次注入 bug 就等于把沙箱关掉。
+ */
+function sandboxModeOf(config: unknown, topicId?: number): SandboxMode {
+  const cfg = config as { configurable?: Record<string, unknown> } | undefined
+  const injected = cfg?.configurable?.sandboxMode
+  if (isPermissionMode(injected)) return injected
+  return permissionGate.modeFor(topicId ?? 0)
+}
+
+/** execute 的单次执行时限（毫秒）与终止提示 */
+const EXEC_TIMEOUT_MS = 30_000
 
 interface FsMount {
   /** 虚拟前缀，如 '/' 或 '/memories/' */
@@ -372,7 +415,8 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           'Write a file in the virtual filesystem, overwriting it if it already exists. Missing parent directories are created automatically.',
         schema: z.object({
           file_path: z.string().describe('Virtual path of the file to write'),
-          content: z.string().describe('Full file content')
+          content: z.string().describe('Full file content'),
+          ...sandboxPermissionField
         })
       }
     ),
@@ -456,7 +500,8 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             .optional()
             .describe(
               'When true, replace every occurrence; defaults to false (a unique match is required)'
-            )
+            ),
+          ...sandboxPermissionField
         })
       }
     ),
@@ -608,63 +653,61 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           // 命令执行窗口：这期间被磁盘监听捕获的文件变化归到这次调用名下
           // （命令没有精确的前后快照，只能如实记录「被命令改过、不可回溯」）
           beginToolWriteWindow({ topicId, callId })
-          return await new Promise<string>((resolvePromise) => {
-            const child = exec(
+          const mode = sandboxModeOf(config, topicId)
+          try {
+            // 真正在沙箱里跑（档位 → OS 隔离原语；拿不到后端就拒绝执行，见 sandbox/exec.ts）
+            const result = await runConfinedShell({
               command,
-              {
-                cwd: options.workspacePath,
-                timeout: 30_000,
-                maxBuffer: 2 * 1024 * 1024,
-                windowsHide: true
-              },
-              (error, stdout, stderr) => {
-                // 命令已退出：先关窗口（后续 1.5s 宽限内的落盘仍归给它，见 watcher.ts）
-                endToolWriteWindow(callId)
-                const out = stdout || ''
-                const errOut = stderr || ''
-                const exitCode = error
-                  ? typeof (error as { code?: number }).code === 'number'
-                    ? (
-                        error as {
-                          code: number
-                        }
-                      ).code
-                    : 1
-                  : 0
-                let text = out
-                if (errOut) text += (text ? '\n' : '') + `[stderr]\n${errOut}`
-                if (text.length > MAX_EXEC_CHARS) {
-                  text = `${text.slice(0, MAX_EXEC_CHARS)}\n...${tr.exec.truncated}`
-                }
-                resolvePromise(JSON.stringify({ exitCode, stdout: text }))
-              }
-            )
-            // 取消贯通（修复：此前 execute 不响应「停止」，命令最多再跑 30s 且副作用不随取消中止）
-            const signal = config?.signal
-            const onAbort = (): void => {
-              try {
-                child.kill()
-              } catch {
-                // 进程已退出
-              }
-            }
-            if (signal) {
-              if (signal.aborted) onAbort()
-              else signal.addEventListener('abort', onAbort, { once: true })
-            }
-            // 子进程关闭后移除监听，避免 listener 泄漏；同时关闭命令写入窗口
-            child.on('close', () => {
-              if (signal) signal.removeEventListener('abort', onAbort)
-              endToolWriteWindow(callId)
+              mode,
+              workspaceRoot: options.workspacePath,
+              maxChars: MAX_EXEC_CHARS,
+              timeoutMs: EXEC_TIMEOUT_MS,
+              signal: config?.signal
             })
-          })
+
+            if (result.unavailable) {
+              // 故障关闭：命令没有执行，必须让模型知道「不是命令失败，是没有沙箱可用」
+              const text = sandboxUnavailableText(
+                mainFormat(tr.exec.sandboxUnavailable, { reason: result.unavailable })
+              )
+              recordToolFacts(callId, { error: text })
+              return text
+            }
+            if (result.runnerFailure) {
+              const text = mainFormat(tr.exec.sandboxRunnerFailed, {
+                detail: result.runnerFailure.slice(0, 400)
+              })
+              recordToolFacts(callId, { error: text })
+              return text
+            }
+
+            let text = result.output
+            if (result.timedOut) {
+              text += (text ? '\n' : '') + tr.exec.timedOut
+            }
+            if (result.denied) {
+              // 沙箱把写拒了：附上协议标记与升权提示（模型可据此申请一次人工提权）
+              text = sandboxDenialText(
+                mode,
+                `${mainFormat(tr.exec.sandboxDenied, { mode })}${text ? `\n${text}` : ''}`
+              )
+            }
+            if (text.length > MAX_EXEC_CHARS) {
+              text = `${text.slice(0, MAX_EXEC_CHARS)}\n...${tr.exec.truncated}`
+            }
+            return JSON.stringify({ exitCode: result.exitCode ?? 1, stdout: text })
+          } finally {
+            // 命令已退出：关窗口（后续 1.5s 宽限内的落盘仍归给它，见 watcher.ts）
+            endToolWriteWindow(callId)
+          }
         },
         {
           name: 'execute',
           description:
-            'Run a shell command (Windows) with the workspace directory as the working directory, returning stdout/stderr and the exit code. Use it for read-only queries and operations confined to the workspace; prefer `read_file`, `write_file`, `ls`, `glob` and `grep` for file and directory work.',
+            'Run a shell command (Windows) with the workspace directory as the working directory, returning stdout/stderr and the exit code. The command runs inside an OS-level sandbox: under "workspace-write" it may write inside the workspace (and its private temp directory) but every write outside is denied by the operating system, and under "read-only" no write is possible at all. A denied write returns a [sandbox: ...] marker plus an escalation hint. Prefer `read_file`, `write_file`, `ls`, `glob` and `grep` for file and directory work.',
           schema: z.object({
-            command: z.string().describe('Shell command to execute')
+            command: z.string().describe('Shell command to execute'),
+            ...sandboxPermissionField
           })
         }
       )

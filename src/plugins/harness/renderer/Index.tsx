@@ -12,6 +12,7 @@ import QueueDock from './components/QueueDock'
 import TaskProgressCard from './components/TaskProgressCard'
 import GoalBar from './components/GoalBar'
 import AskQuestionModal from './components/AskQuestionModal'
+import PermissionApprovalModal from './components/PermissionApprovalModal'
 import ModelRecoveryModal from './components/ModelRecoveryModal'
 import WorkspacePanel, { type WorkspacePanelHandle } from './components/WorkspacePanel'
 import {
@@ -654,6 +655,7 @@ const Index: React.FC = () => {
                       groupedProviderOptions={groupedProviderOptions}
                       modelSupportsTools={modelSupportsTools}
                       modelSupportsVision={modelSupportsVision}
+                      currentTopicId={currentTopicId}
                       isDarkMode={isDarkMode}
                       colorBgLayout={colorBgLayout}
                       colorBorder={colorBorder}
@@ -702,6 +704,8 @@ const Index: React.FC = () => {
 
         {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答 */}
         <AskQuestionModal currentTopicId={currentTopicId} />
+        {/* 沙箱审批弹窗：危险 / 越界调用被拦下后等用户决定（允许一次 / 拒绝） */}
+        <PermissionApprovalModal currentTopicId={currentTopicId} />
         {/* 模型请求失败弹窗：自动重试耗尽后选择是否切换模型继续（原位继续，不重发问题） */}
         <ModelRecoveryModal currentTopicId={currentTopicId} />
       </div>

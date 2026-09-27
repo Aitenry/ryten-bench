@@ -12,14 +12,15 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
-    "dev": "electron-vite dev",
+    "dev": "npm run build:sandbox && electron-vite dev",
     "build:plugins": "node scripts/build-plugins.mjs",
+    "build:sandbox": "node native/build-sandbox.mjs",
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "install-electron && electron-builder install-app-deps",
-    "build:unpack": "npm run build:plugins && electron-vite build && electron-builder --dir",
-    "build:win": "npm run build:plugins && electron-vite build && electron-builder --win --publish never",
-    "build:mac": "npm run build:plugins && electron-vite build && electron-builder --mac --publish never",
-    "build:linux": "npm run build:plugins && electron-vite build && electron-builder --linux --publish never"
+    "build:unpack": "npm run build:sandbox && npm run build:plugins && electron-vite build && electron-builder --dir",
+    "build:win": "npm run build:sandbox && npm run build:plugins && electron-vite build && electron-builder --win --publish never",
+    "build:mac": "npm run build:sandbox && npm run build:plugins && electron-vite build && electron-builder --mac --publish never",
+    "build:linux": "npm run build:sandbox && npm run build:plugins && electron-vite build && electron-builder --linux --publish never"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",
@@ -111,6 +112,7 @@
     "json-llm-repair": "^0.1.5",
     "jszip": "3.10.1",
     "katex": "^0.16.47",
+    "koffi": "^3.3.1",
     "langchain": "^1.5.3",
     "lowlight": "^3.3.0",
     "mammoth": "^1.12.0",

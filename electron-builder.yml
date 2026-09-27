@@ -13,12 +13,19 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  # koffi 是原生 FFI 绑定（沙箱 runner 用它调 Win32 API）：.node 不能从 asar 里加载
+  - '**/koffi/**'
 extraResources:
   # drizzle 迁移文件（由 pnpm drizzle-kit generate 生成），启动时由 src/main/database/orm.ts 按序应用
   - from: drizzle
     to: database/drizzle
   - from: resources/models-profile.json
     to: models-profile.json
+  # 沙箱自带资产（Windows 受限令牌 runner / Linux Landlock 启动器）：
+  # 放 resources/sandbox 而不是 asar 里——它们要被当成独立进程 spawn，
+  # 且 Linux 启动器需要保住可执行位（见 src/plugins/harness/main/sandbox/service.ts）
+  - from: resources/sandbox
+    to: sandbox
   # 插件包（由 pnpm build:plugins 生成：resources/plugins/<id>/{plugin.json,main.cjs,renderer.mjs,chunk-*.mjs}）
   # 首次启动时整包 copy 到 userData/plugins/<id>/，此后与第三方插件走同一条装载链路（见 src/plugins/PACKAGING.md）
   - from: resources/plugins

@@ -67,7 +67,15 @@ export const zhCNFsToolTexts = {
 
   exec: {
     /** execute 输出硬上限截断 */
-    truncated: '（输出过长，已截断）'
+    truncated: '（输出过长，已截断）',
+    /** 命令超时被终止 */
+    timedOut: '（命令超时，已终止）',
+    /** 该平台没有可用沙箱后端：命令**未执行**（故障关闭） */
+    sandboxUnavailable: '沙箱不可用，命令未执行：{{reason}}',
+    /** 沙箱后端自身启动失败：命令**未执行**（与「命令失败」区分开） */
+    sandboxRunnerFailed: '沙箱后端启动失败，命令未执行：{{detail}}',
+    /** 沙箱在操作系统层拒绝了这次操作（越界写入等） */
+    sandboxDenied: '命令试图做沙箱允许范围之外的事（{{mode}} 模式），已被操作系统拒绝：'
   },
 
   output: {
@@ -99,6 +107,35 @@ export const zhCNFsToolTexts = {
     summaryEmpty: '摘要输出为空',
     /** 历史回灌时工具结果的裁剪标记（完整内容保留在会话记录里） */
     toolResultPruned: '……（{{omitted}} 字符已裁剪，完整内容保留在会话记录中）……'
+  },
+
+  /**
+   * 沙箱（权限档位）相关文案。
+   *
+   * `[sandbox: ...]` 标记本身是**协议字符串**，不在这里——真源在 runtime/permission.ts
+   * （模型按标记识别拦截，工装按标记断言），这里只放跟随界面语言的正文。
+   */
+  sandbox: {
+    reason: {
+      /** 仅可查看模式下写文件 */
+      readOnlyWrite: '当前权限是「仅可查看」：写文件需要你临时提权后才能执行。',
+      /** 仅可查看模式下的危险命令 */
+      readOnlyExec: '当前权限是「仅可查看」：这条命令会改动系统，已被拦截（{{evidence}}）。',
+      /** 仅可查看模式下的外部工具（无法确认是否只读） */
+      readOnlyExternal: '当前权限是「仅可查看」：无法确认这个外部工具（MCP / 插件）是否只读。',
+      /** 命令里出现工作区以外的路径 */
+      outsidePath: '命令里出现工作区以外的路径：{{evidence}}',
+      /** 命令里出现危险操作 */
+      riskyCommand: '命令里出现危险操作：{{evidence}}'
+    },
+    escalation: {
+      invalidMode:
+        '升权参数不合法：sandbox_permissions 只能是 read-only / workspace-write / danger-full-access 之一。',
+      invalidJustification: '升权必须同时给出 justification（一句话说明为什么要越过沙箱）。',
+      notWider: '升权目标必须比当前档位更宽：read-only → workspace-write → danger-full-access。',
+      notPreviouslyDenied:
+        '只有刚被沙箱拒绝过的同一次调用才能申请升权：请先原样重试拿到拒绝结果，再带上 sandbox_permissions 与 justification。'
+    }
   }
 }
 
@@ -148,7 +185,13 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
   },
 
   exec: {
-    truncated: '(output truncated)'
+    truncated: '(output truncated)',
+    timedOut: '(command timed out and was terminated)',
+    sandboxUnavailable: 'The sandbox is unavailable, so the command was NOT run: {{reason}}',
+    sandboxRunnerFailed:
+      'The sandbox backend failed to start, so the command was NOT run: {{detail}}',
+    sandboxDenied:
+      'The command tried to do something outside what the sandbox allows ({{mode}} mode) and the operating system denied it:'
   },
 
   output: {
@@ -172,6 +215,29 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     summaryEmpty: 'The summarizer returned an empty output',
     toolResultPruned:
       '……({{omitted}} characters pruned; the full content is kept in the conversation record)……'
+  },
+
+  sandbox: {
+    reason: {
+      readOnlyWrite:
+        'Current permission is "read only": writing files needs your one-off escalation first.',
+      readOnlyExec:
+        'Current permission is "read only": this command would change the system, so it was blocked ({{evidence}}).',
+      readOnlyExternal:
+        'Current permission is "read only": this external tool (MCP / plugin) cannot be verified as read-only.',
+      outsidePath: 'Command references a path outside the workspace: {{evidence}}',
+      riskyCommand: 'Command contains a risky operation: {{evidence}}'
+    },
+    escalation: {
+      invalidMode:
+        'Invalid escalation argument: sandbox_permissions must be one of read-only / workspace-write / danger-full-access.',
+      invalidJustification:
+        'Escalation requires justification: one sentence explaining why the sandbox should be bypassed.',
+      notWider:
+        'The escalation target must be strictly wider than the current mode: read-only → workspace-write → danger-full-access.',
+      notPreviouslyDenied:
+        'Only the exact call that the sandbox just denied can request escalation: retry it unchanged first, then add sandbox_permissions and justification.'
+    }
   }
 }
 

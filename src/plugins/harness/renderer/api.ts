@@ -2,6 +2,8 @@ import type {
   AgentConfigInput,
   AgentConfigRow,
   AgentPaginatedResult,
+  ApprovalDecision,
+  ApprovalRequestView,
   AskAnswer,
   FileChangeContent,
   FileChangeView,
@@ -20,6 +22,7 @@ import type {
   McpToolInfo,
   PaginatedResult,
   PendingQuestionView,
+  PermissionMode,
   QueuedMessageView,
   StartMemoryAgentResult,
   SubagentSessionRow,
@@ -29,6 +32,25 @@ import type {
   WorkspaceRow
 } from '../shared/types'
 import type { HarnessToolInfo } from './types'
+
+/** 档位状态视图（主进程为准：当前话题档位 + 新会话默认档位） */
+export interface PermissionStateView {
+  topicId: number
+  mode: PermissionMode
+  defaultMode: PermissionMode
+}
+
+/** 沙箱后端状态（设置页展示「有没有真正的内核级隔离」） */
+export interface SandboxStatusView {
+  platform: string
+  backend: string | null
+  enforcement: 'full' | 'partial' | null
+  usable: boolean
+  reason?: string
+  tempRoot?: string
+  windowsRunnerPath?: string
+  landlockLauncherPath?: string
+}
 
 /**
  * harness 插件主进程通道的薄封装。
@@ -231,6 +253,45 @@ export const harnessApi = {
       invoke('plugin:harness:harness-question-answer', requestId, answers) as Promise<boolean>,
     getQuestion: (topicId: number) =>
       invoke('plugin:harness:harness-question-get', topicId) as Promise<PendingQuestionView | null>,
+
+    /* ── 沙箱权限（档位选择器 + 危险操作审批弹窗） ── */
+    /** 当前档位与新会话默认值（切话题时拉一次） */
+    getPermission: (topicId?: number | null) =>
+      invoke(
+        'plugin:harness:harness-permission-get',
+        topicId ?? undefined
+      ) as Promise<PermissionStateView>,
+    /** 切档位：scope='default' 改新会话默认值，否则改该话题 */
+    setPermission: (payload: {
+      topicId?: number | null
+      mode: PermissionMode
+      scope?: 'topic' | 'default'
+    }) =>
+      invoke('plugin:harness:harness-permission-set', {
+        topicId: payload.topicId ?? undefined,
+        mode: payload.mode,
+        scope: payload.scope
+      }) as Promise<PermissionStateView>,
+    onPermissionUpdated: (callback: (state: PermissionStateView) => void): (() => void) =>
+      on('plugin:harness:harness-permission-updated', (state) =>
+        callback(state as PermissionStateView)
+      ),
+    /** 沙箱后端状态：拿不到后端时命令会被拒绝执行（设置页要把这件事说出来） */
+    sandboxStatus: () =>
+      invoke('plugin:harness:harness-sandbox-status') as Promise<SandboxStatusView>,
+    /** 撤销工作区上的常驻 ACE（仅 Windows 后端有意义；卸载/清理入口） */
+    cleanupSandbox: (workspacePath: string) =>
+      invoke('plugin:harness:harness-sandbox-cleanup', workspacePath) as Promise<boolean>,
+    /** 沙箱拦下一次危险 / 越界操作 → 弹窗等用户决定 */
+    onApprovalAsked: (callback: (pending: ApprovalRequestView) => void): (() => void) =>
+      on('plugin:harness:harness-approval-asked', (pending) =>
+        callback(pending as ApprovalRequestView)
+      ),
+    /** 裁决：allow-once（只放行这一次）/ deny */
+    decideApproval: (requestId: string, decision: ApprovalDecision) =>
+      invoke('plugin:harness:harness-approval-decide', requestId, decision) as Promise<boolean>,
+    getApproval: (topicId: number) =>
+      invoke('plugin:harness:harness-approval-get', topicId) as Promise<ApprovalRequestView | null>,
 
     cancelStream: () => {
       void invoke('plugin:harness:harness-cancel-stream')

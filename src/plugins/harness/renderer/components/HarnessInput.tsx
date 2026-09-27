@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
-import { App, Button, Input, Popover, Tooltip, theme } from 'antd'
+import { App, Button, Input, Modal, Popover, Tooltip, theme } from 'antd'
 import {
   RiArrowUpLine,
   RiAttachment2,
@@ -10,7 +10,10 @@ import {
   RiArrowUpSLine,
   RiArrowDownSLine,
   RiSearchLine,
-  RiCheckLine
+  RiCheckLine,
+  RiShieldCheckLine,
+  RiShieldKeyholeLine,
+  RiShieldFlashLine
 } from '@remixicon/react'
 import {
   OpenAIFilled,
@@ -43,6 +46,8 @@ import {
 } from '@renderer/utils/providerMeta'
 import ProviderMark from '@renderer/components/provider/provider-mark'
 import type { Attachment } from '../types'
+import type { PermissionMode } from '../../shared/types'
+import { harnessApi } from '../api'
 
 // TipTap 默认不加载标准键位绑定（退格/删除/回车等），必须显式加载 prosemirror-commands 的 baseKeymap
 const BaseKeymap = Extension.create({
@@ -68,6 +73,49 @@ const providerIconMap: Record<string, React.ComponentType<{ style?: React.CSSPro
 // 与正文/占位符字号一致（14px），保证空内容时与提示文字同高同位。
 // 如需微调高度改这里即可。
 const CARET_HEIGHT = 14
+
+/**
+ * 权限档位（沙箱）选项表 —— 与主进程 runtime/permission.ts 的档位一一对应。
+ *
+ * 只有三个内置档位、且与 DSH 的预设同名同义（仅可查看 / 工作区内修改 / 完全权限）：
+ * 图标沿用盾牌家族，颜色只在「更宽 = 更危险」这一条信息上变化（中性 → 主色 → 警示）。
+ */
+const PERMISSION_OPTIONS: {
+  mode: PermissionMode
+  labelKey:
+    | 'harness.permission.readOnly'
+    | 'harness.permission.workspaceWrite'
+    | 'harness.permission.fullAccess'
+  hintKey:
+    | 'harness.permission.readOnlyHint'
+    | 'harness.permission.workspaceWriteHint'
+    | 'harness.permission.fullAccessHint'
+  icon: React.ComponentType<{ size?: number | string; style?: React.CSSProperties }>
+  /** 颜色令牌名（在组件里按主题 token 取色） */
+  tone: 'neutral' | 'primary' | 'warning'
+}[] = [
+  {
+    mode: 'read-only',
+    labelKey: 'harness.permission.readOnly',
+    hintKey: 'harness.permission.readOnlyHint',
+    icon: RiShieldCheckLine,
+    tone: 'neutral'
+  },
+  {
+    mode: 'workspace-write',
+    labelKey: 'harness.permission.workspaceWrite',
+    hintKey: 'harness.permission.workspaceWriteHint',
+    icon: RiShieldKeyholeLine,
+    tone: 'primary'
+  },
+  {
+    mode: 'danger-full-access',
+    labelKey: 'harness.permission.fullAccess',
+    hintKey: 'harness.permission.fullAccessHint',
+    icon: RiShieldFlashLine,
+    tone: 'warning'
+  }
+]
 
 // 读取粘贴 File 内容为 dataUrl（图片附件走此路径）
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -106,6 +154,11 @@ interface HarnessInputProps {
   }[]
   modelSupportsTools: boolean
   modelSupportsVision: boolean
+  /**
+   * 当前话题 id（权限档位按话题存）：
+   * null = 还没有会话（新对话第一轮），此时切换档位等同于改「新会话默认值」。
+   */
+  currentTopicId: number | null
   isDarkMode: boolean
   colorBgLayout: string
   colorBorder: string
@@ -128,6 +181,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   onSelectProvider,
   groupedProviderOptions,
   modelSupportsVision,
+  currentTopicId,
   isDarkMode,
   colorBgLayout,
   colorBorder,
@@ -153,6 +207,83 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   /** 模型列表的键盘高亮下标（搜索结果扁平化后的下标） */
   const [activeIndex, setActiveIndex] = useState(0)
   const [savingEffort, setSavingEffort] = useState(false)
+
+  // ── 权限档位（沙箱）：仅可查看 / 工作区内修改 / 完全权限 ──────────────────
+  // 档位按话题存在主进程（electron-store），这里只缓存一份用于显示；
+  // 切到「完全权限」要先过一次风险确认（DSH 同款），其余档位即点即生效。
+  const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null)
+  const [permissionOpen, setPermissionOpen] = useState(false)
+  const [confirmFullAccess, setConfirmFullAccess] = useState(false)
+  const [savingPermission, setSavingPermission] = useState(false)
+
+  const currentTopicIdRef = useRef(currentTopicId)
+  currentTopicIdRef.current = currentTopicId
+
+  // 切话题：拉一次该话题的档位（新话题没有记录 → 主进程回落到「新会话默认值」）
+  useEffect(() => {
+    let cancelled = false
+    void harnessApi.harness
+      .getPermission(currentTopicId)
+      .then((state) => {
+        if (!cancelled) setPermissionMode(state.mode)
+      })
+      .catch(() => {
+        // 插件停用 / 通道不可用时静默：输入框其余功能不受影响
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentTopicId])
+
+  // 档位变更广播（设置页改默认值、另一窗口切换）→ 同步当前显示
+  useEffect(() => {
+    try {
+      return harnessApi.harness.onPermissionUpdated((state) => {
+        if (state.topicId === (currentTopicIdRef.current ?? 0)) setPermissionMode(state.mode)
+      })
+    } catch (err) {
+      // 订阅失败（插件停用 / preload 白名单未放行）不能让异常从 effect 逃逸：会卸载整棵渲染树
+      console.warn('[harness-input] 权限档位订阅失败:', err)
+      return
+    }
+  }, [])
+
+  const applyPermissionMode = useCallback(
+    async (mode: PermissionMode): Promise<void> => {
+      setSavingPermission(true)
+      try {
+        const state = await harnessApi.harness.setPermission({
+          topicId: currentTopicIdRef.current,
+          mode,
+          scope: 'topic'
+        })
+        setPermissionMode(state.mode)
+        setPermissionOpen(false)
+      } catch {
+        message.error(t('harness.permission.switchFailed'))
+      } finally {
+        setSavingPermission(false)
+      }
+    },
+    [message, t]
+  )
+
+  /** 选中档位：完全权限需要显式确认风险，其余直接切换 */
+  const selectPermissionMode = useCallback(
+    (mode: PermissionMode): void => {
+      if (mode === permissionMode) {
+        setPermissionOpen(false)
+        return
+      }
+      if (mode === 'danger-full-access') {
+        setPermissionOpen(false)
+        setConfirmFullAccess(true)
+        return
+      }
+      void applyPermissionMode(mode)
+    },
+    [permissionMode, applyPermissionMode]
+  )
 
   /** 扁平化选项：查找当前模型、键盘导航、搜索结果共用一份 */
   const flatOptions = useMemo(
@@ -974,6 +1105,45 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const effortTriggerText = effectiveEffort ? reasoningEffortLabel(effectiveEffort) : ''
 
+  /** 档位图标配色：中性 → 主色 → 警示，颜色只承载「更宽 = 风险更高」这一条信息 */
+  const permissionToneColor = (tone: 'neutral' | 'primary' | 'warning'): string =>
+    tone === 'primary'
+      ? token.colorPrimary
+      : tone === 'warning'
+        ? token.colorWarning
+        : token.colorTextTertiary
+
+  const activePermission =
+    PERMISSION_OPTIONS.find((option) => option.mode === permissionMode) ??
+    PERMISSION_OPTIONS[1]
+  const ActivePermissionIcon = activePermission.icon
+
+  /** 权限档位面板：三项 + 当前档位的一句话说明（不加分组标题、不加徽章） */
+  const permissionMenu = (
+    <div className="harness-model-menu harness-permission-menu" style={menuVars}>
+      <div className="hmm-list">
+        {PERMISSION_OPTIONS.map((option) => {
+          const active = option.mode === permissionMode
+          const Icon = option.icon
+          return (
+            <button
+              key={option.mode}
+              type="button"
+              className={`hmm-item${active ? ' is-active' : ''}`}
+              disabled={savingPermission}
+              onClick={() => selectPermissionMode(option.mode)}
+            >
+              <Icon size={16} style={{ color: permissionToneColor(option.tone), flexShrink: 0 }} />
+              <span className="hmm-item-label">{t(option.labelKey)}</span>
+              {active ? <RiCheckLine size={14} className="hmm-item-check" /> : null}
+            </button>
+          )
+        })}
+      </div>
+      <div className="hmm-note">{t(activePermission.hintKey)}</div>
+    </div>
+  )
+
   return (
     <div
       className="rounded-2xl input-scrollbar"
@@ -1110,6 +1280,39 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           }
           .harness-model-trigger-effort { color: var(--hmm-tertiary); }
           .harness-model-trigger-chev { color: var(--hmm-tertiary); flex-shrink: 0; }
+
+          /* ── 权限档位（沙箱）：与模型触发条同形，收起时只显示当前档位 ── */
+          .harness-permission-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            max-width: 100%;
+            height: 26px;
+            padding: 0 8px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--hmm-text);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+          }
+          .harness-permission-trigger:hover { background: var(--hmm-hover); }
+          .harness-permission-trigger[aria-expanded='true'] {
+            background: var(--hmm-hover);
+            border-color: var(--hmm-border);
+          }
+          .harness-permission-trigger:disabled { cursor: default; opacity: 0.6; }
+          .harness-permission-trigger-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .harness-permission-trigger-chev { color: var(--hmm-tertiary); flex-shrink: 0; }
+          .harness-permission-menu .hmm-list { max-height: none; }
 
           /* ── 模型 / 推理等级：展开面板 ── */
           .harness-model-menu {
@@ -1325,6 +1528,39 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               )}
             </button>
           </Popover>
+          {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定） */}
+          <Popover
+            open={permissionOpen}
+            onOpenChange={setPermissionOpen}
+            trigger="click"
+            placement="topLeft"
+            arrow={false}
+            content={permissionMenu}
+            styles={{
+              content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+            }}
+          >
+            <button
+              type="button"
+              className="harness-permission-trigger"
+              aria-label={t('harness.input.permissionAria')}
+              aria-expanded={permissionOpen}
+              disabled={savingPermission}
+            >
+              <ActivePermissionIcon
+                size={14}
+                style={{ color: permissionToneColor(activePermission.tone) }}
+              />
+              <span className="harness-permission-trigger-name">
+                {t(activePermission.labelKey)}
+              </span>
+              {permissionOpen ? (
+                <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+              ) : (
+                <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+              )}
+            </button>
+          </Popover>
         </div>
         <div className="flex items-center gap-2">
           {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
@@ -1342,6 +1578,25 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           </Tooltip>
         </div>
       </div>
+
+      {/* 完全权限：档位本身没有拦截，切换前必须过一次显式风险确认（DSH 同款） */}
+      <Modal
+        open={confirmFullAccess}
+        title={t('harness.permission.confirmTitle')}
+        okText={t('harness.permission.confirmOk')}
+        cancelText={t('harness.permission.confirmCancel')}
+        okButtonProps={{ danger: true, loading: savingPermission }}
+        onOk={() => {
+          setConfirmFullAccess(false)
+          void applyPermissionMode('danger-full-access')
+        }}
+        onCancel={() => setConfirmFullAccess(false)}
+        width={440}
+      >
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+          {t('harness.permission.confirmBody')}
+        </div>
+      </Modal>
     </div>
   )
 }

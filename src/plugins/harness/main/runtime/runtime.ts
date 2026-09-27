@@ -21,6 +21,9 @@ import { buildWorkflowTool } from './workflow'
 import { buildSkillsPromptSection, loadSkills } from './skills'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../tools/builders'
 import { createTaskTool } from './subagent'
+import { permissionGate } from './permission-gate'
+import { guardTools } from './permission-guard'
+import { sandboxPromptSection } from './permission'
 import { RecordQueue, startGraphStream, invokeGraph, type GraphRunOptions } from './graph'
 import { SpillStore } from './spill'
 import type { MnemonComponent } from './mnemon/index'
@@ -88,6 +91,13 @@ export class Runtime {
   private readonly recursionLimit: number
   /** 工具调用总次数上限（模型级「工具调用轮数」） */
   private readonly maxToolCalls: number
+  /**
+   * 本轮话题 id（每次 stream/invoke 重新赋值）。
+   *
+   * 为什么要在 Runtime 上留一份：工具包装（权限闸门）在组装期就需要一个话题兜底值——
+   * 子代理子图不带 configurable，工具调用拿不到 topicId，只能回落到这里。
+   */
+  private currentTopicId = 0
 
   constructor(opts: AgentRuntimeOptions) {
     this.opts = opts
@@ -124,7 +134,8 @@ export class Runtime {
     this.workflowTool = buildWorkflowTool({
       mainModel: opts.model,
       resolveModel: (spec) => this.resolveSubAgentModel(spec),
-      buildAgentTools: () => [...this.opts.tools, ...this.fsTools],
+      // 工作流里的子代理同样受权限闸门约束（工具在真正被调用时才组装，话题取当时的 this.currentTopicId）
+      buildAgentTools: () => this.guard([...this.opts.tools, ...this.fsTools]),
       recursionLimit: this.recursionLimit,
       maxToolCalls: this.maxToolCalls,
       spillRef: this.spillRef
@@ -138,25 +149,46 @@ export class Runtime {
   /**
    * 组装主代理工具集
    * （业务工具 + 文件工具 + 待办 + 目标 + 后台任务 + 提问 + 子代理续接控制 + 工作流 + Mnemon + task）
+   *
+   * 全部工具统一过权限闸门：任何一次调用（含 MCP / 插件贡献 / 后续新增的工具）都必须在
+   * 组装处就被包住，否则「新加一个工具」就会悄悄绕过沙箱。
    */
   private buildAllTools(topicId: number): StructuredToolInterface[] {
-    return [
-      ...this.opts.tools,
-      ...this.fsTools,
-      ...buildTodoTools(todoStore, topicId),
-      ...buildGoalTools(goalStore, topicId),
-      ...buildJobTools(jobsRegistry, topicId),
-      buildAskUserTool(topicId),
-      ...buildSubagentControlTools(subagentSessions, topicId),
-      this.workflowTool,
-      ...(this.mnemon ? this.mnemon.tools : []),
-      ...(this.taskTool ? [this.taskTool] : [])
-    ]
+    return this.guard(
+      [
+        ...this.opts.tools,
+        ...this.fsTools,
+        ...buildTodoTools(todoStore, topicId),
+        ...buildGoalTools(goalStore, topicId),
+        ...buildJobTools(jobsRegistry, topicId),
+        buildAskUserTool(topicId),
+        ...buildSubagentControlTools(subagentSessions, topicId),
+        this.workflowTool,
+        ...(this.mnemon ? this.mnemon.tools : []),
+        ...(this.taskTool ? [this.taskTool] : [])
+      ],
+      topicId
+    )
   }
 
-  /** 子代理工具（按声明的工具名从系统工具注册表独立构建，与主智能体工具配置无关） */
+  /** 子代理工具（按声明的工具名从系统工具注册表独立构建）——同样过闸门 */
   private buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
-    return buildSubAgentToolsFromRegistry(subAgent)
+    return this.guard(buildSubAgentToolsFromRegistry(subAgent))
+  }
+
+  /**
+   * 套上权限闸门（沙箱：仅可查看 / 工作区内修改 / 完全权限）。
+   *
+   * @param topicId 话题 id；缺省用本轮话题（子代理/工作流在调用期组装工具，取当时的 currentTopicId）
+   */
+  private guard(
+    tools: StructuredToolInterface[],
+    topicId?: number
+  ): StructuredToolInterface[] {
+    return guardTools(tools, {
+      topicId: topicId ?? this.currentTopicId,
+      workspaceRoot: this.opts.workspacePath
+    })
   }
 
   /** 解析 'provider:model' → 模型实例；失败返回 undefined（回退主模型） */
@@ -215,6 +247,16 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
       }
     }
     return prompt
+  }
+
+  /**
+   * 本轮系统提示词 = 基础提示词 + 当前权限档位说明段。
+   *
+   * 为什么在请求期拼而不是构造期：档位是**按话题**的，同一份 Runtime 配置在
+   * 不同话题下会用不同档位；档位说明必须与真正生效的拦截行为逐字对应。
+   */
+  private promptFor(topicId: number): string {
+    return this.systemPrompt + sandboxPromptSection(permissionGate.modeFor(topicId))
   }
 
   /** 图执行配置（递归上限触顶时由 graph 层优雅收尾，不再报错） */
@@ -281,14 +323,17 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   ): RuntimeStream {
     const queue = new RecordQueue()
     this.queueRef.current = queue
+    this.currentTopicId = topicId
     // 本轮用量采集容器（每次 stream/invoke 重新开始）
     this.usageRecords = []
+    // 拒绝凭据按轮清零：上一轮用户拒绝过的调用，这一轮可以重新问（否则同签名会被永远静默拒绝）
+    permissionGate.reset()
     // 按话题创建溢出存储（工作区 .spill 优先，其次记忆目录；均无则禁用溢出）
     this.spillRef.current = new SpillStore(this.opts.workspacePath, this.opts.memoryPath, topicId)
     const graph = buildAgentGraph({
       model: this.opts.model,
       tools: this.buildAllTools(topicId),
-      systemPrompt: this.systemPrompt,
+      systemPrompt: this.promptFor(topicId),
       queue: this.queueRef,
       spill: this.spillRef.current,
       usageSink: { push: (record) => this.usageRecords.push(record) },
@@ -312,13 +357,16 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
     turnMeta?: TurnMeta
   ): Promise<BaseMessage[]> {
     this.queueRef.current = undefined
+    this.currentTopicId = topicId
     // 本轮用量采集容器（每次 stream/invoke 重新开始）
     this.usageRecords = []
+    // 与流式路径同一处理：拒绝凭据按轮清零
+    permissionGate.reset()
     this.spillRef.current = new SpillStore(this.opts.workspacePath, this.opts.memoryPath, topicId)
     const graph = buildAgentGraph({
       model: this.opts.model,
       tools: this.buildAllTools(topicId),
-      systemPrompt: this.systemPrompt,
+      systemPrompt: this.promptFor(topicId),
       queue: this.queueRef,
       spill: this.spillRef.current,
       usageSink: { push: (record) => this.usageRecords.push(record) }

@@ -81,7 +81,53 @@ export const harnessEnUS: typeof harnessZhCN = {
       imageReadFailed: 'Failed to read the image attachment: {{name}}',
       filePathUnavailable:
         'Cannot get the local path of "{{name}}". Add it by drag-and-drop or the upload button',
-      pasteImageFallbackName: 'paste-image.png'
+      pasteImageFallbackName: 'paste-image.png',
+      permissionAria: 'Choose the permission mode',
+      permissionLabel: 'Permission'
+    },
+    permission: {
+      readOnly: 'Read only',
+      workspaceWrite: 'Workspace write',
+      fullAccess: 'Full access',
+      readOnlyHint: 'Reads only: writes and risky commands are blocked; the model may ask once',
+      workspaceWriteHint:
+        'Reads, workspace writes and normal commands run; out-of-scope or risky actions ask you first',
+      fullAccessHint: 'No interception: file changes and commands run directly',
+      confirmTitle: 'Enable full access?',
+      confirmBody:
+        'With full access the agent skips confirmation steps and can act directly, including sensitive operations, file changes and external commands. Only use it when you trust the tasks ahead.',
+      confirmOk: 'Enable full access',
+      confirmCancel: 'Cancel',
+      defaultLabel: 'Default permission mode',
+      defaultHint:
+        'Applies to conversations created from now on; the current one can be switched in the composer',
+      switchFailed: 'Failed to switch the permission mode'
+    },
+    sandbox: {
+      label: 'Sandbox',
+      full: 'full enforcement',
+      partial: 'partial enforcement',
+      unavailable: 'unavailable',
+      fullHint:
+        'Write restrictions are enforced by the operating system: everything outside the workspace is denied',
+      partialHint:
+        'Write restrictions are enforced by the operating system; the restricted token keeps Everyone and NTFS hard links can alias files, so enforcement is partial (known boundary)',
+      unavailableHint:
+        'No kernel-level isolation is available on this platform, so commands are refused instead of running unconfined: {{reason}}',
+      backendWindows: 'Windows restricted token + ACL',
+      backendBwrap: 'Linux bubblewrap',
+      backendLandlock: 'Linux Landlock',
+      backendSeatbelt: 'macOS Seatbelt'
+    },
+    approval: {
+      title: 'Your approval is required',
+      toolLabel: 'Tool',
+      detailLabel: 'Operation',
+      allowOnce: 'Allow once',
+      deny: 'Deny',
+      escalationNote: 'The model asks to escalate to "{{mode}}" for one call: {{justification}}',
+      footerHint:
+        'This allows the call once; the same operation will ask again. Use "Stop" to end the turn.'
     },
     queue: {
       count: '{{count}} queued message(s)',

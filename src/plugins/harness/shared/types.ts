@@ -36,6 +36,10 @@ export type { SubagentSessionRow } from '../main/runtime/subagent-sessions'
 export type { PendingQuestionView, AskAnswer } from '../main/runtime/ask'
 export type { StartMemoryAgentResult } from '../main/runtime/memory-agent'
 
+/* ── 沙箱权限（档位 + 审批弹窗视图） ── */
+export type { PermissionMode, DenyReason } from '../main/runtime/permission'
+export type { ApprovalRequestView, ApprovalDecision } from '../main/runtime/permission-gate'
+
 /* ── 工作区文件改动史与文件监听 ── */
 export type { FileChangeView, FileChangeContent } from '../main/workspace/file-history'
 export type { WorkspaceFsChange } from '../main/workspace/watcher'

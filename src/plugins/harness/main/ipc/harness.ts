@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow, app, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
@@ -37,6 +37,20 @@ import { jobsRegistry } from '../runtime/jobs'
 import { subagentSessions } from '../runtime/subagent-sessions'
 import { startMemoryAgent, type StartMemoryAgentResult } from '../runtime/memory-agent'
 import { questionService } from '../runtime/ask'
+import {
+  permissionGate,
+  type ApprovalDecision,
+  type ApprovalRequestView
+} from '../runtime/permission-gate'
+import {
+  permissionStateFor,
+  setDefaultPermissionMode,
+  setTopicPermissionMode,
+  wirePermissionGate
+} from '../runtime/permission-store'
+import { isPermissionMode, type PermissionMode } from '../runtime/permission'
+import { ensureExecutable, resolveSandboxAsset, sandboxService } from '../sandbox/service'
+import { setSandboxLogger } from '../sandbox/log'
 import { goalRoundDriver } from '../goal-driver'
 import { HarnessSettings } from '../../../../main/types/settings'
 import {
@@ -67,6 +81,8 @@ export const HARNESS_EVENTS = {
   agentsUpdated: 'plugin:harness:harness-agents-updated',
   agentOutputUpdated: 'plugin:harness:harness-agent-output-updated',
   questionAsked: 'plugin:harness:harness-question-asked',
+  approvalAsked: 'plugin:harness:harness-approval-asked',
+  permissionUpdated: 'plugin:harness:harness-permission-updated',
   todosUpdated: 'plugin:harness:harness-todos-updated'
 } as const
 
@@ -1083,6 +1099,68 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
     handlers[`plugin:harness:${channel}`] = handler
   }
 
+  // 权限闸门接线：档位来源（electron-store）+ 工作区根目录 + 界面语言文案
+  wirePermissionGate()
+  // 沙箱层不 import electron（要能在任意 node 环境跑：工装 / 容器验证），日志由这里注入
+  setSandboxLogger(logger)
+
+  // 沙箱服务接线：把自带资产（Windows runner / Linux Landlock 启动器）的真实路径注入。
+  // 两条候选：开发态在仓库 resources/sandbox 下；打包态由 electron-builder 的
+  // extraResources 复制到 process.resourcesPath/sandbox（asar 里不能直接 spawn 脚本）。
+  const sandboxRoots = { devRoot: app.getAppPath(), resourcesPath: process.resourcesPath }
+  const archDir =
+    process.arch === 'x64'
+      ? 'linux-x64'
+      : process.arch === 'arm64'
+        ? 'linux-arm64'
+        : `linux-${process.arch}`
+  const landlockLauncher =
+    process.platform === 'linux'
+      ? resolveSandboxAsset(join(archDir, 'ryten-landlock-launcher'), sandboxRoots)
+      : undefined
+  if (landlockLauncher) ensureExecutable(landlockLauncher)
+  sandboxService.configure({
+    nodePath: process.execPath,
+    appRoot: app.getAppPath(),
+    windowsRunnerPath:
+      process.platform === 'win32'
+        ? resolveSandboxAsset('win32-sandbox-runner.cjs', sandboxRoots)
+        : undefined,
+    landlockLauncherPath: landlockLauncher
+  })
+  const sandboxStatus = sandboxService.status()
+  logger.info(
+    `[Sandbox] 接线完成 backend=${sandboxStatus.backend ?? 'unavailable'} enforcement=${sandboxStatus.enforcement ?? '-'} ${sandboxStatus.reason ?? ''}`
+  )
+
+  // 沙箱拦截到的危险 / 越界操作 → 广播到所有窗口，由审批弹窗问用户「允许一次 / 拒绝」
+  ctx.effect(() => {
+    permissionGate.onApprovalAsked = (pending: ApprovalRequestView) => {
+      // 只广播可序列化视图（无 resolve / signal，纯 JSON）
+      const payload = {
+        topicId: pending.topicId,
+        requestId: pending.requestId,
+        toolName: pending.toolName,
+        detail: pending.detail,
+        reason: pending.reason,
+        reasonCode: pending.reasonCode,
+        requestedMode: pending.requestedMode,
+        justification: pending.justification
+      }
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.approvalAsked, payload)
+      }
+      logger.info(
+        `[Permission] 挂起审批 requestId=${pending.requestId} tool=${pending.toolName} reason=${pending.reasonCode}`
+      )
+    }
+    return () => {
+      // 停用插件即不再有人应答：挂起审批全部按拒绝结算（故障关闭）
+      permissionGate.onApprovalAsked = undefined
+      permissionGate.abortAll()
+    }
+  })
+
   // 队列变更 → 广播到所有窗口（输入框上方的插话队列实时刷新）
   ctx.effect(() => {
     harnessQueue.onChanged = ({ topicId }) => broadcastQueue(topicId)
@@ -1470,6 +1548,61 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
     return questionService.getPending(topicId)
   })
 
+  // ── 沙箱审批（危险 / 越界操作被拦下后等用户决定）─────────────────────────
+  // 与提问不同：审批只影响「这一次调用」，没有「总是允许」——持久策略由档位负责。
+  handle('harness-approval-decide', (requestId: string, decision: string) => {
+    const allowed = permissionGate.decide(
+      requestId,
+      decision === 'allow-once' ? 'allow-once' : ('deny' as ApprovalDecision)
+    )
+    logger.info(`[Permission] 审批裁决 requestId=${requestId} decision=${decision} 命中=${allowed}`)
+    return allowed
+  })
+  // 切话题 / 重新加载时拉一次当前挂起的审批（弹窗可能是在别的界面挂起的）
+  handle('harness-approval-get', (topicId: number) => permissionGate.getPending(topicId))
+
+  // ── 权限档位（输入框左下角选择器 + 设置页「新会话默认」）───────────────────
+  handle('harness-permission-get', (topicId?: number) => permissionStateFor(topicId ?? null))
+  // 沙箱后端状态（设置页与诊断用）：拿不到后端时命令会被拒绝执行，界面必须能说出来
+  handle('harness-sandbox-status', () => {
+    const status = sandboxService.status()
+    return { ...status, ...sandboxService.describe() }
+  })
+  // 撤销工作区上的常驻 ACE（卸载/清理入口；仅 Windows 后端有意义）
+  handle('harness-sandbox-cleanup', (workspacePath: string) => {
+    if (!workspacePath) return false
+    return sandboxService.cleanupWorkspace({
+      mode: 'workspace-write',
+      workspaceRoot: workspacePath
+    })
+  })
+  handle(
+    'harness-permission-set',
+    (payload: { topicId?: number; mode?: unknown; scope?: 'topic' | 'default' }) => {
+      const mode = payload?.mode
+      if (!isPermissionMode(mode)) {
+        logger.warn(`[Permission] 拒绝非法档位: ${String(mode)}`)
+        return permissionStateFor(payload?.topicId ?? null)
+      }
+      // scope='default' 改「之后新建话题的默认值」；否则改当前话题（DSH 的两层语义）
+      if (payload?.scope === 'default') {
+        setDefaultPermissionMode(mode)
+      } else if (typeof payload.topicId === 'number' && payload.topicId > 0) {
+        setTopicPermissionMode(payload.topicId, mode as PermissionMode)
+      } else {
+        setDefaultPermissionMode(mode)
+      }
+      const state = permissionStateFor(payload?.topicId ?? null)
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          safeSend(win.webContents, HARNESS_EVENTS.permissionUpdated, state)
+        }
+      }
+      logger.info(`[Permission] 档位已切换 topic=${state.topicId} mode=${state.mode}`)
+      return state
+    }
+  )
+
   // 取消流式输出（同时中止挂起的提问）
   handle('harness-cancel-stream', () => {
     const sender = primarySender()
@@ -1487,6 +1620,8 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
       broadcastQueue(topicId)
     }
     questionService.abortAll()
+    // 沙箱审批同样撤回：用户点了停止，就不该再有「等待审批」的调用挂在那里
+    permissionGate.abortAll()
   })
 
   // 对话计划清单（write_todos）变更 → 广播到渲染进程（输入框上方的进行中任务卡片）

@@ -88,7 +88,48 @@ export const harnessZhCN = {
       visionUnsupported: '当前模型不支持视觉识别，无法粘贴图片附件',
       imageReadFailed: '读取图片附件失败：{{name}}',
       filePathUnavailable: '无法获取「{{name}}」的本地路径，请通过拖拽或上传按钮添加',
-      pasteImageFallbackName: 'paste-image.png'
+      pasteImageFallbackName: 'paste-image.png',
+      permissionAria: '选择权限模式',
+      permissionLabel: '权限'
+    },
+    permission: {
+      readOnly: '仅可查看',
+      workspaceWrite: '工作区内修改',
+      fullAccess: '完全权限',
+      readOnlyHint: '只读：写入与危险命令一律拦截，模型可申请一次提权',
+      workspaceWriteHint: '工作区内的读写与常规命令直接执行；越界或危险操作先问你',
+      fullAccessHint: '不再拦截：文件改动与命令直接执行',
+      confirmTitle: '确认启用完全权限？',
+      confirmBody:
+        '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+      confirmOk: '启用完全权限',
+      confirmCancel: '取消',
+      defaultLabel: '默认权限模式',
+      defaultHint: '之后新建的会话使用这个档位；当前会话可在输入框左下角单独切换',
+      switchFailed: '权限模式切换失败'
+    },
+    sandbox: {
+      label: '沙箱',
+      full: '完整强制',
+      partial: '部分强制',
+      unavailable: '不可用',
+      fullHint: '写入限制由操作系统强制执行：工作区之外一律拒绝',
+      partialHint:
+        '写入限制由操作系统强制执行；受限令牌保留了 Everyone 且 NTFS 硬链接可别名，因此属部分强制（已知边界）',
+      unavailableHint: '当前平台拿不到内核级隔离，命令会被拒绝执行（不会静默放行）：{{reason}}',
+      backendWindows: 'Windows 受限令牌 + ACL',
+      backendBwrap: 'Linux bubblewrap',
+      backendLandlock: 'Linux Landlock',
+      backendSeatbelt: 'macOS Seatbelt'
+    },
+    approval: {
+      title: '需要你的许可',
+      toolLabel: '工具',
+      detailLabel: '本次操作',
+      allowOnce: '允许一次',
+      deny: '拒绝',
+      escalationNote: '模型申请临时提权到「{{mode}}」：{{justification}}',
+      footerHint: '只放行这一次；同样的操作再次出现时还会问你。点「停止生成」可中止本轮。'
     },
     queue: {
       count: '{{count}} 条排队消息',
