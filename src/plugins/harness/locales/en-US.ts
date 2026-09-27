@@ -90,8 +90,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceWrite: 'Workspace write',
       fullAccess: 'Full access',
       readOnlyHint: 'Reads only: writes and risky commands are blocked; the model may ask once',
-      workspaceWriteHint:
-        'Reads, workspace writes and normal commands run; out-of-scope or risky actions ask you first',
       fullAccessHint: 'No interception: file changes and commands run directly',
       confirmTitle: 'Enable full access?',
       confirmBody:

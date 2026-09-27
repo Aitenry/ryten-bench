@@ -97,7 +97,6 @@ export const harnessZhCN = {
       workspaceWrite: '工作区内修改',
       fullAccess: '完全权限',
       readOnlyHint: '只读：写入与危险命令一律拦截，模型可申请一次提权',
-      workspaceWriteHint: '工作区内的读写与常规命令直接执行；越界或危险操作先问你',
       fullAccessHint: '不再拦截：文件改动与命令直接执行',
       confirmTitle: '确认启用完全权限？',
       confirmBody:

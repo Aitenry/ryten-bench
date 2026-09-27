@@ -86,10 +86,8 @@ const PERMISSION_OPTIONS: {
     | 'harness.permission.readOnly'
     | 'harness.permission.workspaceWrite'
     | 'harness.permission.fullAccess'
-  hintKey:
-    | 'harness.permission.readOnlyHint'
-    | 'harness.permission.workspaceWriteHint'
-    | 'harness.permission.fullAccessHint'
+  /** 面板底部的一句话说明（不给 = 该档位不显示说明行） */
+  hintKey?: 'harness.permission.readOnlyHint' | 'harness.permission.fullAccessHint'
   icon: React.ComponentType<{ size?: number | string; style?: React.CSSProperties }>
   /** 颜色令牌名（在组件里按主题 token 取色） */
   tone: 'neutral' | 'primary' | 'warning'
@@ -104,7 +102,6 @@ const PERMISSION_OPTIONS: {
   {
     mode: 'workspace-write',
     labelKey: 'harness.permission.workspaceWrite',
-    hintKey: 'harness.permission.workspaceWriteHint',
     icon: RiShieldKeyholeLine,
     tone: 'primary'
   },
@@ -340,19 +337,21 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     setMenuView('model')
     setModelQuery('')
     // 打开时高亮当前模型（搜索词刚被清空，所以按全量列表定位）
-    setActiveIndex(Math.max(0, flatOptions.findIndex((o) => o.value === selectedProviderId)))
+    setActiveIndex(
+      Math.max(
+        0,
+        flatOptions.findIndex((o) => o.value === selectedProviderId)
+      )
+    )
   }, [flatOptions, selectedProviderId])
 
-  const handleMenuOpenChange = useCallback(
-    (open: boolean): void => {
-      setMenuOpen(open)
-      if (open) {
-        setMenuView('root')
-        setModelQuery('')
-      }
-    },
-    []
-  )
+  const handleMenuOpenChange = useCallback((open: boolean): void => {
+    setMenuOpen(open)
+    if (open) {
+      setMenuView('root')
+      setModelQuery('')
+    }
+  }, [])
 
   const selectModel = useCallback(
     (value: number): void => {
@@ -1114,8 +1113,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         : token.colorTextTertiary
 
   const activePermission =
-    PERMISSION_OPTIONS.find((option) => option.mode === permissionMode) ??
-    PERMISSION_OPTIONS[1]
+    PERMISSION_OPTIONS.find((option) => option.mode === permissionMode) ?? PERMISSION_OPTIONS[1]
   const ActivePermissionIcon = activePermission.icon
 
   /** 权限档位面板：三项 + 当前档位的一句话说明（不加分组标题、不加徽章） */
@@ -1140,7 +1138,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           )
         })}
       </div>
-      <div className="hmm-note">{t(activePermission.hintKey)}</div>
+      {activePermission.hintKey ? (
+        <div className="hmm-note">{t(activePermission.hintKey)}</div>
+      ) : null}
     </div>
   )
 
@@ -1324,6 +1324,12 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
             font-size: 13px;
           }
+          /* 权限面板不跟着模型面板走 260px：三项都是短标签，固定 160px，
+             说明行在面板内换行（宽度不随档位变化而跳） */
+          .harness-model-menu.harness-permission-menu {
+            width: 160px;
+            min-width: 160px;
+          }
           .harness-model-menu .hmm-row {
             display: flex;
             align-items: center;
@@ -1491,6 +1497,41 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               }}
             />
           </Tooltip>
+          {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定）。
+              排在模型选择前面：先定「能动多大范围」，再看「用哪个模型」。 */}
+          <Popover
+            open={permissionOpen}
+            onOpenChange={setPermissionOpen}
+            trigger="click"
+            placement="topLeft"
+            arrow={false}
+            content={permissionMenu}
+            styles={{
+              container: { padding: 0 },
+              content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+            }}
+          >
+            <button
+              type="button"
+              className="harness-permission-trigger"
+              aria-label={t('harness.input.permissionAria')}
+              aria-expanded={permissionOpen}
+              disabled={savingPermission}
+            >
+              <ActivePermissionIcon
+                size={14}
+                style={{ color: permissionToneColor(activePermission.tone) }}
+              />
+              <span className="harness-permission-trigger-name">
+                {t(activePermission.labelKey)}
+              </span>
+              {permissionOpen ? (
+                <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+              ) : (
+                <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+              )}
+            </button>
+          </Popover>
           {/* 模型选择：收起时一行（模型名 + 推理等级），点开是「模型 / 推理等级」两行入口。
               推理等级直接写进该模型的配置列，下一轮请求即按协议族翻译成各家字段。 */}
           <Popover
@@ -1501,6 +1542,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             arrow={false}
             content={modelMenu}
             styles={{
+              container: { padding: 0 },
               content: { padding: 0, background: 'transparent', boxShadow: 'none' }
             }}
           >
@@ -1525,39 +1567,6 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
                 <RiArrowUpSLine size={14} className="harness-model-trigger-chev" />
               ) : (
                 <RiArrowDownSLine size={14} className="harness-model-trigger-chev" />
-              )}
-            </button>
-          </Popover>
-          {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定） */}
-          <Popover
-            open={permissionOpen}
-            onOpenChange={setPermissionOpen}
-            trigger="click"
-            placement="topLeft"
-            arrow={false}
-            content={permissionMenu}
-            styles={{
-              content: { padding: 0, background: 'transparent', boxShadow: 'none' }
-            }}
-          >
-            <button
-              type="button"
-              className="harness-permission-trigger"
-              aria-label={t('harness.input.permissionAria')}
-              aria-expanded={permissionOpen}
-              disabled={savingPermission}
-            >
-              <ActivePermissionIcon
-                size={14}
-                style={{ color: permissionToneColor(activePermission.tone) }}
-              />
-              <span className="harness-permission-trigger-name">
-                {t(activePermission.labelKey)}
-              </span>
-              {permissionOpen ? (
-                <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
-              ) : (
-                <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
               )}
             </button>
           </Popover>
@@ -1593,9 +1602,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         onCancel={() => setConfirmFullAccess(false)}
         width={440}
       >
-        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-          {t('harness.permission.confirmBody')}
-        </div>
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>{t('harness.permission.confirmBody')}</div>
       </Modal>
     </div>
   )
