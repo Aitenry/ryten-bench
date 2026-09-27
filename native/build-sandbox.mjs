@@ -118,6 +118,11 @@ function expect(label, condition, detail = '') {
   }
 }
 
+/** 诊断信息：只打印，不计入通过/失败计数（bisect 用；结论要在 CI 日志里读） */
+function note(text) {
+  console.log(`  · ${text}`)
+}
+
 /**
  * 退出码的可读形式。
  *
@@ -201,14 +206,15 @@ function selfcheckWindows(root, sandboxDir) {
   writeFileSync(probeScript, PROBE_SOURCE)
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', RYTEN_APP_ROOT: appRoot }
   /** 受限调用：runner 自己把子进程 cwd 设成工作区（与产品 exec.ts 的 cwd=workspaceRoot 一致） */
-  const run = (mode, argv) =>
+  const run = (mode, argv, extraEnv = {}) =>
     spawnSync(
       runtime ?? process.execPath,
       [runner, '--workspace', ws, '--temp', tmpdir(), '--mode', mode, '--', ...argv],
-      { encoding: 'utf8', env }
+      { encoding: 'utf8', env: { ...env, ...extraEnv } }
     )
   /** 子进程是 cmd.exe —— 产品在 Windows 上就是这么包命令的（`cmd /d /s /c <命令>`） */
-  const shell = (mode, command) => run(mode, ['cmd.exe', '/d', '/s', '/c', command])
+  const shell = (mode, command, extraEnv) =>
+    run(mode, ['cmd.exe', '/d', '/s', '/c', command], extraEnv)
   /** 子进程是打包后的 Electron 自己（node 模式；GUI 子系统，不需要控制台） */
   const probe = (mode, target, label) =>
     run(mode, [runtime ?? process.execPath, probeScript, target, label])
@@ -324,6 +330,33 @@ function selfcheckWindows(root, sandboxDir) {
 
   const cleanup = shell('cleanup', 'echo unused')
   expect('cleanup：撤销工作区 ACE 成功', cleanup.status === 0, describeRun(cleanup))
+
+  /**
+   * 诊断区（**不计入通过/失败**）。
+   *
+   * CI（windows-latest）实测：`workspace-write` 的控制台子进程一律以 0xC0000142 死在 DLL
+   * 初始化阶段，而 read-only 跑同一条命令正常、非控制台子进程也正常——本地复现不出来。
+   * 于是用 runner 的 `RYTEN_SANDBOX_DIAG` 逐个关掉 workspace-write 独有的变量，把病因一次
+   * 缩到某一项上：哪一行是「起得来」，哪一项就是病因（或它的反面）。定位后这段会删掉。
+   */
+  note('workspace-write 控制台子进程变量 bisect（不计入断言；看 CI 日志里的「起得来/起不来」）')
+  for (const variant of [
+    'no-temp-redirect',
+    'no-private-temp',
+    'no-workspace-ace',
+    'no-temp-sid',
+    'no-default-dacl',
+    'everyone-default-dacl',
+    'logon-default-dacl',
+    'both-default-dacl',
+    'alloc-console'
+  ]) {
+    const result = shell('workspace-write', 'echo ran-bisect& echo x > bisect.txt', {
+      RYTEN_SANDBOX_DIAG: variant
+    })
+    const started = (result.stdout ?? '').includes('ran-bisect')
+    note(`  ${started ? '起得来' : '起不来'}  ${variant.padEnd(22)} ${describeRun(result)}`)
+  }
 
   rmSync(ws, { recursive: true, force: true })
   rmSync(escape, { force: true })

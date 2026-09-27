@@ -52,6 +52,19 @@ const RUNNER_FAILURE_EXIT = 127
 /** 子进程在 loader/控制台初始化阶段就死掉（只做诊断提示，不改退出码语义） */
 const STATUS_DLL_INIT_FAILED = 0xc0000142
 
+/**
+ * **诊断开关（只给工装做变量 bisect 用，不是产品行为开关）**，默认空 = 生产形态。
+ *
+ * 背景：CI（GitHub windows-latest）上 `workspace-write` 的控制台子进程一律以 0xC0000142 死在
+ * DLL 初始化阶段，而 `read-only` 的同一条命令正常、非控制台子进程也正常；本地复现不出来。
+ * 于是用这个开关在 CI 里逐个关掉 workspace-write 独有的变量，把病因缩到某一项上。
+ * 取值：no-temp-redirect | no-private-temp | no-workspace-ace | no-temp-sid |
+ *      no-default-dacl | everyone-default-dacl | logon-default-dacl | both-default-dacl |
+ *      alloc-console
+ */
+const DIAG = process.env.RYTEN_SANDBOX_DIAG ?? ''
+const diag = (name) => DIAG === name
+
 /* ────────────────────────── Win32 常量 ────────────────────────── */
 
 const PROCESS_QUERY_INFORMATION = 0x0400
@@ -204,6 +217,8 @@ function createBindings() {
     LocalFree: kernel32.func('void *__stdcall LocalFree(void *)'),
     GetStdHandle: kernel32.func('void *__stdcall GetStdHandle(int)'),
     SetConsoleCtrlHandler: kernel32.func('int __stdcall SetConsoleCtrlHandler(void *, int)'),
+    AllocConsole: kernel32.func('int __stdcall AllocConsole()'),
+    GetConsoleWindow: kernel32.func('void *__stdcall GetConsoleWindow()'),
     SetEnvironmentVariableW: kernel32.func(
       'int __stdcall SetEnvironmentVariableW(const char16_t *, const char16_t *)'
     ),
@@ -982,24 +997,67 @@ async function main() {
   try {
     if (parsed.mode === 'workspace-write') {
       workspaceSidPtr = sidFromString(bindings, workspaceWriteSid(parsed.workspace))
-      // 私有临时目录：随机路径 → 随机能力 SID，别的会话写不进来
-      privateTempDir = mkdtempSync(join(parsed.temp, 'ryten-sandbox-'))
-      tempSidPtr = sidFromString(bindings, tempWriteSid(privateTempDir))
-      grantWrite(bindings, parsed.workspace, workspaceSidPtr)
-      grantWrite(bindings, privateTempDir, tempSidPtr)
+      if (!diag('no-private-temp')) {
+        // 私有临时目录：随机路径 → 随机能力 SID，别的会话写不进来
+        privateTempDir = mkdtempSync(join(parsed.temp, 'ryten-sandbox-'))
+        tempSidPtr = sidFromString(bindings, tempWriteSid(privateTempDir))
+        grantWrite(bindings, privateTempDir, tempSidPtr)
+      }
+      if (!diag('no-workspace-ace')) grantWrite(bindings, parsed.workspace, workspaceSidPtr)
     }
 
     restrictedToken = createRestrictedToken(
       bindings,
       currentToken,
       logonSid,
-      [workspaceSidPtr, tempSidPtr].filter(Boolean),
+      [workspaceSidPtr, diag('no-temp-sid') ? null : tempSidPtr].filter(Boolean),
       everyoneSid,
       parsed.mode
     )
-    setTokenDefaultDaclGrant(bindings, restrictedToken, workspaceSidPtr ?? everyoneSid)
+    if (diag('no-default-dacl')) {
+      // 诊断：完全不并默认 DACL
+    } else if (diag('everyone-default-dacl')) {
+      setTokenDefaultDaclGrant(bindings, restrictedToken, everyoneSid)
+    } else if (diag('logon-default-dacl')) {
+      setTokenDefaultDaclGrant(bindings, restrictedToken, logonSid)
+    } else if (diag('both-default-dacl')) {
+      setTokenDefaultDaclGrant(bindings, restrictedToken, workspaceSidPtr ?? everyoneSid)
+      setTokenDefaultDaclGrant(bindings, restrictedToken, everyoneSid)
+    } else {
+      /**
+       * 生产形态：能力 SID **加上** Everyone，两条都并进默认 DACL。
+       *
+       * 为什么必须是两条：受限令牌只原样继承用户的默认 DACL，而用户的默认 DACL 里没有任何
+       * restricting SID。被沙箱化的进程在启动期新建对象（控制台、段、事件、管道、临时文件）时，
+       * 写类访问要过两遍检查，第二遍只能靠对象自身 DACL 里的 restricting SID。
+       *   - 本地实测（`RYTEN_SANDBOX_DIAG=no-default-dacl`）：一条都不并 → 控制台子进程直接
+       *     以 0xC0000142 死在 DLL 初始化阶段；
+       *   - CI 实测（GitHub windows-latest，只并能力 SID）：`workspace-write` 的控制台子进程
+       *     同样 0xC0000142，而 `read-only`（默认 DACL 并的是 Everyone）正常——说明启动期那个
+       *     对象是被**别的组件**（控制台宿主等）访问的，随机能力 SID 只有我们自己带得动。
+       * 于是：能力 SID 让自有对象按最小授权走，Everyone 让宿主侧组件也过得去。
+       * 代价（如实记进 README 的已知边界）：子进程**新建**对象的 DACL 会含 Everyone；
+       * 能不能新建仍由父目录 DACL 把关，越界创建照样被拒。
+       */
+      setTokenDefaultDaclGrant(bindings, restrictedToken, workspaceSidPtr ?? everyoneSid)
+      if (workspaceSidPtr !== null) setTokenDefaultDaclGrant(bindings, restrictedToken, everyoneSid)
+    }
 
-    if (privateTempDir !== null) {
+    if (diag('alloc-console')) {
+      // 诊断：先给 runner 自己弄一个（隐藏的）控制台，子进程附着而不是自己新建
+      if (kernel.AllocConsole() === 0 && kernel.GetConsoleWindow() === null) {
+        process.stderr.write('[ryten-sandbox] diag: AllocConsole unavailable\n')
+      }
+      const window = kernel.GetConsoleWindow()
+      if (window !== null) {
+        bindings.koffi.load('user32.dll').func('int __stdcall ShowWindow(void *, int)')(
+          window,
+          SW_HIDE
+        )
+      }
+    }
+
+    if (privateTempDir !== null && !diag('no-temp-redirect')) {
       // 子进程的 TMP/TEMP 指向已授权的私有临时目录（只改 runner 自己的环境，子进程继承）
       if (kernel.SetEnvironmentVariableW('TMP', privateTempDir) === 0) {
         fail(`SetEnvironmentVariableW TMP failed (Win32 ${kernel.GetLastError()})`)

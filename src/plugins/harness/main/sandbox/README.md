@@ -29,13 +29,20 @@
 4. `CreateRestrictedToken(WRITE_RESTRICTED)`：restricting 列表 = [登录 SID, Everyone]
    （workspace-write 再加两个能力 SID）。Windows 对写类访问做**两遍检查**，
    restricting 列表里没有的 SID 拿不到任何写权限 ⇒ 只能写工作区；
-5. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
+5. 令牌的**默认 DACL** 再并 ACE：workspace-write 并「工作区能力 SID **+ Everyone**」，
+   read-only 并 Everyone。受限令牌只原样继承用户的默认 DACL，而它**不含任何 restricting SID**；
+   被沙箱化的进程在启动期新建对象（控制台、段、事件、管道、临时文件）时，写类访问的第二遍检查
+   只能靠对象自身 DACL 里的 restricting SID。实测（`RYTEN_SANDBOX_DIAG`，工装驱动 bisect）：
+   一条都不并 → 控制台子进程以 `0xC0000142` 死在 DLL 初始化阶段；**只并随机能力 SID** 时本地能过、
+   CI（windows-latest）过不去（workspace-write 全灭、read-only 正常）——启动期那些对象还会被
+   **别的组件**（控制台宿主等）访问，随机能力 SID 只有我们自己带得动，Everyone 才是通用的那一张；
+6. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
    （Node 的管道是 overlapped 的，受限子进程同步写会 `ERROR_INVALID_PARAMETER`），
    `PeekNamedPipe` + `ReadFile` 泵回 runner 的 stdout；子进程放进 kill-on-close 的
    Job Object（runner 被杀 → 整棵子树被清理）。子进程**共享宿主控制台**，窗口用
    `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏——**刻意不传 `CREATE_NO_WINDOW` /
    `CREATE_NEW_CONSOLE`**（见下一条边界）；
-6. `TMP`/`TEMP` 指向已授权的私有临时目录；退出后撤销临时 ACE、删临时目录、镜像退出码。
+7. `TMP`/`TEMP` 指向已授权的私有临时目录；退出后撤销临时 ACE、删临时目录、镜像退出码。
 
 命令：`mode=cleanup` 可撤销工作区上的常驻 ACE（工作区 ACE 默认常驻以复用：第二次起命中
 精确 ACE 就跳过整棵树的重新传播）。
@@ -83,6 +90,10 @@ workspace-write 时再 `(allow file-write* (subpath <工作区>))`；命令经
 
 - **Windows 是部分强制**：受限令牌必须保留 `Everyone`（否则早期 DLL 初始化与 CNG 会崩），
   因此 DACL 里显式授予 Everyone 写权限的对象仍可写；NTFS 硬链接可把已授权文件别名到工作区外；
+- **默认 DACL 里并了 Everyone** ⇒ 子进程**新建**的对象（工作区里的文件、私有临时目录里的文件、
+  匿名管道…）自身 DACL 含 Everyone 完全访问。这是为「启动期对象要被控制台宿主等组件访问」付的
+  代价（见 Windows 机制第 5 条）；能不能新建仍由**父目录 DACL** 把关，越界创建照样被内核拒绝
+  （工装逐条断言：写 `C:\Windows`、写用户目录、read-only 连工作区都写不了，全部仍被拒）；
 - **Windows 不做控制台隔离**：受限令牌下 `CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE` 的子进程会在
   DLL 初始化阶段以 `STATUS_DLL_INIT_FAILED`（`0xC0000142`，stderr 全空）死亡，因此子进程与 runner
   **共享控制台**，只用 `STARTF_USESHOWWINDOW + SW_HIDE` 把窗口藏起来；stdio 走 runner 自己建的管道，
