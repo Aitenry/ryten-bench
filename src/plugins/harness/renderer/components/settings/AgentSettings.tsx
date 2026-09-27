@@ -162,25 +162,27 @@ const AgentSettings: React.FC = () => {
 
   const loadOptions = useCallback(async () => {
     try {
-      const [providerList, tools, skillList, main, settings, mcp, permission, sandboxStatus] =
-        await Promise.all([
-          window.api.providers.getEnabled(),
-          harnessApi.harness.getTools(),
-          harnessApi.harness.listSkills(),
-          harnessApi.mainAgent.get(),
-          window.api.systemSettings.getAll(),
-          harnessApi.mcp.list(),
-          // 权限档位的「新会话默认值」（当前会话的档位在输入框左下角单独切）
-          harnessApi.harness.getPermission(null),
-          // 沙箱后端状态（不可用时命令会被拒绝执行，用户有权知道）
-          harnessApi.harness.sandboxStatus()
-        ])
+      const [providerList, tools, skillList, main, settings, mcp] = await Promise.all([
+        window.api.providers.getEnabled(),
+        harnessApi.harness.getTools(),
+        harnessApi.harness.listSkills(),
+        harnessApi.mainAgent.get(),
+        window.api.systemSettings.getAll(),
+        harnessApi.mcp.list()
+      ])
+      // 沙箱状态与权限档位是**附加信息**：单独取、各自吞错——它们失败（例如某平台探针
+      // 起不来、通道暂时不可用）绝不能让整页加载失败（这里曾经因为并进上面的 Promise.all
+      // 而整页空白，2026-09-27 被 verify-agent-mcp-tools.mjs 抓到）
+      const [permission, sandboxStatus] = await Promise.all([
+        harnessApi.harness.getPermission(null).catch(() => null),
+        harnessApi.harness.sandboxStatus().catch(() => null)
+      ])
       setProviders((providerList as ProviderOption[]).filter((p) => !isEmbeddingProvider(p)))
       setAvailableTools(tools)
       setSkills(skillList)
       setMcpServers(mcp)
-      setDefaultPermissionMode(permission.defaultMode)
-      setSandbox(sandboxStatus)
+      if (permission) setDefaultPermissionMode(permission.defaultMode)
+      if (sandboxStatus) setSandbox(sandboxStatus)
       const rawMain = main as Record<string, unknown>
       const rawTools = (rawMain.tools as string[]) ?? []
       const rawMcpTools = (rawMain.mcpTools as string[]) ?? []

@@ -239,7 +239,8 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
       width={560}
       centered
       closable={false}
-      maskClosable={false}
+      // antd 6：maskClosable 已弃用，改用 mask.closable
+      mask={{ closable: false }}
       onCancel={() => undefined}
       footer={
         <div className="flex items-center justify-end gap-2">

@@ -112,7 +112,8 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
         </span>
       }
       closable={false}
-      maskClosable={false}
+      // antd 6：maskClosable 已弃用，改用 mask.closable
+      mask={{ closable: false }}
       okText={t('harness.askQuestion.okText')}
       cancelButtonProps={{ style: { display: 'none' } }}
       okButtonProps={{ disabled: !canSubmit(), loading: submitting }}

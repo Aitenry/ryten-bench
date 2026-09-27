@@ -121,7 +121,8 @@ const PermissionApprovalModal: React.FC<{ currentTopicId: number | null }> = ({
         </span>
       }
       closable={false}
-      maskClosable={false}
+      // antd 6：maskClosable 已弃用，改用 mask.closable
+      mask={{ closable: false }}
       okText={t('harness.approval.allowOnce')}
       cancelText={t('harness.approval.deny')}
       cancelButtonProps={{ disabled: submitting }}
