@@ -53,7 +53,8 @@ const WorkshopSettings: React.FC = () => {
   const { t } = useTranslation()
 
   const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
-  const [root, setRoot] = useState('')
+  const [pluginsPath, setPluginsPath] = useState('')
+  const [pickingRoot, setPickingRoot] = useState(false)
   const [ready, setReady] = useState(true)
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string>('')
@@ -66,7 +67,7 @@ const WorkshopSettings: React.FC = () => {
     try {
       const state = await harnessApi.workshop.state()
       setReady(state.ready)
-      setRoot(state.root)
+      setPluginsPath(state.pluginsPath ?? '')
       setDrafts(await harnessApi.workshop.list())
     } catch (error) {
       viewMessage(
@@ -257,41 +258,37 @@ const WorkshopSettings: React.FC = () => {
   }
 
   /**
-   * 换工作目录（源码落盘位置）：空文件夹会把草稿搬过去；已经有同一份草稿的目录直接接管。
-   * 结果里带 `previousDir` 时提示一句「原处还留着一份」——不静默删用户的东西。
+   * 配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
+   *
+   * 已经放着的旧草稿会被搬过来（主进程做，用户不用管）；取消不是失败，不提示。
    */
-  const handlePickWorkingDir = (draft: WorkshopDraftSummary): Promise<void> =>
-    runAction(
-      draft.id,
-      () => harnessApi.workshop.pickWorkingDir(draft.id),
-      (result) => {
-        if (!result || result.canceled) return
-        viewMessage(
-          `workshop-workdir-${draft.id}`,
-          'success',
-          t('workshopSettings.workdir.done', { path: result.dir }),
-          5
-        )
-        if (result.previousDir) {
-          viewMessage(
-            `workshop-workdir-left-${draft.id}`,
-            'info',
-            t('workshopSettings.workdir.leftBehind', { path: result.previousDir }),
-            6
-          )
-        }
+  const handlePickRoot = async (): Promise<void> => {
+    setPickingRoot(true)
+    try {
+      const result = await harnessApi.workshop.pickRoot()
+      if (!result.ok) {
+        viewMessage('workshop-root', 'error', result.error ?? '', 6)
+        return
       }
-    )
-
-  /** 搬回工坊默认目录 */
-  const handleResetWorkingDir = (draft: WorkshopDraftSummary): Promise<void> =>
-    runAction(
-      draft.id,
-      () => harnessApi.workshop.setWorkingDir(draft.id),
-      () => {
-        void message.success(t('workshopSettings.workdir.reset'))
-      }
-    )
+      const data = result.data
+      if (!data || data.canceled) return
+      setPluginsPath(data.dir ?? '')
+      await refresh()
+      if (detail) await openDetail(detail.id)
+      viewMessage(
+        'workshop-root',
+        'success',
+        data.moved && data.moved.length > 0
+          ? t('workshopSettings.root.moved', { count: data.moved.length })
+          : t('workshopSettings.root.saved', { path: data.dir ?? '' }),
+        5
+      )
+    } catch (error) {
+      viewMessage('workshop-root', 'error', String(error))
+    } finally {
+      setPickingRoot(false)
+    }
+  }
 
   /** 行的说明行：id · 模板 · 版本 · 文件数（用草稿自己的 id，不写笼统的「插件」） */
   const statusText = (draft: WorkshopDraftSummary): string =>
@@ -314,17 +311,6 @@ const WorkshopSettings: React.FC = () => {
       label: t('workshopSettings.action.verify')
     },
     { type: 'divider' },
-    {
-      key: 'working-dir',
-      icon: <RiFolderOpenLine size={14} />,
-      label: draft.workingDir
-        ? t('workshopSettings.action.changeWorkdir')
-        : t('workshopSettings.action.pickWorkdir')
-    },
-    ...(draft.workingDir
-      ? [{ key: 'reset-workdir', label: t('workshopSettings.action.resetWorkdir') }]
-      : []),
-    { type: 'divider' as const },
     {
       key: 'publish',
       icon: <RiUploadCloud2Line size={14} />,
@@ -370,12 +356,6 @@ const WorkshopSettings: React.FC = () => {
       case 'export':
         void handleExport(draft.id)
         break
-      case 'working-dir':
-        void handlePickWorkingDir(draft)
-        break
-      case 'reset-workdir':
-        void handleResetWorkingDir(draft)
-        break
       case 'uninstall':
         handleUninstall(draft)
         break
@@ -419,10 +399,31 @@ const WorkshopSettings: React.FC = () => {
         </div>
       )}
 
+      {/* 插件存放路径：所有插件源码的根目录。没有默认值，未配置时下面也列不出草稿 */}
+      <SettingsSection
+        title={t('workshopSettings.root.title')}
+        icon={<RiFolderOpenLine size={14} />}
+      >
+        <SettingRow
+          title={pluginsPath || t('workshopSettings.root.rowEmpty')}
+          description={
+            pluginsPath
+              ? t('workshopSettings.root.rowDesc')
+              : t('workshopSettings.root.rowDescEmpty')
+          }
+          control={
+            <Button size="small" loading={pickingRoot} onClick={() => void handlePickRoot()}>
+              {pluginsPath ? t('workshopSettings.root.change') : t('workshopSettings.root.pick')}
+            </Button>
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection
         title={t('workshopSettings.list.title')}
         icon={<RiFileList3Line size={14} />}
-        description={root ? t('workshopSettings.list.root', { path: root }) : undefined}
+        /* 这里刻意**不写**工坊自己的内部目录（userData/...，用户口径：不要在设置页显示这个目录）；
+           要显示的是用户配置的插件存放路径，见上面那一行 */
         extra={
           <Button size="small" icon={<RiAddLine size={14} />} onClick={() => setCreating(true)}>
             {t('workshopSettings.list.new')}
@@ -439,7 +440,9 @@ const WorkshopSettings: React.FC = () => {
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                  {t('workshopSettings.list.empty')}
+                  {pluginsPath
+                    ? t('workshopSettings.list.empty')
+                    : t('workshopSettings.list.needRoot')}
                 </span>
               }
             />
@@ -512,18 +515,6 @@ const WorkshopSettings: React.FC = () => {
                     {flags}
                   </span>
                 )}
-                {draft.workingDir && (
-                  <div
-                    style={{
-                      marginTop: 4,
-                      fontSize: 11.5,
-                      color: token.colorTextTertiary,
-                      wordBreak: 'break-all'
-                    }}
-                  >
-                    {t('workshopSettings.workdir.label', { path: draft.workingDir })}
-                  </div>
-                )}
               </SettingRow>
             )
           })
@@ -580,36 +571,15 @@ const WorkshopSettings: React.FC = () => {
       >
         {detail && (
           <div className="flex flex-col" style={{ gap: 16 }}>
-            {/* 源码位置 + 一行工作目录操作（源码放自己目录里时能一眼看出在哪） */}
-            <div className="flex items-center" style={{ gap: 8 }}>
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: 12,
-                  color: token.colorTextTertiary,
-                  wordBreak: 'break-all'
-                }}
-              >
-                {detail.workingDir
-                  ? t('workshopSettings.workdir.label', { path: detail.dir })
-                  : t('workshopSettings.workdir.default', { path: detail.dir })}
-              </span>
-              <Button
-                size="small"
-                type="text"
-                icon={<RiFolderOpenLine size={14} />}
-                onClick={() => void handlePickWorkingDir(detail)}
-              >
-                {detail.workingDir
-                  ? t('workshopSettings.action.changeWorkdir')
-                  : t('workshopSettings.action.pickWorkdir')}
-              </Button>
-              {detail.workingDir && (
-                <Button size="small" type="text" onClick={() => void handleResetWorkingDir(detail)}>
-                  {t('workshopSettings.action.resetWorkdir')}
-                </Button>
-              )}
+            {/* 源码位置（就是「插件存放路径」下的那个子目录；路径本身在上面那一段配置） */}
+            <div
+              style={{
+                fontSize: 12,
+                color: token.colorTextTertiary,
+                wordBreak: 'break-all'
+              }}
+            >
+              {detail.dir}
             </div>
 
             {/* 验收报告：逐项结论（失败项带建议，可直接丢回给助手） */}

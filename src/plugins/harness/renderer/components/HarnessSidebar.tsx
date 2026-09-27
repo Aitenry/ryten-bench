@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useCallback, useState } from 'react'
+import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { App, Dropdown, Input, Modal, theme } from 'antd'
 import { SkeletonListRows, SkeletonTextLines } from '@renderer/components/system/Skeleton'
 import type { InputRef } from 'antd'
@@ -227,6 +227,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [draftsLoading, setDraftsLoading] = useState(false)
   /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
   const [newDraftOpen, setNewDraftOpen] = useState(false)
+  /** 用户配置的插件存放路径（空 = 还没配置，列表为空时要给出「先去选文件夹」的引导） */
+  const [pluginsPath, setPluginsPath] = useState('')
 
   const switchMode = useCallback((next: SidebarMode): void => {
     setMode(next)
@@ -241,6 +243,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const loadDrafts = useCallback(async (): Promise<void> => {
     setDraftsLoading(true)
     try {
+      const state = await harnessApi.workshop.state()
+      setPluginsPath(state.pluginsPath ?? '')
       setDrafts(await harnessApi.workshop.list())
     } catch {
       // 工坊没接线（AI 助手刚停用/重载）时保持空列表：面板本来就只在插件模式用
@@ -682,62 +686,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         <span className="shrink-0 group-hover:hidden" style={{ fontSize: 11, color: state.color }}>
           {state.text}
         </span>
-        {/* 行内只留「工作目录」这一个动作：源码放哪儿是这一层的语义（构建/验收/安装在详情里） */}
-        <Dropdown
-          trigger={['click']}
-          menu={{
-            items: [
-              {
-                key: 'pick',
-                icon: <RiFolderOpenLine size={14} />,
-                label: draft.workingDir
-                  ? t('workshopSettings.action.changeWorkdir')
-                  : t('workshopSettings.action.pickWorkdir')
-              },
-              ...(draft.workingDir
-                ? [{ key: 'reset', label: t('workshopSettings.action.resetWorkdir') }]
-                : [])
-            ],
-            onClick: ({ key, domEvent }) => {
-              domEvent.stopPropagation()
-              void (async () => {
-                const result =
-                  key === 'reset'
-                    ? await harnessApi.workshop.setWorkingDir(draft.id)
-                    : await harnessApi.workshop.pickWorkingDir(draft.id)
-                if (!result.ok) {
-                  viewMessage('workshop-workdir', 'error', result.error ?? '')
-                  return
-                }
-                const data = result.data as { canceled?: boolean; dir?: string } | undefined
-                if (data?.canceled) return
-                viewMessage(
-                  'workshop-workdir',
-                  'success',
-                  t('workshopSettings.workdir.done', { path: data?.dir ?? '' }),
-                  4
-                )
-                await loadDrafts()
-              })()
-            }
-          }}
-        >
-          <button
-            title={t('harness.sidebar.draftActions')}
-            className="ant-dropdown-trigger hidden group-hover:flex items-center justify-center shrink-0 rounded"
-            style={{
-              width: 20,
-              height: 20,
-              color: colorTextTertiary,
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <RiMoreLine size={15} />
-          </button>
-        </Dropdown>
       </div>
     )
   }
@@ -1116,7 +1064,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <SkeletonListRows rows={3} />
           ) : visibleDrafts.length === 0 ? (
             <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
-              {query ? t('harness.sidebar.noMatchResult') : t('harness.sidebar.noDraft')}
+              {query
+                ? t('harness.sidebar.noMatchResult')
+                : pluginsPath
+                  ? t('harness.sidebar.noDraft')
+                  : t('harness.sidebar.needPluginsPath')}
             </p>
           ) : (
             visibleDrafts.map((draft) => renderDraft(draft))

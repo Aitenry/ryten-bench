@@ -43,10 +43,6 @@ export function workshopRoot(): string {
   return root
 }
 
-export function draftsRoot(): string {
-  return path.join(workshopRoot(), 'drafts')
-}
-
 export function distRoot(): string {
   return path.join(workshopRoot(), 'dist')
 }
@@ -59,56 +55,58 @@ export function exportsRoot(): string {
   return path.join(workshopRoot(), 'exports')
 }
 
-// ---------- 草稿的工作目录（源码落盘位置） ----------
+/**
+ * 旧版草稿目录（每份草稿在自己的工作目录特性之前，源码都落在 `<userData>/plugin-workshop/drafts/`）。
+ *
+ * 现在只用来**迁移**：用户第一次配置插件存放路径时，这里已有的草稿会被搬过去，
+ * 之后不再往这里写任何东西。
+ */
+export function legacyDraftsRoot(): string {
+  return path.join(workshopRoot(), 'drafts')
+}
+
+// ---------- 插件存放路径（用户配置，无默认值） ----------
 
 /**
- * 草稿的工作目录注册表（`<root>/registry.json`）。
+ * 用户配置的**插件存放路径**（所有插件的源码根目录）。
  *
- * 为什么需要它：草稿的源码默认落在 `<root>/drafts/<id>/`，但用户可以给某个插件**指定工作目录**
- * （源码写在自己的目录里，能进 git、能用编辑器打开）。这份映射不能放在草稿目录里的
- * `workshop.json`——那会变成「要先知道目录才能知道目录在哪」的循环。因此单独一份注册表，
- * 也是「这份草稿的源码到底在哪」的**唯一**真源（`draftDir()` 读它）。
+ * 为什么没有默认值（用户口径 2026-09-27「不要有默认目录，需要配置所有插件的存放路径」）：
+ * 插件源码是用户自己的东西——该放在他能看见、能进 git、能用编辑器打开的地方，
+ * 而不是应用数据目录里的某个隐藏路径。未配置时工坊不列草稿也不能新建。
+ *
+ * 落盘约定：每个插件一个子目录 `<pluginsPath>/<插件 id>/`；
+ * **根目录本身永远不会被删**（删插件只删它自己那个子目录）。
  */
-interface WorkshopRegistry {
-  roots?: Record<string, string>
+let pluginsRoot = ''
+
+/** 配置插件存放路径（未配置传空字符串） */
+export function configurePluginsRoot(dir: string | null | undefined): void {
+  pluginsRoot = typeof dir === 'string' && dir.trim() !== '' ? path.resolve(dir) : ''
 }
 
-let registryRoot = ''
-let registry: Record<string, string> = {}
-
-/** 按需加载注册表（根目录换了就重读；configure 之后第一次用到时加载） */
-function ensureRegistry(): void {
-  const current = workshopRoot()
-  if (registryRoot === current) return
-  registryRoot = current
-  const raw = readJson<WorkshopRegistry>(path.join(current, 'registry.json'))
-  registry = raw?.roots && typeof raw.roots === 'object' ? { ...raw.roots } : {}
+/** 当前插件存放路径（未配置时为空字符串） */
+export function pluginsRootPath(): string {
+  return pluginsRoot
 }
 
-/** 某草稿是否用了自定义工作目录 */
-export function draftRootOf(id: string): string | null {
-  ensureRegistry()
-  return registry[assertDraftId(id)] ?? null
+/** 是否已配置插件存放路径（未配置时草稿相关动作全部拒绝） */
+export function hasPluginsRoot(): boolean {
+  return pluginsRoot !== ''
 }
 
-/** 写入/清除某草稿的工作目录（传 null = 回到工坊的 drafts 目录） */
-export function setDraftRoot(id: string, dir: string | null): void {
-  ensureRegistry()
-  const key = assertDraftId(id)
-  if (dir) registry[key] = path.resolve(dir)
-  else delete registry[key]
-  writeJson(path.join(workshopRoot(), 'registry.json'), { roots: registry })
+/** 取插件存放路径（未配置时抛可读错误，界面据此引导去选文件夹） */
+export function requirePluginsRoot(): string {
+  if (!pluginsRoot) {
+    throw new Error(
+      '还没有配置「插件存放路径」：先在 设置 → 助手 → 插件工坊 里选一个文件夹，所有插件都会放在它下面'
+    )
+  }
+  return pluginsRoot
 }
 
-/** 当前注册表里的全部「自定义工作目录」草稿（id → 目录） */
-export function customDraftRoots(): Record<string, string> {
-  ensureRegistry()
-  return { ...registry }
-}
-
-/** 草稿源码目录：自定义工作目录优先，否则是 `<root>/drafts/<id>` */
+/** 某插件的源码目录：`<插件存放路径>/<插件 id>/` */
 export function draftDir(id: string): string {
-  return draftRootOf(id) ?? path.join(draftsRoot(), assertDraftId(id))
+  return path.join(requirePluginsRoot(), assertDraftId(id))
 }
 
 export function distDir(id: string): string {

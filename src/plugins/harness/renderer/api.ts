@@ -60,19 +60,6 @@ export interface SandboxStatusView {
   landlockLauncherPath?: string
 }
 
-/** 换/回退草稿工作目录的结果（与主进程 working-dir.ts 的返回同形） */
-export interface WorkingDirResult {
-  id: string
-  /** 生效后的源码目录 */
-  dir: string
-  /** 是否搬了文件（接管空目录时会搬） */
-  moved: boolean
-  /** true = 目标目录里已有一份同 id 的草稿，直接接管 */
-  adopted: boolean
-  /** 搬走之后留在原处的东西（可自行删除） */
-  previousDir?: string
-}
-
 /**
  * harness 插件主进程通道的薄封装。
  *
@@ -561,7 +548,10 @@ export const harnessApi = {
     state: () =>
       invoke('plugin:harness:workshop-state') as Promise<{
         ready: boolean
-        root: string
+        /** 是否已配置插件存放路径（用户设置，没有默认值） */
+        configured: boolean
+        /** 用户配置的插件存放路径（未配置时为空串） */
+        pluginsPath: string
         drafts: number
       }>,
     list: () => invoke('plugin:harness:workshop-list') as Promise<WorkshopDraftSummary[]>,
@@ -571,14 +561,7 @@ export const harnessApi = {
       invoke('plugin:harness:workshop-read-file', id, relPath) as Promise<string>,
     report: (id: string) =>
       invoke('plugin:harness:workshop-report', id) as Promise<WorkshopReport | null>,
-    create: (input: {
-      id: string
-      title?: string
-      template?: string
-      description?: string
-      /** 直接建在指定工作目录里（源码落盘位置） */
-      workingDir?: string
-    }) =>
+    create: (input: { id: string; title?: string; template?: string; description?: string }) =>
       invoke('plugin:harness:workshop-create', input) as Promise<
         WorkshopActionResult<{ id: string; files: string[]; dir: string }>
       >,
@@ -606,15 +589,18 @@ export const harnessApi = {
       >,
     openDir: (id: string) =>
       invoke('plugin:harness:workshop-open-dir', id) as Promise<WorkshopActionResult<string>>,
-    /** 弹系统选择框挑一个工作目录（源码落盘位置；选中的空目录会把草稿搬过去） */
-    pickWorkingDir: (id: string) =>
-      invoke('plugin:harness:workshop-pick-working-dir', id) as Promise<
-        WorkshopActionResult<WorkingDirResult & { canceled: boolean }>
+    /**
+     * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
+     * 用户取消时返回 `{ canceled: true }`（取消不是失败）。
+     */
+    pickRoot: () =>
+      invoke('plugin:harness:workshop-pick-root') as Promise<
+        WorkshopActionResult<{ canceled: boolean; dir?: string; moved?: string[] }>
       >,
-    /** 按显式路径设置工作目录（`dir` 为空 = 搬回工坊默认目录） */
-    setWorkingDir: (id: string, dir?: string) =>
-      invoke('plugin:harness:workshop-set-working-dir', id, dir) as Promise<
-        WorkshopActionResult<WorkingDirResult>
+    /** 按显式路径配置插件存放路径（工装用；空串 = 清除配置） */
+    setRoot: (dir: string) =>
+      invoke('plugin:harness:workshop-set-root', dir) as Promise<
+        WorkshopActionResult<{ dir: string; moved: string[] }>
       >,
     /** 草稿/产物/安装态变化（助手在对话里改了草稿时，开着的面板要跟着变） */
     onChanged: (callback: () => void): (() => void) =>

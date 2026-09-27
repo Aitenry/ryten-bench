@@ -57,6 +57,8 @@ export interface WorkshopHost {
   disable: (id: string) => void
   /** 卸载：摘主模块 + 删目录 + 清覆写（数据由插件自己的 purge 贡献处理） */
   uninstall: (id: string) => void
+  /** 持久化「插件存放路径」（harness 设置的 pluginsPath） */
+  setPluginsRoot: (dir: string) => void
   /** 广播插件状态变化（渲染层据此重新 fetch 插件模块与样式） */
   notify: () => void
   /** 渲染层实时探针（没有可用窗口时返回 `skip`） */

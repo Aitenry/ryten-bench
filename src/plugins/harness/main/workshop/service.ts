@@ -1,4 +1,4 @@
-import * as fs from 'fs'
+﻿import * as fs from 'fs'
 import * as path from 'path'
 import type {
   WorkshopBuildInfo,
@@ -11,8 +11,16 @@ import type {
 } from '../../shared/workshop'
 import { buildDraft, type BuildDraftOptions } from './build'
 import { createDraft, type CreateDraftOptions } from './scaffold'
-import { distDir, draftDir, draftRootOf, isWorkshopReady, reportPath, setDraftRoot } from './paths'
-import { attachWorkingDir, detachWorkingDir, type WorkingDirResult } from './working-dir'
+import {
+  configurePluginsRoot,
+  distDir,
+  draftDir,
+  hasPluginsRoot,
+  isWorkshopReady,
+  legacyDraftsRoot,
+  pluginsRootPath,
+  reportPath
+} from './paths'
 import {
   deleteDraft as removeDraftDir,
   deleteDraftFile,
@@ -24,7 +32,7 @@ import {
   readDraftMeta,
   writeDraftFile
 } from './store'
-import { hasBuild, isBuildStale, workshopHostOrNull, type WorkshopHost } from './host'
+import { hasBuild, isBuildStale, workshopHost, workshopHostOrNull, type WorkshopHost } from './host'
 import { publishDraft, disableDraft, unpublishDraft, exportDraft } from './install'
 import { readReport, verifyDraft, type VerifyOptions } from './verify'
 
@@ -37,16 +45,27 @@ import { readReport, verifyDraft, type VerifyOptions } from './verify'
  */
 
 export interface WorkshopServiceState {
+  /** 工坊接线是否就绪（AI 助手插件装载着） */
   ready: boolean
+  /**
+   * 是否已配置**插件存放路径**（用户设置；没有默认值）。
+   * 未配置时草稿列表为空、新建会被拒，界面据此引导用户去选文件夹。
+   */
+  configured: boolean
+  /** 用户配置的插件存放路径（未配置时为空字符串） */
+  pluginsPath: string
+  /** 工坊内部根目录（会话产物/报告/导出；**不在界面上展示**） */
   root: string
   drafts: number
 }
 
-/** 工坊当前状态（面板标题栏与工具失败提示） */
+/** 工坊当前状态（面板与工具失败提示） */
 export function workshopState(): WorkshopServiceState {
   const host = workshopHostOrNull()
   return {
     ready: isWorkshopReady(),
+    configured: hasPluginsRoot(),
+    pluginsPath: pluginsRootPath(),
     root: host?.root ?? '',
     drafts: isWorkshopReady() ? listDraftIds().length : 0
   }
@@ -95,7 +114,7 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
     builtAt: meta?.builtAt,
     installed: host ? host.isInstalled(id) : false,
     enabled: host ? host.isEnabled(id) : false,
-    workingDir: draftRootOf(id) ?? undefined,
+    pluginsPath: pluginsRootPath() || undefined,
     lastReport: report
       ? {
           at: report.at,
@@ -123,6 +142,11 @@ export function draftDetail(id: string): WorkshopDraftDetail {
 /** 新建草稿（宿主模块白名单在生成时注入 WORKSHOP.md） */
 export function createDraftFromTemplate(opts: CreateDraftOptions): ReturnType<typeof createDraft> {
   const host = workshopHostOrNull()
+  if (!hasPluginsRoot()) {
+    throw new Error(
+      '还没有配置「插件存放路径」：先在 设置 → 助手 → 插件工坊 里选一个文件夹（所有插件都放在它下面）'
+    )
+  }
   if (host?.isBundledPlugin(opts.id)) {
     throw new Error(`'${opts.id}' 是随应用分发的内置插件 id，换一个名字（例如 'my-${opts.id}'）`)
   }
@@ -156,12 +180,11 @@ export function removeFile(id: string, rel: string): void {
 /**
  * 删整份草稿（含产物与报告）。
  *
- * 草稿被指到用户自己的工作目录时**只解除登记**，不动那个目录里的任何文件
- * （可能有 .git / README / 用户自己的改动）——返回值里如实报出没动过的目录。
+ * 只删 `<插件存放路径>/<id>/` 这一个子目录 + 它的产物与报告；
+ * **插件存放路径本身永远不动**（那是用户在设置里选的文件夹，里面可能还有别的东西）。
  */
-export function removeDraft(id: string): { removedDir: boolean; externalDir?: string } {
+export function removeDraft(id: string): { removedDir: boolean } {
   const result = removeDraftDir(id)
-  setDraftRoot(id, null)
   for (const target of [distDir(id), reportPath(id)]) {
     try {
       fs.rmSync(target, { recursive: true, force: true })
@@ -172,16 +195,51 @@ export function removeDraft(id: string): { removedDir: boolean; externalDir?: st
   return result
 }
 
-/** 给草稿指定工作目录（源码落到用户自己的目录里；空目录会被搬过去） */
-export function setWorkingDir(id: string, dir: string): WorkingDirResult {
-  if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在（先 plugin_draft create）`)
-  return attachWorkingDir(id, dir)
+/**
+ * 配置**插件存放路径**（用户在设置里选的文件夹）。
+ *
+ * 三件事，顺序有意义：① 校验目录（存在、是目录、不在工坊内部目录里）；
+ * ② 落进设置（由宿主注入的 `setPluginsRoot` 持久化）；③ 把旧版草稿搬过来
+ * （早期版本把源码放在 `<userData>/plugin-workshop/drafts/`，配置之后自然迁移，用户不用管）。
+ */
+export function adoptPluginsRoot(dir: string): { dir: string; moved: string[] } {
+  const host = workshopHost()
+  const target = path.resolve(dir)
+  const workshop = path.resolve(host.root)
+  if (target === workshop || target.startsWith(workshop + path.sep)) {
+    throw new Error('插件存放路径不能选在工坊自己的目录里（会话/产物/报告都在那儿）')
+  }
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(target, { recursive: true })
+  }
+  if (!fs.statSync(target).isDirectory()) {
+    throw new Error(`插件存放路径必须是文件夹：${target}`)
+  }
+
+  const moved = migrateLegacyDrafts(target)
+  host.setPluginsRoot(target)
+  configurePluginsRoot(target)
+  return { dir: target, moved }
 }
 
-/** 把源码搬回工坊的默认目录（不想再用自定义目录时） */
-export function resetWorkingDir(id: string): WorkingDirResult {
-  if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在`)
-  return detachWorkingDir(id)
+/** 旧版草稿目录里的草稿搬到新的插件存放路径（同名子目录已存在就跳过，绝不覆盖） */
+function migrateLegacyDrafts(target: string): string[] {
+  const legacy = legacyDraftsRoot()
+  if (!fs.existsSync(legacy)) return []
+  const moved: string[] = []
+  for (const entry of fs.readdirSync(legacy, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const from = path.join(legacy, entry.name)
+    const to = path.join(target, entry.name)
+    if (fs.existsSync(to)) continue
+    try {
+      fs.renameSync(from, to)
+      moved.push(entry.name)
+    } catch {
+      // 跨盘搬迁失败就跳过（用户自己拷过去即可，不影响其余草稿）
+    }
+  }
+  return moved
 }
 
 /** 构建（不抛错：诊断在返回值里） */

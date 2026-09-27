@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import type { WorkshopCssMode, WorkshopDraftMeta, WorkshopTemplate } from '../../shared/workshop'
-import { assertDraftId, draftDir, draftExists, ensureDir, setDraftRoot } from './paths'
+import { assertDraftId, draftDir, draftExists, ensureDir } from './paths'
 import { TEMPLATE_INFOS, renderTemplate } from './templates'
 import { listDraftFiles, readDraftMeta, writeDraftMeta } from './store'
 
@@ -23,11 +23,6 @@ export interface CreateDraftOptions {
   description?: string
   css?: WorkshopCssMode
   overwrite?: boolean
-  /**
-   * 源码落盘目录（「工作目录」）：给了就直接建在那里（必须是空目录，或已有一份同 id 的草稿），
-   * 不给则用工坊默认的 `drafts/<id>/`。见 working-dir.ts 的三条安全规则。
-   */
-  workingDir?: string
   /** 宿主主进程可用的 `@host/main/**` 键 */
   hostMainKeys?: string[]
   /** 宿主渲染层可用的 `@host/renderer/**`、`@host/vendor/**` 键 */
@@ -63,13 +58,7 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     )
   }
 
-  // 工作目录：先登记再建文件——`draftDir(id)` 读的就是这份注册表
-  if (typeof opts.workingDir === 'string' && opts.workingDir.trim() !== '') {
-    const dir = path.resolve(opts.workingDir.trim())
-    ensureDir(dir)
-    setDraftRoot(id, dir)
-  }
-
+  // 源码落在用户配置的插件存放路径下（未配置时 draftDir 会抛可读错误，界面据此引导去配置）
   const dir = draftDir(id)
   if (overwritten) fs.rmSync(dir, { recursive: true, force: true })
   ensureDir(dir)

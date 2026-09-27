@@ -31,6 +31,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       },
       newDraft: 'New plugin draft',
       noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
+      needPluginsPath: 'Hit + above to pick a plugins folder first',
       draftActions: 'Draft actions',
       pluginState: {
         draft: 'Draft',
@@ -790,24 +791,26 @@ export const harnessEnUS: typeof harnessZhCN = {
       remove: 'Delete draft',
       detail: 'Details',
       menu: 'More actions',
-      openDir: 'Open draft folder',
-      pickWorkdir: 'Choose working folder',
-      changeWorkdir: 'Change working folder',
-      resetWorkdir: 'Move back into workshop'
+      openDir: 'Open draft folder'
     },
-    workdir: {
-      label: 'Source folder: {{path}}',
-      default: 'Source lives in the workshop folder: {{path}}',
-      done: 'Working folder set to {{path}}',
-      leftBehind: 'A copy of the source stays in {{path}}; you can delete it yourself',
-      reset: 'Source moved back into the workshop folder'
+    root: {
+      title: 'Plugins folder',
+      pick: 'Choose folder',
+      change: 'Change folder',
+      placeholder: 'No plugins folder chosen yet',
+      rowEmpty: 'No plugins folder chosen yet',
+      rowDesc: 'Every plugin lives in this folder, one subfolder each',
+      rowDescEmpty:
+        'Plugin source is yours, so you decide where it goes - pick a folder and you can create plugins',
+      saved: 'Plugins folder set to {{path}}',
+      moved: 'Plugins folder set; {{count}} existing plugin(s) were moved there too'
     },
     list: {
       title: 'Drafts',
-      root: 'Workshop folder: {{path}}',
       new: 'New draft',
       empty:
-        'No drafts yet. Ask the assistant for one ("build me a pomodoro plugin"), or use "New draft" to scaffold a skeleton.'
+        'No plugins yet. Ask the assistant for one ("build me a pomodoro plugin"), or use "New draft" to scaffold a skeleton.',
+      needRoot: 'Pick a plugins folder above first - then you can create plugins'
     },
     files: '{{count}} file(s)',
     filesSection: 'Files ({{count}})',

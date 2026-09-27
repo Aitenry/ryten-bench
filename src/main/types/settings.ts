@@ -21,6 +21,14 @@ export interface HarnessSettings {
   activeWorkspaceId?: number
   /** 记忆（Memory）存储根目录，空/未设置表示不启用；其下按工作区 ID 目录隔离（workspace-<id>/），每个工作区一套独立记忆 */
   memoryPath?: string
+  /**
+   * **插件存放路径**（插件工坊里所有插件的源码根目录）。
+   *
+   * 刻意**没有默认值**（用户口径 2026-09-27「不要有默认目录，需要配置所有插件的存放路径」）：
+   * 未配置时工坊不列草稿也不能新建，界面入口先去选文件夹。每个插件占一个子目录
+   * （`<pluginsPath>/<插件 id>/`），根目录本身永远不会被删。
+   */
+  pluginsPath?: string
 }
 
 export type ThemeMode = 'light' | 'dark' | 'auto'

@@ -5,6 +5,7 @@ import type { MainIpcHandlers } from '../../../../main/plugins/context'
 import type { WorkshopRendererProbe } from '../../shared/workshop'
 import { resolveProbeResult } from '../workshop/probe'
 import {
+  adoptPluginsRoot,
   build,
   createDraftFromTemplate,
   dirOf,
@@ -17,13 +18,13 @@ import {
   readFile,
   removeDraft,
   removeFile,
-  resetWorkingDir,
-  setWorkingDir,
   unpublish,
   verify,
   workshopState,
   writeFile
 } from '../workshop/service'
+import { configurePluginsRoot } from '../workshop/paths'
+import { workshopHost } from '../workshop/host'
 
 /**
  * 插件工坊的 IPC（harness 插件的第 6 个域）。
@@ -143,21 +144,14 @@ export function workshopIpcHandlers(): MainIpcHandlers {
 
   handle(
     'workshop-create',
-    async (input: {
-      id: string
-      title?: string
-      template?: string
-      description?: string
-      workingDir?: string
-    }) =>
+    async (input: { id: string; title?: string; template?: string; description?: string }) =>
       await act(async () => {
         const result = createDraftFromTemplate({
           id: input?.id,
           title: input?.title,
           // 不传就是默认的 'full'（全部内容）：模板选择只在助手侧按需使用
           template: input?.template as never,
-          description: input?.description,
-          workingDir: input?.workingDir
+          description: input?.description
         })
         broadcastWorkshopChanged()
         return { id: result.meta.id, files: result.files, dir: result.dir }
@@ -165,34 +159,39 @@ export function workshopIpcHandlers(): MainIpcHandlers {
   )
 
   /**
-   * 弹系统选择框挑一个**工作目录**（源码落盘位置）。
+   * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
    *
-   * 两条入口共用同一套接管规则（working-dir.ts）：这个原生框没法被自动化点击，
-   * 工装因此走 `workshop-set-working-dir`（显式路径）。
+   * 这个原生框没法被自动化点击，工装因此走 `workshop-set-root`（显式路径）。
    */
   handle(
-    'workshop-pick-working-dir',
-    async (id: string) =>
+    'workshop-pick-root',
+    async () =>
       await act(async () => {
         const picked = await dialog.showOpenDialog({
-          title: '选择插件源码的工作目录（空文件夹，或已放着同一个插件草稿）',
+          title: '选择插件的存放路径（每个插件会在它下面占一个文件夹）',
           properties: ['openDirectory', 'createDirectory']
         })
         if (picked.canceled || picked.filePaths.length === 0) {
-          return { canceled: true as const, id, dir: '', moved: false, adopted: false }
+          return { canceled: true as const }
         }
-        const result = setWorkingDir(id, picked.filePaths[0])
+        const result = adoptPluginsRoot(picked.filePaths[0])
         broadcastWorkshopChanged()
         return { canceled: false as const, ...result }
       })
   )
 
-  /** 按显式路径设置（`dir` 为空 = 搬回工坊默认目录） */
+  /** 按显式路径配置插件存放路径（面板/工装用；`dir` 为空 = 清除配置） */
   handle(
-    'workshop-set-working-dir',
-    async (id: string, dir?: string) =>
+    'workshop-set-root',
+    async (dir: string) =>
       await act(async () => {
-        const result = dir ? setWorkingDir(id, dir) : resetWorkingDir(id)
+        if (!dir) {
+          workshopHost().setPluginsRoot('')
+          configurePluginsRoot('')
+          broadcastWorkshopChanged()
+          return { dir: '', moved: [] as string[] }
+        }
+        const result = adoptPluginsRoot(dir)
         broadcastWorkshopChanged()
         return result
       })

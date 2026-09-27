@@ -155,10 +155,12 @@ export interface WorkshopDraftSummary {
   installed: boolean
   enabled: boolean
   /**
-   * 源码落盘的工作目录（用户自己指定的目录）；缺省 = 工坊默认的
-   * `<userData>/plugin-workshop/drafts/<id>/`。见 workshop/working-dir.ts。
+   * 用户配置的**插件存放路径**（所有插件源码的根目录，`<pluginsPath>/<插件 id>/`）。
+   *
+   * 刻意没有默认值：没配置时工坊不列草稿也不能新建，界面入口会先去让用户选文件夹。
+   * 工坊自己的产物/报告目录（userData 下）不出现在界面上。
    */
-  workingDir?: string
+  pluginsPath?: string
   /** 最近一次验收的摘要（没有则不出现） */
   lastReport?: { at: number; ok: boolean; failed: number; total: number }
   /** 产物与应用包/已装副本是否同构（打不出来时 undefined） */

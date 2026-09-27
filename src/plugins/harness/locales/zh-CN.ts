@@ -40,6 +40,7 @@ export const harnessZhCN = {
       },
       newDraft: '新建插件草稿',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
+      needPluginsPath: '先点右上角 ＋ 选择插件存放路径，然后就能新建插件了',
       draftActions: '草稿操作',
       pluginState: {
         draft: '草稿',
@@ -784,23 +785,24 @@ export const harnessZhCN = {
       remove: '删除草稿',
       detail: '详情',
       menu: '更多操作',
-      openDir: '打开草稿目录',
-      pickWorkdir: '选择工作目录',
-      changeWorkdir: '更换工作目录',
-      resetWorkdir: '改回工坊目录'
+      openDir: '打开草稿目录'
     },
-    workdir: {
-      label: '源码目录：{{path}}',
-      default: '源码在工坊目录：{{path}}',
-      done: '工作目录已设为 {{path}}',
-      leftBehind: '原目录还留着一份源码（{{path}}），可以自行删除',
-      reset: '源码已搬回工坊目录'
+    root: {
+      title: '插件存放路径',
+      pick: '选择文件夹',
+      change: '更换文件夹',
+      placeholder: '还没有选择插件存放路径',
+      rowEmpty: '还没有选择插件存放路径',
+      rowDesc: '所有插件都放在这个文件夹下，每个插件一个子目录',
+      rowDescEmpty: '插件源码是你自己的东西，放在哪里由你决定——选一个文件夹后就能新建插件了',
+      saved: '插件存放路径已设为 {{path}}',
+      moved: '插件存放路径已设置，{{count}} 个已有插件也搬了过去'
     },
     list: {
       title: '草稿',
-      root: '工坊目录：{{path}}',
       new: '新建草稿',
-      empty: '还没有草稿。在助手里说「帮我做一个番茄钟插件」，或用右上角「新建草稿」先生成骨架。'
+      empty: '还没有插件。在助手里说「帮我做一个番茄钟插件」，或用右上角「新建草稿」先生成骨架。',
+      needRoot: '先在上面选择插件存放路径，然后就能新建插件了'
     },
     files: '{{count}} 个文件',
     filesSection: '文件（{{count}}）',

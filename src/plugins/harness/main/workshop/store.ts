@@ -7,13 +7,12 @@ import type {
   WorkshopCssMode
 } from '../../shared/workshop'
 import {
-  customDraftRoots,
   draftDir,
   draftExists,
-  draftRootOf,
-  draftsRoot,
+  hasPluginsRoot,
   normalizeDraftRel,
   readJson,
+  requirePluginsRoot,
   resolveInDraft,
   writeJson
 } from './paths'
@@ -97,28 +96,24 @@ export function patchDraftMeta(id: string, patch: Partial<WorkshopDraftMeta>): W
 }
 
 /**
- * 列举全部草稿 id：工坊默认的 `drafts/<id>/` **加上**指定了工作目录的草稿
- * （源码在用户自己的目录里，注册表是唯一线索——见 paths.ts 的草稿工作目录注册表）。
+ * 列举全部草稿 id：`<插件存放路径>/` 下的每个子目录。
+ *
+ * 未配置存放路径时返回空数组（界面据此引导用户先选文件夹）——不抛错，
+ * 因为「列个表」在没配置时是正常状态，只有**新建/构建**这类动作才必须配置。
  */
 export function listDraftIds(): string[] {
-  const ids = new Set<string>()
+  if (!hasPluginsRoot()) return []
   let entries: fs.Dirent[] = []
   try {
-    entries = fs.readdirSync(draftsRoot(), { withFileTypes: true })
+    entries = fs.readdirSync(requirePluginsRoot(), { withFileTypes: true })
   } catch {
-    // 还没有任何草稿：正常状态
+    // 目录还不存在（用户刚选了一个空文件夹/被移走）：当作没有草稿
+    return []
   }
-  for (const entry of entries) {
-    if (entry.isDirectory() && draftExists(entry.name)) ids.add(entry.name)
-  }
-  for (const [id, dir] of Object.entries(customDraftRoots())) {
-    try {
-      if (fs.existsSync(dir)) ids.add(id)
-    } catch {
-      // 目录暂时读不到（外置盘没挂载等）：这一轮先不列它
-    }
-  }
-  return [...ids].sort((a, b) => a.localeCompare(b, 'en'))
+  return entries
+    .filter((entry) => entry.isDirectory() && draftExists(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, 'en'))
 }
 
 /** 校验扩展名（写文件时用；读/列举不校验，历史文件也要能读出来） */
@@ -235,19 +230,16 @@ export function deleteDraftFile(id: string, rel: unknown): void {
 }
 
 /**
- * 整份删除草稿目录。
+ * 整份删除草稿目录（`<插件存放路径>/<id>/`）。
  *
- * **只删工坊自己管的那份**：草稿被指到用户自己的「工作目录」时，这里只解除登记
- * （`paths.setDraftRoot(id, null)` 由调用方做），绝不 rm 用户的文件夹——
- * 那里可能有 .git、README 和用户自己的改动（见 working-dir.ts 的三条安全规则）。
+ * 只删这个插件的子目录，**根目录本身永远不动**（那是用户在设置里选的文件夹，
+ * 里面可能还有别的东西）。
  *
- * @returns `externalDir` = 那次删除**没有**动过的用户目录（面板据此提示一句）
+ * @returns `removedDir` = 是否真的删了目录（未配置存放路径时为 false）
  */
-export function deleteDraft(id: string): { removedDir: boolean; externalDir?: string } {
+export function deleteDraft(id: string): { removedDir: boolean } {
+  if (!hasPluginsRoot()) return { removedDir: false }
   const dir = draftDir(id)
-  if (draftRootOf(id) !== null) {
-    return { removedDir: false, externalDir: dir }
-  }
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true })
   return { removedDir: true }
 }
