@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Input, Modal, theme } from 'antd'
-import { RiFolderOpenLine } from '@remixicon/react'
+import { Input, Modal, theme } from 'antd'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../../api'
@@ -9,77 +8,44 @@ import { harnessApi } from '../../api'
  * 「新建草稿」弹窗（侧栏的 ＋ 与设置页的「新建草稿」共用同一个）。
  *
  * 两处入口共用它，是为了让「点一下就开始」这条路径**只有一次跳转**：
- * 侧栏插件模式里点 ＋ 直接弹这个框，不再先弹设置弹窗（2026-09-27 用户口径
- * 「在页面点击新建插件直接打开这个即可」）。
+ * 侧栏插件模式里点 ＋ 直接弹这个框（没配插件存放路径时先弹文件夹选择，见侧栏的
+ * `handleNewDraft`）。弹窗里**只问 id 与展示名**——选择存放路径的动作不在这里
+ * （用户口径 2026-09-27「新建插件里面不要弄一个选择插件目录」），
+ * 它属于设置页那一项与侧栏空列表位置上的那个按钮。
  *
- * 只问两件事：id（小写 kebab，同时是目录名/命名空间）与展示名。
- * **没有模板选择**——生成的一律是含全部内容的 `full` 骨架，用不上的部分交给助手删。
- *
- * 另外把**插件存放路径**摆在最上面（用户口径「不要有默认目录，需要配置所有插件的存放路径」）：
- * 没配过时这里是空的 + 一个「选择」按钮，选好之前「新建」保持禁用——
- * 插件源码是用户自己的东西，落在哪儿必须由他决定。
+ * 模板也**不提供选择**：生成的一律是含全部内容的 `full` 骨架，用不上的部分交给助手删。
  */
 const NewDraftModal: React.FC<{
   open: boolean
   onClose: () => void
-  /** 建成之后（面板刷新、侧栏重列草稿各自决定怎么接） */
+  /** 建成之后（面板刷新、侧栏重列插件各自决定怎么接） */
   onCreated?: (id: string) => void
-  /** 存放路径变化时通知调用方（侧栏据此重拉列表） */
-  onRootChanged?: () => void
-}> = ({ open, onClose, onCreated, onRootChanged }) => {
+}> = ({ open, onClose, onCreated }) => {
   const { token } = theme.useToken()
   const { viewMessage } = useMessage()
   const { t } = useTranslation()
   const [id, setId] = useState('')
   const [title, setTitle] = useState('')
   const [creating, setCreating] = useState(false)
-  const [picking, setPicking] = useState(false)
-  const [pluginsPath, setPluginsPath] = useState('')
+  const [configured, setConfigured] = useState(true)
 
-  // 打开时读一次当前配置（关掉再打开、或在别处改过都能拿到最新值）
+  // 打开时确认「插件存放路径」已配置（正常路径下已由调用方保证；没配就禁用「新建」并说明）
   useEffect(() => {
     if (!open) return
     void harnessApi.workshop
       .state()
-      .then((state) => setPluginsPath(state.pluginsPath ?? ''))
-      .catch(() => setPluginsPath(''))
+      .then((state) => setConfigured(Boolean(state.pluginsPath)))
+      .catch(() => setConfigured(false))
   }, [open])
 
   /** id 规则与主进程一致：小写 kebab */
   const validId = /^[a-z][a-z0-9-]*$/.test(id.trim())
-  const ready = validId && pluginsPath.trim() !== ''
+  const ready = validId && configured
 
   const close = (): void => {
     setId('')
     setTitle('')
     onClose()
-  }
-
-  const handlePickRoot = async (): Promise<void> => {
-    setPicking(true)
-    try {
-      const result = await harnessApi.workshop.pickRoot()
-      if (!result.ok) {
-        viewMessage('workshop-root', 'error', result.error ?? '', 6)
-        return
-      }
-      const data = result.data
-      if (!data || data.canceled) return
-      setPluginsPath(data.dir ?? '')
-      onRootChanged?.()
-      if (data.moved && data.moved.length > 0) {
-        viewMessage(
-          'workshop-root-moved',
-          'success',
-          t('workshopSettings.root.moved', { count: data.moved.length }),
-          5
-        )
-      }
-    } catch (error) {
-      viewMessage('workshop-root', 'error', String(error))
-    } finally {
-      setPicking(false)
-    }
   }
 
   const handleCreate = async (): Promise<void> => {
@@ -116,21 +82,6 @@ const NewDraftModal: React.FC<{
       onCancel={close}
     >
       <div className="flex flex-col" style={{ gap: 12, paddingTop: 8 }}>
-        {/* 插件存放路径：所有插件的源码根目录，没有默认值 */}
-        <div className="flex items-center" style={{ gap: 8 }}>
-          <Input
-            value={pluginsPath}
-            readOnly
-            // 稳定钩子：工装按字段定位（路径框在 id 之前，不能靠「第一个 input」）
-            data-workshop-field="path"
-            placeholder={t('workshopSettings.root.placeholder')}
-            prefix={<RiFolderOpenLine size={14} style={{ color: token.colorTextTertiary }} />}
-            style={{ flex: 1 }}
-          />
-          <Button loading={picking} onClick={() => void handlePickRoot()}>
-            {pluginsPath ? t('workshopSettings.root.change') : t('workshopSettings.root.pick')}
-          </Button>
-        </div>
         <Input
           value={id}
           onChange={(event) => setId(event.target.value)}
@@ -145,8 +96,10 @@ const NewDraftModal: React.FC<{
           placeholder={t('workshopSettings.create.titlePlaceholder')}
           onPressEnter={() => void handleCreate()}
         />
-        <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
-          {t('workshopSettings.create.note')}
+        <div
+          style={{ fontSize: 12, color: configured ? token.colorTextTertiary : token.colorError }}
+        >
+          {configured ? t('workshopSettings.create.note') : t('workshopSettings.create.needRoot')}
         </div>
       </div>
     </Modal>

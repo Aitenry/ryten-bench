@@ -31,7 +31,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       },
       newDraft: 'New plugin draft',
       noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
-      needPluginsPath: 'Hit + above to pick a plugins folder first',
+      needPluginsPath:
+        'Plugin source is yours to keep anywhere - pick a folder to start creating plugins',
       draftActions: 'Draft actions',
       pluginState: {
         draft: 'Draft',
@@ -810,7 +811,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       new: 'New draft',
       empty:
         'No plugins yet. Ask the assistant for one ("build me a pomodoro plugin"), or use "New draft" to scaffold a skeleton.',
-      needRoot: 'Pick a plugins folder above first - then you can create plugins'
+      needRoot:
+        'No plugins folder picked yet. Plugin source lives wherever you want - pick a folder to start creating plugins'
     },
     files: '{{count}} file(s)',
     filesSection: 'Files ({{count}})',
@@ -853,6 +855,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       title: 'New draft',
       idPlaceholder: 'lowercase kebab, e.g. pomodoro-timer',
       titlePlaceholder: 'Display name (e.g. Pomodoro)',
+      needRoot: 'No plugins folder picked yet - pick one first, then create the draft',
       note: 'The draft comes with everything: page, settings page, an AI tool for the assistant, event push and data purge. Let the assistant delete what you do not need.'
     }
   }

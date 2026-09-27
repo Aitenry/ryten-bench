@@ -75,27 +75,23 @@ interface MnemonSidebarSnapshot {
 /** 会话分页大小（与 useHarnessHandlers 的 TOPICS_PAGE_SIZE 保持一致） */
 const TOPICS_PAGE_SIZE = 20
 
-/**
- * 侧栏模式：`chat`（工作区 → 会话）/ `plugin`（插件草稿）。
- *
- * 持久化在 localStorage（与宿主 `ctx.use('storage')` 的插件前缀同一套约定：
- * `rb.plugin.<id>.<key>`），重开应用还停在用户上次选的模式。
- */
-type SidebarMode = 'chat' | 'plugin'
-const MODE_STORAGE_KEY = 'rb.plugin.harness.sidebarMode'
-
-function readSidebarMode(): SidebarMode {
-  try {
-    return window.localStorage.getItem(MODE_STORAGE_KEY) === 'plugin' ? 'plugin' : 'chat'
-  } catch {
-    return 'chat'
-  }
-}
-
 /** 胶囊开关的单档宽度（两档等宽，滑块才能用固定位移滑过去） */
 const MODE_SEGMENT_WIDTH = 44
 /** 滑块位移的缓动：末端轻微回弹，切换有手感但不夸张 */
 const MODE_THUMB_EASE = 'cubic-bezier(0.32, 1.35, 0.5, 1)'
+
+/**
+ * 侧栏模式：`chat`（工作区 → 会话）/ `plugin`（插件）。
+ *
+ * **不持久化**（用户口径 2026-09-27「一进来，默认不能选中插件这个栏，要看当前是在工作的
+ * 选中内容还是插件的选中内容」）：这个开关表达的是**此刻面板在看哪一类内容**，
+ * 不是用户偏好——每次进入应用都从「工作」开始，随后跟随内容走：
+ * 选会话 → 工作；点开插件 / 进工坊页 → 插件（见下面的 `WORKSHOP_FOCUS_EVENT` 与 onSelectTopic）。
+ */
+type SidebarMode = 'chat' | 'plugin'
+
+/** 工坊页/插件详情被打开时派发：侧栏据此把开关切到「插件」 */
+const WORKSHOP_FOCUS_EVENT = 'harness-workshop-focus'
 
 /**
  * 侧栏模式开关（胶囊 + 滑块）。
@@ -221,22 +217,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  /* ── 模式（会话 / 插件）与插件草稿 ── */
-  const [mode, setMode] = useState<SidebarMode>(readSidebarMode)
+  /* ── 模式（工作 / 插件）与插件 ── */
+  /** 每次进入应用都从「工作」开始（不读任何持久化偏好） */
+  const [mode, setMode] = useState<SidebarMode>('chat')
   const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
   const [draftsLoading, setDraftsLoading] = useState(false)
   /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
   const [newDraftOpen, setNewDraftOpen] = useState(false)
-  /** 用户配置的插件存放路径（空 = 还没配置，列表为空时要给出「先去选文件夹」的引导） */
+  /** 用户配置的插件存放路径（空 = 还没配置：空列表位置直接给「选择文件夹」入口） */
   const [pluginsPath, setPluginsPath] = useState('')
+  const [pickingRoot, setPickingRoot] = useState(false)
 
   const switchMode = useCallback((next: SidebarMode): void => {
     setMode(next)
-    try {
-      window.localStorage.setItem(MODE_STORAGE_KEY, next)
-    } catch {
-      // 私隐模式/存储写满：模式只在本次会话生效，不影响功能
-    }
   }, [])
 
   /** 拉插件草稿清单（插件模式下打开面板、以及主进程广播变化时各拉一次） */
@@ -260,8 +253,51 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return harnessApi.workshop.onChanged(() => void loadDrafts())
   }, [mode, loadDrafts])
 
-  /** 打开工坊里某份草稿的详情（设置弹窗 → 插件工坊 → 该草稿抽屉） */
+  /**
+   * 开关跟随内容：工坊页/插件详情一被打开，就切到「插件」
+   * （详见文件头的说明——这个开关表达的是「面板此刻在看哪一类内容」）。
+   */
+  useEffect(() => {
+    const handler = (): void => setMode('plugin')
+    window.addEventListener(WORKSHOP_FOCUS_EVENT, handler)
+    return () => window.removeEventListener(WORKSHOP_FOCUS_EVENT, handler)
+  }, [])
+
+  /** 选一个插件存放路径（侧栏空列表位置与 ＋ 都走它） */
+  const pickPluginsRoot = useCallback(async (): Promise<boolean> => {
+    setPickingRoot(true)
+    try {
+      const result = await harnessApi.workshop.pickRoot()
+      if (!result.ok) {
+        viewMessage('workshop-root', 'error', result.error ?? '')
+        return false
+      }
+      const data = result.data
+      if (!data || data.canceled) return false
+      setPluginsPath(data.dir ?? '')
+      await loadDrafts()
+      return true
+    } catch (error) {
+      viewMessage('workshop-root', 'error', String(error))
+      return false
+    } finally {
+      setPickingRoot(false)
+    }
+  }, [loadDrafts, viewMessage])
+
+  /** ＋：没配存放路径时**先**让用户选文件夹，选好再弹新建框（弹窗里不再放选择器） */
+  const handleNewDraft = useCallback(async (): Promise<void> => {
+    if (!pluginsPath) {
+      const picked = await pickPluginsRoot()
+      if (!picked) return
+    }
+    setNewDraftOpen(true)
+  }, [pickPluginsRoot, pluginsPath])
+
+  /** 打开工坊里某份插件的详情（设置弹窗 → 插件工坊 → 该插件抽屉） */
   const openDraft = useCallback((id: string): void => {
+    // 点插件 = 当前内容切到插件这一侧（开关跟着内容走）
+    window.dispatchEvent(new CustomEvent(WORKSHOP_FOCUS_EVENT))
     window.dispatchEvent(
       new CustomEvent('open-system-settings', {
         detail: { tab: 'workshop', scope: 'assistant' }
@@ -465,6 +501,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 打开某个工作区下的会话：跨工作区时先切换工作区 */
   const handleOpenTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+      // 选会话 = 当前内容回到「工作」这一侧（开关跟着内容走）
+      setMode('chat')
       if (workspaceId !== activeWorkspaceId) {
         const ws = workspaces.find((w) => w.id === workspaceId)
         if (ws) await switchWorkspace(ws)
@@ -1025,10 +1063,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <RiSearchLine size={16} />
             )}
             {mode === 'plugin'
-              ? /* 新建草稿：**直接**弹「新建草稿」框（不再先弹设置弹窗再跳工坊页） */
+              ? /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器） */
                 iconBtn(
                   t('harness.sidebar.newDraft'),
-                  () => setNewDraftOpen(true),
+                  () => void handleNewDraft(),
                   <RiAddLine size={16} />
                 )
               : [
@@ -1063,13 +1101,47 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           draftsLoading && drafts.length === 0 ? (
             <SkeletonListRows rows={3} />
           ) : visibleDrafts.length === 0 ? (
-            <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
-              {query
-                ? t('harness.sidebar.noMatchResult')
-                : pluginsPath
-                  ? t('harness.sidebar.noDraft')
-                  : t('harness.sidebar.needPluginsPath')}
-            </p>
+            query ? (
+              <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
+                {t('harness.sidebar.noMatchResult')}
+              </p>
+            ) : pluginsPath ? (
+              <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
+                {t('harness.sidebar.noDraft')}
+              </p>
+            ) : (
+              /*
+               * 还没配插件存放路径：**这里就是配置入口**（用户口径：不要在新建弹窗里放选择器，
+               * 把选择动作放到这块提示的位置上）。
+               */
+              <div className="flex flex-col items-center gap-2 px-3 py-7 text-center">
+                <p className="text-xs" style={{ color: colorTextTertiary, margin: 0 }}>
+                  {t('harness.sidebar.needPluginsPath')}
+                </p>
+                <button
+                  onClick={() => void pickPluginsRoot()}
+                  disabled={pickingRoot}
+                  /* 稳定钩子：工装按它定位「配置插件存放路径」这个入口 */
+                  data-workshop-pick-root="sidebar"
+                  className="rounded transition-colors"
+                  style={{
+                    fontSize: 12,
+                    height: 24,
+                    padding: '0 10px',
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: colorFillAlter,
+                    color: colorText,
+                    cursor: pickingRoot ? 'default' : 'pointer'
+                  }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = token.colorFillSecondary)
+                  }
+                  onMouseLeave={(e) => (e.currentTarget.style.background = colorFillAlter)}
+                >
+                  {t('workshopSettings.root.pick')}
+                </button>
+              </div>
+            )
           ) : (
             visibleDrafts.map((draft) => renderDraft(draft))
           )

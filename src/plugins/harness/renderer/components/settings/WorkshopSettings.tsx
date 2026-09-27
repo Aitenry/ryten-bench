@@ -84,6 +84,12 @@ const WorkshopSettings: React.FC = () => {
     void refresh()
   }, [refresh])
 
+  // 开着工坊页 = 当前内容在插件这一侧：侧栏的模式开关要跟着切到「插件」
+  // （详见 HarnessSidebar 里 WORKSHOP_FOCUS_EVENT 的说明）
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('harness-workshop-focus'))
+  }, [])
+
   // 助手在对话里改了草稿/发布了插件时，这一页要跟着变（主进程广播）
   useEffect(() => harnessApi.workshop.onChanged(() => void refresh()), [refresh])
 
@@ -425,7 +431,14 @@ const WorkshopSettings: React.FC = () => {
         /* 这里刻意**不写**工坊自己的内部目录（userData/...，用户口径：不要在设置页显示这个目录）；
            要显示的是用户配置的插件存放路径，见上面那一行 */
         extra={
-          <Button size="small" icon={<RiAddLine size={14} />} onClick={() => setCreating(true)}>
+          /* 没配存放路径时点不出新建（配置入口就在下面的空态里，弹窗里刻意不放选择器） */
+          <Button
+            size="small"
+            icon={<RiAddLine size={14} />}
+            disabled={!pluginsPath}
+            title={pluginsPath ? undefined : t('workshopSettings.list.needRoot')}
+            onClick={() => setCreating(true)}
+          >
             {t('workshopSettings.list.new')}
           </Button>
         }
@@ -436,16 +449,32 @@ const WorkshopSettings: React.FC = () => {
           </div>
         ) : draftCount === 0 ? (
           <div style={{ padding: '28px 0', textAlign: 'center' }}>
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
+            {pluginsPath ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
+                    {t('workshopSettings.list.empty')}
+                  </span>
+                }
+              />
+            ) : (
+              /* 未配置存放路径：**这里就是配置入口**（与侧栏插件模式的空列表同一口径） */
+              <div className="flex flex-col items-center" style={{ gap: 12 }}>
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                  {pluginsPath
-                    ? t('workshopSettings.list.empty')
-                    : t('workshopSettings.list.needRoot')}
+                  {t('workshopSettings.list.needRoot')}
                 </span>
-              }
-            />
+                <Button
+                  size="small"
+                  loading={pickingRoot}
+                  /* 稳定钩子：工装按它定位「配置插件存放路径」这个入口 */
+                  data-workshop-pick-root="settings"
+                  onClick={() => void handlePickRoot()}
+                >
+                  {t('workshopSettings.root.pick')}
+                </Button>
+              </div>
+            )}
           </div>
         ) : (
           drafts.map((draft) => {

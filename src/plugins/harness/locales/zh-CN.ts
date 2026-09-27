@@ -40,7 +40,7 @@ export const harnessZhCN = {
       },
       newDraft: '新建插件草稿',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
-      needPluginsPath: '先点右上角 ＋ 选择插件存放路径，然后就能新建插件了',
+      needPluginsPath: '插件源码是你自己的，放在哪里由你决定——选一个文件夹就能新建了',
       draftActions: '草稿操作',
       pluginState: {
         draft: '草稿',
@@ -802,7 +802,7 @@ export const harnessZhCN = {
       title: '草稿',
       new: '新建草稿',
       empty: '还没有插件。在助手里说「帮我做一个番茄钟插件」，或用右上角「新建草稿」先生成骨架。',
-      needRoot: '先在上面选择插件存放路径，然后就能新建插件了'
+      needRoot: '还没有选择插件存放路径。插件源码放在哪里由你决定，选一个文件夹后就能新建插件了'
     },
     files: '{{count}} 个文件',
     filesSection: '文件（{{count}}）',
@@ -845,6 +845,7 @@ export const harnessZhCN = {
       title: '新建草稿',
       idPlaceholder: '小写 kebab，例如 pomodoro-timer',
       titlePlaceholder: '展示名（例如 番茄钟）',
+      needRoot: '还没有选择插件存放路径——先选一个文件夹，再回来新建',
       note: '生成的是完整骨架：页面、设置页、给助手的 AI 工具、事件推送、卸载清数据都有，用不上的部分交给助手删。'
     }
   }
