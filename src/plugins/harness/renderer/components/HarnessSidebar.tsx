@@ -224,9 +224,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [draftsLoading, setDraftsLoading] = useState(false)
   /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
   const [newDraftOpen, setNewDraftOpen] = useState(false)
-  /** 用户配置的插件存放路径（空 = 还没配置：空列表位置直接给「选择文件夹」入口） */
+  /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示一行灰字，配置入口是右上角 ＋） */
   const [pluginsPath, setPluginsPath] = useState('')
-  const [pickingRoot, setPickingRoot] = useState(false)
 
   const switchMode = useCallback((next: SidebarMode): void => {
     setMode(next)
@@ -263,9 +262,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return () => window.removeEventListener(WORKSHOP_FOCUS_EVENT, handler)
   }, [])
 
-  /** 选一个插件存放路径（侧栏空列表位置与 ＋ 都走它） */
+  /** 选一个插件存放路径（只有 ＋ 这一个入口：没配路径时它先走这里） */
   const pickPluginsRoot = useCallback(async (): Promise<boolean> => {
-    setPickingRoot(true)
     try {
       const result = await harnessApi.workshop.pickRoot()
       if (!result.ok) {
@@ -280,8 +278,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     } catch (error) {
       viewMessage('workshop-root', 'error', String(error))
       return false
-    } finally {
-      setPickingRoot(false)
     }
   }, [loadDrafts, viewMessage])
 
@@ -1111,36 +1107,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               </p>
             ) : (
               /*
-               * 还没配插件存放路径：**这里就是配置入口**（用户口径：不要在新建弹窗里放选择器，
-               * 把选择动作放到这块提示的位置上）。
+               * 还没配插件存放路径：**与「尚未配置工作区」逐字同一副样子**——一行居中的灰字，
+               * 不写说明段落（用户口径 2026-09-27「不要这种描述…要像没有设置任何工作区时
+               * 显示的样式保持一致」）。选文件夹的入口就是右上角的 ＋（没配路径时它先弹
+               * 文件夹选择，见 handleNewDraft）。
                */
-              <div className="flex flex-col items-center gap-2 px-3 py-7 text-center">
-                <p className="text-xs" style={{ color: colorTextTertiary, margin: 0 }}>
-                  {t('harness.sidebar.needPluginsPath')}
-                </p>
-                <button
-                  onClick={() => void pickPluginsRoot()}
-                  disabled={pickingRoot}
-                  /* 稳定钩子：工装按它定位「配置插件存放路径」这个入口 */
-                  data-workshop-pick-root="sidebar"
-                  className="rounded transition-colors"
-                  style={{
-                    fontSize: 12,
-                    height: 24,
-                    padding: '0 10px',
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    background: colorFillAlter,
-                    color: colorText,
-                    cursor: pickingRoot ? 'default' : 'pointer'
-                  }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = token.colorFillSecondary)
-                  }
-                  onMouseLeave={(e) => (e.currentTarget.style.background = colorFillAlter)}
-                >
-                  {t('workshopSettings.root.pick')}
-                </button>
-              </div>
+              <p className="text-xs text-center py-8" style={{ color: colorTextTertiary }}>
+                {t('harness.sidebar.needPluginsPath')}
+              </p>
             )
           ) : (
             visibleDrafts.map((draft) => renderDraft(draft))

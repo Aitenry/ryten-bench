@@ -10,8 +10,9 @@ import { harnessApi } from '../../api'
  * 两处入口共用它，是为了让「点一下就开始」这条路径**只有一次跳转**：
  * 侧栏插件模式里点 ＋ 直接弹这个框（没配插件存放路径时先弹文件夹选择，见侧栏的
  * `handleNewDraft`）。弹窗里**只问 id 与展示名**——选择存放路径的动作不在这里
- * （用户口径 2026-09-27「新建插件里面不要弄一个选择插件目录」），
- * 它属于设置页那一项与侧栏空列表位置上的那个按钮。
+ * （用户口径 2026-09-27「新建插件里面不要弄一个选择插件目录」）：
+ * 选文件夹的入口只有两个，都是各页面自己的入口——设置 → 插件工坊的「插件存放路径」
+ * 那一行，和侧栏右上角的 ＋。
  *
  * 模板也**不提供选择**：生成的一律是含全部内容的 `full` 骨架，用不上的部分交给助手删。
  */
@@ -99,7 +100,7 @@ const NewDraftModal: React.FC<{
         <div
           style={{ fontSize: 12, color: configured ? token.colorTextTertiary : token.colorError }}
         >
-          {configured ? t('workshopSettings.create.note') : t('workshopSettings.create.needRoot')}
+          {configured ? t('workshopSettings.create.note') : t('workshopSettings.list.needRoot')}
         </div>
       </div>
     </Modal>

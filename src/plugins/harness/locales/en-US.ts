@@ -31,8 +31,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       },
       newDraft: 'New plugin draft',
       noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
-      needPluginsPath:
-        'Plugin source is yours to keep anywhere - pick a folder to start creating plugins',
+      needPluginsPath: 'No plugins folder yet',
       draftActions: 'Draft actions',
       pluginState: {
         draft: 'Draft',
@@ -798,11 +797,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       title: 'Plugins folder',
       pick: 'Choose folder',
       change: 'Change folder',
-      placeholder: 'No plugins folder chosen yet',
-      rowEmpty: 'No plugins folder chosen yet',
+      rowEmpty: 'No plugins folder yet',
       rowDesc: 'Every plugin lives in this folder, one subfolder each',
-      rowDescEmpty:
-        'Plugin source is yours, so you decide where it goes - pick a folder and you can create plugins',
       saved: 'Plugins folder set to {{path}}',
       moved: 'Plugins folder set; {{count}} existing plugin(s) were moved there too'
     },
@@ -811,8 +807,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       new: 'New draft',
       empty:
         'No plugins yet. Ask the assistant for one ("build me a pomodoro plugin"), or use "New draft" to scaffold a skeleton.',
-      needRoot:
-        'No plugins folder picked yet. Plugin source lives wherever you want - pick a folder to start creating plugins'
+      needRoot: 'No plugins folder yet'
     },
     files: '{{count}} file(s)',
     filesSection: 'Files ({{count}})',
@@ -855,7 +850,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       title: 'New draft',
       idPlaceholder: 'lowercase kebab, e.g. pomodoro-timer',
       titlePlaceholder: 'Display name (e.g. Pomodoro)',
-      needRoot: 'No plugins folder picked yet - pick one first, then create the draft',
       note: 'The draft comes with everything: page, settings page, an AI tool for the assistant, event push and data purge. Let the assistant delete what you do not need.'
     }
   }

@@ -40,7 +40,7 @@ export const harnessZhCN = {
       },
       newDraft: '新建插件草稿',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
-      needPluginsPath: '插件源码是你自己的，放在哪里由你决定——选一个文件夹就能新建了',
+      needPluginsPath: '尚未选择插件存放路径',
       draftActions: '草稿操作',
       pluginState: {
         draft: '草稿',
@@ -791,10 +791,8 @@ export const harnessZhCN = {
       title: '插件存放路径',
       pick: '选择文件夹',
       change: '更换文件夹',
-      placeholder: '还没有选择插件存放路径',
-      rowEmpty: '还没有选择插件存放路径',
+      rowEmpty: '尚未选择插件存放路径',
       rowDesc: '所有插件都放在这个文件夹下，每个插件一个子目录',
-      rowDescEmpty: '插件源码是你自己的东西，放在哪里由你决定——选一个文件夹后就能新建插件了',
       saved: '插件存放路径已设为 {{path}}',
       moved: '插件存放路径已设置，{{count}} 个已有插件也搬了过去'
     },
@@ -802,7 +800,7 @@ export const harnessZhCN = {
       title: '草稿',
       new: '新建草稿',
       empty: '还没有插件。在助手里说「帮我做一个番茄钟插件」，或用右上角「新建草稿」先生成骨架。',
-      needRoot: '还没有选择插件存放路径。插件源码放在哪里由你决定，选一个文件夹后就能新建插件了'
+      needRoot: '尚未选择插件存放路径'
     },
     files: '{{count}} 个文件',
     filesSection: '文件（{{count}}）',
@@ -845,7 +843,6 @@ export const harnessZhCN = {
       title: '新建草稿',
       idPlaceholder: '小写 kebab，例如 pomodoro-timer',
       titlePlaceholder: '展示名（例如 番茄钟）',
-      needRoot: '还没有选择插件存放路径——先选一个文件夹，再回来新建',
       note: '生成的是完整骨架：页面、设置页、给助手的 AI 工具、事件推送、卸载清数据都有，用不上的部分交给助手删。'
     }
   }

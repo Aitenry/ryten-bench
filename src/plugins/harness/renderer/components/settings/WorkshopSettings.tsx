@@ -412,11 +412,8 @@ const WorkshopSettings: React.FC = () => {
       >
         <SettingRow
           title={pluginsPath || t('workshopSettings.root.rowEmpty')}
-          description={
-            pluginsPath
-              ? t('workshopSettings.root.rowDesc')
-              : t('workshopSettings.root.rowDescEmpty')
-          }
+          /* 说明只有一句、两种状态共用：没配时不写劝导式的段落（用户口径 2026-09-27） */
+          description={t('workshopSettings.root.rowDesc')}
           control={
             <Button size="small" loading={pickingRoot} onClick={() => void handlePickRoot()}>
               {pluginsPath ? t('workshopSettings.root.change') : t('workshopSettings.root.pick')}
@@ -448,33 +445,20 @@ const WorkshopSettings: React.FC = () => {
             <SkeletonSettingRows rows={3} />
           </div>
         ) : draftCount === 0 ? (
+          /* 空态两种情形只差一句话（没配路径 / 配了还没插件），样式与侧栏空态同一套：
+             一行灰字居中，不摆说明段落，也不再多给一个「选择文件夹」入口——
+             配路径只有上面那一行的按钮（一个功能一个入口） */
           <div style={{ padding: '28px 0', textAlign: 'center' }}>
-            {pluginsPath ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                    {t('workshopSettings.list.empty')}
-                  </span>
-                }
-              />
-            ) : (
-              /* 未配置存放路径：**这里就是配置入口**（与侧栏插件模式的空列表同一口径） */
-              <div className="flex flex-col items-center" style={{ gap: 12 }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
                 <span style={{ fontSize: 13, color: token.colorTextSecondary }}>
-                  {t('workshopSettings.list.needRoot')}
+                  {pluginsPath
+                    ? t('workshopSettings.list.empty')
+                    : t('workshopSettings.list.needRoot')}
                 </span>
-                <Button
-                  size="small"
-                  loading={pickingRoot}
-                  /* 稳定钩子：工装按它定位「配置插件存放路径」这个入口 */
-                  data-workshop-pick-root="settings"
-                  onClick={() => void handlePickRoot()}
-                >
-                  {t('workshopSettings.root.pick')}
-                </Button>
-              </div>
-            )}
+              }
+            />
           </div>
         ) : (
           drafts.map((draft) => {
