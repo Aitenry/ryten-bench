@@ -1,4 +1,4 @@
-﻿import * as fs from 'fs'
+import * as fs from 'fs'
 import * as path from 'path'
 import type {
   WorkshopBuildInfo,
@@ -27,6 +27,7 @@ import {
   draftExists,
   listDraftFiles,
   listDraftIds,
+  patchDraftMeta,
   readDraftFile,
   readDraftManifest,
   readDraftMeta,
@@ -175,6 +176,33 @@ export function writeFile(
 /** 删草稿文件 */
 export function removeFile(id: string, rel: string): void {
   deleteDraftFile(id, rel)
+}
+
+/**
+ * 重命名插件（改的是**展示名**）。
+ *
+ * 两处一起改：草稿元数据 `workshop.json` 的 `title`（工坊列表与侧栏显示的是它）与清单
+ * `plugin.json` 的 `name`（应用里「插件管理」/菜单显示的是它）——只改一处会出现
+ * 「侧栏叫新名字、装进应用还是旧名字」。
+ *
+ * **不动目录名与 id**：id 同时是目录名、`plugin.json.id` 与 IPC 命名空间 `plugin:<id>:*`，
+ * 改它等于换一个插件（那是「新建一个 + 删掉旧的」，不是重命名）。
+ * 改完产物比源码旧（要进行里生效需重新构建/安装），这是既有的 `staleBuild` 口径。
+ */
+export function renameDraft(id: string, title: string): WorkshopDraftSummary {
+  if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在`)
+  const clean = typeof title === 'string' ? title.trim() : ''
+  if (!clean) throw new Error('插件名称不能为空')
+  if (clean.length > 60) throw new Error('插件名称最多 60 个字')
+  if (clean === readDraftMeta(id)?.title) return draftSummary(id)
+
+  patchDraftMeta(id, { title: clean })
+  const manifest = readDraftManifest(id)
+  if (manifest && typeof manifest === 'object') {
+    // 清单是生成出来的 JSON：整体重写（保持 2 空格缩进，与模板生成的一致）
+    writeDraftFile(id, 'plugin.json', JSON.stringify({ ...manifest, name: clean }, null, 2) + '\n')
+  }
+  return draftSummary(id)
 }
 
 /**

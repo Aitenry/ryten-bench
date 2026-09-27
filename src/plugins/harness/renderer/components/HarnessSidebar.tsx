@@ -16,15 +16,20 @@ import {
   RiFolder2Line,
   RiFolderOpenLine,
   RiFoldersLine,
+  RiHammerLine,
   RiMoreLine,
   RiPuzzleLine,
   RiSearchLine,
-  RiSettings4Line
+  RiSettings4Line,
+  RiShieldCheckLine,
+  RiUploadCloud2Line
 } from '@remixicon/react'
 import ChaseDots from './ChaseDots'
 import NewDraftModal from './workshop/NewDraftModal'
+import { useDraftActions } from './workshop/useDraftActions'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
+import type { MenuProps } from 'antd'
 import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../shared/types'
 import type { WorkshopDraftSummary } from '../../shared/workshop'
@@ -212,7 +217,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 }) => {
   const { token } = theme.useToken()
   const { viewMessage } = useMessage()
-  const { modal } = App.useApp()
+  const { modal, message } = App.useApp()
   const { t } = useTranslation()
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -226,6 +231,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [newDraftOpen, setNewDraftOpen] = useState(false)
   /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示一行灰字，配置入口是右上角 ＋） */
   const [pluginsPath, setPluginsPath] = useState('')
+  /* 重命名插件弹窗（与工作区重命名同一套交互：一行输入 + 保存） */
+  const [draftRenameTarget, setDraftRenameTarget] = useState<WorkshopDraftSummary | null>(null)
+  const [draftRenameName, setDraftRenameName] = useState('')
+  const [draftRenameSaving, setDraftRenameSaving] = useState(false)
 
   const switchMode = useCallback((next: SidebarMode): void => {
     setMode(next)
@@ -289,6 +298,124 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
     setNewDraftOpen(true)
   }, [pickPluginsRoot, pluginsPath])
+
+  /**
+   * 插件行上的动作（构建 / 验收 / 安装）走与设置页同一个 hook——提示与忙碌态口径一致。
+   * 行内还能重命名与删除（对齐工作区行的「⋯ + ＋」，用户口径 2026-09-27）。
+   */
+  const {
+    busyId: draftBusyId,
+    build: buildDraft,
+    verify: verifyDraft,
+    publish: publishDraft
+  } = useDraftActions({ onChanged: async () => await loadDrafts() })
+
+  /** 删除插件（只删它的源码目录 + 产物；已装进应用的插件不受影响，与设置页同一套文案） */
+  const handleRemoveDraft = useCallback(
+    (draft: WorkshopDraftSummary): void => {
+      modal.confirm({
+        title: t('harness.sidebar.pluginDeleteTitle', { name: draft.title }),
+        content: t('workshopSettings.remove.body'),
+        okText: t('common.action.delete'),
+        okButtonProps: { danger: true },
+        cancelText: t('common.action.cancel'),
+        onOk: async () => {
+          const result = await harnessApi.workshop.remove(draft.id)
+          if (!result.ok) {
+            viewMessage(`workshop-remove-${draft.id}`, 'error', result.error ?? '', 6)
+          }
+          await loadDrafts()
+        }
+      })
+    },
+    [modal, t, viewMessage, loadDrafts]
+  )
+
+  /** 打开重命名插件弹窗 */
+  const openDraftRename = useCallback((draft: WorkshopDraftSummary): void => {
+    setDraftRenameTarget(draft)
+    setDraftRenameName(draft.title)
+  }, [])
+
+  /** 保存插件名（改的是展示名：草稿 title + 清单 name；目录名/id 不动） */
+  const handleDraftRenameSave = useCallback(async (): Promise<void> => {
+    const name = draftRenameName.trim()
+    if (!name || !draftRenameTarget) {
+      viewMessage('draft-rename-validate', 'warning', t('harness.sidebar.pluginNameRequired'))
+      return
+    }
+    try {
+      setDraftRenameSaving(true)
+      const result = await harnessApi.workshop.rename(draftRenameTarget.id, name)
+      if (!result.ok) {
+        viewMessage('draft-rename-error', 'error', result.error ?? '', 6)
+        return
+      }
+      setDraftRenameTarget(null)
+      await loadDrafts()
+      viewMessage('draft-rename-done', 'success', t('harness.sidebar.renameSuccess'), 2)
+    } catch (error) {
+      viewMessage('draft-rename-error', 'error', String(error))
+    } finally {
+      setDraftRenameSaving(false)
+    }
+  }, [draftRenameName, draftRenameTarget, viewMessage, loadDrafts, t])
+
+  /** 插件行的「⋯」：构建 / 验收 / 安装（与设置页同一个菜单口径）+ 重命名 / 删除 */
+  const draftMenuFor = useCallback(
+    (draft: WorkshopDraftSummary): MenuProps['items'] => [
+      { key: 'build', icon: <RiHammerLine size={14} />, label: t('workshopSettings.action.build') },
+      {
+        key: 'verify',
+        icon: <RiShieldCheckLine size={14} />,
+        label: t('workshopSettings.action.verify')
+      },
+      {
+        key: 'publish',
+        icon: <RiUploadCloud2Line size={14} />,
+        label: draft.installed
+          ? t('workshopSettings.action.update')
+          : t('workshopSettings.action.publish')
+      },
+      { type: 'divider' },
+      { key: 'rename', icon: <RiEditLine size={14} />, label: t('harness.sidebar.pluginRename') },
+      { type: 'divider' },
+      {
+        key: 'remove',
+        danger: true,
+        icon: <RiDeleteBin6Line size={14} />,
+        label: t('harness.sidebar.pluginDelete')
+      }
+    ],
+    [t]
+  )
+
+  const onDraftMenuClick = useCallback(
+    (draft: WorkshopDraftSummary, key: string): void => {
+      switch (key) {
+        case 'build':
+          void buildDraft(draft.id)
+          break
+        case 'verify':
+          void verifyDraft(draft.id)
+          break
+        case 'publish':
+          void publishDraft(draft.id, () => {
+            void message.success(t('workshopSettings.publish.done'))
+          })
+          break
+        case 'rename':
+          openDraftRename(draft)
+          break
+        case 'remove':
+          handleRemoveDraft(draft)
+          break
+        default:
+          break
+      }
+    },
+    [buildDraft, verifyDraft, publishDraft, openDraftRename, handleRemoveDraft, message, t]
+  )
 
   /** 打开工坊里某份插件的详情（设置弹窗 → 插件工坊 → 该插件抽屉） */
   const openDraft = useCallback((id: string): void => {
@@ -524,6 +651,36 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [activeWorkspaceId, workspaceTopics, loadWorkspaceTopics, switchWorkspace, onNewHarness]
   )
 
+  /**
+   * 插件行的 ＋：针对这个插件开一个新会话（对齐工作区行的「＋ 新建会话」）。
+   *
+   * 会话挂在工作区下，所以先确保有一个活动工作区（跨工作区时先切过去，与
+   * `handleCreateSession` 同一套）。新会话本身是**空白**的——首个话题在首次发送时才落库
+   * （见 useHarnessHandlers），因此把插件上下文**预填进输入框**：用户接着打
+   * 「加个倒计时提醒」就能直接发，助手也知道说的是哪份草稿（`plugin_draft` 按 id 找它）。
+   */
+  const handlePluginSession = useCallback(
+    async (draft: WorkshopDraftSummary): Promise<void> => {
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
+      if (!ws) {
+        viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
+        return
+      }
+      if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
+      // 新会话 = 当前内容回到「工作」这一侧
+      setMode('chat')
+      onNewHarness()
+      window.dispatchEvent(
+        new CustomEvent('harness-prefill-input', {
+          detail: {
+            text: t('harness.sidebar.pluginSessionPrefill', { name: draft.title, id: draft.id })
+          }
+        })
+      )
+    },
+    [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t]
+  )
+
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
     try {
@@ -696,9 +853,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return { text: t('harness.sidebar.pluginState.draft'), color: colorTextTertiary }
   }
 
-  /** 草稿行：点一行 = 打开它的工坊详情（构建/验收/安装都在那里） */
+  /**
+   * 插件行：点一行 = 打开它的工坊详情；悬停出现「⋯（构建/验收/安装/重命名/删除）」与
+   * 「＋（针对这个插件新建会话）」——与工作区行的两个行内动作一一对应
+   * （用户口径 2026-09-27「插件没有像工作区那样的功能」）。
+   */
   const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
     const state = draftStateOf(draft)
+    /** 这一行正跑着构建/验收/安装：行内动作先收起来，避免重复点 */
+    const busy = draftBusyId === draft.id
     return (
       <div
         key={draft.id}
@@ -712,14 +875,68 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           className="flex items-center justify-center shrink-0"
           style={{ width: 16, color: colorTextSecondary }}
         >
-          <RiPuzzleLine size={15} />
+          {busy ? <ChaseDots size={14} color={colorTextTertiary} /> : <RiPuzzleLine size={15} />}
         </span>
         <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
           {draft.title}
         </span>
-        <span className="shrink-0 group-hover:hidden" style={{ fontSize: 11, color: state.color }}>
-          {state.text}
-        </span>
+        {!busy && (
+          <span
+            className="shrink-0 group-hover:hidden"
+            style={{ fontSize: 11, color: state.color }}
+          >
+            {state.text}
+          </span>
+        )}
+        {!busy && (
+          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+            <Dropdown
+              menu={{
+                items: draftMenuFor(draft),
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation()
+                  onDraftMenuClick(draft, key)
+                }
+              }}
+              trigger={['click']}
+              placement="bottomRight"
+            >
+              <button
+                onClick={(e) => e.stopPropagation()}
+                title={t('harness.sidebar.pluginActions')}
+                className="flex items-center justify-center rounded"
+                style={{
+                  width: 22,
+                  height: 22,
+                  color: colorTextSecondary,
+                  background: 'transparent'
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              >
+                <RiMoreLine size={15} />
+              </button>
+            </Dropdown>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                void handlePluginSession(draft)
+              }}
+              title={t('harness.sidebar.pluginNewSession')}
+              className="flex items-center justify-center rounded"
+              style={{
+                width: 22,
+                height: 22,
+                color: colorTextSecondary,
+                background: 'transparent'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <RiAddLine size={16} />
+            </button>
+          </span>
+        )}
       </div>
     )
   }
@@ -1293,6 +1510,30 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           onChange={(e) => setRenameName(e.target.value)}
           onPressEnter={handleRenameSave}
         />
+      </Modal>
+
+      {/* 重命名插件弹窗（与工作区重命名同一套交互；只改展示名，目录名/id 不动） */}
+      <Modal
+        title={t('harness.sidebar.pluginRename')}
+        open={draftRenameTarget !== null}
+        onCancel={() => setDraftRenameTarget(null)}
+        onOk={handleDraftRenameSave}
+        okText={t('common.action.save')}
+        cancelText={t('common.action.cancel')}
+        confirmLoading={draftRenameSaving}
+        width={380}
+      >
+        <Input
+          autoFocus
+          data-workshop-field="rename"
+          placeholder={t('harness.sidebar.pluginNamePlaceholder')}
+          value={draftRenameName}
+          onChange={(e) => setDraftRenameName(e.target.value)}
+          onPressEnter={handleDraftRenameSave}
+        />
+        <div style={{ marginTop: 8, fontSize: 12, color: colorTextTertiary }}>
+          {t('harness.sidebar.pluginRenameNote', { id: draftRenameTarget?.id ?? '' })}
+        </div>
       </Modal>
     </div>
   )

@@ -1249,6 +1249,22 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     assistantIdByTopicRef.current.clear()
   }, [saveSessionToCache])
 
+  /**
+   * 外部请求预填输入框（`harness-prefill-input`）。
+   *
+   * 用途：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
+   * （首个话题在首次发送时才落库），把插件上下文预填进去，用户接着打需求就能发。
+   * 事件在 `onNewHarness()` 之后派发，因此这次写入会覆盖它的清空（同一次批处理里后者生效）。
+   */
+  useEffect(() => {
+    const handler = (event: Event): void => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text
+      if (typeof text === 'string' && text.trim()) setInputValue(text)
+    }
+    window.addEventListener('harness-prefill-input', handler)
+    return () => window.removeEventListener('harness-prefill-input', handler)
+  }, [])
+
   const handleSelectTopic = useCallback(
     async (topic: HarnessTopicRow): Promise<void> => {
       // 不在加载时禁止切换，允许自由切换

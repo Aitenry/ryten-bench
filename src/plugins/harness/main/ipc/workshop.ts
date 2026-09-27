@@ -18,6 +18,7 @@ import {
   readFile,
   removeDraft,
   removeFile,
+  renameDraft,
   unpublish,
   verify,
   workshopState,
@@ -119,6 +120,17 @@ export function workshopIpcHandlers(): MainIpcHandlers {
         const result = await publish(id)
         broadcastWorkshopChanged()
         return result
+      })
+  )
+
+  /** 重命名插件（改展示名：草稿 title + 清单 name；目录名/id 不动） */
+  handle(
+    'workshop-rename',
+    async (id: string, title: string) =>
+      await act(async () => {
+        const summary = renameDraft(id, title)
+        broadcastWorkshopChanged()
+        return summary
       })
   )
 

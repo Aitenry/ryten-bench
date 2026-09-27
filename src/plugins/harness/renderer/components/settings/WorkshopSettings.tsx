@@ -27,6 +27,7 @@ import {
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../api'
 import NewDraftModal from '../workshop/NewDraftModal'
+import { useDraftActions } from '../workshop/useDraftActions'
 import type {
   WorkshopCheck,
   WorkshopDraftDetail,
@@ -57,7 +58,6 @@ const WorkshopSettings: React.FC = () => {
   const [pickingRoot, setPickingRoot] = useState(false)
   const [ready, setReady] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [busyId, setBusyId] = useState<string>('')
   const [detail, setDetail] = useState<WorkshopDraftDetail | null>(null)
   const [report, setReport] = useState<WorkshopReport | null>(null)
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null)
@@ -118,83 +118,26 @@ const WorkshopSettings: React.FC = () => {
   }, [openDetail])
 
   /**
-   * 统一执行一次工坊动作：置忙 → 调主进程 → 失败提示原文 → 成功后刷新列表与抽屉。
-   *
-   * `onSuccess` 拿到的是动作的真实返回值（构建诊断 / 验收报告），用于给更强的反馈
-   * （例如验收未通过时把失败项数报出来）——刻意**不重复调用**接口：
-   * 构建/验收都是重活，调两次等于干两遍。
+   * 构建 / 验收 / 安装走共用 hook（侧栏插件行用同一份，口径不会分叉）；
+   * `run` 留在这里给停用 / 导出 / 删除 / 卸载复用（忙碌态与失败提示同一套）。
    */
-  const runAction = async <T,>(
-    id: string,
-    run: () => Promise<{ ok: boolean; error?: string; data?: T }>,
-    onSuccess?: (data: T | undefined) => void
-  ): Promise<void> => {
-    setBusyId(id)
-    try {
-      const result = await run()
-      if (!result.ok) {
-        viewMessage(
-          `workshop-${id}`,
-          'error',
-          result.error ?? t('workshopSettings.actionFailed'),
-          6
-        )
-        return
-      }
-      onSuccess?.(result.data)
+  const {
+    busyId,
+    run: runAction,
+    build: handleBuild,
+    verify: handleVerify,
+    publish
+  } = useDraftActions({
+    onChanged: async (id) => {
       await refresh()
       if (detail?.id === id) await openDetail(id)
-    } catch (error) {
-      viewMessage(`workshop-${id}`, 'error', String(error))
-    } finally {
-      setBusyId('')
     }
-  }
-
-  const handleBuild = (id: string): Promise<void> =>
-    runAction(
-      id,
-      () => harnessApi.workshop.build(id),
-      (info) => {
-        if (info && !info.ok) {
-          viewMessage(`workshop-build-${id}`, 'error', info.errors.join('；'), 6)
-        } else if (info) {
-          viewMessage(
-            `workshop-build-${id}`,
-            'success',
-            t('workshopSettings.build.ok', { count: info.files.length }),
-            3
-          )
-        }
-      }
-    )
-
-  const handleVerify = (id: string): Promise<void> =>
-    runAction(
-      id,
-      () => harnessApi.workshop.verify(id, true),
-      (report) => {
-        if (!report) return
-        const failed = report.checks.filter((c) => c.status === 'fail').length
-        viewMessage(
-          `workshop-verify-${id}`,
-          report.ok ? 'success' : 'error',
-          report.ok
-            ? t('workshopSettings.verify.passed', { count: report.checks.length })
-            : t('workshopSettings.verify.failed', { count: failed }),
-          4
-        )
-      }
-    )
+  })
 
   const handlePublish = (id: string): Promise<void> =>
-    runAction(
-      id,
-      () => harnessApi.workshop.publish(id),
-      () => {
-        void message.success(t('workshopSettings.publish.done'))
-      }
-    )
+    publish(id, () => {
+      void message.success(t('workshopSettings.publish.done'))
+    })
 
   const handleDisable = (id: string): Promise<void> =>
     runAction(id, () => harnessApi.workshop.disable(id))

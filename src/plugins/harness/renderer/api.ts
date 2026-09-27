@@ -583,6 +583,11 @@ export const harnessApi = {
       invoke('plugin:harness:workshop-unpublish', id) as Promise<WorkshopActionResult<boolean>>,
     remove: (id: string) =>
       invoke('plugin:harness:workshop-remove', id) as Promise<WorkshopActionResult<boolean>>,
+    /** 重命名插件：改展示名（草稿 title + 清单 name），目录名/id 不动 */
+    rename: (id: string, title: string) =>
+      invoke('plugin:harness:workshop-rename', id, title) as Promise<
+        WorkshopActionResult<WorkshopDraftSummary>
+      >,
     exportZip: (id: string) =>
       invoke('plugin:harness:workshop-export', id) as Promise<
         WorkshopActionResult<{ file: string; bytes: number; files: string[] }>
