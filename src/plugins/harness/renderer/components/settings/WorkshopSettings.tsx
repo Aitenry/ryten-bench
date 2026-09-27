@@ -1,17 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  App,
-  Button,
-  Checkbox,
-  Drawer,
-  Dropdown,
-  Empty,
-  Input,
-  Modal,
-  Select,
-  Tag,
-  theme
-} from 'antd'
+import React, { useCallback, useEffect, useState } from 'react'
+import { App, Button, Checkbox, Drawer, Dropdown, Empty, Input, Modal, Tag, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   RiAddLine,
@@ -74,7 +62,6 @@ const WorkshopSettings: React.FC = () => {
   const [creating, setCreating] = useState(false)
   const [newId, setNewId] = useState('')
   const [newTitle, setNewTitle] = useState('')
-  const [newTemplate, setNewTemplate] = useState('page')
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -276,8 +263,8 @@ const WorkshopSettings: React.FC = () => {
     if (!id) return
     const result = await harnessApi.workshop.create({
       id,
-      title: newTitle.trim() || undefined,
-      template: newTemplate
+      title: newTitle.trim() || undefined
+      // 不传 template：主进程按默认的 'full' 生成「全部内容」的骨架
     })
     if (!result.ok) {
       viewMessage('workshop-create', 'error', result.error ?? '')
@@ -434,15 +421,6 @@ const WorkshopSettings: React.FC = () => {
   )
 
   const draftCount = drafts.length
-  const templates = useMemo(
-    () => [
-      { value: 'page', label: t('workshopSettings.template.page') },
-      { value: 'panel', label: t('workshopSettings.template.panel') },
-      { value: 'tool', label: t('workshopSettings.template.tool') },
-      { value: 'minimal', label: t('workshopSettings.template.minimal') }
-    ],
-    [t]
-  )
 
   return (
     <div>
@@ -752,7 +730,12 @@ const WorkshopSettings: React.FC = () => {
         )}
       </Drawer>
 
-      {/* ── 新建草稿（助手是主路径，这里是「先建骨架再让助手填」的备用入口） ── */}
+      {/*
+        ── 新建草稿 ──
+        只问 id 与展示名：**不再让用户挑模板**（2026-09-27 用户口径「默认是全部内容都要」）——
+        生成的骨架里页面 / 设置页 / AI 工具 / 事件推送 / 卸载清数据都齐了，
+        助手按需要删掉用不上的部分即可。
+      */}
       <Modal
         open={creating}
         title={t('workshopSettings.create.title')}
@@ -774,7 +757,6 @@ const WorkshopSettings: React.FC = () => {
             onChange={(event) => setNewTitle(event.target.value)}
             placeholder={t('workshopSettings.create.titlePlaceholder')}
           />
-          <Select value={newTemplate} onChange={setNewTemplate} options={templates} />
           <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
             {t('workshopSettings.create.note')}
           </div>

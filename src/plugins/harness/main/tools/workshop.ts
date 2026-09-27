@@ -171,7 +171,8 @@ const createDraftTool = (): StructuredToolInterface =>
             const result = createDraftFromTemplate({
               id: input.id,
               title: input.title,
-              template: (input.template as never) ?? 'page',
+              // 默认 full：一份骨架就含页面 + 设置页 + AI 工具（用户口径「默认是全部内容都要」）
+              template: (input.template as never) ?? 'full',
               description: input.description,
               css: input.css as never,
               overwrite: input.overwrite,
@@ -181,8 +182,9 @@ const createDraftTool = (): StructuredToolInterface =>
               `${result.overwritten ? '已按模板重建' : '已创建'}草稿 '${result.meta.id}'（模板 ${result.meta.template}）\n` +
               `目录：${result.dir}${input.workingDir ? '（用户指定的工作目录）' : '（工坊默认目录）'}\n` +
               `文件：${result.files.join('、')}\n` +
-              `下一步：读 WORKSHOP.md 了解契约 → 改写 renderer/main 里的文件 → plugin_build。\n` +
-              `提示：模板里已经有一份能跑通的骨架与冒烟用例，先在它上面改，不要从零重写。`
+              `下一步：读 WORKSHOP.md 了解契约 → 按需要删掉骨架里用不上的部分 → plugin_build。\n` +
+              `提示：默认模板 'full' 已经把页面/设置页/AI 工具/事件推送/卸载清数据都摆好了，` +
+              `在它上面删比从零拼装可靠——不要重写整个骨架。`
             )
           }
           case 'list': {
@@ -287,9 +289,12 @@ const createDraftTool = (): StructuredToolInterface =>
         content: z.string().optional().describe('写文件时的完整文件内容'),
         title: z.string().optional().describe('展示名（create 时用）'),
         template: z
-          .enum(['page', 'panel', 'tool', 'minimal'])
+          .enum(['full', 'page', 'panel', 'tool', 'minimal'])
           .optional()
-          .describe('模板：page=页面+菜单 / panel=设置页 / tool=给助手加工具 / minimal=空骨架'),
+          .describe(
+            "Skeleton kind; defaults to 'full' (page + settings page + AI tool + events + purge). " +
+              'Narrow ones: page / panel / tool / minimal'
+          ),
         description: z.string().optional().describe('插件说明（写入 plugin.json）'),
         overwrite: z.boolean().optional().describe('create 时是否覆盖已存在的草稿（默认 false）'),
         css: z

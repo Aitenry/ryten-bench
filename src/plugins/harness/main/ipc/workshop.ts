@@ -154,7 +154,8 @@ export function workshopIpcHandlers(): MainIpcHandlers {
         const result = createDraftFromTemplate({
           id: input?.id,
           title: input?.title,
-          template: (input?.template as never) ?? 'page',
+          // 不传就是默认的 'full'（全部内容）：模板选择只在助手侧按需使用
+          template: input?.template as never,
           description: input?.description,
           workingDir: input?.workingDir
         })

@@ -43,10 +43,10 @@ export interface CreateDraftResult {
   dir: string
 }
 
-/** 模板是否合法（非法时给出可用取值，避免模型瞎猜） */
+/** 模板是否合法（非法时给出可用取值，避免模型瞎猜）；缺省 = `full`（全部内容） */
 export function normalizeTemplate(value: unknown): WorkshopTemplate {
   const known = TEMPLATE_INFOS.map((t) => t.template)
-  if (typeof value !== 'string' || value === '') return 'page'
+  if (typeof value !== 'string' || value === '') return 'full'
   if (!known.includes(value as WorkshopTemplate)) {
     throw new Error(`模板 '${value}' 不存在：可用 ${known.join(' / ')}`)
   }

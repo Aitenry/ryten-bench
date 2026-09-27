@@ -833,6 +833,7 @@ export const harnessZhCN = {
       body: '只删除工坊里的源码、构建产物与验收报告；已经装进应用的插件不受影响。'
     },
     template: {
+      full: '完整骨架（页面 + 设置页 + AI 工具）',
       page: '独立页面（侧栏菜单 + 路由页面）',
       panel: '设置页（设置 → 助手 下的一页）',
       tool: 'AI 工具（给助手加一个可调用的工具）',
@@ -842,7 +843,7 @@ export const harnessZhCN = {
       title: '新建草稿',
       idPlaceholder: '小写 kebab，例如 pomodoro-timer',
       titlePlaceholder: '展示名（例如 番茄钟）',
-      note: '生成后可以让助手读 WORKSHOP.md 了解契约，再让它改代码。'
+      note: '生成的是完整骨架：页面、设置页、给助手的 AI 工具、事件推送、卸载清数据都有，用不上的部分交给助手删。'
     }
   }
 }

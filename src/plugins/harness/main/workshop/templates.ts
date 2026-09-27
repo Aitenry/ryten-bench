@@ -37,26 +37,34 @@ export interface TemplateInfo {
 
 export const TEMPLATE_INFOS: TemplateInfo[] = [
   {
+    template: 'full',
+    label: '完整骨架（默认）',
+    description:
+      '一份就含全部内容：侧栏页面 + 设置页 + 给助手贡献的 AI 工具 + 主进程通道与事件推送 + 卸载清数据',
+    registers:
+      'route / menu / settingsSection / i18n（渲染层）+ 4 个 IPC 通道 + 1 个事件通道 + harness.tool 与 plugin.purge 贡献（主进程）'
+  },
+  {
     template: 'page',
-    label: '独立页面插件',
+    label: '只要独立页面',
     description: '侧栏菜单 + 路由页面 + 一对主进程 IPC 通道（把数据存到 userData 下的 JSON）',
     registers: 'route / menu / i18n（渲染层）+ 2 个 IPC 通道 + plugin.purge（主进程）'
   },
   {
     template: 'panel',
-    label: '设置页插件',
+    label: '只要设置页',
     description: '设置 → 助手 分组下的一页（表单 / 开关 / 状态展示的落点）',
     registers: 'settingsSection / i18n（渲染层）+ 1 个 IPC 通道（主进程）'
   },
   {
     template: 'tool',
-    label: 'AI 工具插件',
+    label: '只要 AI 工具',
     description: '给 AI 助手贡献一个可在对话里调用的工具（harness.tool 贡献点）',
     registers: 'harness.tool 贡献（主进程）+ 设置页状态展示（渲染层）'
   },
   {
     template: 'minimal',
-    label: '最小骨架',
+    label: '空骨架',
     description: '只满足插件契约的空骨架：一个空 install + 一个空挂载点示例',
     registers: 'appProvider（渲染层空 Provider）'
   }
@@ -605,6 +613,375 @@ export function install(ctx: MainPluginContext): void {
 `
 }
 
+// ============================================================================
+// full：一份就含全部内容（默认模板，2026-09-27 用户要求「默认是全部内容都要」）
+// ============================================================================
+
+/**
+ * 完整骨架的主进程入口：状态文件 + 4 个通道 + 事件推送 + AI 工具 + 卸载清数据。
+ *
+ * 它是**能跑通的示例合集**，把插件的每个契约面都摆出来一遍：
+ * 可逆 effect（建目录/读盘/回滚）、registerIpc、registerEvent + safeSend 推送、
+ * harness.tool 贡献（工具与插件自己的数据是同一份）、plugin.purge 声明。
+ * 助手在这个骨架上删掉不需要的部分即可——比从零拼装可靠得多。
+ */
+function fullMain(vars: TemplateVars): string {
+  const toolName = toolNameOf(vars.id)
+  return `import * as fs from 'fs'
+import * as path from 'path'
+import { app, BrowserWindow } from 'electron'
+import { tool } from '@langchain/core/tools'
+import * as z from 'zod/v4'
+import { PLUGIN_PURGE } from '@host/main/plugins/contributions'
+import { HARNESS_TOOL_CONTRIBUTION } from '@host/main/plugins/tool-contract'
+import { safeSend } from '@host/main/safe-send'
+import type { MainPluginContext } from './context'
+
+/**
+ * ${vars.title} 的主进程：状态落盘 + 通道 + 事件推送 + 给助手的工具。
+ *
+ * 三条容易写错的规矩（都在这里做对了，照抄即可）：
+ * - 通道名必须以 \`plugin:${vars.id}:\` 开头，否则装载期就抛；
+ * - 主进程 → 渲染层的推送要**先 registerEvent 声明**（否则渲染层订阅不到），
+ *   并用宿主 safe-send（向已失效的渲染帧发送不会抛错，只有它能识别）；
+ * - 一切副作用都放进 ctx.effect 并返回回滚函数，插件停用时宿主会逆序撤销。
+ */
+const STATE_CHANGED = 'plugin:${vars.id}:state-changed'
+
+interface PluginState {
+  /** 页面里保存的内容 */
+  value: string
+  /** 设置页里的开关 */
+  enabled: boolean
+  /** 设置页里的备注 */
+  note: string
+}
+
+let stateFile = ''
+let state: PluginState = { value: '', enabled: false, note: '' }
+
+function persist(): void {
+  if (stateFile) fs.writeFileSync(stateFile, JSON.stringify(state), 'utf-8')
+}
+
+/** 状态变了就推给所有窗口（渲染层订阅 STATE_CHANGED 的那一处会实时更新） */
+function broadcast(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    safeSend(win.webContents, STATE_CHANGED, { ...state })
+  }
+}
+
+export function install(ctx: MainPluginContext): void {
+  ctx.effect(() => {
+    // 数据放 userData（别写用户的工作区：那是他的项目目录）
+    const dir = path.join(app.getPath('userData'), 'plugin-state')
+    fs.mkdirSync(dir, { recursive: true })
+    stateFile = path.join(dir, '${vars.id}.json')
+    try {
+      const saved = JSON.parse(fs.readFileSync(stateFile, 'utf-8')) as Partial<PluginState>
+      state = { ...state, ...saved }
+    } catch {
+      // 首次运行没有文件：用默认值
+    }
+    return () => {
+      stateFile = ''
+    }
+  })
+
+  // 只推送、没有 handler 的通道必须声明，否则渲染层订阅不到
+  ctx.registerEvent(STATE_CHANGED)
+
+  ctx.registerIpc({
+    'plugin:${vars.id}:state-get': () => ({ ...state }),
+    'plugin:${vars.id}:state-set': (value: unknown) => {
+      state = { ...state, value: typeof value === 'string' ? value : '' }
+      persist()
+      broadcast()
+      return { ...state }
+    },
+    'plugin:${vars.id}:settings-get': () => ({ ...state }),
+    'plugin:${vars.id}:settings-set': (patch: Partial<PluginState>) => {
+      state = {
+        ...state,
+        enabled: typeof patch?.enabled === 'boolean' ? patch.enabled : state.enabled,
+        note: typeof patch?.note === 'string' ? patch.note : state.note
+      }
+      persist()
+      broadcast()
+      return { ...state }
+    }
+  })
+
+  // 卸载时勾了「同时删除该插件的全部数据」才会跑到这里（插件当时仍装载着）
+  ctx.contribute(PLUGIN_PURGE, {
+    label: '本插件保存的内容与设置（plugin-state/${vars.id}.json）',
+    run: () => {
+      if (stateFile) fs.rmSync(stateFile, { force: true })
+    }
+  })
+
+  // 给助手贡献一个工具：读的正是这份插件自己的状态（工具与数据同源）
+  ctx.contribute(HARNESS_TOOL_CONTRIBUTION, {
+    name: '${toolName}',
+    info: {
+      name: '${toolName}',
+      label: ${jsonEscape(vars.title)},
+      description: ${jsonEscape(vars.description)},
+      icon: 'RiToolsLine',
+      color: '#8b5cf6'
+    },
+    build: () =>
+      tool(
+        async () => {
+          const saved = state.value ? state.value : '（还没有保存任何内容）'
+          return ${jsonEscape(vars.title)} + '：' + saved
+        },
+        {
+          name: '${toolName}',
+          description: ${jsonEscape(vars.description)},
+          schema: z.object({})
+        }
+      )
+  })
+}
+`
+}
+
+/** 完整骨架的渲染层入口：路由 + 侧栏菜单 + 设置页 + 词条 */
+function fullPlugin(vars: TemplateVars): string {
+  return `import { RiPuzzleLine } from '@remixicon/react'
+import type { PluginRenderContext } from './context'
+import Page from './Page'
+import Settings from './Settings'
+
+/**
+ * 完整骨架的渲染层入口：把三类挂载点各注册一个（路由页面 / 侧栏菜单 / 设置页），
+ * 再加一组词条。都是可逆装配——插件停用时宿主自动摘除，不需要写反注册。
+ */
+const plugin = {
+  install(ctx: PluginRenderContext): void {
+    ctx.use('route').register({
+      path: '/${vars.id}',
+      load: () => import('./Page')
+    })
+    ctx.use('menu').register({
+      // 菜单键必须与路由路径一致：点击菜单就是 navigate('/' + key)
+      key: '${vars.id}',
+      labelKey: '${vars.id}.menu.title',
+      icon: <RiPuzzleLine size={16} />,
+      order: 60
+    })
+    ctx.use('settingsSection').register({
+      tabKey: '${vars.id}',
+      labelKey: '${vars.id}.settings.title',
+      icon: <RiPuzzleLine size={16} />,
+      group: 'assistant',
+      order: 90,
+      Component: Settings
+    })
+    // 词条：第一个参数是命名空间（宿主界面一律 'translation'），第二个是「语言 → 词条树」
+    ctx.use('i18n').addResources('translation', {
+      'zh-CN': {
+        '${vars.id}': {
+          menu: { title: ${jsonEscape(vars.title)} },
+          settings: { title: ${jsonEscape(vars.title)} }
+        }
+      },
+      'en-US': {
+        '${vars.id}': {
+          menu: { title: ${jsonEscape(vars.title)} },
+          settings: { title: ${jsonEscape(vars.title)} }
+        }
+      }
+    })
+  }
+}
+
+export default plugin
+`
+}
+
+/** 完整骨架的页面：读写内容 + 订阅主进程推送（实时） */
+function fullPage(vars: TemplateVars): string {
+  return `import { useCallback, useEffect, useState } from 'react'
+import { Button, Card, Input, Space, Typography } from 'antd'
+import { RiSaveLine, RiRefreshLine } from '@remixicon/react'
+import { invoke } from './context'
+
+interface PluginState {
+  value: string
+  enabled: boolean
+  note: string
+}
+
+/**
+ * ${vars.title} 的页面。
+ *
+ * 数据只走本插件的主进程通道；主进程改了状态会推 \`plugin:${vars.id}:state-changed\`，
+ * 这里订阅它做实时更新（设置页里改开关，这一页也会跟着变）。
+ */
+export default function Page(): React.JSX.Element {
+  const [state, setState] = useState<PluginState>({ value: '', enabled: false, note: '' })
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setState((await invoke('plugin:${vars.id}:state-get')) as PluginState)
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  useEffect(() => {
+    // 事件通道由插件主进程 registerEvent 声明过才进 preload 白名单
+    return window.api.plugin.on('plugin:${vars.id}:state-changed', (data) => {
+      setState(data as PluginState)
+    })
+  }, [])
+
+  const save = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setState((await invoke('plugin:${vars.id}:state-set', state.value)) as PluginState)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="h-full w-full overflow-auto p-6">
+      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          ${vars.title}
+        </Typography.Title>
+        <Card size="small">
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Typography.Text type="secondary">
+              {state.enabled ? '设置页里的开关是打开的' : '设置页里的开关是关闭的'}
+              {state.note ? ' · 备注：' + state.note : ''}
+            </Typography.Text>
+            <Input.TextArea
+              value={state.value}
+              onChange={(e) => setState((prev) => ({ ...prev, value: e.target.value }))}
+              autoSize={{ minRows: 4, maxRows: 12 }}
+              placeholder="写点什么，保存后重启仍然在"
+            />
+            <Space>
+              <Button type="primary" icon={<RiSaveLine size={16} />} loading={busy} onClick={save}>
+                保存
+              </Button>
+              <Button icon={<RiRefreshLine size={16} />} onClick={() => void load()}>
+                重新读取
+              </Button>
+            </Space>
+          </Space>
+        </Card>
+      </div>
+    </div>
+  )
+}
+`
+}
+
+/** 完整骨架的设置页 */
+function fullSettings(vars: TemplateVars): string {
+  return `import { useCallback, useEffect, useState } from 'react'
+import { Button, Input, Switch, Typography } from 'antd'
+import { invoke } from './context'
+
+interface PluginState {
+  value: string
+  enabled: boolean
+  note: string
+}
+
+/**
+ * ${vars.title} 的设置页（设置 → 助手 → 本插件）。
+ *
+ * 与页面共用同一份主进程状态：这里改开关，页面那边会通过事件推送同步过去。
+ */
+export default function Settings(): React.JSX.Element {
+  const [state, setState] = useState<PluginState>({ value: '', enabled: false, note: '' })
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async (): Promise<void> => {
+    setState((await invoke('plugin:${vars.id}:settings-get')) as PluginState)
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const save = async (patch: Partial<PluginState>): Promise<void> => {
+    setBusy(true)
+    try {
+      setState((await invoke('plugin:${vars.id}:settings-set', patch)) as PluginState)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        ${vars.title}
+      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+        这一页由插件自己注册（settingsSection 挂载点）；停用插件后这一页随之消失。
+      </Typography.Paragraph>
+      <div className="flex max-w-[560px] flex-col gap-3">
+        <div className="flex items-center justify-between gap-4">
+          <span>启用示例开关</span>
+          <Switch
+            checked={state.enabled}
+            onChange={(value) => void save({ enabled: value })}
+            size="small"
+          />
+        </div>
+        <Input
+          value={state.note}
+          onChange={(e) => setState((prev) => ({ ...prev, note: e.target.value }))}
+          placeholder="备注（保存后持久化）"
+        />
+        <Button type="primary" loading={busy} onClick={() => void save({ note: state.note })}>
+          保存
+        </Button>
+      </div>
+    </div>
+  )
+}
+`
+}
+
+/** 完整骨架的冒烟用例：两条通道各验一次 */
+function fullSmoke(vars: TemplateVars): string {
+  return `/**
+ * 草稿自带的冒烟用例（工坊验收电池会执行它）。
+ *
+ * 语义：\`channels\` 里的每一项都会用**真实装载的插件**调用对应 IPC 处理器，
+ * 参数是 args 数组，返回值交给 expect 断言（返回 true = 通过，返回字符串 = 失败原因）。
+ * 加新通道时在这里补一条——它比「装上去点一下」更早发现问题。
+ */
+export default {
+  channels: {
+    'plugin:${vars.id}:state-set': {
+      args: ['smoke-value'],
+      expect: (value) => value && value.value === 'smoke-value'
+    },
+    'plugin:${vars.id}:settings-set': {
+      args: [{ enabled: true, note: 'smoke' }],
+      expect: (value) => value && value.enabled === true && value.note === 'smoke'
+    }
+  }
+}
+`
+}
+
 /** 冒烟用例（工坊的验收电池会真的调用这些通道；模板变量由调用方拼进 channel/args/expect） */
 function smokeFile(channel: string, args: string, expect: string): string {
   return `/**
@@ -671,7 +1048,6 @@ export function renderTemplate(
       break
 
     case 'page':
-    default:
       files['plugin.json'] = manifestFile(vars, {
         inject: ['route', 'menu', 'i18n'],
         routes: [{ path: `/${vars.id}` }],
@@ -690,6 +1066,26 @@ export function renderTemplate(
         "['smoke-value']",
         "(value) => value && value.value === 'smoke-value'"
       )
+      break
+
+    case 'full':
+    default:
+      // 默认模板 = 全部内容（用户口径「默认是全部内容都要」）：页面 + 设置页 + AI 工具 + 事件推送
+      files['plugin.json'] = manifestFile(vars, {
+        inject: ['route', 'menu', 'settingsSection', 'i18n'],
+        routes: [{ path: `/${vars.id}` }],
+        menu: {
+          key: vars.id,
+          labelKey: `${vars.id}.menu.title`,
+          icon: 'RiPuzzleLine',
+          order: 60
+        }
+      })
+      files['main/index.ts'] = fullMain(vars)
+      files['renderer/plugin.tsx'] = fullPlugin(vars)
+      files['renderer/Page.tsx'] = fullPage(vars)
+      files['renderer/Settings.tsx'] = fullSettings(vars)
+      files['workshop.smoke.mjs'] = fullSmoke(vars)
       break
   }
 

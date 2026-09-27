@@ -840,6 +840,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       body: 'This only deletes the workshop source, build output and report; an already installed plugin is unaffected.'
     },
     template: {
+      full: 'Full skeleton (page + settings + AI tool)',
       page: 'Standalone page (sidebar menu + route)',
       panel: 'Settings page (a page under Settings → Assistant)',
       tool: 'AI tool (a tool the assistant can call)',
@@ -849,7 +850,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       title: 'New draft',
       idPlaceholder: 'lowercase kebab, e.g. pomodoro-timer',
       titlePlaceholder: 'Display name (e.g. Pomodoro)',
-      note: 'After scaffolding, let the assistant read WORKSHOP.md for the contract before editing.'
+      note: 'The draft comes with everything: page, settings page, an AI tool for the assistant, event push and data purge. Let the assistant delete what you do not need.'
     }
   }
 }

@@ -13,8 +13,14 @@
  * - **验收（verify）**：对产物跑一遍自动化测试电池，产出 `WorkshopReport`。
  */
 
-/** 草稿模板：决定 `plugin_draft create` 生成哪一套骨架 */
-export type WorkshopTemplate = 'page' | 'tool' | 'panel' | 'minimal'
+/**
+ * 草稿模板：决定 `plugin_draft create` 生成哪一套骨架。
+ *
+ * `full` 是**默认**（用户口径「默认是全部内容都要」）：页面 + 设置页 + AI 工具 +
+ * 通道/事件推送 + 卸载清数据，一份就够。其余四个是「只要一部分」的窄模板，
+ * 供助手在明确知道只需某一种形态时使用（界面上的新建入口不提供选择）。
+ */
+export type WorkshopTemplate = 'full' | 'page' | 'tool' | 'panel' | 'minimal'
 
 /**
  * 插件自带样式表的来源。
