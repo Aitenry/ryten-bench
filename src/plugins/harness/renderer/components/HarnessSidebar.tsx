@@ -91,6 +91,83 @@ function readSidebarMode(): SidebarMode {
   }
 }
 
+/** 胶囊开关的单档宽度（两档等宽，滑块才能用固定位移滑过去） */
+const MODE_SEGMENT_WIDTH = 44
+/** 滑块位移的缓动：末端轻微回弹，切换有手感但不夸张 */
+const MODE_THUMB_EASE = 'cubic-bezier(0.32, 1.35, 0.5, 1)'
+
+/**
+ * 侧栏模式开关（胶囊 + 滑块）。
+ *
+ * 为什么不用「两个按钮各自换背景色」：那样切换是**瞬间跳变**，眼睛得重新找位置；
+ * 滑块滑过去时「现在在哪一档」是位置本身在说，来回切也不会有两个亮块打架。
+ * 颜色全部走 antd token（跟随主题），尺寸写死只为滑块位移好算——两档文字都是两个汉字。
+ */
+const SidebarModeSwitch: React.FC<{
+  mode: SidebarMode
+  onChange: (next: SidebarMode) => void
+  track: string
+  thumb: string
+  active: string
+  inactive: string
+  hairline: string
+  t: TFunction
+}> = ({ mode, onChange, track, thumb, active, inactive, hairline, t }) => {
+  const items: SidebarMode[] = ['chat', 'plugin']
+  const index = Math.max(0, items.indexOf(mode))
+  return (
+    <div
+      role="tablist"
+      className="relative flex items-center select-none"
+      style={{ padding: 2, height: 24, borderRadius: 999, background: track }}
+    >
+      {/* 滑块：绝对定位 + transform（不动布局、不重排文字），切换时滑到另一档 */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          top: 2,
+          left: 2,
+          width: MODE_SEGMENT_WIDTH,
+          height: 20,
+          borderRadius: 999,
+          background: thumb,
+          border: `1px solid ${hairline}`,
+          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.28)',
+          transform: `translateX(${index * MODE_SEGMENT_WIDTH}px)`,
+          transition: `transform 240ms ${MODE_THUMB_EASE}`
+        }}
+      />
+      {items.map((item) => (
+        <button
+          key={item}
+          type="button"
+          role="tab"
+          aria-selected={mode === item}
+          onClick={() => onChange(item)}
+          title={t(`harness.sidebar.mode.${item}Hint` as never)}
+          style={{
+            position: 'relative',
+            width: MODE_SEGMENT_WIDTH,
+            height: 20,
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            fontSize: 12,
+            lineHeight: '20px',
+            color: mode === item ? active : inactive,
+            fontWeight: mode === item ? 500 : 400,
+            transition: 'color 180ms ease'
+          }}
+        >
+          {t(`harness.sidebar.mode.${item}` as never)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** 会话相对时间：刚刚 / 12分钟 / 3小时 / 1天 / 09月10日（值为 null 时不着色显示）
  *  非组件函数：译文由调用方传入 t */
 function formatRelativeTime(t: TFunction, value: string | null): string {
@@ -976,34 +1053,20 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         ) : (
           <>
             {/*
-              模式切换：这块面板装两套内容——「普通」是工作区 → 会话，「插件」是插件草稿。
-              放原来标题的位置（标题本身没有信息量，开关有）。
+              模式切换：这块面板装两套内容——「工作」是工作区 → 会话，「插件」是插件草稿。
+              胶囊样式 + 一枚滑块（transform 过渡）而不是两个按钮换背景色：
+              切换时滑块滑过去，位置本身就在说「现在在哪一档」。
             */}
-            <div
-              className="flex items-center select-none"
-              style={{ gap: 2, padding: 2, borderRadius: 6, background: colorFillAlter }}
-            >
-              {(['chat', 'plugin'] as const).map((item) => (
-                <button
-                  key={item}
-                  onClick={() => switchMode(item)}
-                  title={t(`harness.sidebar.mode.${item}Hint` as never)}
-                  className="rounded transition-colors"
-                  style={{
-                    fontSize: 12,
-                    height: 22,
-                    padding: '0 8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: mode === item ? colorBgContainer : 'transparent',
-                    color: mode === item ? colorText : colorTextTertiary,
-                    fontWeight: mode === item ? 500 : 400
-                  }}
-                >
-                  {t(`harness.sidebar.mode.${item}` as never)}
-                </button>
-              ))}
-            </div>
+            <SidebarModeSwitch
+              mode={mode}
+              onChange={switchMode}
+              track={colorFillAlter}
+              thumb={token.colorBgElevated}
+              active={colorText}
+              inactive={colorTextTertiary}
+              hairline={token.colorBorderSecondary}
+              t={t}
+            />
             <span className="flex-1" />
             {iconBtn(
               t('harness.sidebar.searchTooltip'),

@@ -33,9 +33,9 @@ export const harnessZhCN = {
       assistantSettings: '助手设置',
       newWorkspace: '新建工作区',
       mode: {
-        chat: '普通',
+        chat: '工作',
         plugin: '插件',
-        chatHint: '普通模式：工作区与会话',
+        chatHint: '工作模式：工作区与会话',
         pluginHint: '插件模式：插件工坊里的草稿（点一行打开它的详情）'
       },
       newDraft: '新建插件草稿',

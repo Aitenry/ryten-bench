@@ -24,9 +24,9 @@ export const harnessEnUS: typeof harnessZhCN = {
       assistantSettings: 'Assistant settings',
       newWorkspace: 'New workspace',
       mode: {
-        chat: 'Chat',
+        chat: 'Work',
         plugin: 'Plugins',
-        chatHint: 'Chat mode: workspaces and conversations',
+        chatHint: 'Work mode: workspaces and conversations',
         pluginHint: 'Plugin mode: drafts in the Plugin Workshop (click one to open it)'
       },
       newDraft: 'New plugin draft',
