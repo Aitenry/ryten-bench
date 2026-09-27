@@ -658,6 +658,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * `handleCreateSession` 同一套）。新会话本身是**空白**的——首个话题在首次发送时才落库
    * （见 useHarnessHandlers），因此把插件上下文**预填进输入框**：用户接着打
    * 「加个倒计时提醒」就能直接发，助手也知道说的是哪份草稿（`plugin_draft` 按 id 找它）。
+   *
+   * **刻意不切模式**（用户口径 2026-09-27「为什么我在插件里面点击新建会话，会切换到工作」）：
+   * 人还在挑插件，面板就别自己跳走——开关仍停在「插件」，新会话只是把聊天区腾空 +
+   * 预填好上下文；要不要切到「工作」由用户自己决定。
    */
   const handlePluginSession = useCallback(
     async (draft: WorkshopDraftSummary): Promise<void> => {
@@ -667,8 +671,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         return
       }
       if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
-      // 新会话 = 当前内容回到「工作」这一侧
-      setMode('chat')
       onNewHarness()
       window.dispatchEvent(
         new CustomEvent('harness-prefill-input', {
@@ -1276,11 +1278,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <RiSearchLine size={16} />
             )}
             {mode === 'plugin'
-              ? /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器） */
+              ? /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器）。
+                   图标与工作模式的「新建工作区」用同一个（RiFoldersLine）——两个模式的头部同构，
+                   用户口径 2026-09-27「这个按键的 icon 要和工作的 icon 保持一致」 */
                 iconBtn(
                   t('harness.sidebar.newDraft'),
                   () => void handleNewDraft(),
-                  <RiAddLine size={16} />
+                  <RiFoldersLine size={16} />
                 )
               : [
                   iconBtn(
