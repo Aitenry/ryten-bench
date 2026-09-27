@@ -64,10 +64,42 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # 沙箱资产（resources/sandbox）由 build:sandbox 产出，而 build:win/mac/linux 的第一步就是它；
+      # 下面两步分别验证「资产构建成功」与「装进产物」，任何一步失败都让发布停下来
+      # ——否则会出现「装完即用」失效：后端缺失 → 命令被故障关闭、直接拒绝执行。
       - name: Build installer
         run: pnpm ${{ matrix.script }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify sandbox assets were built
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f resources/sandbox/win32-sandbox-runner.cjs
+          case "${{ matrix.platform }}" in
+            linux)
+              launcher=$(ls resources/sandbox/linux-*/ryten-landlock-launcher | head -n1)
+              test -n "${launcher}"
+              test -x "${launcher}"
+              # 真跑一次：证明这个内核上「自限 + exec」确实可用（不是只编出了个文件）
+              "${launcher}" --ro / --rw /dev -- true
+              echo "Linux 启动器可用：${launcher}"
+              ;;
+            macos)
+              echo "macOS 用系统自带 sandbox-exec，无需自带二进制"
+              ;;
+          esac
+          ls -la resources/sandbox
+
+      # 真正的闸门：拿**打包产物**里的沙箱做一次真机自检（Windows 用产物里的 Electron
+      # 二进制跑 runner、Linux 跑自研启动器），含「工作区外写入必须被拒」与「对照组可写」。
+      # 这一步曾经不存在，于是「runner 在 Electron 里崩」这类只在打包后才暴露的问题没人拦。
+      - name: Verify the packaged app carries a working sandbox
+        run: node native/build-sandbox.mjs --selfcheck
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

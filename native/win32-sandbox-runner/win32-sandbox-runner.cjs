@@ -239,6 +239,11 @@ function createBindings() {
     GetNamedSecurityInfoW: advapi32.func(
       'uint32_t __stdcall GetNamedSecurityInfoW(const char16_t *, int, uint32_t, _Out_ void **, _Out_ void **, _Out_ void **, _Out_ void **, _Out_ void **)'
     ),
+    // ACL 遍历（幂等检查用）：刻意不用 koffi.view 读整块 ACL 内存（在 Electron 下会崩，见 readBytes）
+    GetAclInformation: advapi32.func(
+      'int __stdcall GetAclInformation(void *, _Out_ void *, uint32_t, int)'
+    ),
+    GetAce: advapi32.func('int __stdcall GetAce(void *, uint32_t, _Out_ void **)'),
     SetNamedSecurityInfoW: advapi32.func(
       'uint32_t __stdcall SetNamedSecurityInfoW(const char16_t *, int, uint32_t, void *, void *, void *, void *)'
     ),
@@ -264,11 +269,28 @@ function createBindings() {
 
 /* ────────────────────────── SID / 内存小工具 ────────────────────────── */
 
+/**
+ * 逐字节读一段原生内存（SID / ACE 内嵌 SID 用）。
+ *
+ * **为什么不用 `koffi.view`**：koffi 3.3.1 的 `view()` 在 Electron（实测 44.1.1 / Node 24.19）
+ * 里会直接 `FATAL ERROR: Error::New napi_get_last_error_info` 崩掉整个进程——而 `decode`、
+ * `address`、`encode`、以及所有 Win32 调用在该运行时下都正常。这个崩溃是原生 abort、
+ * try/catch 拦不住，因此本文件**禁止使用 `koffi.view`**（工装里有一条静态断言盯着）。
+ * SID 最长 68 字节，逐字节 decode 的开销可以忽略。
+ */
+function readBytes(koffi, ptr, offset, count) {
+  const bytes = Buffer.allocUnsafe(count)
+  for (let index = 0; index < count; index++) {
+    bytes[index] = koffi.decode(ptr, offset + index, 'uint8_t')
+  }
+  return bytes
+}
+
 /** 取指针指向的 SID 的字节（SID = 1 字节修订 + 1 字节子权威数 + 6 字节权威 + N×4 字节子权威） */
 function sidBytes(koffi, sidPtr) {
   const count = koffi.decode(sidPtr, 1, 'uint8_t')
-  const length = 8 + count * 4
-  return Buffer.from(koffi.view(sidPtr, length))
+  if (count > 15) fail(`implausible SID sub-authority count ${count}`)
+  return readBytes(koffi, sidPtr, 0, 8 + count * 4)
 }
 
 /** 抛 Win32 错误（带 API 名、错误码与上下文） */
@@ -584,27 +606,34 @@ function mergeAndApply(bindings, path, entry, oldAcl, descriptor, label) {
 /**
  * 目录当前 DACL 是否已带完全相同的授权 ACE（有则跳过写回）：命中即省掉整棵树的重新传播。
  *
- * ACE 里的 SID 是**内嵌**的（不是指针），所以按字节比较——直接当指针解引用会读到垃圾地址。
+ * 实现刻意**只用 Win32 的 ACL 接口 + `koffi.decode`**（`GetAclInformation` 取 ACE 数量、
+ * `GetAce` 逐条取 ACE 指针），不用 `koffi.view` 去读整块 ACL 内存：
+ * ACE 里的 SID 是**内嵌**的（不是指针），只能按偏移逐字节读出来比较；而 `koffi.view`
+ * 在 Electron 下会崩（见 readBytes 的注释）。
  */
 function hasExactGrant(bindings, oldAcl, sidPtr) {
-  const { koffi } = bindings
-  const aclSize = koffi.decode(oldAcl, 2, 'uint16_t')
-  const aceCount = koffi.decode(oldAcl, 4, 'uint16_t')
-  if (aclSize < 8 || aclSize > 1048576) return false // 形状可疑：走合并路径（有完整错误处理）
+  const { koffi, advapi, kernel } = bindings
+  const info = Buffer.alloc(12) // ACL_SIZE_INFORMATION { AceCount; AclBytesInUse; AclBytesFree; }
+  if (advapi.GetAclInformation(oldAcl, info, info.length, 2) === 0) {
+    // 读不出 ACL 结构：退回合并路径（那条路有完整的错误处理）
+    return false
+  }
+  const aceCount = info.readUInt32LE(0)
+  if (aceCount === 0 || aceCount > 65535) return false
   const target = sidBytes(koffi, sidPtr)
-  const acl = Buffer.from(koffi.view(oldAcl, aclSize))
-  let offset = 8 // ACE 头 8 字节之后是第一条 ACE
   for (let index = 0; index < aceCount; index++) {
-    const aceSize = acl.readUInt16LE(offset + 2)
-    if (aceSize < 8 || offset + aceSize > aclSize) return false
-    const aceType = acl.readUInt8(offset)
-    const aceFlags = acl.readUInt8(offset + 1)
-    const mask = acl.readUInt32LE(offset + 4)
-    if (aceType === 0 && aceFlags === SUB_CONTAINERS_AND_OBJECTS_INHERIT && mask === GRANT_MASK) {
-      const inline = acl.subarray(offset + 8, offset + 8 + target.length)
-      if (inline.length === target.length && inline.equals(target)) return true
-    }
-    offset += aceSize
+    const aceSlot = [null]
+    if (advapi.GetAce(oldAcl, index, aceSlot) === 0) continue
+    const ace = aceSlot[0]
+    if (ace === null) continue
+    const aceType = koffi.decode(ace, 0, 'uint8_t')
+    const aceFlags = koffi.decode(ace, 1, 'uint8_t')
+    const aceSize = koffi.decode(ace, 2, 'uint16_t')
+    if (aceType !== 0 || aceFlags !== SUB_CONTAINERS_AND_OBJECTS_INHERIT) continue
+    if (koffi.decode(ace, 4, 'uint32_t') !== GRANT_MASK) continue
+    if (aceSize < 8 + target.length) continue
+    const inline = readBytes(koffi, ace, 8, target.length)
+    if (inline.equals(target)) return true
   }
   return false
 }

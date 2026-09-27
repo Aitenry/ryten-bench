@@ -6,6 +6,11 @@ files:
   - '!**/.vscode/*'
   - '!src/**'
   - '!drizzle/**'
+  # 沙箱资产只走 extraResources（下面的 `from: resources/sandbox → to: sandbox`）：
+  # 不排除的话它会被同时塞进 asar（再被 asarUnpack 解出来）和 resourcesPath 两份，
+  # 而 service.ts 的 resolveSandboxAsset 在打包态会先命中 asar 里那份 → 路径不确定。
+  # 排除后：开发态走 <仓库>/resources/sandbox，打包态只走 <resourcesPath>/sandbox。
+  - '!resources/sandbox/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!drizzle.config.ts'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'

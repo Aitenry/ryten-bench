@@ -38,6 +38,15 @@
 命令：`mode=cleanup` 可撤销工作区上的常驻 ACE（工作区 ACE 默认常驻以复用：第二次起命中
 精确 ACE 就跳过整棵树的重新传播）。
 
+> **硬规则：runner 里禁止使用 `koffi.view`。** koffi 3.3.1 的 `view()` 在 Electron（实测
+> 44.1.1 / Node 24.19，即打包后的真实运行环境）里会直接
+> `FATAL ERROR: Error::New napi_get_last_error_info` **崩掉整个进程**——原生 abort，
+> `try/catch` 拦不住；而 `decode` / `address` / `encode` 与所有 Win32 调用在该运行时下都正常。
+> 读原生内存一律走「逐字节 `koffi.decode`」（`readBytes`），ACL 遍历改用
+> `GetAclInformation` + `GetAce`。回归防线有两道：`test/verify-sandbox-service.mjs` 里的静态断言
+> （源码不得出现 `koffi.view(`），以及 `node native/build-sandbox.mjs --selfcheck`
+> （用打包出来的 Electron 真跑一遍）。
+
 ### Linux：Landlock（自研启动器）/ bubblewrap
 
 - 优先 `bwrap`（若系统已装）：`--ro-bind / /` + workspace-write 时 `--bind <工作区>`、
@@ -100,6 +109,34 @@ workspace-write 时再 `(allow file-write* (subpath <工作区>))`；命令经
   `native/landlock-launcher/ryten-landlock-launcher.c` 编译成
   `<out>/linux-<arch>/ryten-landlock-launcher`。`dev` 与 `build:win/mac/linux/unpack`
   都会先跑它，所以 clone 下来不会缺资源；源码全在会入库的 `native/` 下，删掉该目录不丢东西。
+- 打包态只保留**一份**沙箱资产：`files` 里排除了 `resources/sandbox/**`，只由
+  `extraResources` 复制到 `<resourcesPath>/sandbox`（否则 asar 里还会有一份，
+  `resolveSandboxAsset` 在打包态会先命中 asar 那份，路径变得不确定）。
+
+### 打包产物自检（CI 与本地同一条命令）
+
+```bash
+node native/build-sandbox.mjs --selfcheck            # 自动找 dist/*-unpacked（含 macOS .app）
+node native/build-sandbox.mjs --selfcheck dist/win-unpacked
+```
+
+它拿**打包产物里的沙箱**真机跑一遍，覆盖 8 项断言：
+
+1. 产物里确实有 `resources/sandbox/win32-sandbox-runner.cjs`；
+2. asar 里没有第二份（单份不变式）；
+3. **对照组**：工作区外的目标路径在沙箱外本来可写（否则下面的「拒绝」断言毫无判别力）；
+4. `workspace-write`：工作区内写入成功；
+5. `workspace-write`：同一工作区再次授权（幂等检查路径）可用；
+6. `workspace-write`：工作区外写入被内核拒绝且文件不存在；
+7. `read-only`：连工作区内都写不了；
+8. `cleanup`：撤销工作区 ACE 成功。
+
+Windows 上它用**打包出来的 Electron 二进制**（`ELECTRON_RUN_AS_NODE=1` + `RYTEN_APP_ROOT`
+指向产物里的 `app.asar`）跑 runner —— 这正是应用的调用路径，因此能抓到「只在打包后才暴露」
+的问题（例如上面那条 `koffi.view` 崩溃）。
+
+CI（`.github/workflows/release-0.1.0.yml`）里有三道闸门：类型检查、`build:sandbox` 产出的资产
+是否就位（Linux 上还会真跑一次启动器）、以及上面这条 `--selfcheck`；任何一道失败都不会发布。
 
 ## 工装
 
