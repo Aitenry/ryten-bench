@@ -86,6 +86,8 @@ const Index: React.FC = () => {
     handleCopy,
     handleSend,
     handleNewHarness,
+    /** 每次外部预填自增（插件行的 ＋）：输入框据此聚焦 + 光标落到末尾 */
+    prefillFocusToken,
     handleDeleteMessagePair,
     handleStartEditMessage,
     handleSubmitEditMessage,
@@ -645,6 +647,7 @@ const Index: React.FC = () => {
                     <HarnessInput
                       inputValue={inputValue}
                       onInputChange={setInputValue}
+                      prefillFocusToken={prefillFocusToken}
                       textareaRef={textareaRef}
                       inputHistoryRef={inputHistoryRef}
                       attachments={attachments}
