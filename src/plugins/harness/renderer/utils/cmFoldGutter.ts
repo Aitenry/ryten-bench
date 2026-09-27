@@ -48,13 +48,16 @@ function remixicon(pathD: string): SVGSVGElement {
 /** 折叠槽标记：展开可折叠的行显示向下箭头，已折叠的行显示向右箭头（与资源管理器同一套语义） */
 class FoldMarker extends GutterMarker {
   readonly open: boolean
+
   constructor(open: boolean) {
     super()
     this.open = open
   }
+
   eq(other: GutterMarker): boolean {
     return other instanceof FoldMarker && other.open === this.open
   }
+
   toDOM(): Node {
     return remixicon(this.open ? ARROW_DROP_DOWN_D : ARROW_DROP_RIGHT_D)
   }

@@ -69,7 +69,9 @@ export function mergeToolSources<T>(sources: {
 
   const pushAll = (list: ToolSource<T>[], sort: boolean): void => {
     const accepted: ToolSource<T>[] = []
-    for (const source of sort ? [...list].sort((a, b) => a.info.name.localeCompare(b.info.name, 'en')) : list) {
+    for (const source of sort
+      ? [...list].sort((a, b) => a.info.name.localeCompare(b.info.name, 'en'))
+      : list) {
       const name = source.info.name
       if (seen.has(name)) {
         warnConflict(name, sources.onWarn)

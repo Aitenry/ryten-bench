@@ -101,8 +101,8 @@ export default {
 
 ## 装配入口（P5 起只剩清单注册表）
 
-| 位置                       | 内容                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 位置                         | 内容                                                                        |
+|----------------------------|---------------------------------------------------------------------------|
 | `src/plugins/manifests.ts` | **唯一**的清单注册表：只 import 各插件的 `manifest.ts`（无 react/electron 依赖），供主进程铺包/面板列举 |
 
 P1~P4 期间 core 还持有两张**静态注册表**（`src/main/plugins/builtin.ts` 的主模块登记、
@@ -121,16 +121,16 @@ core 只剩「外壳 + 插件宿主 + DB 引擎 + 模型 Provider + 通用 prelo
 
 看代码时的入口（按需要选一处，不要从别处猜）：
 
-| 想了解                                            | 看这里                                                                      |
-| ------------------------------------------------- | --------------------------------------------------------------------------- |
-| 目录形态、主进程/渲染层契约、通道命名规则         | 本文档上面几节                                                              |
-| 主进程插件上下文（registerIpc/effect/contribute） | `src/main/plugins/context.ts`                                               |
-| 多值贡献点（AI 工具、宿主生命周期钩子）           | `src/main/plugins/contributions.ts`、`app-hooks.ts`                         |
-| 主进程应用事件总线（core → 插件推送时机）         | `src/main/plugins/app-events.ts`                                            |
-| 宿主装载/卸载与 preload 白名单推送                | `src/main/plugins/host.ts`                                                  |
-| 插件清单唯一定义                                  | `src/plugins/manifests.ts`                                                  |
-| 各插件的通道名                                    | `src/plugins/<id>/main/ipc/**`、渲染层的 `src/plugins/<id>/renderer/api.ts` |
-| 迁移历史、踩过的坑、跨插件耦合清单                | `src/plugins/MIGRATION.md`、`test/plugin-coupling-notes.md`                 |
+| 想了解                                     | 看这里                                                                    |
+|-----------------------------------------|------------------------------------------------------------------------|
+| 目录形态、主进程/渲染层契约、通道命名规则                   | 本文档上面几节                                                                |
+| 主进程插件上下文（registerIpc/effect/contribute） | `src/main/plugins/context.ts`                                          |
+| 多值贡献点（AI 工具、宿主生命周期钩子）                   | `src/main/plugins/contributions.ts`、`app-hooks.ts`                     |
+| 主进程应用事件总线（core → 插件推送时机）                | `src/main/plugins/app-events.ts`                                       |
+| 宿主装载/卸载与 preload 白名单推送                  | `src/main/plugins/host.ts`                                             |
+| 插件清单唯一定义                                | `src/plugins/manifests.ts`                                             |
+| 各插件的通道名                                 | `src/plugins/<id>/main/ipc/**`、渲染层的 `src/plugins/<id>/renderer/api.ts` |
+| 迁移历史、踩过的坑、跨插件耦合清单                       | `src/plugins/MIGRATION.md`、`test/plugin-coupling-notes.md`             |
 
 core 的边界（本轮收尾后）：
 

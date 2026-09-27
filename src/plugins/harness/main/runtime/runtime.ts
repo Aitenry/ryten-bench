@@ -181,10 +181,7 @@ export class Runtime {
    *
    * @param topicId 话题 id；缺省用本轮话题（子代理/工作流在调用期组装工具，取当时的 currentTopicId）
    */
-  private guard(
-    tools: StructuredToolInterface[],
-    topicId?: number
-  ): StructuredToolInterface[] {
+  private guard(tools: StructuredToolInterface[], topicId?: number): StructuredToolInterface[] {
     return guardTools(tools, {
       topicId: topicId ?? this.currentTopicId,
       workspaceRoot: this.opts.workspacePath

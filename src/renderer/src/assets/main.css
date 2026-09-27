@@ -53,16 +53,14 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.06),
-    0 4px 24px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06),
+  0 4px 24px rgba(0, 0, 0, 0.1);
 }
 
 /* 暗色模式：外层更暗，边框用白色半透明 */
 .dark .custom-frame {
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 4px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08),
+  0 4px 24px rgba(0, 0, 0, 0.25);
 }
 
 /* ======== 标题栏 ======== */
@@ -188,9 +186,8 @@ body {
   background: transparent;
   border-radius: 6px;
   cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s;
+  transition: background 0.15s,
+  color 0.15s;
 }
 
 .frame-menu-item:hover {
@@ -266,9 +263,8 @@ body {
   height: 5px;
   border-radius: 50%;
   background: rgba(128, 128, 128, 0.3);
-  transition:
-    background 0.3s,
-    width 0.3s;
+  transition: background 0.3s,
+  width 0.3s;
 }
 
 /* ======== 滚动条 ======== */

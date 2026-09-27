@@ -19,6 +19,7 @@ export interface NotificationItem {
   readonly?: boolean
   read: boolean
   onClick?: () => void
+
   /** 插件扩展字段（如构建进度的 wikiId / overallProgress / completed），core 按需读取 */
   [key: string]: unknown
 }

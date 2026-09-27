@@ -97,6 +97,7 @@ export interface BottomBarItemRegistration {
 /** 注册表服务：register 返回注销函数（可逆效果），宿主在插件卸载时整组清空 */
 export interface RegistryService<T extends { pluginId: string }> {
   register(item: Omit<T, 'pluginId'>): () => void
+
   getAll(): T[]
 }
 
@@ -128,6 +129,7 @@ export type HostServiceKey = keyof HostServices
 /** 插件：manifest + install（Cordis 组件三元组在实现层的入口） */
 export interface Plugin {
   manifest: PluginManifest
+
   /** 可逆安装：注册的逆操作进入 ctx.effect 回滚栈；返回值 dispose 最后执行 */
   install(ctx: PluginContext): void | (() => void) | Promise<void | (() => void)>
 }

@@ -221,8 +221,9 @@ class ProviderService {
       mode: config.thinking_mode,
       effort: config.reasoning_effort,
       // 没显式选档位时按模型档案的档位表取「中等思考」兜底（见 thinking-params）
-      effortLevels: (config.metadata as { capabilities?: { reasoning_effort_levels?: string[] } } | null)
-        ?.capabilities?.reasoning_effort_levels,
+      effortLevels: (
+        config.metadata as { capabilities?: { reasoning_effort_levels?: string[] } } | null
+      )?.capabilities?.reasoning_effort_levels,
       maxTokens: this.resolveMaxTokens(config)
     })
     if (!thinking) return

@@ -7,6 +7,7 @@ import { findExternalPlugin } from './scanner'
 import { isEnabledPlugin } from './host'
 import { hostUiBridgeSource, parseHostUiKey } from './host-ui-bridge'
 import { resolvePluginRequest } from './protocol-routing'
+
 /**
  * plugin:// 自定义协议：服务插件的静态文件（renderer.js/main 附属资源/图标）
  * 以及**渲染层宿主 UI 桥**（`plugin://host/ui.js?m=<key>`）。

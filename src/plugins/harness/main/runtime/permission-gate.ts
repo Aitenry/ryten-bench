@@ -61,8 +61,10 @@ export interface GateTexts {
     evidence?: string
     detail: string
   }): string
+
   /** 弹窗里的原因说明 */
   reason(code: DenyReason, evidence?: string): string
+
   /** 升权参数不合法时给模型的文本 */
   escalationUnavailable(error: EscalationError): string
 }

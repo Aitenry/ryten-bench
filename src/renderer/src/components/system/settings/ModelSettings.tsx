@@ -494,7 +494,9 @@ const ModelSettings: React.FC = () => {
     const next = effortLevels.includes(level)
       ? effortLevels.filter((item) => item !== level)
       : [...effortLevels, level]
-    form.setFields([{ name: 'metadata_reasoning_effort_levels', value: sortReasoningEfforts(next), touched: true }])
+    form.setFields([
+      { name: 'metadata_reasoning_effort_levels', value: sortReasoningEfforts(next), touched: true }
+    ])
   }
 
   /** 弹窗内的主题变量：表单原语共用一套色板（发丝线/等宽字/强调色） */
@@ -571,10 +573,7 @@ const ModelSettings: React.FC = () => {
         const fillIfEmpty = (key: string, value: string | number | string[]): void => {
           const now = cur[key]
           const empty =
-            now == null ||
-            now === '' ||
-            now === 0 ||
-            (Array.isArray(now) && now.length === 0) // 数组型字段（可选档位）空数组也算空
+            now == null || now === '' || now === 0 || (Array.isArray(now) && now.length === 0) // 数组型字段（可选档位）空数组也算空
           if (empty) patch[key] = value
         }
         if (typeof profile.display_name === 'string' && profile.display_name.trim()) {

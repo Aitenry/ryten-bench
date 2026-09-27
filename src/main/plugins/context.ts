@@ -50,8 +50,10 @@ export interface MainPluginContext {
   readonly id: string
   /** 本插件的通道命名空间（`plugin:<namespace>:` 里的 `<namespace>`） */
   readonly namespace: string
+
   /** 注册 IPC 处理器；返回只注销本次注册通道的逆操作 */
   registerIpc(handlers: MainIpcHandlers): () => void
+
   /**
    * 声明本插件「主进程 → 渲染层」的事件通道（没有 ipcMain 处理器，只有发送方）。
    *
@@ -61,8 +63,10 @@ export interface MainPluginContext {
    * 通道同样必须落在 `plugin:<命名空间>:` 内。
    */
   registerEvent(...channels: string[]): void
+
   /** 注册可逆效果（例如一个后台服务/定时器），停用时 LIFO 回滚 */
   effect(register: () => void | (() => void)): void
+
   /**
    * 挂载一个**多值贡献**（同一个键可由多个插件分别贡献；同一插件也可贡献多项）。
    *
@@ -75,6 +79,7 @@ export interface MainPluginContext {
    * key 为空的贡献没有意义，直接抛错（装配期失败会连累插件装载，早暴露早修）。
    */
   contribute<T>(key: string, value: T): void
+
   /** 读取某贡献点的全部贡献（宿主/注册表所有者用，例如 harness 读 'harness.tool'） */
   contributions<T>(key: string): T[]
 }

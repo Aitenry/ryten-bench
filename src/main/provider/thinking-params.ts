@@ -196,11 +196,7 @@ function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput
       }
       // Gemini 的 thinkingLevel 只有 LOW/MEDIUM/HIGH 三档，两端各向外收敛
       const level =
-        effort === 'minimal' || effort === 'low'
-          ? 'LOW'
-          : effort === 'medium'
-            ? 'MEDIUM'
-            : 'HIGH'
+        effort === 'minimal' || effort === 'low' ? 'LOW' : effort === 'medium' ? 'MEDIUM' : 'HIGH'
       acc.fields.thinkingConfig = { thinkingLevel: level, includeThoughts: true }
       acc.touched = true
       return
