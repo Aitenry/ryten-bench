@@ -27,6 +27,18 @@ export function hasHostUiExports(): boolean {
   return reported !== null
 }
 
+/**
+ * 已上报的宿主 UI 键清单（`null` = 渲染层还没上报）。
+ *
+ * 消费方是**插件工坊**的验收电池：它要判断「插件产物里保留的宿主说明符，
+ * 宿主 UI 表到底认不认」。返回 `null` 而不是空数组是刻意的——「还没上报」
+ * 与「一个键都没有」是两件事，前者只能跳过检查（应用刚启动、界面还没起来），
+ * 后者是真的坏了。
+ */
+export function hostUiExportKeys(): string[] | null {
+  return reported === null ? null : Object.keys(reported)
+}
+
 /** 记录渲染层上报的宿主 UI 导出名（覆盖式：HMR 重载后重新上报） */
 export function setHostUiExports(map: unknown): void {
   if (typeof map !== 'object' || map === null) return

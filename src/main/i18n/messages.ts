@@ -123,7 +123,11 @@ export const zhCN = {
     manage_todos: { label: '待办管理', description: '查看、创建、更新和删除待办事项' },
     manage_docs: { label: '文档管理', description: '搜索、查看、创建、编辑和删除文档' },
     manage_wikis: { label: '知识库', description: '浏览和管理知识库、目录、文档归档' },
-    search_graph: { label: '图谱搜索', description: '在知识图谱中搜索实体' }
+    search_graph: { label: '图谱搜索', description: '在知识图谱中搜索实体' },
+    plugin_draft: { label: '插件草稿', description: '新建插件草稿、读写草稿里的文件' },
+    plugin_build: { label: '构建插件', description: '把草稿构建成可安装的插件包并做静态体检' },
+    plugin_verify: { label: '验收插件', description: '跑自动化验收电池，确认插件真的能用' },
+    plugin_publish: { label: '发布插件', description: '把验收过的插件装进应用并启用' }
   },
   /** 模型重试失败后的「换模型继续」弹窗 */
   modelRecovery: {
@@ -231,7 +235,23 @@ export const enUS: typeof zhCN = {
       label: 'Knowledge base',
       description: 'Browse and manage knowledge bases, folders and archived documents'
     },
-    search_graph: { label: 'Graph search', description: 'Search entities in the knowledge graph' }
+    search_graph: { label: 'Graph search', description: 'Search entities in the knowledge graph' },
+    plugin_draft: {
+      label: 'Plugin drafts',
+      description: 'Create a plugin draft and edit its files'
+    },
+    plugin_build: {
+      label: 'Build plugin',
+      description: 'Build a draft into an installable package and audit it'
+    },
+    plugin_verify: {
+      label: 'Verify plugin',
+      description: 'Run the automated acceptance battery on a draft'
+    },
+    plugin_publish: {
+      label: 'Publish plugin',
+      description: 'Install a verified plugin into the app and enable it'
+    }
   },
   modelRecovery: {
     header: 'Model request failed',

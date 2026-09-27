@@ -32,6 +32,14 @@ import type {
   WorkspaceRow
 } from '../shared/types'
 import type { HarnessToolInfo } from './types'
+import type {
+  WorkshopActionResult,
+  WorkshopBuildInfo,
+  WorkshopDraftDetail,
+  WorkshopDraftSummary,
+  WorkshopPublishResult,
+  WorkshopReport
+} from '../shared/workshop'
 
 /** 档位状态视图（主进程为准：当前话题档位 + 新会话默认档位） */
 export interface PermissionStateView {
@@ -532,6 +540,76 @@ export const harnessApi = {
       on('plugin:harness:workspace-changes-updated', (data) =>
         callback(data as { ids: number[]; status: string; path?: string; obsolete?: number })
       )
+  },
+
+  /* ── 插件工坊（对话式做插件 + 自动验收，设置 → 插件工坊） ── */
+  workshop: {
+    /** 工坊是否可用（AI 助手被停用时为 false）+ 根目录 + 草稿数 */
+    state: () =>
+      invoke('plugin:harness:workshop-state') as Promise<{
+        ready: boolean
+        root: string
+        drafts: number
+      }>,
+    list: () => invoke('plugin:harness:workshop-list') as Promise<WorkshopDraftSummary[]>,
+    detail: (id: string) =>
+      invoke('plugin:harness:workshop-detail', id) as Promise<WorkshopDraftDetail>,
+    readFile: (id: string, relPath: string) =>
+      invoke('plugin:harness:workshop-read-file', id, relPath) as Promise<string>,
+    report: (id: string) =>
+      invoke('plugin:harness:workshop-report', id) as Promise<WorkshopReport | null>,
+    create: (input: { id: string; title?: string; template?: string; description?: string }) =>
+      invoke('plugin:harness:workshop-create', input) as Promise<
+        WorkshopActionResult<{ id: string; files: string[]; dir: string }>
+      >,
+    build: (id: string, dev?: boolean) =>
+      invoke('plugin:harness:workshop-build', id, dev) as Promise<
+        WorkshopActionResult<WorkshopBuildInfo>
+      >,
+    verify: (id: string, probe?: boolean) =>
+      invoke('plugin:harness:workshop-verify', id, probe) as Promise<
+        WorkshopActionResult<WorkshopReport>
+      >,
+    publish: (id: string) =>
+      invoke('plugin:harness:workshop-publish', id) as Promise<
+        WorkshopActionResult<WorkshopPublishResult>
+      >,
+    disable: (id: string) =>
+      invoke('plugin:harness:workshop-disable', id) as Promise<WorkshopActionResult<boolean>>,
+    unpublish: (id: string) =>
+      invoke('plugin:harness:workshop-unpublish', id) as Promise<WorkshopActionResult<boolean>>,
+    remove: (id: string) =>
+      invoke('plugin:harness:workshop-remove', id) as Promise<WorkshopActionResult<boolean>>,
+    exportZip: (id: string) =>
+      invoke('plugin:harness:workshop-export', id) as Promise<
+        WorkshopActionResult<{ file: string; bytes: number; files: string[] }>
+      >,
+    openDir: (id: string) =>
+      invoke('plugin:harness:workshop-open-dir', id) as Promise<WorkshopActionResult<string>>,
+    /** 一键把 4 个工坊工具加进「主智能体 → 工具」（否则助手不会用它们） */
+    enableTools: () =>
+      invoke('plugin:harness:workshop-enable-tools') as Promise<WorkshopActionResult<string[]>>,
+    /** 草稿/产物/安装态变化（助手在对话里改了草稿时，开着的面板要跟着变） */
+    onChanged: (callback: () => void): (() => void) =>
+      on('plugin:harness:workshop-changed', () => callback()),
+    /**
+     * 渲染层实时探针请求（主进程发的；助手界面收到后 import 一遍插件产物并回话）。
+     * 订阅本身由 Provider 常驻持有，用户在不在工坊页都能应答。
+     */
+    onProbe: (
+      callback: (payload: { probeId: string; id: string; entry: string }) => void
+    ): (() => void) =>
+      on('plugin:harness:workshop-probe', (data) =>
+        callback(data as { probeId: string; id: string; entry: string })
+      ),
+    /** 回话（主进程按 probeId 兑付；已超时的结果会被丢弃） */
+    reportProbe: (payload: {
+      probeId: string
+      status: 'pass' | 'fail' | 'skip'
+      detail?: string
+      registrations?: string[]
+      durationMs?: number
+    }) => invoke('plugin:harness:workshop-probe-result', payload) as Promise<boolean>
   }
 }
 

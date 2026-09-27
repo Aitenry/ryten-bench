@@ -751,5 +751,85 @@ export const harnessEnUS: typeof harnessZhCN = {
       importPartial: 'Some entries were not imported',
       saveHint: 'Saving reconnects this server right away'
     }
+  },
+
+  /* ── workshopSettings (Plugin Workshop settings page) ── */
+  workshopSettings: {
+    pageTitle: 'Plugin Workshop',
+    pageDescription:
+      'Let the assistant write a plugin in chat; the workshop builds it, runs automated acceptance checks, and installs it once it passes',
+    notReady:
+      'The workshop is unavailable: make sure the "AI assistant" plugin is enabled in Settings → Plugins',
+    actionFailed: 'Action failed',
+    tools: {
+      title: 'Assistant tools',
+      description: 'The assistant only uses the workshop once its tools are attached',
+      row: 'Let the assistant use the Plugin Workshop',
+      hint: 'Adds these 4 tools to Settings → Agents → Tools (only adds; your existing picks stay)',
+      enable: 'Enable for me',
+      done: 'Added to the assistant tool list'
+    },
+    action: {
+      build: 'Build',
+      verify: 'Verify',
+      publish: 'Install & enable',
+      update: 'Update install',
+      disable: 'Disable',
+      uninstall: 'Uninstall plugin',
+      export: 'Export zip',
+      remove: 'Delete draft',
+      detail: 'Details',
+      menu: 'More actions',
+      openDir: 'Open draft folder'
+    },
+    list: {
+      title: 'Drafts',
+      root: 'Workshop folder: {{path}}',
+      new: 'New draft',
+      empty:
+        'No drafts yet. Ask the assistant for one ("build me a pomodoro plugin"), or use "New draft" to scaffold a skeleton.'
+    },
+    files: '{{count}} file(s)',
+    filesSection: 'Files ({{count}})',
+    state: {
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      built: 'Built',
+      verified: 'Verified',
+      verifyFailed: 'Verification failed {{failed}}/{{total}}'
+    },
+    report: {
+      title: 'Acceptance report',
+      empty: 'Not verified yet: hit "Verify" to build and run the acceptance battery',
+      hint: 'Suggestion: '
+    },
+    verify: {
+      passed: 'Verified: all {{count}} checks passed',
+      failed: 'Verification failed: {{count}} check(s) failed'
+    },
+    build: { ok: 'Build finished: {{count}} artifact file(s)' },
+    publish: { done: 'Installed and enabled (effective immediately)' },
+    export: { done: 'Exported: {{file}}' },
+    uninstall: {
+      title: 'Uninstall "{{name}}"?',
+      body: 'Uninstalling removes the plugin code from the app (its folder under userData is deleted).',
+      purge: 'Also delete all of this plugin’s data (leave unchecked to keep the data)'
+    },
+    remove: {
+      title: 'Delete draft "{{name}}"?',
+      body: 'This only deletes the workshop source, build output and report; an already installed plugin is unaffected.'
+    },
+    template: {
+      page: 'Standalone page (sidebar menu + route)',
+      panel: 'Settings page (a page under Settings → Assistant)',
+      tool: 'AI tool (a tool the assistant can call)',
+      minimal: 'Minimal skeleton'
+    },
+    create: {
+      title: 'New draft',
+      idPlaceholder: 'lowercase kebab, e.g. pomodoro-timer',
+      titlePlaceholder: 'Display name (e.g. Pomodoro)',
+      note: 'After scaffolding, let the assistant read WORKSHOP.md for the contract before editing.'
+    }
   }
 }

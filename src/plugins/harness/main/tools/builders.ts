@@ -11,6 +11,7 @@ import { expandMcpServerGroups, type MainAgentConfig } from '../../shared/mcp'
 import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
+import { workshopToolBuilders, workshopToolInfos } from './workshop'
 
 // ============================================================================
 // Tool Registry — 本地工具 + 插件贡献（harness 只提供注册表/消费点）
@@ -21,7 +22,10 @@ type ToolFactory = () => StructuredToolInterface
 /**
  * harness **本地**工具：与某个插件的数据无关，因此留在 harness。
  * - `get_weather`：数据源 `src/main/weather.ts` 属 core；
- * - `get_time`：纯本地时间。
+ * - `get_time`：纯本地时间；
+ * - `plugin_draft` / `plugin_build` / `plugin_verify` / `plugin_publish`：**插件工坊**
+ *   （见 `main/workshop/**`）——「和助手对话把插件做出来」这条链路是 harness 自己的能力，
+ *   不是别的插件贡献的工具，所以走这张本地表而不是 `harness.tool` 贡献点。
  *
  * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
  * （`src/plugins/<id>/main/tools.ts`），由插件 `install(ctx)` 经
@@ -29,7 +33,8 @@ type ToolFactory = () => StructuredToolInterface
  */
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
-  get_time: buildGetTimeTool
+  get_time: buildGetTimeTool,
+  ...workshopToolBuilders
 }
 
 // ============================================================================
@@ -54,7 +59,9 @@ const localToolInfos: ToolInfo[] = [
     description: 'Current date and time',
     icon: 'RiTimeLine',
     color: '#52c41a'
-  }
+  },
+  // 插件工坊（4 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
+  ...workshopToolInfos
 ]
 
 // ============================================================================

@@ -23,6 +23,8 @@ import { harnessTopicIpcHandlers } from './ipc/harness-topic'
 import { mnemonIpcHandlers } from './ipc/mnemon'
 import { workspaceIpcHandlers } from './ipc/workspace'
 import { agentIpcHandlers } from './ipc/agent'
+import { WORKSHOP_EVENT_CHANNELS, workshopIpcHandlers } from './ipc/workshop'
+import { installWorkshopHost, uninstallWorkshopHost } from './workshop/wiring'
 import { MCP_EVENT_CHANNELS, mcpIpcHandlers } from './ipc/mcp'
 import {
   configureMcp,
@@ -51,13 +53,14 @@ const HARNESS_DOC_CHANGED_CHANNEL = 'plugin:harness:harness-doc-changed'
  * harness 插件主进程入口（契约见 src/plugins/README.md）。
  *
  * 装的是「AI 助手」这一整块内容：
- * - 通道表：5 个域一个文件（harness 主体 / 话题对话 / Mnemon 记忆 / 工作区文件与改动审查 /
- *   智能体配置），共 63 个 `plugin:harness:*` 通道，全部经 `ctx.registerIpc`；
+ * - 通道表：6 个域一个文件（harness 主体 / 话题对话 / Mnemon 记忆 / 工作区文件与改动审查 /
+ *   智能体配置 / **插件工坊**），全部经 `ctx.registerIpc`；
  * - 事件通道：主进程 → 渲染层的推送（流式 chunk、队列、目标、后台任务、子代理、
- *   提问、计划清单、工作区磁盘变化、改动记录、文档改写）逐个 `ctx.registerEvent` 声明，
- *   否则 preload 白名单会拒绝渲染层订阅（notes 那轮踩过）；
- * - 启动接线：文件改动快照目录 + 工作区文件监听，原先写在 `src/main/index.ts`，
- *   现挪进 `ctx.effect`（可逆）。停用「AI 助手」就不再配置快照目录、也不再监听工作区；
+ *   提问、计划清单、工作区磁盘变化、改动记录、文档改写、工坊状态变化与装载探针）
+ *   逐个 `ctx.registerEvent` 声明，否则 preload 白名单会拒绝渲染层订阅（notes 那轮踩过）；
+ * - 启动接线：文件改动快照目录 + 工作区文件监听 + **插件工坊宿主**（`workshop/wiring.ts`），
+ *   原先写在 `src/main/index.ts`，现挪进 `ctx.effect`（可逆）。停用「AI 助手」就不再配置
+ *   快照目录、不再监听工作区、工坊也随之不可用（工具与设置页给出可读错误）；
  * - 工具注册表：本地工具 time/weather + 各插件的 `harness.tool` 贡献（拉取语义，
  *   见 `src/main/plugins/tool-contract.ts`）。
  *
@@ -69,12 +72,13 @@ const HARNESS_DOC_CHANGED_CHANNEL = 'plugin:harness:harness-doc-changed'
  *   workspace 表下），随本轮搬进 `ipc/agent.ts`，provider.ts 只留模型 Provider。
  */
 export function install(ctx: MainPluginContext): void {
-  // ── 通道表（5 个域）─────────────────────────────────────────────────────
+  // ── 通道表（6 个域）─────────────────────────────────────────────────────
   installHarnessIpc(ctx)
   ctx.registerIpc(harnessTopicIpcHandlers())
   ctx.registerIpc(mnemonIpcHandlers())
   ctx.registerIpc(workspaceIpcHandlers())
   ctx.registerIpc(agentIpcHandlers())
+  ctx.registerIpc(workshopIpcHandlers())
   ctx.registerIpc(mcpIpcHandlers())
 
   // ── 主进程 → 渲染层的事件通道（只有发送方）─────────────────────────────
@@ -83,6 +87,7 @@ export function install(ctx: MainPluginContext): void {
     ...WORKSPACE_FILE_HISTORY_EVENT_CHANNELS,
     ...WORKSPACE_WATCHER_EVENT_CHANNELS,
     ...Object.values(MCP_EVENT_CHANNELS),
+    ...WORKSHOP_EVENT_CHANNELS,
     HARNESS_DOC_CHANGED_CHANNEL
   )
 
@@ -121,6 +126,11 @@ export function install(ctx: MainPluginContext): void {
     // 工具结果详情存储目录（内置工具的结果不再随流下发/落库，点开卡片时按需读取）：
     // 同样放 userData。停用时经 configureToolOutputStore('') 降级——见下方回滚。
     configureToolOutputStore(join(app.getPath('userData'), 'tool-output'))
+
+    // ── 插件工坊接线（可逆）──────────────────────────────────────────────
+    // 工坊自己不做 IO 约定：宿主运行时表、插件装载/卸载、模块加载器、渲染层探针
+    // 都在 wiring.ts 里一次性注入（那边刻意是唯一 import electron/core 的地方）。
+    installWorkshopHost()
 
     // ── MCP 客户端接线（可逆）────────────────────────────────────────────
     // 配置读取器由这里注入（管理器本身不 import electron，可离线回归）；
@@ -162,6 +172,9 @@ export function install(ctx: MainPluginContext): void {
       // 停用即「不再配置快照/详情目录」：写入处按空目录降级为「无快照 / 无详情」（不抛错）
       configureFileHistory('')
       configureToolOutputStore('')
+      // 工坊随之摘掉接线：工具与设置页给出「工坊尚未接线」的可读错误，
+      // 已装好的插件**不受影响**（它们是独立的插件包，跟 AI 助手是否启用无关）
+      uninstallWorkshopHost()
       // MCP 同样是可逆装配：摘掉提供者并关掉所有连接（stdio 子进程不能留在系统里）
       setMcpToolProvider(undefined)
       configureMcp(undefined)

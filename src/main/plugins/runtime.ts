@@ -75,6 +75,19 @@ const HOST_MAIN: Record<string, unknown> = {
   '@host/main/plugins/app-hooks': appHooks,
   '@host/main/plugins/contributions': contributions,
   '@host/main/plugins/tool-contract': toolContract,
+  // 插件工坊（harness 的「对话式做插件」）需要读写插件目录与装载/卸载插件：
+  // 它借的是**宿主自己那套**安装/启用/卸载函数，而不是另造一条（见 workshop/wiring.ts）。
+  // 这几个键一律懒加载：它们 import 回 plugins/host.ts，而 host.ts 又 import 本文件（见 lazyHostModule）。
+  /* eslint-disable @typescript-eslint/no-require-imports -- 懒加载：原因见 lazyHostModule 的注释 */
+  '@host/main/plugins/host': lazyHostModule(() => require('../plugins/host')),
+  '@host/main/plugins/host-ui-bridge': lazyHostModule(() => require('../plugins/host-ui-bridge')),
+  '@host/main/plugins/lifecycle': lazyHostModule(() => require('../plugins/lifecycle')),
+  '@host/main/plugins/package-install': lazyHostModule(() => require('../plugins/package-install')),
+  '@host/main/plugins/scanner': lazyHostModule(() => require('../plugins/scanner')),
+  '@host/main/plugins/store': lazyHostModule(() => require('../plugins/store')),
+  '@host/main/ipc/plugins': lazyHostModule(() => require('../ipc/plugins')),
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  '@host/main/plugins/runtime': { hostRuntimeKeys, installHostRuntime, resolveHostModule },
   '@host/main/provider/cache': providerCache,
   '@host/main/provider/service': providerService,
   '@host/main/safe-send': safeSend,
@@ -90,6 +103,37 @@ const HOST_SHARED: Record<string, unknown> = {
 function hostRequire(): NodeRequire {
   const base = app.isReady() ? app.getAppPath() : process.cwd()
   return createRequire(base.endsWith('package.json') ? base : base + '/package.json')
+}
+
+/**
+ * **懒加载**的宿主模块（插件工坊那几个键必须用它，原因见下方注释）。
+ *
+ * `plugins/host.ts` 自己 import 本文件（要 `installHostRuntime`），而工坊要的
+ * `@host/main/plugins/host`、`lifecycle`、`package-install` 等（直接或间接）都 import 回
+ * `host.ts` —— 静态 import 会形成**环**：CJS 打包下先被求值的那一侧拿到的是「函数还没挂上」
+ * 的半成品命名空间，插件运行期表现为 `isBundledPluginId is not a function`
+ * （2026-09-27 真机实测：工坊建草稿直接失败）。改成首次访问时才 require，环就只存在于
+ * 定义期、不存在于求值期。
+ */
+function lazyHostModule<T extends object>(load: () => T): T {
+  let cached: T | null = null
+  const resolve = (): T => (cached ??= load())
+  return new Proxy({} as T, {
+    get: (_target, key) => Reflect.get(resolve(), key),
+    has: (_target, key) => Reflect.has(resolve(), key),
+    ownKeys: () => Reflect.ownKeys(resolve()),
+    /**
+     * 描述符**必须报 configurable: true**：代理的 target 是个空对象，
+     * 而 ESM 命名空间的 `__esModule` 等属性在真模块上是不可配置的——照抄描述符会违反
+     * Proxy 不变量，esbuild 的 `__toESM`（插件包里 `import * as` 的互操作层）会直接抛
+     * `'getOwnPropertyDescriptor' on proxy: trap reported non-configurability for property …`
+     * （2026-09-27 真机实测：整个 harness 主模块因此装载失败，界面里一个通道都没有）。
+     */
+    getOwnPropertyDescriptor: (_target, key) => {
+      const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), key)
+      return descriptor ? { ...descriptor, configurable: true } : undefined
+    }
+  })
 }
 
 /** 缓存的 host require（app ready 前后基准可能不同，首次调用时定下来） */

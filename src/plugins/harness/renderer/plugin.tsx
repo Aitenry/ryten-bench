@@ -3,7 +3,8 @@ import {
   RiAiAgentLine,
   RiFileAi2Line,
   RiBrain4Line,
-  RiPlug2Line
+  RiPlug2Line,
+  RiPuzzleLine
 } from '@remixicon/react'
 import type { Plugin } from '@renderer/plugin-host/types'
 import manifest from '../manifest'
@@ -12,8 +13,10 @@ import AgentSettings from './components/settings/AgentSettings'
 import SkillsSettings from './components/settings/SkillsSettings'
 import MemorySettings from './components/settings/MemorySettings'
 import McpSettings from './components/settings/McpSettings'
+import WorkshopSettings from './components/settings/WorkshopSettings'
 import { harnessAppProvider } from './provider'
 import { harnessApi } from './api'
+import { handleProbeRequest } from './workshop/probe'
 
 /**
  * harness 插件（渲染层入口）：AI Agent 工作台（最大的内置视图）。
@@ -83,6 +86,15 @@ const plugin: Plugin = {
       order: 40,
       Component: McpSettings
     })
+    sections.register({
+      // 插件工坊：和助手对话做插件 + 自动验收（草稿列表 / 构建 / 验收 / 安装）
+      tabKey: 'workshop',
+      labelKey: 'settings.nav.workshop',
+      icon: <RiPuzzleLine size={16} />,
+      group: 'assistant',
+      order: 50,
+      Component: WorkshopSettings
+    })
 
     // 词条随插件注册：停用即不再注册这些键（原先由中央 locales 无条件打包进首屏）
     ctx.use('i18n').addResources('translation', harnessLocales)
@@ -98,6 +110,21 @@ const plugin: Plugin = {
         })
       } catch (err) {
         console.warn('[plugin:harness] doc:changed 桥接订阅失败:', err)
+        return
+      }
+    })
+
+    // 插件工坊的**渲染层实时探针**：主进程在验收/发布时问「这个插件的渲染模块在这里
+    // 能不能 import + install 成功」，本订阅常驻（不依赖用户是否开着工坊设置页），
+    // 收到请求就在真宿主环境里跑一遍并回话（见 ./workshop/probe.ts）。
+    ctx.effect(() => {
+      try {
+        return harnessApi.workshop.onProbe((payload) => {
+          void handleProbeRequest(payload)
+        })
+      } catch (err) {
+        // 通道没进白名单（宿主刚启动）只告警：探针是增强能力，不该影响插件装载
+        console.warn('[plugin:harness] 工坊探针订阅失败:', err)
         return
       }
     })

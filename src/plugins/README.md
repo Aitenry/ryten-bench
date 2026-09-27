@@ -130,6 +130,7 @@ core 只剩「外壳 + 插件宿主 + DB 引擎 + 模型 Provider + 通用 prelo
 | 宿主装载/卸载与 preload 白名单推送                  | `src/main/plugins/host.ts`                                             |
 | 插件清单唯一定义                                | `src/plugins/manifests.ts`                                             |
 | 各插件的通道名                                 | `src/plugins/<id>/main/ipc/**`、渲染层的 `src/plugins/<id>/renderer/api.ts` |
+| **用对话让助手做插件（工坊：构建/自动验收/发布）**             | `src/plugins/harness/main/workshop/README.md`                          |
 | 迁移历史、踩过的坑、跨插件耦合清单                       | `src/plugins/MIGRATION.md`、`test/plugin-coupling-notes.md`             |
 
 core 的边界（本轮收尾后）：

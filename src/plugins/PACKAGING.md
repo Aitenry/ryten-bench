@@ -98,6 +98,12 @@ resources/plugins/<id>/      ──▶   userData/plugins/<id>/
 `plugins/{app-events,app-hooks,contributions,tool-contract}`、
 `provider/{cache,service}`、`safe-send`、`shared/weather-utils`，外加 `@host/shared/model-params`。
 
+**插件工坊追加的 7 个**（2026-09-27）：`plugins/{host,host-ui-bridge,lifecycle,package-install,scanner,store}`
+与 `ipc/plugins` —— 工坊（`src/plugins/harness/main/workshop/`）装/卸插件时借的是宿主自己那套函数。
+这 7 个键**必须用 `runtime.ts` 的 `lazyHostModule` 懒加载**：`plugins/host.ts` import 了 `runtime.ts`
+（`installHostRuntime`），静态 import 会成环，先求值的一侧会拿到「函数还没挂上」的半成品命名空间
+（真机实测表现：`isBundledPluginId is not a function`，整个 harness 主模块装载失败）。
+
 ⚠️ **独立插件不从这里取表**：`task-planner` / `music-player` 的表由插件自己建（自带 DDL），
 宿主的 schema 里没有它们——插件只借用宿主的 `images` 等共享表。
 

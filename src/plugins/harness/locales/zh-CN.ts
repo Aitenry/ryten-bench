@@ -747,5 +747,82 @@ export const harnessZhCN = {
       importPartial: '部分条目未导入',
       saveHint: '保存后会立即重连这台服务器'
     }
+  },
+
+  /* ── workshopSettings（插件工坊：设置 → 插件工坊） ── */
+  workshopSettings: {
+    pageTitle: '插件工坊',
+    pageDescription: '在对话里让助手替你写插件：工坊负责构建、自动验收，通过后装进应用就能用',
+    notReady: '工坊当前不可用：请确认 设置 → 插件 里的「AI 助手」处于启用状态',
+    actionFailed: '操作失败',
+    tools: {
+      title: '助手工具',
+      description: '工坊能力要挂到助手身上，助手才会用',
+      row: '让助手能用插件工坊',
+      hint: '把这 4 个工具放进「设置 → 智能体 → 工具」的已选清单（只加不减，不动你已有的勾选）',
+      enable: '一键启用',
+      done: '已加入助手工具清单'
+    },
+    action: {
+      build: '构建',
+      verify: '验收',
+      publish: '安装并启用',
+      update: '更新安装',
+      disable: '停用',
+      uninstall: '卸载插件',
+      export: '导出 zip',
+      remove: '删除草稿',
+      detail: '详情',
+      menu: '更多操作',
+      openDir: '打开草稿目录'
+    },
+    list: {
+      title: '草稿',
+      root: '工坊目录：{{path}}',
+      new: '新建草稿',
+      empty: '还没有草稿。在助手里说「帮我做一个番茄钟插件」，或用右上角「新建草稿」先生成骨架。'
+    },
+    files: '{{count}} 个文件',
+    filesSection: '文件（{{count}}）',
+    state: {
+      enabled: '已启用',
+      disabled: '已停用',
+      built: '已构建',
+      verified: '验收通过',
+      verifyFailed: '验收失败 {{failed}}/{{total}}'
+    },
+    report: {
+      title: '验收报告',
+      empty: '还没有验收过：点上面的「验收」跑一遍（构建 + 十项检查）',
+      hint: '建议：'
+    },
+    verify: {
+      passed: '验收通过（{{count}} 项检查全绿）',
+      failed: '验收未通过：{{count}} 项失败'
+    },
+    build: { ok: '构建完成：{{count}} 个产物文件' },
+    publish: { done: '已安装并启用（界面立即生效）' },
+    export: { done: '已导出：{{file}}' },
+    uninstall: {
+      title: '卸载「{{name}}」？',
+      body: '卸载会把插件代码从应用里移除（userData 下的插件目录会被删掉）。',
+      purge: '同时删除该插件的全部数据（不勾选则数据保留，重装后仍在）'
+    },
+    remove: {
+      title: '删除草稿「{{name}}」？',
+      body: '只删除工坊里的源码、构建产物与验收报告；已经装进应用的插件不受影响。'
+    },
+    template: {
+      page: '独立页面（侧栏菜单 + 路由页面）',
+      panel: '设置页（设置 → 助手 下的一页）',
+      tool: 'AI 工具（给助手加一个可调用的工具）',
+      minimal: '最小骨架'
+    },
+    create: {
+      title: '新建草稿',
+      idPlaceholder: '小写 kebab，例如 pomodoro-timer',
+      titlePlaceholder: '展示名（例如 番茄钟）',
+      note: '生成后可以让助手读 WORKSHOP.md 了解契约，再让它改代码。'
+    }
   }
 }
