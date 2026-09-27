@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { App, Button, Checkbox, Drawer, Dropdown, Empty, Input, Modal, Tag, theme } from 'antd'
+import { App, Button, Checkbox, Drawer, Dropdown, Empty, Input, Tag, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   RiAddLine,
@@ -26,6 +26,7 @@ import {
   SettingRow
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../api'
+import NewDraftModal from '../workshop/NewDraftModal'
 import type {
   WorkshopCheck,
   WorkshopDraftDetail,
@@ -60,8 +61,6 @@ const WorkshopSettings: React.FC = () => {
   const [report, setReport] = useState<WorkshopReport | null>(null)
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null)
   const [creating, setCreating] = useState(false)
-  const [newId, setNewId] = useState('')
-  const [newTitle, setNewTitle] = useState('')
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -110,13 +109,6 @@ const WorkshopSettings: React.FC = () => {
     window.addEventListener('workshop-open-draft', handler)
     return () => window.removeEventListener('workshop-open-draft', handler)
   }, [openDetail])
-
-  // 侧栏「新建草稿」：打开这里的创建表单（id 由用户起，侧栏不替他编号）
-  useEffect(() => {
-    const handler = (): void => setCreating(true)
-    window.addEventListener('workshop-new-draft', handler)
-    return () => window.removeEventListener('workshop-new-draft', handler)
-  }, [])
 
   /**
    * 统一执行一次工坊动作：置忙 → 调主进程 → 失败提示原文 → 成功后刷新列表与抽屉。
@@ -258,23 +250,10 @@ const WorkshopSettings: React.FC = () => {
     })
   }
 
-  const handleCreate = async (): Promise<void> => {
-    const id = newId.trim()
-    if (!id) return
-    const result = await harnessApi.workshop.create({
-      id,
-      title: newTitle.trim() || undefined
-      // 不传 template：主进程按默认的 'full' 生成「全部内容」的骨架
-    })
-    if (!result.ok) {
-      viewMessage('workshop-create', 'error', result.error ?? '')
-      return
-    }
-    setCreating(false)
-    setNewId('')
-    setNewTitle('')
+  /** 新建完成：刷新列表并直接展开它的详情（接着就能构建/验收/安装） */
+  const handleCreated = async (createdId: string): Promise<void> => {
     await refresh()
-    if (result.data?.id) await openDetail(result.data.id)
+    await openDetail(createdId)
   }
 
   /**
@@ -736,32 +715,12 @@ const WorkshopSettings: React.FC = () => {
         生成的骨架里页面 / 设置页 / AI 工具 / 事件推送 / 卸载清数据都齐了，
         助手按需要删掉用不上的部分即可。
       */}
-      <Modal
+      {/* 新建草稿：与侧栏的 ＋ 共用同一个弹窗组件（只问 id 与展示名，模板固定 full） */}
+      <NewDraftModal
         open={creating}
-        title={t('workshopSettings.create.title')}
-        okText={t('common.action.create')}
-        cancelText={t('common.action.cancel')}
-        okButtonProps={{ disabled: !/^[a-z][a-z0-9-]*$/.test(newId.trim()) }}
-        onOk={() => void handleCreate()}
-        onCancel={() => setCreating(false)}
-      >
-        <div className="flex flex-col" style={{ gap: 12, paddingTop: 8 }}>
-          <Input
-            value={newId}
-            onChange={(event) => setNewId(event.target.value)}
-            placeholder={t('workshopSettings.create.idPlaceholder')}
-            addonBefore="id"
-          />
-          <Input
-            value={newTitle}
-            onChange={(event) => setNewTitle(event.target.value)}
-            placeholder={t('workshopSettings.create.titlePlaceholder')}
-          />
-          <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
-            {t('workshopSettings.create.note')}
-          </div>
-        </div>
-      </Modal>
+        onClose={() => setCreating(false)}
+        onCreated={(id) => void handleCreated(id)}
+      />
     </div>
   )
 }

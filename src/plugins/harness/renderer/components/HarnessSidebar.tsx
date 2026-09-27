@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react'
+﻿import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { App, Dropdown, Input, Modal, theme } from 'antd'
 import { SkeletonListRows, SkeletonTextLines } from '@renderer/components/system/Skeleton'
 import type { InputRef } from 'antd'
@@ -22,6 +22,7 @@ import {
   RiSettings4Line
 } from '@remixicon/react'
 import ChaseDots from './ChaseDots'
+import NewDraftModal from './workshop/NewDraftModal'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import type { TFunction } from 'i18next'
@@ -224,6 +225,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [mode, setMode] = useState<SidebarMode>(readSidebarMode)
   const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
   const [draftsLoading, setDraftsLoading] = useState(false)
+  /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
+  const [newDraftOpen, setNewDraftOpen] = useState(false)
 
   const switchMode = useCallback((next: SidebarMode): void => {
     setMode(next)
@@ -1074,19 +1077,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <RiSearchLine size={16} />
             )}
             {mode === 'plugin'
-              ? /* 新建草稿：走工坊页的创建表单（id 要用户起，不在侧栏硬凑） */
+              ? /* 新建草稿：**直接**弹「新建草稿」框（不再先弹设置弹窗再跳工坊页） */
                 iconBtn(
                   t('harness.sidebar.newDraft'),
-                  () => {
-                    window.dispatchEvent(
-                      new CustomEvent('open-system-settings', {
-                        detail: { tab: 'workshop', scope: 'assistant' }
-                      })
-                    )
-                    window.setTimeout(() => {
-                      window.dispatchEvent(new CustomEvent('workshop-new-draft'))
-                    }, 0)
-                  },
+                  () => setNewDraftOpen(true),
                   <RiAddLine size={16} />
                 )
               : [
@@ -1272,6 +1266,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           )}
         </div>
       )}
+
+      {/* 新建草稿弹窗（插件模式的 ＋；与设置页工坊共用同一个组件） */}
+      <NewDraftModal
+        open={newDraftOpen}
+        onClose={() => setNewDraftOpen(false)}
+        onCreated={() => void loadDrafts()}
+      />
 
       {/* 重命名工作区弹窗 */}
       <Modal
