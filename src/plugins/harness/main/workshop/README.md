@@ -134,17 +134,24 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 
 ### 草稿模板：默认就是「全部内容」
 
-`full` 是**默认模板**（用户口径「不需要选择这些内容，默认是全部内容都要」），一份骨架里齐活：
+`full` 是**默认模板**（用户口径「不需要选择这些内容，默认是全部内容都要」），而且**按真实插件仓库
+（ryten-plugins 的 music-player / task-planner）的分层来铺**——用户 2026-09-28 拿生成的草稿和那边比，
+指出「缺失了好多内容」，于是补齐了表、词条、通道封装、工具文案与组件拆分：
 
-| 面         | full 里对应的东西                                                  |
-| ---------- | ------------------------------------------------------------------ |
-| 页面       | `renderer/Page.tsx` + 路由 + 侧栏菜单                              |
-| 设置页     | `renderer/Settings.tsx` + `settingsSection` 挂载点                 |
-| AI 工具    | `HARNESS_TOOL_CONTRIBUTION`（工具读的正是插件自己保存的内容）      |
-| 通道       | `state-get/state-set/settings-get/settings-set` 四个               |
-| 事件推送   | `registerEvent` + 宿主 `safe-send`（设置页改开关，页面实时跟着变） |
-| 数据与清理 | userData 下的 JSON + `PLUGIN_PURGE`（卸载勾了删数据才清）          |
-| 冒烟用例   | `workshop.smoke.mjs` 两条，验收电池会真的调用它们                  |
+| 面         | full 里对应的东西                                                                             |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| 页面       | `renderer/Page.tsx` + 路由 + 侧栏菜单（列表 + 新建/编辑弹窗 + 删除确认）                      |
+| 设置页     | `renderer/Settings.tsx` + `settingsSection` 挂载点                                            |
+| 组件拆分   | `renderer/components/ItemForm.tsx`（表单单独一个组件，别塞进页面）                            |
+| 通道封装   | `renderer/api.ts`（组件不直接写通道名）+ `shared/types.ts`（跨进程 DTO）                      |
+| AI 工具    | `main/tools.ts`（`HARNESS_TOOL_CONTRIBUTION`，读本插件自己的 mapper）                         |
+| 工具文案   | `main/tool-texts.ts`（中/英，跟随界面语言）                                                   |
+| 自己的表   | `main/db/ddl.ts`（幂等建表 + `schemaReady`）+ `db/schema.ts` + `db/mapper.ts`（走 `withOrm`） |
+| 通道       | `main/ipc.ts`：`items-list/create/update/delete` + `settings-get/set` 六个                    |
+| 事件推送   | `registerEvent` + 宿主 `safe-send`（`items-changed`：设置页改开关，页面实时跟着变）           |
+| 词条       | `locales/{index,zh-CN,en-US}.ts`（英文逐键对齐中文，用 `typeof zhCN` 约束）                   |
+| 数据与清理 | 记录进表、设置进 `userData/plugin-state/<id>.json`；`main/purge.ts` 挂 `PLUGIN_PURGE`         |
+| 冒烟用例   | `workshop.smoke.mjs` 三条：建一条 → 列出来 → 设置存住（验收电池真的调用它们）                 |
 
 **界面上的新建入口只问 id 与展示名**，没有模板下拉；助手侧 `plugin_draft create` 仍可传
 `template`（`page` / `panel` / `tool` / `minimal`）做窄骨架，但默认同样是 `full`——
