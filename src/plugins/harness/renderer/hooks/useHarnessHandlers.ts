@@ -1280,11 +1280,13 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
    */
   useEffect(() => {
     const handler = (event: Event): void => {
-      const pluginId = (event as CustomEvent<{ pluginId?: string }>).detail?.pluginId
+      const detail = (event as CustomEvent<{ pluginId?: string; focus?: boolean }>).detail
+      const pluginId = detail?.pluginId
       pendingPluginIdRef.current = typeof pluginId === 'string' && pluginId ? pluginId : null
       // 还没有话题的这段时间里，界面（侧栏记忆块 / 设置 → 记忆）也要显示这份插件的记忆
       setMemoryScope(pendingPluginIdRef.current ? `plugin:${pendingPluginIdRef.current}` : null)
-      setFocusInputToken((n) => n + 1)
+      // 切模式自动进入的那条空白会话只带作用域、不抢光标（用户只是在看插件这一侧的内容）
+      if (detail?.focus !== false) setFocusInputToken((n) => n + 1)
     }
     window.addEventListener('harness-focus-input', handler)
     return () => window.removeEventListener('harness-focus-input', handler)
