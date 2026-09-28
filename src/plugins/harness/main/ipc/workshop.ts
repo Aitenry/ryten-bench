@@ -25,6 +25,11 @@ import {
   writeFile
 } from '../workshop/service'
 import { configurePluginsRoot } from '../workshop/paths'
+import {
+  ensurePluginWorkspace,
+  listPluginWorkspaces,
+  syncPluginWorkspaceName
+} from '../workshop/workspace'
 import { workshopHost } from '../workshop/host'
 
 /**
@@ -78,8 +83,15 @@ export function workshopIpcHandlers(): MainIpcHandlers {
     handlers[`plugin:harness:${channel}`] = handler
   }
 
-  /** 工坊状态（面板标题：可用性 + 根目录 + 草稿数） */
-  handle('workshop-state', () => workshopState())
+  /**
+   * 工坊状态（面板标题：可用性 + 根目录 + 草稿数）。
+   * 另附**插件工作区清单**（插件 id → 工作区行）：侧栏靠它把插件行和它自己的会话对上，
+   * 并把插件工作区从「工作」列表里滤掉（见 main/workshop/workspace.ts）。
+   */
+  handle('workshop-state', async () => ({
+    ...workshopState(),
+    pluginWorkspaces: await listPluginWorkspaces()
+  }))
 
   /** 全部草稿（含构建/安装/最近验收摘要） */
   handle('workshop-list', () => listDraftSummaries())
@@ -129,8 +141,30 @@ export function workshopIpcHandlers(): MainIpcHandlers {
     async (id: string, title: string) =>
       await act(async () => {
         const summary = renameDraft(id, title)
+        // 插件会话的工作目录（插件工作区）名字跟着插件走
+        await syncPluginWorkspaceName(id, summary.title)
         broadcastWorkshopChanged()
         return summary
+      })
+  )
+
+  /**
+   * 取（必要时创建）某份插件的**插件工作区**——插件会话的工作目录就是它的源码目录
+   * （`<插件存放路径>/<插件 id>/`，见 main/workshop/workspace.ts）。
+   *
+   * 侧栏在「插件行 ＋ 新建会话」时调它，然后像切换普通工作区一样切过去：AI 工作目录、
+   * 资源管理器、文件边界全都跟着这个工作区走（用户口径 2026-09-28「在插件模式下新建会话，
+   * 其工作区还是之前工作模式下选中的工作区，资源管理器也一样」）。
+   */
+  handle(
+    'workshop-ensure-workspace',
+    async (id: string) =>
+      await act(async () => {
+        const workspace = await ensurePluginWorkspace(id)
+        // 工作区清单变了（可能刚建出来）：广播给渲染层，侧栏才知道这个插件行现在有会话可展开、
+        // 并且要把这个工作区从「工作」列表里滤掉
+        broadcastWorkshopChanged()
+        return workspace
       })
   )
 

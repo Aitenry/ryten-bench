@@ -576,6 +576,11 @@ export const harnessApi = {
         /** 用户配置的插件存放路径（未配置时为空串） */
         pluginsPath: string
         drafts: number
+        /**
+         * 插件工作区清单（插件 id → 它的工作区行）：插件会话的工作目录 = 插件源码目录，
+         * 侧栏靠它把插件行和它自己的会话对上，并把插件工作区从「工作」列表里滤掉。
+         */
+        pluginWorkspaces: { draftId: string; workspaceId: number; path: string }[]
       }>,
     list: () => invoke('plugin:harness:workshop-list') as Promise<WorkshopDraftSummary[]>,
     detail: (id: string) =>
@@ -610,6 +615,14 @@ export const harnessApi = {
     rename: (id: string, title: string) =>
       invoke('plugin:harness:workshop-rename', id, title) as Promise<
         WorkshopActionResult<WorkshopDraftSummary>
+      >,
+    /**
+     * 取（必要时创建）某份插件的**插件工作区**：插件会话的工作目录就是它的源码目录
+     * （`<插件存放路径>/<插件 id>/`）。侧栏「插件行 ＋」先调它，再像切普通工作区一样切过去。
+     */
+    ensureWorkspace: (id: string) =>
+      invoke('plugin:harness:workshop-ensure-workspace', id) as Promise<
+        WorkshopActionResult<{ id: number; name: string; path: string }>
       >,
     exportZip: (id: string) =>
       invoke('plugin:harness:workshop-export', id) as Promise<

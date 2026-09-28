@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react'
+import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import { App, Dropdown, Input, Modal, theme } from 'antd'
 import { SkeletonListRows, SkeletonTextLines } from '@renderer/components/system/Skeleton'
 import type { InputRef } from 'antd'
@@ -232,6 +232,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [newDraftOpen, setNewDraftOpen] = useState(false)
   /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示一行灰字，配置入口是右上角 ＋） */
   const [pluginsPath, setPluginsPath] = useState('')
+  /** 插件工作区清单（插件 id → 它的工作区行；主进程按「插件目录」判定，见 workshop-state） */
+  const [pluginWorkspaces, setPluginWorkspaces] = useState<
+    { draftId: string; workspaceId: number; path: string }[]
+  >([])
   /* 重命名插件弹窗（与工作区重命名同一套交互：一行输入 + 保存） */
   const [draftRenameTarget, setDraftRenameTarget] = useState<WorkshopDraftSummary | null>(null)
   const [draftRenameName, setDraftRenameName] = useState('')
@@ -241,26 +245,28 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     setMode(next)
   }, [])
 
-  /** 拉插件草稿清单（插件模式下打开面板、以及主进程广播变化时各拉一次） */
+  /** 拉插件草稿清单 + 插件工作区清单（两个模式都拉，工作模式靠后者滤掉插件目录行） */
   const loadDrafts = useCallback(async (): Promise<void> => {
     setDraftsLoading(true)
     try {
       const state = await harnessApi.workshop.state()
       setPluginsPath(state.pluginsPath ?? '')
+      setPluginWorkspaces(state.pluginWorkspaces ?? [])
       setDrafts(await harnessApi.workshop.list())
     } catch {
       // 工坊没接线（AI 助手刚停用/重载）时保持空列表：面板本来就只在插件模式用
       setDrafts([])
+      setPluginWorkspaces([])
     } finally {
       setDraftsLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (mode !== 'plugin') return
+    // 两个模式都拉：插件模式要列表，工作模式要靠草稿目录把「插件工作区」从工作列表里滤掉
     void loadDrafts()
     return harnessApi.workshop.onChanged(() => void loadDrafts())
-  }, [mode, loadDrafts])
+  }, [loadDrafts])
 
   /**
    * 开关跟随内容：工坊页/插件详情一被打开，就切到「插件」
@@ -645,18 +651,43 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [expandedWorkspaceId, activeWorkspaceId, loadWorkspaceTopics]
   )
 
-  /** 打开某个工作区下的会话：跨工作区时先切换工作区 */
+  /**
+   * 草稿 → 它的「插件工作区」id（插件会话的工作目录 = 插件源码目录，见 main/workshop/workspace.ts）。
+   * 还没给这份插件开过会话时没有这一行（返回 null，插件行也就没有可展开的会话）。
+   * 清单由主进程给（`workshop-state.pluginWorkspaces`）：渲染层不自己拼路径，
+   * 免得两边对「什么算插件目录」有两套说法。
+   */
+  const pluginWorkspaceIdOf = useCallback(
+    (draft: WorkshopDraftSummary): number | null =>
+      pluginWorkspaces.find((item) => item.draftId === draft.id)?.workspaceId ?? null,
+    [pluginWorkspaces]
+  )
+
+  /** 插件工作区集合（工作列表要把这些行滤掉：它们只属于那份插件，不进「工作」模式） */
+  const pluginWorkspaceIds = useMemo(
+    () => new Set(pluginWorkspaces.map((item) => item.workspaceId)),
+    [pluginWorkspaces]
+  )
+
+  /**
+   * 打开某个工作区下的会话：跨工作区时先切换工作区。
+   *
+   * 模式开关跟着内容走：插件工作区里的会话 = 插件内容 → 停在「插件」；
+   * 普通工作区的会话 → 「工作」（用户口径 2026-09-27「要看当前是在工作的选中内容
+   * 还是插件的选中内容」）。
+   */
   const handleOpenTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
-      // 选会话 = 当前内容回到「工作」这一侧（开关跟着内容走）
-      setMode('chat')
+      const isPluginSession = pluginWorkspaceIds.has(workspaceId)
+      setMode(isPluginSession ? 'plugin' : 'chat')
       if (workspaceId !== activeWorkspaceId) {
         const ws = workspaces.find((w) => w.id === workspaceId)
         if (ws) await switchWorkspace(ws)
       }
+      if (isPluginSession) setExpandedWorkspaceId(workspaceId)
       await onSelectTopic(topic)
     },
-    [activeWorkspaceId, workspaces, switchWorkspace, onSelectTopic]
+    [activeWorkspaceId, workspaces, switchWorkspace, onSelectTopic, pluginWorkspaceIds]
   )
 
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
@@ -678,8 +709,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /**
    * 插件行的 ＋：针对这个插件开一个新会话（对齐工作区行的「＋ 新建会话」）。
    *
-   * 会话挂在工作区下，所以先确保有一个活动工作区（跨工作区时先切过去，与
-   * `handleCreateSession` 同一套）。
+   * **工作目录是这份插件自己的源码目录**（`<插件存放路径>/<插件 id>/`）：先让主进程取
+   * （必要时创建）它的「插件工作区」，再像切换普通工作区一样切过去——AI 工作目录、
+   * 资源管理器、文件边界、文件改动审查全都跟着它走。用户口径 2026-09-28「在插件模式下新建会话，
+   * 其工作区还是之前工作模式下选中的工作区，资源管理器也一样」＝这就是要修的那件事。
    *
    * **不往输入框写任何东西**（用户口径 2026-09-28「我需要的是不要显示：给插件「个人记账台账」
    * （id: personal-ledger）这个玩意」）：新会话就是干净的空白会话，只把光标放进输入框，
@@ -695,19 +728,40 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
   const handlePluginSession = useCallback(
     async (draft: WorkshopDraftSummary): Promise<void> => {
-      const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
-      if (!ws) {
-        viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
+      // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
+      const ensured = await harnessApi.workshop.ensureWorkspace(draft.id)
+      if (!ensured.ok || !ensured.data) {
+        viewMessage('plugin-session-ws', 'error', ensured.error ?? '', 6)
         return
       }
-      if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
+      const target = ensured.data
+      // ② 切过去（写设置 + 派发事件：Index 据此换资源管理器根并清空当前会话）
+      try {
+        await window.api.systemSettings.update({
+          harness: {
+            workspacePath: target.path,
+            activeWorkspaceId: target.id
+          } as Parameters<typeof window.api.systemSettings.update>[0]['harness']
+        })
+      } catch (err) {
+        console.error('Failed to switch to plugin workspace:', err)
+        viewMessage('plugin-session-ws', 'error', String(err), 6)
+        return
+      }
+      setActiveWorkspaceId(target.id)
+      setExpandedWorkspaceId(target.id)
+      window.dispatchEvent(
+        new CustomEvent('workspace-changed', { detail: { workspaceId: target.id } })
+      )
+      // 刚建出来的插件工作区要立刻进本地清单（草稿行才能展开、工作列表才能滤掉它）
+      await Promise.all([loadWorkspaces(), loadDrafts()])
+      // ③ 空白新会话 + 把「这条会话属于哪份插件」带过去（决定用哪套记忆）；只聚焦，不写内容
       onNewHarness()
-      // 只把焦点放进输入框（不写内容）+ 把「这条会话属于哪份插件」带过去（决定用哪套记忆）
       window.dispatchEvent(
         new CustomEvent('harness-focus-input', { detail: { pluginId: draft.id } })
       )
     },
-    [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t]
+    [loadDrafts, loadWorkspaces, onNewHarness, viewMessage]
   )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
@@ -749,8 +803,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           try {
             await harnessApi.harness.deleteWorkspace(ws.id)
             if (activeWorkspaceId === ws.id) {
-              // 删除的是当前工作区：自动切到剩余第一个；一个都不剩则回到「未配置」状态
-              const remaining = await harnessApi.harness.getAllWorkspaces()
+              // 删除的是当前工作区：自动切到剩余的用户工作区；一个都不剩则回到「未配置」状态。
+              // 插件工作区不算「用户的」——切过去的话用户会莫名其妙落到某个插件目录上
+              const remaining = (await harnessApi.harness.getAllWorkspaces()).filter(
+                (candidate) => !pluginWorkspaceIds.has(candidate.id)
+              )
               if (remaining.length > 0) {
                 const next = remaining[0]
                 await window.api.systemSettings.update({
@@ -786,7 +843,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         }
       })
     },
-    [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t]
+    [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t, pluginWorkspaceIds]
   )
 
   /* 打开重命名弹窗 */
@@ -838,23 +895,29 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   const query = searchQuery.trim().toLowerCase()
+
+  /** 真正属于用户的工作区（插件工作区不进这个列表，用户口径 2026-09-28「只属于那份插件」） */
+  const userWorkspaces = workspaces.filter((ws) => !pluginWorkspaceIds.has(ws.id))
   const visibleWorkspaces = query
-    ? workspaces.filter(
+    ? userWorkspaces.filter(
         (ws) =>
           ws.name.toLowerCase().includes(query) ||
           topicsOf(ws.id).some((t) => t.title.toLowerCase().includes(query))
       )
-    : workspaces
+    : userWorkspaces
   const visibleTopicsOf = (workspaceId: number): HarnessTopicRow[] => {
     const list = topicsOf(workspaceId)
     return query ? list.filter((t) => t.title.toLowerCase().includes(query)) : list
   }
-  /** 插件模式下的草稿清单（搜索框在两种模式里共用：这里按名字/id 过滤） */
+  /** 插件模式下的草稿清单（搜索框在两种模式里共用：按名字/id/它自己的会话标题过滤） */
   const visibleDrafts = query
-    ? drafts.filter(
-        (draft) =>
-          draft.title.toLowerCase().includes(query) || draft.id.toLowerCase().includes(query)
-      )
+    ? drafts.filter((draft) => {
+        if (draft.title.toLowerCase().includes(query) || draft.id.toLowerCase().includes(query)) {
+          return true
+        }
+        const wsId = pluginWorkspaceIdOf(draft)
+        return wsId != null && topicsOf(wsId).some((t) => t.title.toLowerCase().includes(query))
+      })
     : drafts
 
   /** 草稿状态行：构建 / 验收 / 安装三件事各自的最新结果 */
@@ -886,53 +949,117 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 插件行：点一行 = 打开它的工坊详情；悬停出现「⋯（构建/验收/安装/重命名/删除）」与
    * 「＋（针对这个插件新建会话）」——与工作区行的两个行内动作一一对应
    * （用户口径 2026-09-27「插件没有像工作区那样的功能」）。
+   *
+   * 这份插件开过会话之后，标题右边多一个折叠箭头：展开就是**它自己的会话**
+   * （会话挂在「插件工作区」下 = 插件源码目录，见 main/workshop/workspace.ts）。
+   * 与工作区行的差别只在触发方式——那一行整行可点（点行 = 展开），
+   * 这一行整行是「打开工坊详情」，所以折叠要单独给一个箭头，不抢既有的点击语义。
+   * 用户口径 2026-09-28「插件目录不进『工作』列表，只属于那份插件」。
    */
   const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
     const state = draftStateOf(draft)
     /** 这一行正跑着构建/验收/安装：行内动作先收起来，避免重复点 */
     const busy = draftBusyId === draft.id
+    /** 这份插件的「插件工作区」（会话的工作目录）；没开过会话就还没有这一行 */
+    const pluginWsId = pluginWorkspaceIdOf(draft)
+    const expanded = pluginWsId != null && expandedWorkspaceId === pluginWsId
     return (
-      <div
-        key={draft.id}
-        className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
-        style={{ paddingLeft: 6, paddingRight: 8, height: 32, color: colorText }}
-        onClick={() => openDraft(draft.id)}
-        onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-      >
-        <span
-          className="flex items-center justify-center shrink-0"
-          style={{ width: 16, color: colorTextSecondary }}
+      <div key={draft.id} className="mb-0.5">
+        <div
+          className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
+          style={{
+            paddingLeft: 6,
+            paddingRight: 8,
+            height: 32,
+            color: colorText,
+            background: expanded ? token.colorFillTertiary : 'transparent'
+          }}
+          onClick={() => openDraft(draft.id)}
+          onMouseEnter={(e) => {
+            if (!expanded) e.currentTarget.style.background = colorFillAlter
+          }}
+          onMouseLeave={(e) => {
+            if (!expanded) e.currentTarget.style.background = 'transparent'
+          }}
         >
-          {busy ? <ChaseDots size={14} color={colorTextTertiary} /> : <RiPuzzleLine size={15} />}
-        </span>
-        <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
-          {draft.title}
-        </span>
-        {!busy && (
           <span
-            className="shrink-0 group-hover:hidden"
-            style={{ fontSize: 11, color: state.color }}
+            className="flex items-center justify-center shrink-0"
+            style={{ width: 16, color: colorTextSecondary }}
           >
-            {state.text}
+            {busy ? <ChaseDots size={14} color={colorTextTertiary} /> : <RiPuzzleLine size={15} />}
           </span>
-        )}
-        {!busy && (
-          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-            <Dropdown
-              menu={{
-                items: draftMenuFor(draft),
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation()
-                  onDraftMenuClick(draft, key)
-                }
+          <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
+            {draft.title}
+          </span>
+          {pluginWsId != null && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleToggleWorkspace(pluginWsId)
               }}
-              trigger={['click']}
-              placement="bottomRight"
+              title={
+                expanded
+                  ? t('harness.sidebar.pluginSessionsCollapse')
+                  : t('harness.sidebar.pluginSessionsExpand')
+              }
+              className="flex items-center justify-center shrink-0 rounded"
+              style={{
+                width: 20,
+                height: 20,
+                color: colorTextTertiary,
+                background: 'transparent'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
+              {expanded ? <RiArrowDownSLine size={15} /> : <RiArrowRightSLine size={15} />}
+            </button>
+          )}
+          {!busy && (
+            <span
+              className="shrink-0 group-hover:hidden"
+              style={{ fontSize: 11, color: state.color }}
+            >
+              {state.text}
+            </span>
+          )}
+          {!busy && (
+            <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+              <Dropdown
+                menu={{
+                  items: draftMenuFor(draft),
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation()
+                    onDraftMenuClick(draft, key)
+                  }
+                }}
+                trigger={['click']}
+                placement="bottomRight"
+              >
+                <button
+                  onClick={(e) => e.stopPropagation()}
+                  title={t('harness.sidebar.pluginActions')}
+                  className="flex items-center justify-center rounded"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    color: colorTextSecondary,
+                    background: 'transparent'
+                  }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = token.colorFillSecondary)
+                  }
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <RiMoreLine size={15} />
+                </button>
+              </Dropdown>
               <button
-                onClick={(e) => e.stopPropagation()}
-                title={t('harness.sidebar.pluginActions')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handlePluginSession(draft)
+                }}
+                title={t('harness.sidebar.pluginNewSession')}
                 className="flex items-center justify-center rounded"
                 style={{
                   width: 22,
@@ -943,29 +1070,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
-                <RiMoreLine size={15} />
+                <RiAddLine size={16} />
               </button>
-            </Dropdown>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                void handlePluginSession(draft)
-              }}
-              title={t('harness.sidebar.pluginNewSession')}
-              className="flex items-center justify-center rounded"
-              style={{
-                width: 22,
-                height: 22,
-                color: colorTextSecondary,
-                background: 'transparent'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              <RiAddLine size={16} />
-            </button>
-          </span>
-        )}
+            </span>
+          )}
+        </div>
+
+        {/* 展开 = 这份插件自己的会话（挂在插件工作区下，与其他工作区的会话同一套渲染） */}
+        {expanded && pluginWsId != null && renderTopicList(pluginWsId)}
       </div>
     )
   }
@@ -1091,14 +1203,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const renderWorkspace = (ws: WorkspaceRow): React.ReactNode => {
     const expanded = expandedWorkspaceId === ws.id
     const active = activeWorkspaceId === ws.id
-    const list = visibleTopicsOf(ws.id)
     // 该工作区下是否有会话正在生成（用未过滤的完整列表判断，避免搜索时漏判）：
     // 有则禁止删除该工作区，否则会连坐删掉进行中的会话
     const hasRunningTopic = topicsOf(ws.id).some((t) => loadingTopicIds.has(t.id))
-    // 只有「该工作区会话从未加载过」才算加载中：切换工作区时缓存已有内容，直接无缝渲染
-    const loading =
-      !hasTopicsLoaded(ws.id) &&
-      (ws.id === activeWorkspaceId || workspaceTopicsLoading[ws.id] === true)
     const hovered = hoveredWorkspaceId === ws.id
     const showControls = hovered || active
 
@@ -1209,34 +1316,50 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           </span>
         </div>
 
-        {expanded && (
-          <div className="pb-1">
-            {loading && list.length === 0 ? (
-              <div className="py-1">
-                <SkeletonListRows rows={5} variant="stacked" />
-              </div>
-            ) : list.length === 0 ? (
-              /* 空态与上面的 loading 一样在整栏居中：不能再加左侧缩进，
-                 否则 text-center 只在「缩进剩下的」区域里居中，看起来整体偏右 */
-              <p className="text-center py-3" style={{ fontSize: 12, color: colorTextTertiary }}>
-                {query ? t('harness.sidebar.noMatchTopic') : t('harness.sidebar.emptyTopics')}
-              </p>
-            ) : (
-              <>
-                {list.map((topic) => renderTopicRow(ws.id, topic))}
-                {/* 仅当前工作区的「滚动分页」显示底部 spinner；整表刷新（切换工作区）不显示，避免闪动 */}
-                {ws.id === activeWorkspaceId &&
-                  isLoadingMoreTopics &&
-                  !isRefreshingTopics &&
-                  hasMoreTopics && (
-                    /* 滚动分页的落点是「下面还会长出话题」，所以铺两行话题骨架而不是居中转圈 */
-                    <div className="py-1">
-                      <SkeletonListRows rows={2} variant="stacked" />
-                    </div>
-                  )}
-              </>
-            )}
+        {expanded && renderTopicList(ws.id)}
+      </div>
+    )
+  }
+
+  /**
+   * 某个工作区展开后的会话列表。
+   *
+   * 工作区行与插件行共用同一套（插件会话就挂在它的「插件工作区」下）：加载骨架 / 空态 /
+   * 会话行 / 滚动分页的落点全部一致，免得两处各写一份、日子久了两边长得不一样。
+   *
+   * 空态与 loading 一样在整栏居中：不能再加左侧缩进，否则 text-center 只在「缩进剩下的」
+   * 区域里居中，看起来整体偏右。
+   */
+  const renderTopicList = (workspaceId: number): React.ReactNode => {
+    const list = visibleTopicsOf(workspaceId)
+    // 只有「该工作区会话从未加载过」才算加载中：缓存已有内容时直接无缝渲染
+    const loading =
+      !hasTopicsLoaded(workspaceId) &&
+      (workspaceId === activeWorkspaceId || workspaceTopicsLoading[workspaceId] === true)
+    return (
+      <div className="pb-1">
+        {loading && list.length === 0 ? (
+          <div className="py-1">
+            <SkeletonListRows rows={5} variant="stacked" />
           </div>
+        ) : list.length === 0 ? (
+          <p className="text-center py-3" style={{ fontSize: 12, color: colorTextTertiary }}>
+            {query ? t('harness.sidebar.noMatchTopic') : t('harness.sidebar.emptyTopics')}
+          </p>
+        ) : (
+          <>
+            {list.map((topic) => renderTopicRow(workspaceId, topic))}
+            {/* 仅当前工作区的「滚动分页」显示底部 spinner；整表刷新（切换工作区）不显示，避免闪动 */}
+            {workspaceId === activeWorkspaceId &&
+              isLoadingMoreTopics &&
+              !isRefreshingTopics &&
+              hasMoreTopics && (
+                /* 滚动分页的落点是「下面还会长出话题」，所以铺两行话题骨架而不是居中转圈 */
+                <div className="py-1">
+                  <SkeletonListRows rows={2} variant="stacked" />
+                </div>
+              )}
+          </>
         )}
       </div>
     )

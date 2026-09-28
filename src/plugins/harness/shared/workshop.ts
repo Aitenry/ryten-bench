@@ -161,6 +161,13 @@ export interface WorkshopDraftSummary {
    * 工坊自己的产物/报告目录（userData 下）不出现在界面上。
    */
   pluginsPath?: string
+  /**
+   * 草稿根绝对路径（`<pluginsPath>/<插件 id>/`）。
+   *
+   * 侧栏用它把插件行和「插件工作区」对上：插件会话的工作目录就是这个目录
+   * （见 main/workshop/workspace.ts），会话也跟着这个工作区走。
+   */
+  dir: string
   /** 最近一次验收的摘要（没有则不出现） */
   lastReport?: { at: number; ok: boolean; failed: number; total: number }
   /** 产物与应用包/已装副本是否同构（打不出来时 undefined） */
@@ -172,8 +179,6 @@ export interface WorkshopDraftDetail extends WorkshopDraftSummary {
   files: WorkshopDraftFile[]
   /** plugin.json 解析结果（非法时为 null，错误在 lint 检查里） */
   manifest: Record<string, unknown> | null
-  /** 草稿根绝对路径（面板给「打开目录」用） */
-  dir: string
   css: WorkshopCssMode
 }
 
@@ -201,4 +206,26 @@ export interface WorkshopPublishResult {
    * 此时不会返回结果而是抛错）。
    */
   rendererProbe?: WorkshopRendererProbe
+}
+
+/**
+ * 两个文件系统路径是否指同一个位置。
+ *
+ * 用途只有一个但很关键：把**插件行**和它的「插件工作区」对上——主进程建工作区时存的是
+ * `<插件存放路径>/<插件 id>/`，渲染层拿草稿的 `dir` 去比；两边都必须用同一套口径，
+ * 否则插件行会认不出自己的会话（见 main/workshop/workspace.ts 与 HarnessSidebar）。
+ *
+ * 故意不引 node:path（渲染层没有）：只抹平结尾分隔符 + Windows 大小写不敏感，
+ * 够用且两侧行为一致。相对路径/大小写敏感平台交给调用方自己保证。
+ */
+export function isSameFsPath(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const norm = (p: string): string => p.trim().replace(/[\\/]+$/, '')
+  const left = norm(a)
+  const right = norm(b)
+  if (!left || !right) return false
+  // 任一侧是 Windows 形态（带反斜杠）就按不区分大小写比：同一个目录不允许出现两种写法
+  return left.includes('\\') || right.includes('\\')
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
 }

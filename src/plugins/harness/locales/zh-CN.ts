@@ -47,6 +47,9 @@ export const harnessZhCN = {
       pluginDelete: '删除插件',
       pluginDeleteTitle: '删除插件「{{name}}」？',
       pluginNewSession: '针对这个插件新建会话',
+      /** 插件行标题右侧的折叠箭头：展开就是这份插件自己的会话 */
+      pluginSessionsExpand: '展开这个插件的会话',
+      pluginSessionsCollapse: '收起这个插件的会话',
       needWorkspace: '先配置一个工作区：会话都挂在它下面',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
       needPluginsPath: '尚未选择插件存放路径',

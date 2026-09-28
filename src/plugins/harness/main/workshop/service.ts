@@ -116,6 +116,7 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
     installed: host ? host.isInstalled(id) : false,
     enabled: host ? host.isEnabled(id) : false,
     pluginsPath: pluginsRootPath() || undefined,
+    dir: draftDir(id),
     lastReport: report
       ? {
           at: report.at,
@@ -135,7 +136,6 @@ export function draftDetail(id: string): WorkshopDraftDetail {
     ...summary,
     files: listDraftFiles(id),
     manifest: readDraftManifest(id),
-    dir: draftDir(id),
     css: readDraftMeta(id)?.css ?? 'auto'
   }
 }
