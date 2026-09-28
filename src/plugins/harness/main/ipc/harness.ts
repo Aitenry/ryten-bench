@@ -240,9 +240,27 @@ async function runHarnessTurn(
 
   // 加载主智能体默认配置（electron-store）
   const mainAgentDefaults = settingsStore.get('mainAgent') as MainAgentConfig | undefined
-  const tools = buildTools(effectiveMainAgentTools(mainAgentDefaults))
   const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
   logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
+
+  // 0. 本轮的记忆作用域与「插件模式」。**必须在建话题、建工具之前定下来**：
+  //    插件模式决定工坊那 4 个工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），
+  //    话题上的工具快照与真正挂载的工具集必须是同一个口径。
+  //    作用域以话题上存的为准（重开这条会话 / 重启应用都仍然认），话题还没建时用调用方传来的兜底。
+  const memoryScope = await resolveTurnMemoryScope(
+    options?.topicId,
+    options?.memoryScope,
+    harnessSettings?.activeWorkspaceId ?? 0
+  )
+  const pluginMode = memoryScope.kind === 'plugin'
+  const memoryPluginId = memoryScope.kind === 'plugin' ? memoryScope.pluginId : undefined
+
+  // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具
+  const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
+  const tools = buildTools(selectedTools)
+  logger.info(
+    `[Harness] 本轮工具 pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
+  )
 
   // 1. 确保话题存在
   let topicId = options?.topicId
@@ -250,13 +268,12 @@ async function runHarnessTurn(
     const title = question.slice(0, 50)
     const workspaceId = harnessSettings?.activeWorkspaceId ?? 0
     try {
-      // 话题上记一份「本轮启用的工具」快照（含 MCP 页勾选的 MCP 工具，与真正挂载的口径一致）
-      const selected = effectiveMainAgentTools(mainAgentDefaults)
+      // 话题上记一份「本轮启用的工具」快照（含 MCP 页勾选的 MCP 工具与模式工具，与真正挂载的口径一致）
       topicId = await createTopic(
         workspaceId,
         title,
         undefined,
-        selected.length ? JSON.stringify(selected) : undefined,
+        selectedTools.length ? JSON.stringify(selectedTools) : undefined,
         // 记忆作用域：插件会话建话题时就落库（见 memory-scope.ts）
         options?.memoryScope ?? null
       )
@@ -265,14 +282,6 @@ async function runHarnessTurn(
       topicId = 0
     }
   }
-
-  // 1b. 本轮的记忆作用域（插件会话 → 那份插件自己的记忆，与工作记忆零交叉）
-  const memoryScope = await resolveTurnMemoryScope(
-    topicId,
-    options?.memoryScope,
-    harnessSettings?.activeWorkspaceId ?? 0
-  )
-  const memoryPluginId = memoryScope.kind === 'plugin' ? memoryScope.pluginId : undefined
 
   // 2. 保存用户消息（含图片、文档与目标自动续跑标记）。
   // 提前到模型创建之前（修复：模型创建失败时直接 return,用户消息不落库,重载后丢失）
@@ -1245,10 +1254,24 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
     ) => {
       // 加载主智能体默认配置（electron-store）
       const mainAgentDefaults = settingsStore.get('mainAgent') as MainAgentConfig | undefined
-      const tools = buildTools(effectiveMainAgentTools(mainAgentDefaults))
-      logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
-      const model = await getProviderService().createModel(options?.providerId)
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+      logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
+
+      // 这条同步路径也要认话题的记忆作用域（插件会话 → 那份插件自己的记忆），
+      // 并据此决定插件模式的模式工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES）
+      const syncMemoryScope = await resolveTurnMemoryScope(
+        options?.topicId,
+        undefined,
+        harnessSettings?.activeWorkspaceId ?? 0
+      )
+      const pluginMode = syncMemoryScope.kind === 'plugin'
+      const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
+      const tools = buildTools(selectedTools)
+      logger.info(
+        `[Harness] 本轮工具 pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
+      )
+
+      const model = await getProviderService().createModel(options?.providerId)
 
       // 技能优先级：harnessSettings.enabledSkills > mainAgent.skills
       const effectiveSkills = harnessSettings?.enabledSkills ?? mainAgentDefaults?.skills
@@ -1260,13 +1283,6 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
       } catch (err) {
         logger.warn('[Harness] 读取模型工具调用轮数失败，使用默认值:', err)
       }
-
-      // 这条同步路径也要认话题的记忆作用域（插件会话 → 那份插件自己的记忆）
-      const syncMemoryScope = await resolveTurnMemoryScope(
-        options?.topicId,
-        undefined,
-        harnessSettings?.activeWorkspaceId ?? 0
-      )
 
       const harnessService = new HarnessService(
         model,

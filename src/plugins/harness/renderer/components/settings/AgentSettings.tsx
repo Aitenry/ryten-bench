@@ -44,6 +44,7 @@ import type {
 import {
   isMcpServerGroup,
   isMcpToolName,
+  isPluginModeTool,
   mcpNamespace,
   mcpServerGroupValue,
   parseMcpToolName
@@ -193,12 +194,21 @@ const AgentSettings: React.FC = () => {
        * （**只增不减**，用户不会因为这次改版丢掉已勾选的工具）。搬过一次后这里不再触发。
        */
       const legacyMcp = rawTools.filter(isMcpToolName)
-      const nextTools =
+      const afterMcp =
         legacyMcp.length > 0 ? rawTools.filter((name) => !isMcpToolName(name)) : rawTools
+      /**
+       * 插件工坊的 4 个工具以前也要在这一页勾了才注册。现在它们是**插件模式的模式工具**
+       * （切到插件模式自动挂载，见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），下拉里已经没有
+       * 它们的选项；历史配置里残留的名字在这里摘掉，免得留下一个没有对应选项的幽灵标签。
+       * 摘掉不影响能力：模式工具由模式带进来，与这一页的勾选无关。
+       */
+      const staleModeTools = afterMcp.filter(isPluginModeTool)
+      const nextTools =
+        staleModeTools.length > 0 ? afterMcp.filter((name) => !isPluginModeTool(name)) : afterMcp
       const nextMcpTools =
         legacyMcp.length > 0 ? Array.from(new Set([...rawMcpTools, ...legacyMcp])) : rawMcpTools
-      if (legacyMcp.length > 0) {
-        await harnessApi.mcp.setToolsEnabled(nextMcpTools)
+      if (legacyMcp.length > 0 || staleModeTools.length > 0) {
+        if (legacyMcp.length > 0) await harnessApi.mcp.setToolsEnabled(nextMcpTools)
         await harnessApi.mainAgent.update({ tools: nextTools, skills: rawSkills })
       }
       mainAgentRef.current = { tools: nextTools, skills: rawSkills }
@@ -338,12 +348,15 @@ const AgentSettings: React.FC = () => {
    */
   const saveMainAgent = useCallback(
     async (patch: Partial<{ tools: string[]; skills: string[] }>): Promise<void> => {
-      // tools 里只该有真实工具名：万一还留着 MCP 分组项（旧配置/被复制过来的），落库前摘掉
+      // tools 里只该有**用户可勾的**真实工具名：万一还留着 MCP 分组项或模式工具
+      // （旧配置/被复制过来的），落库前摘掉——模式工具由插件模式自动挂载，勾了也没有意义
       const next = {
         ...mainAgentRef.current,
         ...patch
       }
-      next.tools = next.tools.filter((name) => !isMcpServerGroup(name) && !isMcpToolName(name))
+      next.tools = next.tools.filter(
+        (name) => !isMcpServerGroup(name) && !isMcpToolName(name) && !isPluginModeTool(name)
+      )
       mainAgentRef.current = next
       setMainAgent(next)
       try {
@@ -415,6 +428,9 @@ const AgentSettings: React.FC = () => {
        */
       const migrated: string[] = []
       for (const name of storedTools) {
+        // 插件的模式工坊工具（plugin_draft 等）不是子智能体可选项：它们是插件模式的模式工具，
+        // 由模式自动挂载（见 shared/mcp.ts）。历史配置里残留的直接丢掉。
+        if (isPluginModeTool(name)) continue
         if (isMcpToolName(name)) {
           const parsed = parseMcpToolName(name)
           if (parsed) migrated.push(mcpServerGroupValue(parsed.server))

@@ -44,6 +44,11 @@ import type { WorkshopBuildInfo, WorkshopReport } from '../../shared/workshop'
  * 归属：工坊是 harness 自己的能力（虚拟工作区之外的第二个「写作对象」），
  * 因此走 `tools/builders.ts` 的**本地工具**注册表，而不是 `harness.tool` 贡献点
  * （那是给别的插件贡献工具的入口）。
+ *
+ * 挂载时机（用户口径 2026-09-29「不要在这里面选择工具才注册这些工具」）：这 4 个是**模式工具**，
+ * 不进「设置 → 智能体 → 默认工具」的可选清单，也不靠用户勾选——切到**插件模式**的那一轮起自动挂载
+ * （判定 = 会话的记忆作用域是 `plugin:<id>`，实现见 `shared/mcp.ts` 的 PLUGIN_MODE_TOOL_NAMES
+ * 与 `ipc/harness.ts` 里按 `pluginMode` 组装工具的那两处）。
  */
 
 /** 工具在设置页下拉里的兜底元数据（真正下发时由 main/i18n 按界面语言覆盖） */

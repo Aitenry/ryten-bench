@@ -124,6 +124,8 @@ export const zhCN = {
     manage_docs: { label: '文档管理', description: '搜索、查看、创建、编辑和删除文档' },
     manage_wikis: { label: '知识库', description: '浏览和管理知识库、目录、文档归档' },
     search_graph: { label: '图谱搜索', description: '在知识图谱中搜索实体' },
+    // 工坊这 4 个是**模式工具**：不进下拉（插件模式自动挂载，见 harness 的
+    // shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`）。文案留作兜底：别处按名字列工具时仍能出中文名。
     plugin_draft: { label: '插件草稿', description: '新建插件草稿、读写草稿里的文件' },
     plugin_build: { label: '构建插件', description: '把草稿构建成可安装的插件包并做静态体检' },
     plugin_verify: { label: '验收插件', description: '跑自动化验收电池，确认插件真的能用' },
@@ -236,6 +238,8 @@ export const enUS: typeof zhCN = {
       description: 'Browse and manage knowledge bases, folders and archived documents'
     },
     search_graph: { label: 'Graph search', description: 'Search entities in the knowledge graph' },
+    // Mode tools (plugin workshop): never listed in the tool picker - auto-mounted in plugin mode
+    // (see the harness plugin's shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`). Kept as fallback labels.
     plugin_draft: {
       label: 'Plugin drafts',
       description: 'Create a plugin draft and edit its files'

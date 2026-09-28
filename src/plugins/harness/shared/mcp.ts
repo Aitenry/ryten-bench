@@ -260,6 +260,38 @@ export function expandMcpServerGroups(
 }
 
 /**
+ * **模式工具**：插件工坊的 4 个工具（草稿 / 构建 / 验收 / 发布）。
+ *
+ * 它们**不进**「设置 → 智能体 → 默认工具」的可选清单：那张清单是给「哪一轮都可能用得上」的
+ * 工具准备的，而这 4 个只在写插件时成立。用户口径（2026-09-29）：不要在这里勾了才注册；
+ * 切到**插件模式**就自动挂载，同时把它们从主智能体的可选清单里拿掉。
+ *
+ * 于是模式工具走一条独立的路：
+ *  - 主进程注册表照常登记实例（`main/tools/builders.ts` 的 `toolBuilders`），
+ *    `buildTools` 才拿得到它们、同名插件贡献也照旧被本地工具挡住；
+ *  - `listAvailableTools()` 把它们滤掉 —— 设置页下拉里看不到、也没法勾；
+ *  - `effectiveMainAgentTools(..., { pluginMode: true })` 把它们**追加**进本轮工具名。
+ *    插件模式的判定 = 会话（话题）的记忆作用域是 `plugin:<id>`，见 `main/memory-scope.ts`，
+ *    因此「切到插件模式 → 下一轮就能用」，不需要任何勾选动作，重启应用后重开这条会话也仍然成立。
+ *
+ * 名单放在这个 shared 模块里、而不是新开一个文件：主进程（工具注册/组装）与渲染层
+ * （设置页清理历史残留）都要用它，而本模块是**零相对 import 的纯模块**——
+ * `test/verify-mcp-tools.mjs` 直接 `node --experimental-strip-types` 加载它做离线断言，
+ * 多一条相对 import 那条路就走不通了。
+ */
+export const PLUGIN_MODE_TOOL_NAMES = [
+  'plugin_draft',
+  'plugin_build',
+  'plugin_verify',
+  'plugin_publish'
+] as const
+
+/** 这个名字是不是插件模式的模式工具（设置页过滤历史残留时用） */
+export function isPluginModeTool(name: string): boolean {
+  return (PLUGIN_MODE_TOOL_NAMES as readonly string[]).includes(name)
+}
+
+/**
  * 主智能体配置（electron-store 的 `mainAgent` 键）。
  *
  * `tools` 是**用户从「智能体」页工具下拉里勾的**（本地工具 + 插件工具，**不含** MCP 工具；
@@ -267,6 +299,7 @@ export function expandMcpServerGroups(
  * `mcpTools` 是**在 MCP 页按工具勾的**（MCP 是全项目唯一的工具级管控点）。
  * 两者分开存的原因：进 MCP 页反勾某个工具时，只该停用它自己，不能把用户在智能体页挑的
  * 其他工具一起抹掉——合并成一张表存就必然出这个问题。
+ * 模式工具（插件工坊 4 个）两份都不进：它们由 `pluginMode` 自动带进来。
  */
 export interface MainAgentConfig {
   tools?: string[]
@@ -275,29 +308,32 @@ export interface MainAgentConfig {
 }
 
 /**
- * 一轮对话实际启用的工具名 = 主智能体勾选的工具 + MCP 页勾选的 MCP 工具（去重）。
+ * 一轮对话实际启用的工具名 = 主智能体勾选的工具 + MCP 页勾选的 MCP 工具（去重）
+ *   + 插件模式的模式工具（`options.pluginMode`，名单见 PLUGIN_MODE_TOOL_NAMES）。
  *
- * 单一真源：主进程组装工具集（harness-start-stream / harness-send-message）与设置页展示
+ * 单一真源：主进程组装工具集（harness-start-stream / harness-send-message）与话题上的工具快照
  * 都走这里，避免「页面显示已启用、实际没挂上」这类漂移。`tools` 里若混进了 MCP 分组项
- * （历史数据/子智能体配置被复制过来），这里直接跳过——它不是真实工具名。
+ * （历史数据/子智能体配置被复制过来）或模式工具（改版前在这一页勾过的历史配置），这里直接跳过
+ * ——它们都不是用户可勾的真实工具名，模式工具再由 `pluginMode` 统一追加。
  */
-export function effectiveMainAgentTools(config?: MainAgentConfig | null): string[] {
+export function effectiveMainAgentTools(
+  config?: MainAgentConfig | null,
+  options?: { pluginMode?: boolean }
+): string[] {
   const out: string[] = []
   const push = (names?: string[]): void => {
     for (const name of names ?? []) {
-      if (
-        typeof name === 'string' &&
-        name &&
-        !isMcpToolGroup(name) &&
-        !isMcpServerGroup(name) &&
-        !out.includes(name)
-      ) {
-        out.push(name)
-      }
+      if (typeof name !== 'string' || !name) continue
+      if (isMcpToolGroup(name) || isMcpServerGroup(name)) continue
+      if (isPluginModeTool(name)) continue
+      if (!out.includes(name)) out.push(name)
     }
   }
   push(config?.tools)
   push(config?.mcpTools)
+  if (options?.pluginMode) {
+    for (const name of PLUGIN_MODE_TOOL_NAMES) if (!out.includes(name)) out.push(name)
+  }
   return out
 }
 

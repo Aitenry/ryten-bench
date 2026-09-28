@@ -7,7 +7,7 @@ import {
 } from '../../../../main/plugins/tool-contract'
 import { listContributions } from '../../../../main/plugins/contributions'
 import { settingsStore } from '../../../../main/context'
-import { expandMcpServerGroups, type MainAgentConfig } from '../../shared/mcp'
+import { expandMcpServerGroups, isPluginModeTool, type MainAgentConfig } from '../../shared/mcp'
 import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
@@ -26,6 +26,10 @@ type ToolFactory = () => StructuredToolInterface
  * - `plugin_draft` / `plugin_build` / `plugin_verify` / `plugin_publish`：**插件工坊**
  *   （见 `main/workshop/**`）——「和助手对话把插件做出来」这条链路是 harness 自己的能力，
  *   不是别的插件贡献的工具，所以走这张本地表而不是 `harness.tool` 贡献点。
+ *
+ * 但这 4 个是**模式工具**：注册在这里（`buildTools` 要按名字建实例、同名插件贡献照旧被本地挡住），
+ * 却**不出现在设置页的可选清单里**——它们由插件模式自动挂载，见 `shared/mcp.ts` 的
+ * `PLUGIN_MODE_TOOL_NAMES` 与下面 `listAvailableTools` 的过滤。
  *
  * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
  * （`src/plugins/<id>/main/tools.ts`），由插件 `install(ctx)` 经
@@ -136,9 +140,15 @@ function resolveToolBuilders(): Record<string, ToolFactory> {
  * 工具清单（设置 → 智能体页的工具下拉用）：本地工具 + 各插件贡献 + MCP 工具，同名的本地优先。
  * 每次调用即时拉取，因此插件启停与 MCP 连接状态都会立刻反映在这份清单里。
  * 排序与去重规则与 `resolveToolBuilders` 同源（同一个 `mergeToolSources`），不会漂移。
+ *
+ * **模式工具（插件工坊 4 个）不在这份清单里**：它们由插件模式自动挂载（用户口径 2026-09-29
+ * 「不要在这里面选择工具才注册这些工具」），下发给设置页的下拉里既不该有选项、用户也勾不到。
+ * 注册表（`resolveToolBuilders`）里照旧保留它们——本轮工具名由 `effectiveMainAgentTools` 按模式追加。
  */
 export function listAvailableTools(): ToolInfo[] {
-  return mergeToolSources(toolSources()).infos as ToolInfo[]
+  return mergeToolSources(toolSources()).infos.filter(
+    (info) => !isPluginModeTool(info.name)
+  ) as ToolInfo[]
 }
 
 // ============================================================================
