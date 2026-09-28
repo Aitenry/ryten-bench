@@ -1,5 +1,10 @@
 import * as path from 'path'
-import { createWorkspace, getAllWorkspaces, updateWorkspace } from '../db/mapper/harness'
+import {
+  createWorkspace,
+  getAllWorkspaces,
+  reparentPluginTopics,
+  updateWorkspace
+} from '../db/mapper/harness'
 import type { WorkspaceRow } from '../db/mapper/harness'
 import { isSameFsPath } from '../../shared/workshop'
 import { draftDir, pluginsRootPath } from './paths'
@@ -60,6 +65,10 @@ export async function listPluginWorkspaces(): Promise<
 
 /**
  * 取（必要时创建）某份插件的「插件工作区」。幂等：一个插件目录永远只对应一行。
+ *
+ * 顺带**归位老会话**：插件工作目录上线（2026-09-28）之前开的插件会话，话题上已经是
+ * `plugin:<id>`，但 workspace_id 还指着当时的工作区——把它们收拢到插件工作区下，
+ * 用户下次打开这些会话就落在插件目录上（见 mapper 的 `reparentPluginTopics`）。
  */
 export async function ensurePluginWorkspace(pluginId: string): Promise<WorkspaceRow> {
   const dir = draftDir(pluginId)
@@ -69,9 +78,9 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
     if (existing.name !== name) {
       // 插件改过名：工作区名跟着走（这些行不在「工作」列表里，用户不会自己去改名）
       await updateWorkspace(existing.id, { name })
-      return { ...existing, name }
     }
-    return existing
+    await reparentPluginTopics(existing.id, `plugin:${pluginId}`)
+    return { ...existing, name }
   }
   const id = await createWorkspace(name, dir)
   const created = await findPluginWorkspace(pluginId)
@@ -79,6 +88,7 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
     // 刚建完必然查得到；查不到说明库出了别的问题，如实抛出去而不是编一行假数据
     throw new Error(`插件工作区创建后读不回来（id=${id}，path=${dir}）`)
   }
+  await reparentPluginTopics(created.id, `plugin:${pluginId}`)
   return created
 }
 

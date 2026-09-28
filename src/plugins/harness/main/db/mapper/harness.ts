@@ -1,4 +1,4 @@
-import { asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import logger from 'electron-log'
 import { withOrm } from '../../../../../main/database/orm'
@@ -145,6 +145,36 @@ async function getAllTopicsPaginated(
 async function getTopicById(id: number): Promise<HarnessTopicRow[]> {
   return withOrm('getTopicById', async (db) => {
     return db.select().from(harness_topic).where(eq(harness_topic.id, id))
+  })
+}
+
+/**
+ * 把某插件作用域的历史会话收拢到它的插件工作区下。
+ *
+ * 用途：插件会话「有自己的工作目录」是 2026-09-28 才补上的，在那之前开出来的插件会话
+ * （话题上已经是 `plugin:<id>`，但 workspace_id 还指着当时的工作区）会继续借用工作模式那个
+ * 工作区——正是用户报的那个 bug。取插件工作区时顺手归位，老会话下次打开就落在插件目录上。
+ *
+ * 不动 `updated_at`：那是会话列表的排序键，搬家不该把老会话顶到最前面。
+ */
+async function reparentPluginTopics(workspaceId: number, memoryScope: string): Promise<number> {
+  return withOrm('reparentPluginTopics', async (db) => {
+    const updated = await db
+      .update(harness_topic)
+      .set({ workspace_id: workspaceId })
+      .where(
+        and(
+          eq(harness_topic.memory_scope, memoryScope),
+          ne(harness_topic.workspace_id, workspaceId)
+        )
+      )
+      .returning({ id: harness_topic.id })
+    if (updated.length > 0) {
+      logger.info(
+        `Reparented ${updated.length} plugin topic(s) to workspace=${workspaceId} (${memoryScope})`
+      )
+    }
+    return updated.length
   })
 }
 
@@ -410,6 +440,7 @@ export {
   getAllTopics,
   getAllTopicsPaginated,
   getTopicById,
+  reparentPluginTopics,
   createTopic,
   updateTopic,
   deleteTopic,
