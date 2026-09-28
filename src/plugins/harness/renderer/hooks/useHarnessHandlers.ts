@@ -120,8 +120,8 @@ export interface UseHarnessHandlersReturn {
   handleCopy: (text: string, id: string) => Promise<void>
   handleSend: () => Promise<void>
   handleNewHarness: () => void
-  /** 每次「外部预填输入框」自增（见 harness-prefill-input 监听）：输入框据此聚焦并把光标放到末尾 */
-  prefillFocusToken: number
+  /** 每次「外部请求聚焦输入框」自增（见 harness-focus-input 监听）：输入框据此把光标放进去 */
+  focusInputToken: number
   handleDeleteMessagePair: (msgIndex: number) => Promise<void>
   /** 进入**气泡内**编辑（孤立提问） */
   handleStartEditMessage: (msgIndex: number) => void
@@ -182,10 +182,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   /**
-   * 「刚刚发生了一次外部预填」的计数器（见下面的 harness-prefill-input 监听）。
-   * 输入框据此把光标落到文字末尾并聚焦——不然用户敲键盘什么都不会进去。
+   * 「请把焦点放进输入框」的计数器（见下面的 harness-focus-input 监听）。
+   * 输入框据此聚焦——不改内容，只是让用户点完 ＋ 就能直接打字。
    */
-  const [prefillFocusToken, setPrefillFocusToken] = useState(0)
+  const [focusInputToken, setFocusInputToken] = useState(0)
   const [availableTools, setAvailableTools] = useState<HarnessToolInfo[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -1257,26 +1257,19 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [saveSessionToCache])
 
   /**
-   * 外部请求预填输入框（`harness-prefill-input`）。
+   * 外部请求「把焦点放进输入框」（`harness-focus-input`）。
    *
    * 用途：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
-   * （首个话题在首次发送时才落库），把插件上下文预填进去，用户接着打需求就能发。
-   * 事件在 `onNewHarness()` 之后派发，因此这次写入会覆盖它的清空（同一次批处理里后者生效）。
+   * （首个话题在首次发送时才落库），**刻意不预填任何文字**（用户口径 2026-09-28
+   * 「我需要的是不要显示：给插件「个人记账台账」（id: personal-ledger）这个玩意」），
+   * 只是把光标送进输入框，用户自己打要做什么。
    *
-   * 同时把 `prefillFocusToken` 加一：**预填之后必须把光标落到文字末尾并聚焦**，
-   * 否则用户直接敲键盘什么都不会进输入框（2026-09-27 用户报「新建插件的会话时不能往输入框
-   * 写入内容」——光标不在输入框里，得先手动点一下才写得了）。真正做这件事的是 HarnessInput
-   * （它拿到编辑器实例），这里只发一个「这一次是预填」的信号。
+   * 真正做这件事的是 HarnessInput（它拿得到编辑器实例），这里只发一个「这一次要点焦点」的信号。
    */
   useEffect(() => {
-    const handler = (event: Event): void => {
-      const text = (event as CustomEvent<{ text?: string }>).detail?.text
-      if (typeof text !== 'string' || !text.trim()) return
-      setInputValue(text)
-      setPrefillFocusToken((n) => n + 1)
-    }
-    window.addEventListener('harness-prefill-input', handler)
-    return () => window.removeEventListener('harness-prefill-input', handler)
+    const handler = (): void => setFocusInputToken((n) => n + 1)
+    window.addEventListener('harness-focus-input', handler)
+    return () => window.removeEventListener('harness-focus-input', handler)
   }, [])
 
   const handleSelectTopic = useCallback(
@@ -1891,8 +1884,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     messages,
     inputValue,
     setInputValue,
-    /** 每次「外部预填」自增（HarnessInput 用它把光标放到末尾并聚焦） */
-    prefillFocusToken,
+    /** 每次「外部请求聚焦输入框」自增（HarnessInput 用它把光标放进输入框，不改内容） */
+    focusInputToken,
     availableTools,
     copiedId,
     currentTopicId,

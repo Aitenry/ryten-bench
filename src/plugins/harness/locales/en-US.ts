@@ -39,7 +39,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       pluginDelete: 'Delete plugin',
       pluginDeleteTitle: 'Delete plugin "{{name}}"?',
       pluginNewSession: 'New conversation about this plugin',
-      pluginSessionPrefill: 'For plugin "{{name}}" (id: {{id}}): ',
       needWorkspace: 'Set up a workspace first - conversations live under it',
       noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
       needPluginsPath: 'No plugins folder yet',

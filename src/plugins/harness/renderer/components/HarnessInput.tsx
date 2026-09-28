@@ -128,11 +128,11 @@ interface HarnessInputProps {
   inputValue: string
   onInputChange: (value: string) => void
   /**
-   * 「刚刚发生了一次外部预填」的计数器（插件行的 ＋ → `harness-prefill-input`）。
-   * 变化时把光标落到文字末尾并聚焦——不聚焦的话用户直接敲键盘什么都不会进输入框
-   * （2026-09-27 用户报「新建插件的会话时不能往输入框写入内容」）。
+   * 「外部请求把焦点放进输入框」的计数器（插件行的 ＋ → `harness-focus-input`）。
+   * 变化时聚焦编辑器并**不改内容**——用户点完「新建会话」直接就能打字
+   * （内容一律由用户自己写：用户口径 2026-09-28「不要显示：给插件「…」这个玩意」）。
    */
-  prefillFocusToken?: number
+  focusInputToken?: number
   textareaRef: React.RefObject<HTMLDivElement | null>
   /** 全局输入历史（↑/↓ 键切换浏览，handleSend 记录，localStorage 持久化） */
   inputHistoryRef: { current: string[] }
@@ -175,7 +175,7 @@ interface HarnessInputProps {
 const HarnessInput: React.FC<HarnessInputProps> = ({
   inputValue,
   onInputChange,
-  prefillFocusToken = 0,
+  focusInputToken = 0,
   textareaRef,
   inputHistoryRef,
   attachments,
@@ -862,23 +862,20 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }, [inputValue, updateCaret, getEditorText, restorePlainText])
 
   /**
-   * 外部预填（插件行的 ＋）之后：聚焦输入框，光标落到文字末尾。
+   * 外部请求聚焦（插件行的 ＋「新建会话」）：把光标放进输入框，**不写任何内容**。
    *
-   * 为什么单独一个 effect：上面那个同步 effect 用 `setContent` 恢复文字，**光标会停在开头**
-   * 且编辑器**没有焦点**——用户看到框里有内容，直接敲键盘却什么都进不去（得先手动点一下），
-   * 就算点进去也是插在插件名前面。这里补上「聚焦 + 光标到末尾」，用户接着打需求就行。
-   *
-   * 声明顺序有意放在同步 effect 之后：同一次提交里 React 按声明顺序跑 effect，
-   * 所以这里执行时文字已经就位。
+   * 为什么单独一个 effect：上面那个同步 effect 只管「外部值 → 编辑器」的文字同步，
+   * 不会动焦点。这里只调 `focus('end')`——空编辑器上等价于「聚焦并把光标放到开头」，
+   * 用户点完 ＋ 直接敲键盘就能写。
    */
   useEffect(() => {
-    if (!prefillFocusToken) return
+    if (!focusInputToken) return
     const ed = editorRef.current
     if (!ed || ed.isDestroyed) return
     ed.commands.focus('end')
     historyIndexRef.current = -1
     updateCaret()
-  }, [prefillFocusToken, updateCaret])
+  }, [focusInputToken, updateCaret])
 
   // 光标位置随选区/窗口尺寸变化而更新
   useEffect(() => {

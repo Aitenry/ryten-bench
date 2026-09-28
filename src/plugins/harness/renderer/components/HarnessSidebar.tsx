@@ -655,33 +655,26 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 插件行的 ＋：针对这个插件开一个新会话（对齐工作区行的「＋ 新建会话」）。
    *
    * 会话挂在工作区下，所以先确保有一个活动工作区（跨工作区时先切过去，与
-   * `handleCreateSession` 同一套）。新会话本身是**空白**的——首个话题在首次发送时才落库
-   * （见 useHarnessHandlers），因此把插件上下文**预填进输入框**：用户接着打
-   * 「加个倒计时提醒」就能直接发，助手也知道说的是哪份草稿（`plugin_draft` 按 id 找它）。
+   * `handleCreateSession` 同一套）。
    *
-   * **刻意不切模式**（用户口径 2026-09-27「为什么我在插件里面点击新建会话，会切换到工作」）：
-   * 人还在挑插件，面板就别自己跳走——开关仍停在「插件」，新会话只是把聊天区腾空 +
-   * 预填好上下文；要不要切到「工作」由用户自己决定。
+   * **不往输入框写任何东西**（用户口径 2026-09-28「我需要的是不要显示：给插件「个人记账台账」
+   * （id: personal-ledger）这个玩意」）：新会话就是干净的空白会话，只把光标放进输入框，
+   * 要做什么由用户自己打。
+   *
+   * 也**刻意不切模式**（用户口径 2026-09-27「为什么我在插件里面点击新建会话，会切换到工作」）：
+   * 人还在挑插件，面板就别自己跳走，开关仍停在「插件」。
    */
-  const handlePluginSession = useCallback(
-    async (draft: WorkshopDraftSummary): Promise<void> => {
-      const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
-      if (!ws) {
-        viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
-        return
-      }
-      if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
-      onNewHarness()
-      window.dispatchEvent(
-        new CustomEvent('harness-prefill-input', {
-          detail: {
-            text: t('harness.sidebar.pluginSessionPrefill', { name: draft.title, id: draft.id })
-          }
-        })
-      )
-    },
-    [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t]
-  )
+  const handlePluginSession = useCallback(async (): Promise<void> => {
+    const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
+    if (!ws) {
+      viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
+      return
+    }
+    if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
+    onNewHarness()
+    // 只把焦点放进输入框（不写内容）：新会话开好了，直接就能打字
+    window.dispatchEvent(new CustomEvent('harness-focus-input'))
+  }, [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t])
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
@@ -922,7 +915,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                void handlePluginSession(draft)
+                void handlePluginSession()
               }}
               title={t('harness.sidebar.pluginNewSession')}
               className="flex items-center justify-center rounded"

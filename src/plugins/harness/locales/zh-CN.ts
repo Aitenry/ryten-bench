@@ -47,7 +47,6 @@ export const harnessZhCN = {
       pluginDelete: '删除插件',
       pluginDeleteTitle: '删除插件「{{name}}」？',
       pluginNewSession: '针对这个插件新建会话',
-      pluginSessionPrefill: '给插件「{{name}}」（id: {{id}}）',
       needWorkspace: '先配置一个工作区：会话都挂在它下面',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
       needPluginsPath: '尚未选择插件存放路径',
