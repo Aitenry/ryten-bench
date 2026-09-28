@@ -537,7 +537,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             {headExtra}
             {query ? (
               <span
-                style={{ color: colorTextTertiary, fontSize: smallFont, flex: 1 }}
+                style={{ color: colorTextTertiary, fontSize: smallFont }}
                 className="truncate text-right"
                 title={query}
               >
@@ -951,7 +951,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           <TruncatedTooltipText
             text={`${title}${status}`}
             shinyBaseColor={colorTextSecondary}
-            style={{ color: colorTextSecondary, fontSize, flex: 1 }}
+            style={{ color: colorTextSecondary, fontSize }}
           />
         </div>
       )
@@ -1032,7 +1032,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               <TruncatedTooltipText
                 text={t('harness.assistantMessage.retrying', { attempt, retries })}
                 shinyBaseColor={colorTextSecondary}
-                style={{ color: colorText, fontSize: '13px', flex: 1 }}
+                style={{ color: colorText, fontSize: '13px' }}
               />
             </div>
           )
@@ -1057,7 +1057,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               <TruncatedTooltipText
                 text={t('harness.assistantMessage.compacting')}
                 shinyBaseColor={colorTextSecondary}
-                style={{ color: colorText, fontSize: '13px', flex: 1 }}
+                style={{ color: colorText, fontSize: '13px' }}
               />
             </div>
           )
@@ -1085,7 +1085,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               />
               <TruncatedTooltipText
                 text={t('harness.assistantMessage.compacted')}
-                style={{ color: colorText, fontSize: '13px', flex: 1 }}
+                style={{ color: colorText, fontSize: '13px' }}
               />
               <span style={{ color: colorTextTertiary, fontSize: '13px', flexShrink: 0 }}>
                 <Trans
@@ -1404,7 +1404,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 {sa.taskDescription ? (
                   <TruncatedTooltipText
                     text={sa.taskDescription}
-                    style={{ color: colorTextTertiary, fontSize: 13, flex: 1 }}
+                    style={{ color: colorTextTertiary, fontSize: 13 }}
                   />
                 ) : (
                   <span style={{ flex: 1 }} />

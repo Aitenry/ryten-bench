@@ -88,6 +88,10 @@ const CardShell: React.FC<{
   primaryColor?: string
   /** 工具名（落在 data 属性上，供离线工装清点「哪些工具的卡片真的渲染了」） */
   toolName?: string
+  /** 这张卡片是不是「进行中」形态（工装按 data-tool-progress 清点进行中的卡片） */
+  progress?: boolean
+  /** 主文本是否带光泽扫过（进行中卡片才需要：与左侧图标的亮面同步） */
+  shinyText?: boolean
   /** 写改类卡片：左侧 2px 强调边（扫读时自己跳出来） */
   mutate?: boolean
 }> = ({
@@ -100,6 +104,8 @@ const CardShell: React.FC<{
   actionTitle,
   primaryColor,
   toolName,
+  progress = false,
+  shinyText = false,
   mutate = false
 }) => {
   const [hover, setHover] = useState(false)
@@ -109,6 +115,7 @@ const CardShell: React.FC<{
   return (
     <div
       data-tool-card={toolName}
+      data-tool-progress={progress ? '1' : undefined}
       data-tool-mutate={mutate ? '1' : '0'}
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
@@ -132,7 +139,14 @@ const CardShell: React.FC<{
       {icon}
       <TruncatedTooltipText
         text={primary}
-        style={{ color: primaryColor ?? style.colorText, fontSize, flex: 1 }}
+        /**
+         * 进行中卡片：主文本与左侧图标**同一套亮面**（同一个基色，光泽同步扫过）。
+         * 2026-09-27 用户报「只有图标会显示亮面的动效，而文字没有」——此前这里没传
+         * `shinyBaseColor`，`TruncatedTooltipText` 就不挂 `.shiny-text`，文字自然是静的。
+         * 完成态卡片不传（`shinyText` 缺省 false）：静止的卡片不该一直闪。
+         */
+        shinyBaseColor={shinyText ? style.colorTextSecondary : undefined}
+        style={{ color: primaryColor ?? style.colorText, fontSize }}
       />
       {meta}
       {onClick ? (
@@ -142,6 +156,7 @@ const CardShell: React.FC<{
             color: style.colorTextTertiary,
             opacity: hover ? 1 : 0,
             transition: 'opacity 0.15s',
+            // 进展开的入口不能被文字/元信息挤扁（收缩压力大时它会被压成一条线）
             flexShrink: 0
           }}
         />
@@ -150,18 +165,39 @@ const CardShell: React.FC<{
   )
 }
 
-/** 右侧元信息：数字用等宽字形（与「任务段步数胶囊」同一套排版口径） */
-const Meta: React.FC<{ isNested: boolean; color: string; children: React.ReactNode }> = ({
-  isNested,
-  color,
-  children
-}) => (
+/**
+ * 右侧元信息：数字用等宽字形（与「任务段步数胶囊」同一套排版口径）。
+ *
+ * `shrinkable`（2026-09-27 用户报「这个内容还是超出，没有出现省略号」）：
+ * 失败原因这类**长度不可控**的元信息必须能收缩并出省略号。
+ * 此前这里是 `flexShrink: 0` + `whiteSpace: nowrap` —— 既不许它变窄、又没有省略号，
+ * 一条长原因（沙箱拦截那种整句说明）就把卡片内容顶出容器，再被卡片的 `overflow: hidden` 裁掉：
+ * 用户看到的就是「内容超出，却没有省略号」。原生 `title` 保证裁掉的部分仍能看到全文
+ * （卡片本身的 `title` 是给「点开」这种动作提示用的，两者可能同时存在，靠嵌套元素分开）。
+ */
+const Meta: React.FC<{
+  isNested: boolean
+  color: string
+  /** true = 允许收缩 + 省略号（长度不可控的内容用它，如失败原因） */
+  shrinkable?: boolean
+  children: React.ReactNode
+}> = ({ isNested, color, shrinkable = false, children }) => (
   <span
+    data-tool-meta={shrinkable ? 'shrinkable' : 'fixed'}
+    title={shrinkable ? String(children ?? '') : undefined}
     style={{
       color,
       fontSize: isNested ? '11px' : '12px',
-      flexShrink: 0,
-      whiteSpace: 'nowrap'
+      whiteSpace: 'nowrap',
+      ...(shrinkable
+        ? {
+            // 收缩到内容宽度以下必须有 min-width: 0；裁剪交给省略号
+            flex: '0 1 auto',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }
+        : { flexShrink: 0 })
     }}
   >
     {children}
@@ -234,9 +270,10 @@ const ToolCardMeta: React.FC<{
   const { t } = useTranslation()
   // 失败且有失败原因：原因优先（egress 文本比「exit 1」更能说明问题）。
   // 没有 message 的失败态（如 execute 非零退出）继续走下面的按工具元信息——退出码不能丢。
+  // 失败原因长度不可控（沙箱拦截那种整句说明），必须可收缩 + 出省略号（见 Meta 的 shrinkable）。
   if (card.status === 'error' && card.message) {
     return (
-      <Meta isNested={isNested} color={color}>
+      <Meta isNested={isNested} color={color} shrinkable>
         {card.message}
       </Meta>
     )
@@ -260,15 +297,16 @@ const ToolCardMeta: React.FC<{
       )
     }
     case 'write_file':
+      // `card.message` 这条兜底（失败但没投影出字节数）长度不可控，同失败原因一样要能收缩
       return (
-        <Meta isNested={isNested} color={color}>
+        <Meta isNested={isNested} color={color} shrinkable={card.bytes === undefined}>
           {card.bytes !== undefined ? formatBytes(card.bytes) : card.message}
           <DiffStat added={card.added} removed={card.removed} isDarkMode={isDarkMode} />
         </Meta>
       )
     case 'edit_file':
       return (
-        <Meta isNested={isNested} color={color}>
+        <Meta isNested={isNested} color={color} shrinkable={card.count === undefined}>
           {card.count !== undefined ? (
             <Trans
               i18nKey="harness.assistantMessage.toolReplacements"
@@ -438,6 +476,9 @@ export const ToolProgressCard: React.FC<{
     <CardShell
       style={style}
       isNested={isNested}
+      progress
+      shinyText
+      toolName={tool.name}
       icon={<ShinyIcon icon={Icon} size={size} baseColor={style.colorTextSecondary} />}
       primary={`${summary || tool.name || t('harness.assistantMessage.toolCallFallback')}${status}`}
       primaryColor={style.colorText}
