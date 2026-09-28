@@ -1,0 +1,1 @@
+ALTER TABLE "harness_topic" ADD COLUMN "memory_scope" text;

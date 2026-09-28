@@ -369,13 +369,21 @@ export const harnessApi = {
       >,
     getTopicById: (id: number) =>
       invoke('plugin:harness:harness-topic-get-by-id', id) as Promise<HarnessTopicRow[]>,
-    createTopic: (workspaceId: number, title: string, model?: string, selectedTools?: string) =>
+    createTopic: (
+      workspaceId: number,
+      title: string,
+      model?: string,
+      selectedTools?: string,
+      /** 记忆作用域：`plugin:<插件 id>` = 这份插件自己的记忆；空 = 跟工作区走 */
+      memoryScope?: string | null
+    ) =>
       invoke(
         'plugin:harness:harness-topic-create',
         workspaceId,
         title,
         model,
-        selectedTools
+        selectedTools,
+        memoryScope
       ) as Promise<number>,
     updateTopic: (
       id: number,

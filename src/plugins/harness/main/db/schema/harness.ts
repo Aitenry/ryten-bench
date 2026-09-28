@@ -27,6 +27,12 @@ export const harness_topic = pgTable(
     title: text().notNull(),
     model: text(),
     selected_tools: text(),
+    /**
+     * 记忆作用域：空 = 跟工作区走（`<memoryPath>/workspace-<id>/`）；
+     * `plugin:<插件 id>` = 这份插件自己的记忆（`<memoryPath>/plugin-<id>/`，见 main/memory-scope.ts）。
+     * 插件行「＋ 新建会话」建出来的话题写这个值，重开会话仍然用它自己的记忆。
+     */
+    memory_scope: text(),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
     updated_at: timestamp({ mode: 'string' }).defaultNow()
   },

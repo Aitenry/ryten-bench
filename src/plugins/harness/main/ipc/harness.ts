@@ -58,8 +58,10 @@ import {
   addDialogue,
   updateDialogueContent,
   addDialogueUsage,
-  getDialoguesByTopicId
+  getDialoguesByTopicId,
+  getTopicById
 } from '../db/mapper/harness'
+import { parseMemoryScope, type MemoryScope } from '../memory-scope'
 import { getActiveWorkspaceId } from '../../../../main/database/workspace-context'
 import { sumUsage, type ModelUsageRecord } from '../runtime/usage'
 import { startRendererMemorySampling, stopRendererMemorySampling } from '../renderer-memory'
@@ -127,6 +129,11 @@ interface RunHarnessTurnParams {
      * 每个段落生成新的临时 id，随 steered chunk 下发，前端据此把段落接到对应气泡上。
      */
     messageId?: string
+    /**
+     * 记忆作用域（`plugin:<插件 id>`）。只在**主进程兜底建话题**时用得上——
+     * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
+     */
+    memoryScope?: string | null
   }
 }
 
@@ -249,13 +256,23 @@ async function runHarnessTurn(
         workspaceId,
         title,
         undefined,
-        selected.length ? JSON.stringify(selected) : undefined
+        selected.length ? JSON.stringify(selected) : undefined,
+        // 记忆作用域：插件会话建话题时就落库（见 memory-scope.ts）
+        options?.memoryScope ?? null
       )
     } catch (err) {
       logger.error('Failed to create topic:', err)
       topicId = 0
     }
   }
+
+  // 1b. 本轮的记忆作用域（插件会话 → 那份插件自己的记忆，与工作记忆零交叉）
+  const memoryScope = await resolveTurnMemoryScope(
+    topicId,
+    options?.memoryScope,
+    harnessSettings?.activeWorkspaceId ?? 0
+  )
+  const memoryPluginId = memoryScope.kind === 'plugin' ? memoryScope.pluginId : undefined
 
   // 2. 保存用户消息（含图片、文档与目标自动续跑标记）。
   // 提前到模型创建之前（修复：模型创建失败时直接 return,用户消息不落库,重载后丢失）
@@ -387,7 +404,8 @@ async function runHarnessTurn(
       harnessSettings?.workspacePath || undefined,
       harnessSettings?.memoryPath || undefined,
       harnessSettings?.activeWorkspaceId ?? 0,
-      maxToolRounds
+      maxToolRounds,
+      memoryPluginId
     )
   } catch (err) {
     // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
@@ -1014,6 +1032,35 @@ interface StartStreamOptions {
   turnMeta?: TurnMeta
   reuseUserDialogueId?: number
   messageId?: string
+  /**
+   * 记忆作用域（`plugin:<插件 id>`）。只在**主进程兜底建话题**时用得上——
+   * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
+   */
+  memoryScope?: string | null
+}
+
+/**
+ * 本轮会话的记忆作用域：以**话题上存的**为准（`harness_topic.memory_scope`），
+ * 话题还没建（本轮刚创建、或读不到）时用调用方传来的兜底；都没有 = 工作区记忆。
+ *
+ * 为什么以话题为准：插件行「＋」开出来的会话带 `plugin:<id>`，重开这个会话（甚至重启应用）后
+ * 仍然要用那份插件自己的记忆，不能依赖渲染层记得住（用户口径 2026-09-28）。
+ */
+async function resolveTurnMemoryScope(
+  topicId: number | undefined,
+  fallback: string | null | undefined,
+  workspaceId: number
+): Promise<MemoryScope> {
+  if (topicId) {
+    try {
+      const rows = await getTopicById(topicId)
+      const raw = rows[0]?.memory_scope
+      if (raw) return parseMemoryScope(raw, workspaceId)
+    } catch (err) {
+      logger.warn('[Harness] 读取话题记忆作用域失败，按工作区记忆处理:', err)
+    }
+  }
+  return parseMemoryScope(fallback, workspaceId)
 }
 
 /** 启动一轮用户对话并跟踪其生命周期（退 Application 前会等待它落库） */
@@ -1190,6 +1237,7 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
     async (
       question: string,
       options?: {
+        topicId?: number
         providerId?: number
         images?: string[]
         documents?: { fileName: string; filePath: string }[]
@@ -1213,6 +1261,13 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
         logger.warn('[Harness] 读取模型工具调用轮数失败，使用默认值:', err)
       }
 
+      // 这条同步路径也要认话题的记忆作用域（插件会话 → 那份插件自己的记忆）
+      const syncMemoryScope = await resolveTurnMemoryScope(
+        options?.topicId,
+        undefined,
+        harnessSettings?.activeWorkspaceId ?? 0
+      )
+
       const harnessService = new HarnessService(
         model,
         tools,
@@ -1223,7 +1278,8 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
         harnessSettings?.workspacePath || undefined,
         harnessSettings?.memoryPath || undefined,
         harnessSettings?.activeWorkspaceId ?? 0,
-        maxToolRounds
+        maxToolRounds,
+        syncMemoryScope.kind === 'plugin' ? syncMemoryScope.pluginId : undefined
       )
       return await harnessService.sendMessage(question, options)
     }
@@ -1451,12 +1507,20 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
         logger.warn('[Harness] 读取模型工具调用轮数失败，记忆整理使用默认值:', err)
       }
 
+      // 「存入记忆」也要落进**这条会话自己的**记忆作用域（插件会话 → 那份插件的记忆）
+      const memoryAgentScope = await resolveTurnMemoryScope(
+        payload.topicId,
+        undefined,
+        harnessSettings?.activeWorkspaceId ?? 0
+      )
+
       const result = await startMemoryAgent({
         topicId: payload.topicId,
         answer: payload.answer ?? '',
         question,
         workspaceId: harnessSettings?.activeWorkspaceId ?? 0,
         memoryPath: harnessSettings?.memoryPath || undefined,
+        pluginId: memoryAgentScope.kind === 'plugin' ? memoryAgentScope.pluginId : undefined,
         // 优先用那条回复自己的供应商（前端从用量行带过来），拿不到再走默认供应商
         providerId: payload.providerId,
         maxToolRounds

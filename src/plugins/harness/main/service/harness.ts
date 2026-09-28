@@ -8,6 +8,13 @@ import { HarnessOptions, StructuredMessage, SubAgentConfig, HistoryCompaction } 
 import { Runtime } from '../runtime/runtime'
 import type { ModelUsageRecord } from '../runtime/usage'
 import { getMnemonComponent } from '../mnemon-singleton'
+import {
+  memoryScopeDirName,
+  memoryScopeRoot,
+  pluginScope,
+  workspaceScope,
+  type MemoryScope
+} from '../memory-scope'
 import { summarizeDialoguesWithRecovery } from '../runtime/compaction'
 import { getCompactionByTopic, upsertCompaction } from '../db/mapper/compaction'
 import type { HistoryDialogue, LoadHistoryFn } from './history'
@@ -27,6 +34,11 @@ class HarnessService {
   private readonly workspacePath?: string
   private readonly memoryPath?: string
   private readonly workspaceId: number
+  /**
+   * 插件 id：非空表示这个会话是插件行「＋」开出来的，记忆走**这份插件自己的作用域**
+   * （`<memoryPath>/plugin-<id>/`，见 main/memory-scope.ts），与工作记忆零交叉。
+   */
+  private readonly pluginId?: string
   /** 工具调用总次数上限（来自当前模型的「高级配置 → 工具调用轮数」） */
   private readonly maxToolRounds: number
 
@@ -38,9 +50,10 @@ class HarnessService {
    * @param skillsPath 技能存储目录（含 SKILL.md 的子目录即技能），空表示不启用
    * @param enabledSkills 启用的技能 ID 列表，undefined 表示全部启用
    * @param workspacePath AI 工作区目录，挂载为虚拟 /
-   * @param memoryPath 记忆存储根目录，空表示不启用（其下按工作区 ID 分隔，每个工作区一套独立记忆）
+   * @param memoryPath 记忆存储根目录，空表示不启用（其下按作用域分隔，每个作用域一套独立记忆）
    * @param workspaceId 当前工作区 ID，用于按工作区隔离记忆目录
    * @param maxToolRounds 工具调用总次数上限（模型设置「工具调用轮数」；缺省用工程默认值）
+   * @param pluginId 非空 = 这份插件的会话，记忆落在 `<memoryPath>/plugin-<id>/`
    */
   constructor(
     model: BaseChatModel,
@@ -52,7 +65,8 @@ class HarnessService {
     workspacePath?: string,
     memoryPath?: string,
     workspaceId = 0,
-    maxToolRounds: number = DEFAULT_MAX_TOOL_ROUNDS
+    maxToolRounds: number = DEFAULT_MAX_TOOL_ROUNDS,
+    pluginId?: string
   ) {
     this.model = model
     this.tools = tools
@@ -63,9 +77,10 @@ class HarnessService {
     this.workspacePath = workspacePath
     this.memoryPath = memoryPath
     this.workspaceId = workspaceId
+    this.pluginId = pluginId
     this.maxToolRounds = maxToolRounds
     logger.info(
-      `HarnessService initialized with LangChain Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds})`
+      `HarnessService initialized with LangChain Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, memoryScope=${this.memoryScopeDirName ?? 'disabled'}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds})`
     )
   }
 
@@ -81,19 +96,30 @@ class HarnessService {
       skillsPath: this.skillsPath,
       enabledSkills: this.enabledSkills,
       workspacePath: this.workspacePath,
-      // 记忆按工作区隔离：Runtime 的 /memories/ 挂载与 Mnemon 存储根
-      // 均位于 <memoryPath>/workspace-<workspaceId>/ 下（见 mnemon-singleton.ts）
-      memoryPath: this.workspaceMemoryPath,
+      // 记忆按**作用域**隔离：Runtime 的 /memories/ 挂载与 Mnemon 存储根都在
+      // <memoryPath>/<作用域目录>/ 下——工作模式的会话按工作区，插件会话按插件
+      // （见 memory-scope.ts / mnemon-singleton.ts）
+      memoryPath: this.scopeMemoryPath,
       workspaceId: this.workspaceId,
       maxToolCalls: this.maxToolRounds,
-      mnemon: getMnemonComponent(this.memoryPath, this.workspaceId)
+      mnemon: getMnemonComponent(this.memoryPath, this.workspaceId, this.pluginId)
     })
   }
 
-  /** 工作区级记忆目录（记忆根 + 工作区 ID 定位） */
-  private get workspaceMemoryPath(): string | undefined {
+  /** 作用域目录名（`workspace-<id>` / `plugin-<id>`），日志用 */
+  private get memoryScopeDirName(): string | undefined {
     if (!this.memoryPath) return undefined
-    return path.join(this.memoryPath, `workspace-${this.workspaceId}`)
+    return memoryScopeDirName(this.memoryScope)
+  }
+
+  /** 当前会话的记忆作用域 */
+  private get memoryScope(): MemoryScope {
+    return this.pluginId ? pluginScope(this.pluginId) : workspaceScope(this.workspaceId)
+  }
+
+  /** 作用域级记忆目录（记忆根 + 作用域目录名定位） */
+  private get scopeMemoryPath(): string | undefined {
+    return memoryScopeRoot(this.memoryPath, this.memoryScope)
   }
 
   /**

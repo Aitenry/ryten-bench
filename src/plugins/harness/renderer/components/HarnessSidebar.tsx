@@ -661,20 +661,30 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * （id: personal-ledger）这个玩意」）：新会话就是干净的空白会话，只把光标放进输入框，
    * 要做什么由用户自己打。
    *
+   * **带上插件 id**：这条会话的记忆用**这份插件自己的**（`<memoryPath>/plugin-<id>/`），
+   * 与工作记忆零交叉（用户口径 2026-09-28「插件里面的记忆应该是独立的，现在是直接使用工作里面
+   * 之前选中的记忆上下文，会导致有问题」）。id 由输入框那边在**建话题**时写进
+   * `harness_topic.memory_scope`（见 useHarnessHandlers 的 harness-focus-input 监听）。
+   *
    * 也**刻意不切模式**（用户口径 2026-09-27「为什么我在插件里面点击新建会话，会切换到工作」）：
    * 人还在挑插件，面板就别自己跳走，开关仍停在「插件」。
    */
-  const handlePluginSession = useCallback(async (): Promise<void> => {
-    const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
-    if (!ws) {
-      viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
-      return
-    }
-    if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
-    onNewHarness()
-    // 只把焦点放进输入框（不写内容）：新会话开好了，直接就能打字
-    window.dispatchEvent(new CustomEvent('harness-focus-input'))
-  }, [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t])
+  const handlePluginSession = useCallback(
+    async (draft: WorkshopDraftSummary): Promise<void> => {
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0]
+      if (!ws) {
+        viewMessage('plugin-session-nows', 'warning', t('harness.sidebar.needWorkspace'), 4)
+        return
+      }
+      if (ws.id !== activeWorkspaceId) await switchWorkspace(ws)
+      onNewHarness()
+      // 只把焦点放进输入框（不写内容）+ 把「这条会话属于哪份插件」带过去（决定用哪套记忆）
+      window.dispatchEvent(
+        new CustomEvent('harness-focus-input', { detail: { pluginId: draft.id } })
+      )
+    },
+    [workspaces, activeWorkspaceId, switchWorkspace, onNewHarness, viewMessage, t]
+  )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
@@ -915,7 +925,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                void handlePluginSession()
+                void handlePluginSession(draft)
               }}
               title={t('harness.sidebar.pluginNewSession')}
               className="flex items-center justify-center rounded"

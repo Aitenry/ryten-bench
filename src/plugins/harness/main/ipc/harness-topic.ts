@@ -118,10 +118,17 @@ export function harnessTopicIpcHandlers(): MainIpcHandlers {
 
   handle(
     'harness-topic-create',
-    async (workspaceId: number, title: string, model?: string, selectedTools?: string) => {
+    async (
+      workspaceId: number,
+      title: string,
+      model?: string,
+      selectedTools?: string,
+      /** 记忆作用域（`plugin:<插件 id>`；空 = 工作区记忆，见 main/memory-scope.ts） */
+      memoryScope?: string | null
+    ) => {
       try {
         clearTopicCache()
-        return await createTopic(workspaceId, title, model, selectedTools)
+        return await createTopic(workspaceId, title, model, selectedTools, memoryScope)
       } catch (error) {
         logger.error('Error in harness-topic-create:', error)
         throw error

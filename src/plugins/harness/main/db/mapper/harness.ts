@@ -152,7 +152,9 @@ async function createTopic(
   workspaceId: number,
   title: string,
   model?: string,
-  selectedTools?: string
+  selectedTools?: string,
+  /** 记忆作用域（`plugin:<插件 id>`；空 = 工作区记忆，见 main/memory-scope.ts） */
+  memoryScope?: string | null
 ): Promise<number> {
   return withOrm('createTopic', async (db) => {
     const rows = await db
@@ -161,11 +163,14 @@ async function createTopic(
         workspace_id: workspaceId,
         title,
         model: model || null,
-        selected_tools: selectedTools || null
+        selected_tools: selectedTools || null,
+        memory_scope: memoryScope || null
       })
       .returning({ id: harness_topic.id })
     const newId = rows[0].id
-    logger.info(`Created harness topic ID=${newId} in workspace=${workspaceId}, title: ${title}`)
+    logger.info(
+      `Created harness topic ID=${newId} in workspace=${workspaceId}, title: ${title}${memoryScope ? `, memory=${memoryScope}` : ''}`
+    )
     return newId
   })
 }

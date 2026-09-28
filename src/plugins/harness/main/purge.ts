@@ -79,10 +79,13 @@ export async function purgeHarnessData(): Promise<void> {
     ?.memoryPath
   if (memoryPath) {
     dirs.push(path.join(memoryPath, 'spill'))
-    // 只认本插件建的工作区目录（workspace-<数字>），不碰 memoryPath 下的其它内容
+    // 只认本插件建的记忆作用域目录（工作区 `workspace-<数字>` + 插件 `plugin-<id>`，
+    // 见 memory-scope.ts），不碰 memoryPath 下的其它内容
     try {
       for (const name of fs.readdirSync(memoryPath)) {
-        if (/^workspace-\d+$/.test(name)) dirs.push(path.join(memoryPath, name))
+        if (/^workspace-\d+$/.test(name) || /^plugin-[A-Za-z0-9._-]+$/.test(name)) {
+          dirs.push(path.join(memoryPath, name))
+        }
       }
     } catch (err) {
       logger.warn(`[harness] 读取记忆目录失败（跳过目录清理）: ${memoryPath}`, err)

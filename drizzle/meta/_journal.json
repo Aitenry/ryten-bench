@@ -64,6 +64,13 @@
       "when": 1790430038149,
       "tag": "0008_warm_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790560197585,
+      "tag": "0009_sturdy_the_renegades",
+      "breakpoints": true
     }
   ]
 }

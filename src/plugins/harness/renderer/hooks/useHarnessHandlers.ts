@@ -186,6 +186,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
    * 输入框据此聚焦——不改内容，只是让用户点完 ＋ 就能直接打字。
    */
   const [focusInputToken, setFocusInputToken] = useState(0)
+  /**
+   * 下一条**新话题**要用的插件记忆作用域（插件行「＋ 新建会话」带过来的插件 id）。
+   *
+   * 用户口径 2026-09-28：「插件里面的记忆应该是独立的，现在是直接使用工作里面之前选中的记忆上下文，
+   * 会导致有问题」——所以插件会话开话题时把 `plugin:<id>` 写进 `harness_topic.memory_scope`，
+   * 之后（含重启后再打开这个会话）主进程都按话题上存的作用域走（见 main/memory-scope.ts）。
+   * 只有在「还没有话题」的这一小段时间里需要它，话题一建就清掉。
+   */
+  const pendingPluginIdRef = useRef<string | null>(null)
   const [availableTools, setAvailableTools] = useState<HarnessToolInfo[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -1254,20 +1263,24 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     // 新会话没有插话队列；当前段落指针也一并复位
     setQueuedMessages([])
     assistantIdByTopicRef.current.clear()
+    // 普通「新建会话」不带插件记忆作用域（插件行 ＋ 会在之后把 id 放进来，见 harness-focus-input）
+    pendingPluginIdRef.current = null
   }, [saveSessionToCache])
 
   /**
-   * 外部请求「把焦点放进输入框」（`harness-focus-input`）。
+   * 外部请求「开一个（可选带插件记忆作用域的）新会话，并把焦点放进输入框」（`harness-focus-input`）。
    *
    * 用途：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
    * （首个话题在首次发送时才落库），**刻意不预填任何文字**（用户口径 2026-09-28
    * 「我需要的是不要显示：给插件「个人记账台账」（id: personal-ledger）这个玩意」），
-   * 只是把光标送进输入框，用户自己打要做什么。
-   *
-   * 真正做这件事的是 HarnessInput（它拿得到编辑器实例），这里只发一个「这一次要点焦点」的信号。
+   * 只把光标送进输入框 + 记住这条会话该用**哪份插件的记忆**。
    */
   useEffect(() => {
-    const handler = (): void => setFocusInputToken((n) => n + 1)
+    const handler = (event: Event): void => {
+      const pluginId = (event as CustomEvent<{ pluginId?: string }>).detail?.pluginId
+      pendingPluginIdRef.current = typeof pluginId === 'string' && pluginId ? pluginId : null
+      setFocusInputToken((n) => n + 1)
+    }
     window.addEventListener('harness-focus-input', handler)
     return () => window.removeEventListener('harness-focus-input', handler)
   }, [])
@@ -1281,6 +1294,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
       // 切话题时放弃气泡内编辑状态：那条提问属于上一个话题
       setEditingOrphanId(null)
+
+      // 选中的话题自带记忆作用域（存在话题行上，主进程按它走）→ 清掉「下一条新话题」的挂起值
+      pendingPluginIdRef.current = null
 
       currentTopicIdRef.current = topic.id
       setCurrentTopicId(topic.id)
@@ -1531,7 +1547,19 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         if (!topicId) {
           const title = userMessage.content.slice(0, 50)
           const workspaceId = await getActiveWorkspaceId()
-          topicId = await harnessApi.harness.createTopic(workspaceId, title)
+          // 记忆作用域：插件行「＋」开出来的会话带 `plugin:<id>`（这份插件自己的记忆），
+          // 普通会话留空 = 跟工作区走（见 main/memory-scope.ts）
+          const pluginId = pendingPluginIdRef.current
+          const memoryScope = pluginId ? `plugin:${pluginId}` : null
+          topicId = await harnessApi.harness.createTopic(
+            workspaceId,
+            title,
+            undefined,
+            undefined,
+            memoryScope
+          )
+          // 作用域已经落进话题行，之后由主进程按话题读；用完就清，避免影响下一条新会话
+          pendingPluginIdRef.current = null
           currentTopicIdRef.current = topicId
           setCurrentTopicId(topicId)
           refreshTopics().then()
