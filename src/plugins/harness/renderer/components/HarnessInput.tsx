@@ -970,6 +970,15 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     : isLoading
       ? t('harness.input.queueTooltip')
       : ''
+  /**
+   * 主按钮什么时候不可点：**只有「发送」需要内容**。
+   *
+   * 停止不依赖输入框内容——生成中把输入框清空，恰恰是用户想叫停的那一刻。
+   * 这里曾经写成 `disabled={!hasContent}`，于是「生成中 + 输入框为空」时停止按钮自己也被禁掉，
+   * 变成一个点了没反应的按钮（用户 2026-09-29 报的「会话进行中时，输入框里面没有内容，
+   * 但是不能暂停」）。生成中带内容的那一档仍然是发送（进插话队列），不受影响。
+   */
+  const primaryDisabled = !primaryStops && !hasContent
 
   // chip 主题色经 CSS 变量注入 FileRef NodeView
   const chipCssVars = useMemo(
@@ -1597,7 +1606,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         <div className="flex items-center gap-2">
           {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
               生成中且输入框为空 → 「停止」；生成中但已经打了字 → 「发送」（这条进插话队列）。
-              这样生成中既能继续发消息，也不会丢掉随时叫停的能力。 */}
+              这样生成中既能继续发消息，也不会丢掉随时叫停的能力。
+              「停止」档不能禁用（见 primaryDisabled）：生成中清空输入框正是要叫停。 */}
           <Tooltip title={primaryHint}>
             <Button
               type="primary"
@@ -1605,7 +1615,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               shape="circle"
               icon={primaryStops ? <RiStopFill size={16} /> : <RiArrowUpLine size={16} />}
               onClick={onPrimary}
-              disabled={!hasContent}
+              disabled={primaryDisabled}
             />
           </Tooltip>
         </div>
