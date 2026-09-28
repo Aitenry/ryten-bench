@@ -129,6 +129,24 @@ globalThis.__RB_HOST_RESOLVE__(spec) // '@host/main/database/orm' → 宿主那�
 // → 按宿主自身的解析路径（应用根）require 同一实例
 ```
 
+### 装载顺序：插件主模块早于数据库初始化（2026-09-28 修）
+
+`initPluginHost()`（扫描并 require 每个插件的 `main.cjs`）跑在 `createLoadingWindow()` **之前**，
+而数据库要等后者才起步（`setInitializationPromise` / `setDatabaseInstance` 都在那个流程里）。
+所以插件主模块**装载期**碰库时，宿主这边「既没有实例、也没有进行中的初始化」。
+
+老代码在这时直接抛 `Database has not been initialized yet.`：插件在装载期建表（工坊 full 模板的
+`main/db/ddl.ts` 就是这么写的）会失败，而它的 `schemaReady` 承诺把这条错**缓存**下来，
+之后每个通道都拿同一个陈旧错误刷屏，直到重启（用户 2026-09-28 实测：personal-ledger 全红）。
+
+现在 `database/instance.ts` 的 `getDatabaseInstance()` / `awaitInitialized()` 会**等初始化开始**
+（`INIT_START_WAIT_MS` = 20s 上限，超时仍按未初始化报错），插件装载期的库访问因此自然排到
+初始化之后。插件侧仍有两条纪律：**别在装载期同步等库**、**别「先读库再导出同步状态」**。
+
+回归：`node test/probe-plugin-load-db-race.mjs`（装一份装载期建表的插件 → 重启 → 断言启动日志
+没有 `Database has not been initialized yet`、有「表结构已就绪」、插件表通道可读）。
+改前实测 6/9（复现用户的报错），改后 9/9。
+
 ### 渲染层交接方式
 
 渲染层插件包是 ESM（`plugin://` + blob import 加载），宿主 UI 以 **ESM 桥**提供：

@@ -730,9 +730,13 @@ import { withOrm } from '@host/main/database/orm'
 /**
  * ${vars.title} **自带建表**（独立插件的 DDL 归插件自己）。
  *
- * 两条约束：
+ * 三条约束：
  * - **幂等**：一律 \`IF NOT EXISTS\`，插件每次装载都会跑一遍；
- * - **只动自己的表**：表名带插件前缀，绝不碰别的插件或宿主的表。
+ * - **只动自己的表**：表名带插件前缀，绝不碰别的插件或宿主的表；
+ * - **装载期就可以调用**：插件主模块是在**数据库初始化之前**被宿主装载的
+ *   （\`initPluginHost()\` 早于 \`createLoadingWindow()\`），所以这里不能在装载期假设库已就绪。
+ *   宿主的 \`withOrm\` 会等库就绪（宿主侧 \`database/instance.ts\` 的保证），因此下面这个
+ *   立即执行的承诺是安全的——但**别在装载期同步等它**，也不要「先读库再导出同步状态」。
  */
 const DDL: string[] = [
   \`CREATE TABLE IF NOT EXISTS ${sql}_items (
@@ -1979,6 +1983,8 @@ export async function listItems() {
 - **表名前缀 = 插件 id 的 SQL 形态**（\`${sqlNameOf(vars.id)}_\`）：一个库里装着所有插件的表，撞名就是事故；
 - \`@host/main/database/orm\` 的 \`withOrm(op, fn)\` 给 drizzle 实例并统一记异常（务必用它，别自己拿连接）；
 - \`schemaReady\` 是承诺：装载即建表，但**不保证建表先于第一次查询**，mapper / purge 都要 await 它；
+- **插件是在数据库初始化之前被装载的**（宿主 \`initPluginHost()\` 早于 \`createLoadingWindow()\`）：
+  \`withOrm\` 会等库就绪，所以装载期调用它是安全的，但**别在装载期同步等它**、也别「先读库再导出同步状态」；
 - **应用数据进表**（可查询、AI 工具能读），**设置进 JSON**（\`userData/plugin-state/${vars.id}.json\`）；
   用户的工作区是他的项目目录，**任何数据都不要写进去**。
 
