@@ -29,6 +29,7 @@ import NewDraftModal from './workshop/NewDraftModal'
 import { useDraftActions } from './workshop/useDraftActions'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
+import type { HarnessSettings } from '@renderer/types/settings'
 import type { MenuProps } from 'antd'
 import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../shared/types'
@@ -89,12 +90,20 @@ const MODE_THUMB_EASE = 'cubic-bezier(0.32, 1.35, 0.5, 1)'
 /**
  * 侧栏模式：`chat`（工作区 → 会话）/ `plugin`（插件）。
  *
- * **不持久化**（用户口径 2026-09-27「一进来，默认不能选中插件这个栏，要看当前是在工作的
- * 选中内容还是插件的选中内容」）：这个开关表达的是**此刻面板在看哪一类内容**，
- * 不是用户偏好——每次进入应用都从「工作」开始，随后跟随内容走：
- * 选会话 → 工作；点开插件 / 进工坊页 → 插件（见下面的 `WORKSHOP_FOCUS_EVENT` 与 onSelectTopic）。
+ * 这个开关表达的是**此刻面板在看哪一类内容**，因此**跟着内容走**：选会话 → 工作；
+ * 点开插件 / 进工坊页 → 插件（见下面的 `WORKSHOP_FOCUS_EVENT` 与 onSelectTopic）。
+ *
+ * 同时它和两侧各自「当前那一条内容」一起**落盘**，下次进来照着恢复
+ * （用户口径 2026-09-28「要记住工作模式和插件模式，选中的会话，下次进来可以记住」）。
+ * 这覆盖了 2026-09-27 的「一进来默认不能选中插件这个栏」——那条口径的前提是内容恢复不了，
+ * 现在两侧内容一起记，开关跟着恢复出来的内容走，不会出现「侧栏列着插件、内容是工作会话」。
  */
 type SidebarMode = 'chat' | 'plugin'
+
+/** 工作模式「当前那一条内容」 */
+type WorkContent = { workspaceId: number; topicId: number | null }
+/** 插件模式「当前那一条内容」（含是哪份插件） */
+type PluginContent = { pluginId: string; workspaceId: number; topicId: number | null }
 
 /** 工坊页/插件详情被打开时派发：侧栏据此把开关切到「插件」 */
 const WORKSHOP_FOCUS_EVENT = 'harness-workshop-focus'
@@ -224,7 +233,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null)
 
   /* ── 模式（工作 / 插件）与插件 ── */
-  /** 每次进入应用都从「工作」开始（不读任何持久化偏好） */
+  /** 初始「工作」：恢复上次那一侧在挂载后由 restoreLastContent 覆盖（见下面的启动恢复） */
   const [mode, setMode] = useState<SidebarMode>('chat')
   const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
   const [draftsLoading, setDraftsLoading] = useState(false)
@@ -243,20 +252,63 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   /**
    * 两个模式各自「当前那一条内容」：切模式时切回去（用户口径 2026-09-28「切换工作模式或者
-   * 插件模式下，就默认切换到当前模式下的默认选中项的内容」）。
+   * 插件模式下，就默认切换到当前模式下的默认选中项的内容」），**并且落盘**——
+   * 下次进应用照着它恢复（同一天「要记住工作模式和插件模式，选中的会话，下次进来可以记住」）。
    *
    * 记的是「话题 id + 它所在的工作区」（话题可能还没建 = null，那就是这个工作区里的空白会话）；
    * 切回去时按 id 重新读一次话题行——标题可能被改过，不能拿旧快照渲染。
-   * 用 ref 而不是 state：它只影响「下次切模式切到哪」，不参与渲染。
+   * 用 ref 而不是 state：它只影响「下次切模式切到哪」，不参与渲染；写盘统一走下面的
+   * rememberWork / rememberPlugin（两者只在这里写，避免「改了 ref 忘了存」）。
    */
-  const workContentRef = useRef<{ workspaceId: number; topicId: number | null } | null>(null)
-  const pluginContentRef = useRef<{
-    pluginId: string
-    workspaceId: number
-    topicId: number | null
-  } | null>(null)
+  const workContentRef = useRef<WorkContent | null>(null)
+  const pluginContentRef = useRef<PluginContent | null>(null)
   /** 工作模式最后待过的用户工作区（切回工作模式时优先回到它） */
   const lastWorkWorkspaceIdRef = useRef<number | null>(null)
+
+  /**
+   * 启动恢复跑完了没有。**恢复完成之前一律不写设置**：否则挂载时那个初始的「工作」
+   * 会把记住的「插件」冲掉（写盘和读盘在同一个键上，抢跑就是互相覆盖）。
+   */
+  const hydratedRef = useRef(false)
+
+  /** 两份清单（工作区 / 草稿 + 插件工作区）各读完一次没有：启动恢复必须等它们都到位 */
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false)
+  const [draftsLoaded, setDraftsLoaded] = useState(false)
+
+  /** 把模式 / 两侧内容写回设置（都走这一个口子；低频动作，不需要防抖） */
+  const persistSelection = useCallback(
+    (patch: {
+      activeMode?: SidebarMode
+      workContent?: WorkContent | null
+      pluginContent?: PluginContent | null
+    }): void => {
+      if (!hydratedRef.current) return
+      void window.api.systemSettings
+        .update({
+          harness: patch as Parameters<typeof window.api.systemSettings.update>[0]['harness']
+        })
+        .catch((err) => console.error('Failed to persist sidebar selection:', err))
+    },
+    []
+  )
+
+  /** 记下工作模式当前那一条内容（内存 + 落盘） */
+  const rememberWork = useCallback(
+    (next: WorkContent | null): void => {
+      workContentRef.current = next
+      persistSelection({ workContent: next })
+    },
+    [persistSelection]
+  )
+
+  /** 记下插件模式当前那一条内容（内存 + 落盘） */
+  const rememberPlugin = useCallback(
+    (next: PluginContent | null): void => {
+      pluginContentRef.current = next
+      persistSelection({ pluginContent: next })
+    },
+    [persistSelection]
+  )
 
   /** 拉插件草稿清单 + 插件工作区清单（两个模式都拉，工作模式靠后者滤掉插件目录行） */
   const loadDrafts = useCallback(async (): Promise<void> => {
@@ -277,7 +329,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   useEffect(() => {
     // 两个模式都拉：插件模式要列表，工作模式要靠草稿目录把「插件工作区」从工作列表里滤掉
-    void loadDrafts()
+    void loadDrafts().finally(() => setDraftsLoaded(true))
     return harnessApi.workshop.onChanged(() => void loadDrafts())
   }, [loadDrafts])
 
@@ -608,9 +660,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   // 首次进入：载入工作区列表并展开当前工作区
   useEffect(() => {
-    loadWorkspaces().then(({ list, activeId }) => {
-      setExpandedWorkspaceId(activeId ?? list[0]?.id ?? null)
-    })
+    loadWorkspaces()
+      .then(({ list, activeId }) => {
+        setExpandedWorkspaceId(activeId ?? list[0]?.id ?? null)
+      })
+      .finally(() => setWorkspacesLoaded(true))
   }, [loadWorkspaces])
 
   // 切换工作区（含子代理等外部入口）：同步激活态、展开态与记忆概览
@@ -688,11 +742,21 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 模式开关跟着内容走：插件工作区里的会话 = 插件内容 → 停在「插件」；
    * 普通工作区的会话 → 「工作」（用户口径 2026-09-27「要看当前是在工作的选中内容
    * 还是插件的选中内容」）。
+   *
+   * 顺手把「这一侧当前那一条内容」记下来（内存 + 落盘）：这条会话就是下次进应用要恢复的那条
+   * ——不等下面那个「按 topics 记录」的 effect，因为它的前提是话题列表已经切到该工作区，
+   * 跨工作区点开时会晚上一拍。
    */
   const handleOpenTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
       const isPluginSession = pluginWorkspaceIds.has(workspaceId)
       setMode(isPluginSession ? 'plugin' : 'chat')
+      if (isPluginSession) {
+        const draftId = pluginWorkspaces.find((item) => item.workspaceId === workspaceId)?.draftId
+        if (draftId) rememberPlugin({ pluginId: draftId, workspaceId, topicId: topic.id })
+      } else {
+        rememberWork({ workspaceId, topicId: topic.id })
+      }
       if (workspaceId !== activeWorkspaceId) {
         const ws = workspaces.find((w) => w.id === workspaceId)
         if (ws) await switchWorkspace(ws)
@@ -700,7 +764,16 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (isPluginSession) setExpandedWorkspaceId(workspaceId)
       await onSelectTopic(topic)
     },
-    [activeWorkspaceId, workspaces, switchWorkspace, onSelectTopic, pluginWorkspaceIds]
+    [
+      activeWorkspaceId,
+      workspaces,
+      switchWorkspace,
+      onSelectTopic,
+      pluginWorkspaceIds,
+      pluginWorkspaces,
+      rememberPlugin,
+      rememberWork
+    ]
   )
 
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
@@ -714,9 +787,20 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (ws.id !== activeWorkspaceId) {
         await switchWorkspace(ws)
       }
+      // 新建出来的是这条工作区的空白会话：它就是工作模式「当前那一条内容」
+      rememberWork({ workspaceId: ws.id, topicId: null })
+      if (mode !== 'chat') setMode('chat')
       onNewHarness()
     },
-    [activeWorkspaceId, workspaceTopics, loadWorkspaceTopics, switchWorkspace, onNewHarness]
+    [
+      activeWorkspaceId,
+      workspaceTopics,
+      loadWorkspaceTopics,
+      switchWorkspace,
+      onNewHarness,
+      rememberWork,
+      mode
+    ]
   )
 
   /**
@@ -775,12 +859,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       )
       // 刚建出来的插件工作区要立刻进本地清单（草稿行才能展开、工作列表才能滤掉它）
       await Promise.all([loadWorkspaces(), loadDrafts()])
-      // 记下「插件模式当前那一条内容」：切模式回来时接着看它（见 enterPluginModeContent）
-      pluginContentRef.current = {
+      // 记下「插件模式当前那一条内容」：切模式回来 + 下次进应用都接着看它
+      rememberPlugin({
         pluginId: draft.id,
         workspaceId: target.id,
         topicId: options?.topic?.id ?? null
-      }
+      })
       // ③ 有指定会话就直接打开它；否则开一条空白新会话 + 把「这条会话属于哪份插件」带过去
       //    （决定用哪套记忆）；只聚焦，不写内容
       if (options?.topic) {
@@ -799,7 +883,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )
       }
     },
-    [loadDrafts, loadWorkspaces, onNewHarness, onSelectTopic, viewMessage]
+    [loadDrafts, loadWorkspaces, onNewHarness, onSelectTopic, viewMessage, rememberPlugin]
   )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
@@ -822,12 +906,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       setActiveWorkspaceId(id)
       setExpandedWorkspaceId(id)
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: id } }))
+      // 新建并激活的工作区 = 工作模式「当前那一条内容」（空白会话），新建动作本身也把人留在工作这一侧
+      rememberWork({ workspaceId: id, topicId: null })
+      if (mode !== 'chat') setMode('chat')
       onNewHarness()
       await loadWorkspaces()
     } catch (err) {
       console.error('Failed to create workspace:', err)
     }
-  }, [loadWorkspaces, onNewHarness, t])
+  }, [loadWorkspaces, onNewHarness, t, rememberWork, mode])
 
   const handleDeleteWorkspace = useCallback(
     (ws: WorkspaceRow): void => {
@@ -840,6 +927,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         onOk: async () => {
           try {
             await harnessApi.harness.deleteWorkspace(ws.id)
+            // 记住的「工作模式那一条内容」指向被删的工作区时一并作废：恢复逻辑虽然会兜底，
+            // 但留着一条指不到东西的记忆，下次启动就要多绕一次
+            const wasRememberedWork = workContentRef.current?.workspaceId === ws.id
             if (activeWorkspaceId === ws.id) {
               // 删除的是当前工作区：自动切到剩余的用户工作区；一个都不剩则回到「未配置」状态。
               // 插件工作区不算「用户的」——切过去的话用户会莫名其妙落到某个插件目录上
@@ -859,6 +949,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 window.dispatchEvent(
                   new CustomEvent('workspace-changed', { detail: { workspaceId: next.id } })
                 )
+                rememberWork({ workspaceId: next.id, topicId: null })
               } else {
                 await window.api.systemSettings.update({
                   harness: {
@@ -870,9 +961,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 setExpandedWorkspaceId(null)
                 setWorkspaceTopics({})
                 window.dispatchEvent(new CustomEvent('workspace-changed', { detail: {} }))
+                rememberWork(null)
               }
               // 原会话已随工作区删除，回到空白欢迎态
               onNewHarness()
+            } else if (wasRememberedWork) {
+              // 当前内容在别的侧，但被删的正是工作侧记住的那一条：清掉，别留悬空记忆
+              rememberWork(null)
             }
             await loadWorkspaces()
           } catch (err) {
@@ -881,7 +976,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         }
       })
     },
-    [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t, pluginWorkspaceIds]
+    [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t, pluginWorkspaceIds, rememberWork]
   )
 
   /* 打开重命名弹窗 */
@@ -1446,7 +1541,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [activeWorkspaceId, pluginWorkspaceIds])
 
-  // 记下两个模式各自当前那一条内容（切模式时切回去）
+  // 记下两个模式各自当前那一条内容（切模式时切回去 + 下次进应用恢复它）
   // 话题可能是刚从「空白会话」发出来的：那时 currentTopicId 才第一次有值，也在这里记上。
   // **只在话题列表已属于活动工作区时记**（topicsWorkspaceId === activeWorkspaceId）：
   // 跨工作区选会话时 topics 还是旧工作区的，那时记会把话题挂到错的工作区上。
@@ -1457,16 +1552,28 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       pluginWorkspaces.find((item) => item.workspaceId === topicsWorkspaceId)?.draftId ?? null
     if (pluginId) {
       if (pluginContentRef.current?.topicId !== currentTopicId) {
-        pluginContentRef.current = {
+        rememberPlugin({
           pluginId,
           workspaceId: topicsWorkspaceId,
           topicId: currentTopicId
-        }
+        })
       }
     } else if (workContentRef.current?.topicId !== currentTopicId) {
-      workContentRef.current = { workspaceId: topicsWorkspaceId, topicId: currentTopicId }
+      rememberWork({ workspaceId: topicsWorkspaceId, topicId: currentTopicId })
     }
-  }, [currentTopicId, topicsWorkspaceId, activeWorkspaceId, pluginWorkspaces])
+  }, [
+    currentTopicId,
+    topicsWorkspaceId,
+    activeWorkspaceId,
+    pluginWorkspaces,
+    rememberPlugin,
+    rememberWork
+  ])
+
+  /** 模式也落盘：下次进应用回到同一侧（内容跟着它恢复，见 restoreLastContent） */
+  useEffect(() => {
+    persistSelection({ activeMode: mode })
+  }, [mode, persistSelection])
 
   /** 按 id 重新读一条话题行（记的是 id，标题可能已经改过，不能拿旧快照渲染） */
   const fetchTopicRow = useCallback(async (topicId: number): Promise<HarnessTopicRow | null> => {
@@ -1495,7 +1602,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         return
       }
       // 会话已经被删了：退回「这个工作区的空白会话」
-      workContentRef.current = { workspaceId: remembered.workspaceId, topicId: null }
+      rememberWork({ workspaceId: remembered.workspaceId, topicId: null })
     }
     const target =
       userList.find((w) => w.id === lastWorkWorkspaceIdRef.current) ?? userList[0] ?? null
@@ -1528,7 +1635,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     fetchTopicRow,
     switchWorkspace,
     onSelectTopic,
-    onNewHarness
+    onNewHarness,
+    rememberWork
   ])
 
   /**
@@ -1553,12 +1661,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         return
       }
       // 那条会话已经被删了：退回「这份插件的空白会话」
-      pluginContentRef.current = null
+      rememberPlugin(null)
     }
     const fallback = visibleDrafts[0] ?? drafts[0] ?? null
     if (!fallback) return
     await handlePluginSession(fallback, { focus: false })
-  }, [inPluginContent, drafts, visibleDrafts, fetchTopicRow, handlePluginSession])
+  }, [inPluginContent, drafts, visibleDrafts, fetchTopicRow, handlePluginSession, rememberPlugin])
 
   /** 模式开关：切模式 = 同时把内容切到那一侧（用户口径 2026-09-28） */
   const switchMode = useCallback(
@@ -1570,6 +1678,90 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     },
     [mode, enterWorkModeContent, enterPluginModeContent]
   )
+
+  /* ── 启动恢复：上次待在哪一侧、两侧各自选的是哪条会话 ─────────────────────────
+   * 用户口径 2026-09-28「要记住工作模式和插件模式，选中的会话，下次进来可以记住」：
+   * 进应用时读回 activeMode + workContent / pluginContent，把那一侧的那条会话重新选上
+   * （主区域、侧栏选中态、记忆作用域、资源管理器根全都跟着它走）。
+   *
+   * 三条纪律：
+   * - **两份清单都读完再恢复**：工作区列表 / 草稿 + 插件工作区还没到位时，「这条还在不在」
+   *   会误判成「已删除」，于是把记住的内容降级成空白会话；
+   * - **只跑一次**（hydratedRef），而且**跑完之前不写设置**（persistSelection 里的那道闸）：
+   *   挂载时 mode 的初始值是「工作」，抢在恢复前落盘就把记住的「插件」冲掉了；
+   * - **命不中就退回默认落点**，不报错也不提示：那条会话/工作区/插件已经删了是正常事，
+   *   退回该侧的空白会话（工作）或第一份插件（插件）即可。
+   */
+  const restoreLastContent = useCallback(async (): Promise<void> => {
+    let saved: HarnessSettings | undefined
+    try {
+      saved = (await window.api.systemSettings.getAll()).harness
+    } catch (err) {
+      console.error('Failed to read the remembered sidebar selection:', err)
+      return
+    }
+    const savedMode: SidebarMode = saved?.activeMode === 'plugin' ? 'plugin' : 'chat'
+    const work = saved?.workContent ?? null
+    const plugin = saved?.pluginContent ?? null
+    // 两份记忆先落回内存：随后切模式也要回到它们（切模式那套只认这两个 ref）
+    workContentRef.current = work
+    pluginContentRef.current = plugin
+    lastWorkWorkspaceIdRef.current = work?.workspaceId ?? null
+    setMode(savedMode)
+    // 把模式本身写实一次：一直待在「工作」不切档的话，下面那个跟随 mode 的 effect 永远不会跑，
+    // 盘上就缺 activeMode 这一格（下次进来虽然也能默认成工作，但持久化状态应当是完整的）
+    persistSelection({ activeMode: savedMode })
+
+    if (savedMode === 'plugin') {
+      const draft = plugin ? drafts.find((item) => item.id === plugin.pluginId) : null
+      if (plugin && draft) {
+        const topic = plugin.topicId != null ? await fetchTopicRow(plugin.topicId) : null
+        await handlePluginSession(draft, { topic: topic ?? undefined, focus: false })
+        return
+      }
+      // 没记住过插件内容（或那份插件已删）：按「切到插件模式」的默认落点来
+      await enterPluginModeContent()
+      return
+    }
+
+    const ws = work ? workspaces.find((item) => item.id === work.workspaceId) : null
+    if (work && ws) {
+      if (activeWorkspaceId !== ws.id) await switchWorkspace(ws)
+      setExpandedWorkspaceId(ws.id)
+      const topic = work.topicId != null ? await fetchTopicRow(work.topicId) : null
+      if (topic) {
+        await onSelectTopic(topic)
+        return
+      }
+      // 记住的那条会话已经删了：留在这个工作区的空白会话上
+      rememberWork({ workspaceId: ws.id, topicId: null })
+      onNewHarness()
+      return
+    }
+    // 工作侧没记住 / 那个工作区已删：当前内容要是在插件工作区上，先按切模式那套换回用户工作区
+    if (inPluginContent) await enterWorkModeContent()
+    else onNewHarness()
+  }, [
+    drafts,
+    workspaces,
+    activeWorkspaceId,
+    inPluginContent,
+    fetchTopicRow,
+    switchWorkspace,
+    onSelectTopic,
+    onNewHarness,
+    handlePluginSession,
+    enterPluginModeContent,
+    enterWorkModeContent,
+    rememberWork,
+    persistSelection
+  ])
+
+  useEffect(() => {
+    if (hydratedRef.current || !workspacesLoaded || !draftsLoaded) return
+    hydratedRef.current = true
+    void restoreLastContent()
+  }, [workspacesLoaded, draftsLoaded, restoreLastContent])
 
   return (
     <div
