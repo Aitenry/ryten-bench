@@ -65,6 +65,8 @@ const LUA_TOKEN = 0x4
 const WRITE_RESTRICTED = 0x8
 /** CreateProcessAsUserW 标志 */
 const CREATE_UNICODE_ENVIRONMENT = 0x00000400
+/** AttachConsole(ATTACH_PARENT_PROCESS)：挂到父进程的控制台上 */
+const ATTACH_PARENT_PROCESS = 0xffffffff
 /**
  * STARTUPINFO.dwFlags：让 wShowWindow 生效。
  *
@@ -169,6 +171,7 @@ function createBindings() {
   const koffi = loadKoffi()
   const kernel32 = koffi.load('kernel32.dll')
   const advapi32 = koffi.load('advapi32.dll')
+  const user32 = koffi.load('user32.dll')
 
   const STARTUPINFOW = koffi.struct('STARTUPINFOW', {
     cb: 'uint32_t',
@@ -201,6 +204,9 @@ function createBindings() {
     OpenProcess: kernel32.func('void *__stdcall OpenProcess(uint32_t, int, uint32_t)'),
     CloseHandle: kernel32.func('int __stdcall CloseHandle(void *)'),
     GetLastError: kernel32.func('uint32_t __stdcall GetLastError()'),
+    AllocConsole: kernel32.func('int __stdcall AllocConsole()'),
+    AttachConsole: kernel32.func('int __stdcall AttachConsole(uint32_t)'),
+    GetConsoleWindow: kernel32.func('void *__stdcall GetConsoleWindow()'),
     LocalFree: kernel32.func('void *__stdcall LocalFree(void *)'),
     GetStdHandle: kernel32.func('void *__stdcall GetStdHandle(int)'),
     SetConsoleCtrlHandler: kernel32.func('int __stdcall SetConsoleCtrlHandler(void *, int)'),
@@ -236,6 +242,10 @@ function createBindings() {
     TerminateJobObject: kernel32.func('int __stdcall TerminateJobObject(void *, uint32_t)'),
     WaitForSingleObject: kernel32.func('uint32_t __stdcall WaitForSingleObject(void *, uint32_t)'),
     GetExitCodeProcess: kernel32.func('int __stdcall GetExitCodeProcess(void *, _Out_ uint32_t *)')
+  }
+
+  const user = {
+    ShowWindow: user32.func('int __stdcall ShowWindow(void *, int)')
   }
 
   const advapi = {
@@ -288,7 +298,7 @@ function createBindings() {
     if (actual !== expected) fail(`unexpected ${name} size ${actual} (expected ${expected} on x64)`)
   }
 
-  return { koffi, kernel, advapi, STARTUPINFOW, PROCESS_INFORMATION }
+  return { koffi, kernel, user, advapi, STARTUPINFOW, PROCESS_INFORMATION }
 }
 
 /* ────────────────────────── SID / 内存小工具 ────────────────────────── */
@@ -809,6 +819,38 @@ function createKillOnCloseJob(bindings) {
 }
 
 /**
+ * 让 runner 自己拥有一个**隐藏的**控制台。
+ *
+ * 为什么必须做（2026-09-28 用户实测 + 本机复现）：runner 是以 `process.execPath`
+ * （**electron.exe，GUI 子系统**）起的，GUI 进程**没有控制台**；而受限子进程是 `cmd.exe`
+ * （控制台子系统），又刻意不带 `CREATE_NO_WINDOW`（受限令牌下那样会 0xC0000142 死掉，见常量说明）——
+ * 于是 Windows 会给**每一个**受限子进程新建一个控制台：Windows 11 把新控制台交给「默认终端」
+ * （Windows Terminal），桌面上就闪一个 cmd/PowerShell 窗口。`STARTUPINFO.wShowWindow = SW_HIDE`
+ * 管不住「新建控制台」这件事，`ShowWindow(GetConsoleWindow())` 在 WT 托管下也够不着那个窗口
+ * （拿到的是伪窗口句柄）——**唯一稳的办法是根本不让系统去新建**：
+ * runner 自己先占一个控制台，子进程「共享控制台」就不会再建。
+ *
+ * 顺序：先 `AttachConsole(ATTACH_PARENT_PROCESS)`（被终端直接跑时，父进程本来就有控制台），
+ * 失败再 `AllocConsole()` 自己造一个。两种情况下都把窗口 `SW_HIDE` 掉。
+ */
+function ensureConsole(bindings) {
+  const { kernel, user } = bindings
+  try {
+    if (kernel.GetConsoleWindow()) {
+      user.ShowWindow(kernel.GetConsoleWindow(), SW_HIDE)
+      return
+    }
+    if (kernel.AttachConsole(ATTACH_PARENT_PROCESS) === 0) {
+      if (kernel.AllocConsole() === 0) return
+    }
+    const hwnd = kernel.GetConsoleWindow()
+    if (hwnd) user.ShowWindow(hwnd, SW_HIDE)
+  } catch {
+    // 控制台只是为了「不弹窗」：拿不到也不能影响命令本身
+  }
+}
+
+/**
  * 以受限令牌 spawn 子进程，stdio 继承 runner 自己的（父进程看到的仍是普通管道）。
  * 子进程被放进 Job Object：runner 一旦消失（被杀/崩溃），Job 句柄关闭 → 整棵子树被杀。
  */
@@ -949,6 +991,9 @@ async function main() {
 
   const bindings = createBindings()
   const { kernel } = bindings
+  // 先给自己弄一个（隐藏的）控制台：受限子进程是「共享控制台」创建的，runner 要是没有控制台，
+  // Windows 会给每个子进程新建一个 —— 桌面上就是一闪而过的黑窗口（见 ensureConsole 的说明）。
+  ensureConsole(bindings)
 
   // cleanup 模式：只撤销工作区上我们的 ACE（卸载/清理入口），不起任何进程
   if (parsed.mode === 'cleanup') {

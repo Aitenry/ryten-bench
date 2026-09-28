@@ -310,15 +310,6 @@ async function performInitializationTasks(): Promise<void> {
   sendInitProgress(m.splash.stepCompleted, 100, steps.length, steps.length)
 }
 
-/**
- * 加载页「值不值得露脸」的等待窗口（毫秒）。
- *
- * 热启动时初始化通常几百毫秒就结束，主窗口紧接着就位——这段时间显示加载页只会得到
- * 「一个窗口闪一下」的观感（2026-09-27 用户报「每一次启动应用都会打开一个窗口，然后快速就关闭了，
- * 影响光感」）。等这么久还没结束才说明真的需要它（冷启动、首次建库、迁移）。
- */
-const SPLASH_DELAY_MS = 600
-
 export async function createLoadingWindow(): Promise<void> {
   const loadingWindow = new BrowserWindow({
     width: 360,
@@ -331,10 +322,10 @@ export async function createLoadingWindow(): Promise<void> {
     /**
      * 先不显示，等页面**真的能画出来**（ready-to-show）再显示。
      *
-     * 为什么（2026-09-27 用户报「每一次启动应用都会打开一个窗口，然后快速就关闭了，影响光感」）：
-     * 这个窗口是 `transparent + frame:false`，创建即显示时屏幕上先出现的是一块**还没绘制的**
-     * 空白/黑窗口，等 HTML 画好才变成正常加载页——热启动（初始化几百毫秒就结束）时，
-     * 用户看到的就是「一块黑窗口闪一下」。默认 `show: true` 正是这个闪现的来源。
+     * 这个窗口是 `transparent + frame:false`：创建即显示（Electron 默认 `show: true`）时，
+     * 屏幕上先出现的是一块**还没绘制的**空白/黑窗口，等 HTML 画好才变成正常加载页。
+     * 用户 2026-09-27 报的「每次启动都闪一个窗口」里，有这一段；加载页本身要留着，
+     * 只是不该以「没画出来的样子」露脸。
      */
     show: false,
     ...{ icon },
@@ -350,13 +341,11 @@ export async function createLoadingWindow(): Promise<void> {
 
   loadingWindow.setMenu(null)
 
-  // 能画出来了才显示；如果这时初始化已经结束（热启动），就干脆不显示——
-  // 否则会「刚露脸就被 close 掉」，还是一次闪烁。
+  // 画好了就显示。唯一例外：初始化已经结束（极快的热启动）——那说明主窗口马上接手，
+  // 再显示只会「刚露脸就被 close 掉」。
   loadingWindow.once('ready-to-show', () => {
-    setTimeout(() => {
-      if (loadingWindow.isDestroyed() || isInitComplete()) return
-      loadingWindow.show()
-    }, SPLASH_DELAY_MS)
+    if (loadingWindow.isDestroyed() || isInitComplete()) return
+    loadingWindow.show()
   })
 
   // 启动页自身的静态文案在渲染侧按 ?lang= 选择，避免首帧显示错语言

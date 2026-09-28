@@ -12,7 +12,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
-    "dev": "npm run build:sandbox && electron-vite dev",
+    "dev": "node native/build-sandbox.mjs && electron-vite dev",
     "build:plugins": "node scripts/build-plugins.mjs",
     "build:sandbox": "node native/build-sandbox.mjs",
     "build": "npm run typecheck && electron-vite build",
