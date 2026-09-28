@@ -24,6 +24,15 @@ export interface TemplateVars {
   hostMainKeys: string[]
   /** 宿主渲染层可用的 `@host/renderer/**`、`@host/vendor/**` 键 */
   hostUiKeys: string[]
+  /**
+   * 清单 `menu.icon` 用的图标名（**由调用方算好**，见 {@link menuIconOf}）。
+   *
+   * 为什么不让模板硬编码一个名字：`plugin.json` 的 `menu.icon` 是**字符串**，宿主要在
+   * 首帧把它换成组件，靠的是 `declared-icons.tsx` 里那张白名单；白名单外的名字一律先回退成
+   * 通用图标（不报错，等插件真实注册后才覆盖）。所以这里按「宿主白名单 ∩ remixicon 真实导出」
+   * 挑一枚，同一枚也用在 `renderer/plugin.tsx` 的 `ctx.use('menu').register()` 里（两处必须一致）。
+   */
+  menuIcon?: string
 }
 
 export interface TemplateInfo {
@@ -73,6 +82,33 @@ export const TEMPLATE_INFOS: TemplateInfo[] = [
 /** 工具名只能用 [A-Za-z0-9_-]，草稿 id 里的中划线换成下划线 */
 export function toolNameOf(id: string, suffix = 'echo'): string {
   return `${id.replace(/-/g, '_')}_${suffix}`
+}
+
+/** 清单 `menu.icon` 的**兜底图标名**（宿主白名单里的通用枚：没挑到就用它） */
+const MENU_ICON_FALLBACK = 'RiPlugLine'
+
+/**
+ * 宿主 `src/renderer/src/plugin-host/declared-icons.tsx` 的 `DECLARED_MENU_ICONS` 名单。
+ *
+ * 这份名单**只影响首帧**：清单里的 `menu.icon` 是字符串，宿主要靠它换成组件；
+ * 名单外的名字一律先回退成通用图标（不报错，等插件真实注册后覆盖）。
+ * 放在这里是「宿主加图标时要同步改两份」的显式提醒（源码守卫会核对两边一致）。
+ */
+const DECLARED_MENU_ICONS = ['RiDashboardLine', 'RiCalendar2Line', 'RiDiscLine', 'RiChatAiLine']
+
+/**
+ * 给这份草稿挑一枚「首帧就能显示」的菜单图标名。
+ *
+ * 两个条件必须同时成立：
+ * 1. 名字在宿主 `DECLARED_MENU_ICONS` 名单里 —— 否则首帧是通用图标；
+ * 2. 名字在宿主装的 `@remixicon/react` 里**真实存在** —— 否则运行期拿到 `undefined`，
+ *    JSX 直接抛「Element type is invalid」白屏（名单里的四枚都核对过）。
+ *
+ * 同一枚名字还要用在 `renderer/plugin.tsx` 的 `ctx.use('menu').register({ icon })` 里：
+ * 清单图标与真实注册不一致时，首帧与注册后会出现两个图标。
+ */
+export function menuIconOf(): string {
+  return DECLARED_MENU_ICONS[0] ?? MENU_ICON_FALLBACK
 }
 
 /** SQL 标识符里的安全形态（表名/索引名只能由字母数字下划线组成） */
@@ -187,6 +223,15 @@ import { invoke } from './context'
  *
  * 数据来源是插件自己的主进程通道（${channelGet} / ${channelSet}）——
  * 页面永远不直接读磁盘，跨进程一律走 plugin:<id>:* 通道（契约见 WORKSHOP.md）。
+ *
+ * 两个容易犯的错（都在 WORKSHOP.md 第 6 节里，验收电池会点名）：
+ * 1. **根节点不能带 \`overflow-auto\`**：宿主的插件容器高度是确定的，根节点自己滚会把标题一起
+ *    滚出窗口、并顶出「整页滚动条」。正确写法见下面的根节点 + 正文块（要滚只滚正文块）；
+ * 2. **不要用 Tailwind 的 \`dark:\` 变体做暗色**：插件编出来的 CSS 里 \`dark:\` 落成的是
+ *    \`prefers-color-scheme\`（跟操作系统配色），而应用主题是宿主自己的一套（还可能按时间切）
+ *    ——两者对不上。颜色取 antd token（\`theme.useToken()\`）或宿主
+ *    \`@host/renderer/hooks/useTheme\` 的 \`effectiveTheme\`（插件模板 full 的
+ *    \`renderer/components/ui.tsx\` 里有现成的 \`usePluginPalette()\` 可以直接抄）。
  */
 export default function Page(): React.JSX.Element {
   const [value, setValue] = useState('')
@@ -219,32 +264,35 @@ export default function Page(): React.JSX.Element {
   }
 
   return (
-    <div className="h-full w-full overflow-auto p-6">
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          ${vars.title}
-        </Typography.Title>
-        <Card size="small">
-          <Space direction="vertical" style={{ width: '100%' }} size={12}>
-            <Typography.Text type="secondary">
-              {saved ? '已保存：' + saved : '还没有保存过内容'}
-            </Typography.Text>
-            <Input.TextArea
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              autoSize={{ minRows: 4, maxRows: 12 }}
-              placeholder="写点什么，保存后重启仍然在"
-            />
-            <Space>
-              <Button type="primary" icon={<RiSaveLine size={16} />} loading={busy} onClick={save}>
-                保存
-              </Button>
-              <Button icon={<RiRefreshLine size={16} />} onClick={() => void load()}>
-                重新读取
-              </Button>
+    // 根节点：撑满宿主给的高度、自己不滚（整页不出滚动条）
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden p-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            ${vars.title}
+          </Typography.Title>
+          <Card size="small">
+            <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              <Typography.Text type="secondary">
+                {saved ? '已保存：' + saved : '还没有保存过内容'}
+              </Typography.Text>
+              <Input.TextArea
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                autoSize={{ minRows: 4, maxRows: 12 }}
+                placeholder="写点什么，保存后重启仍然在"
+              />
+              <Space>
+                <Button type="primary" icon={<RiSaveLine size={16} />} loading={busy} onClick={save}>
+                  保存
+                </Button>
+                <Button icon={<RiRefreshLine size={16} />} onClick={() => void load()}>
+                  重新读取
+                </Button>
+              </Space>
             </Space>
-          </Space>
-        </Card>
+          </Card>
+        </div>
       </div>
     </div>
   )
@@ -255,7 +303,8 @@ export default function Page(): React.JSX.Element {
 /** 页面模板的渲染层入口 */
 function pagePlugin(vars: TemplateVars): string {
   const labelKey = `${vars.id}.menu.title`
-  return `import { RiPuzzleLine } from '@remixicon/react'
+  const icon = vars.menuIcon ?? MENU_ICON_FALLBACK
+  return `import { ${icon} } from '@remixicon/react'
 import type { PluginRenderContext } from './context'
 import Page from './Page'
 
@@ -264,6 +313,10 @@ import Page from './Page'
  *
  * 注册的都是**可逆装配**：插件停用时宿主会把这些注册项一并摘除
  * （菜单消失、路由卸载、词条移除），不需要自己写反注册。
+ *
+ * 注意 icon 用的 \`${icon}\`：名字必须是 \`@remixicon/react\` 里真实存在的导出
+ * （写错 = 运行期 undefined → JSX 抛「Element type is invalid」白屏），
+ * 并且与 \`plugin.json\` 的 \`menu.icon\` 保持同一枚（清单图标只影响首帧）。
  */
 const plugin = {
   install(ctx: PluginRenderContext): void {
@@ -275,7 +328,7 @@ const plugin = {
       // 菜单键必须与路由路径一致：点击菜单是 navigate('/' + key)
       key: '${vars.id}',
       labelKey: '${labelKey}',
-      icon: <RiPuzzleLine size={16} />,
+      icon: <${icon} size={16} />,
       order: 60
     })
     ctx.use('i18n').addResources('translation', {
@@ -354,14 +407,17 @@ export function install(ctx: MainPluginContext): void {
 /** 设置页模板的渲染层设置页组件 */
 function panelComponent(vars: TemplateVars): string {
   return `import { useCallback, useEffect, useState } from 'react'
-import { Button, Input, Switch, Typography } from 'antd'
+import { Button, Input, Space, Switch, Typography } from 'antd'
 import { invoke } from './context'
 
 /**
  * ${vars.title} 的设置页。
  *
- * 页面结构用宿主提供的 SettingsUI（设置页样式随宿主走），
- * 数据同样只走本插件的主进程通道。
+ * 设置页有三件约定俗成的规矩（跟宿主设置页的观感一致，见 WORKSHOP.md 第 6 节）：
+ * 1. **字段顺排**：一行一个字段，标签在左、控件在右，不要装饰性的分组标题与带框信息块；
+ * 2. **值进字段本身**（用 placeholder / 说明文字），不要另加一块「当前值：…」的展示面板；
+ * 3. **颜色不写字面量**：需要底色/边框时取 antd token（\`theme.useToken()\`）或宿主
+ *    \`@host/renderer/hooks/useTheme\` 的 \`effectiveTheme\` —— 写死的浅色在暗色主题下就是白底白字。
  */
 interface PanelState {
   enabled: boolean
@@ -399,7 +455,7 @@ export default function Settings(): React.JSX.Element {
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         这一页由插件自己注册（settingsSection 挂载点），停用插件后这一页随之消失。
       </Typography.Paragraph>
-      <div className="flex max-w-[560px] flex-col gap-3">
+      <Space direction="vertical" size={12} style={{ width: '100%', maxWidth: 560 }}>
         <div className="flex items-center justify-between gap-4">
           <span>启用示例开关</span>
           <Switch checked={state.enabled} onChange={(v) => void save({ enabled: v })} size="small" />
@@ -412,7 +468,7 @@ export default function Settings(): React.JSX.Element {
         <Button type="primary" loading={busy} onClick={() => void save({ note: state.note })}>
           保存
         </Button>
-      </div>
+      </Space>
     </div>
   )
 }
@@ -1217,7 +1273,11 @@ export const ${pascalOf(vars.id)}ZhCN = {
       title: ${jsonEscape(vars.title)},
       add: '新建',
       empty: '还没有记录，点「新建」加一条。',
-      deleteConfirm: '删除这条记录？'
+      deleteConfirm: '删除这条记录？',
+      moreItems: '还有 {{count}} 项（窗口拉高就能看到）',
+      on: '已启用',
+      off: '已停用',
+      loading: '读取中…'
     },
     form: {
       createTitle: '新建记录',
@@ -1257,7 +1317,11 @@ export const ${P}EnUS: typeof ${P}ZhCN = {
       title: ${jsonEscape(vars.title)},
       add: 'New',
       empty: 'Nothing here yet - hit "New" to add one.',
-      deleteConfirm: 'Delete this record?'
+      deleteConfirm: 'Delete this record?',
+      moreItems: '{{count}} more (widen the window to see them)',
+      on: 'Enabled',
+      off: 'Disabled',
+      loading: 'Loading…'
     },
     form: {
       createTitle: 'New record',
@@ -1335,18 +1399,542 @@ export default api
 `
 }
 
+/**
+ * 渲染层：布局与配色原语（**模板里最容易踩坑的一块，所以按踩过的坑写死**）。
+ *
+ * 这个文件回答三个问题，答案都是从真实插件（personal-ledger 等）的事故里反推出来的：
+ * 1. 「一页装不下怎么办」——宿主给插件页面的高度是确定的，**页面层永远不出滚动条**，
+ *    内容多了靠 `FitTable` / `FitList` / `ChartBox` 按可用高度自适应；
+ * 2. 「浮层（弹窗）为什么冒出整页滚动条」——因为高度由内容决定，滚动容器变成了
+ *    铺满视口的 `.ant-modal-wrap`，用 `formModalProps` 把上限钉在弹窗内部；
+ * 3. 「暗色主题为什么坏」——插件编出来的 `plugin.css` 跟的是**操作系统**配色，
+ *    而应用主题是宿主自己的一套（还可能按时间自动切），所以颜色只能走 token + 配色表。
+ */
+function fullRendererUi(): string {
+  return `import { useCallback, useEffect, useRef, useState } from 'react'
+import { Card, Table, theme as antdTheme, type ModalProps, type TableProps } from 'antd'
+import { useTheme } from '@host/renderer/hooks/useTheme'
+
+/**
+ * 布局与配色原语：**插件界面的公共地基**，页面/组件都从这里取，别各写各的。
+ *
+ * 为什么模板自带这个文件：宿主页面容器的高度链是
+ * \`custom-frame-outer(100vh) → custom-frame(overflow:hidden,flex-col) → frame-body(flex-1,min-h-0)
+ * → .frame-body-center(flex-1,overflow:auto,min-h-0，插件页面挂在这里)\`，
+ * 所以插件根节点用 \`h-full\` 拿到的就是一个**确定的高度**。
+ * 下面这些原语的目标只有一个：**插件页面永不出滚动条**，内容多的时候按可用高度降级。
+ */
+
+export interface Size {
+  width: number
+  height: number
+}
+
+/** 监听元素自身尺寸（ResizeObserver）：图表与自适应容器靠它把「可用高度」变成像素 */
+export function useSize<T extends HTMLElement = HTMLDivElement>(): [React.RefObject<T | null>, Size] {
+  const ref = useRef<T | null>(null)
+  const [size, setSize] = useState<Size>({ width: 0, height: 0 })
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const update = (): void => {
+      const next = { width: element.clientWidth, height: element.clientHeight }
+      setSize((previous) =>
+        previous.width === next.width && previous.height === next.height ? previous : next
+      )
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  return [ref, size]
+}
+
+/** 配色表：中性色取 antd token，语义色按主题给两份 */
+export interface PluginPalette {
+  /** 当前是否是暗色主题 */
+  dark: boolean
+  /** 强调色（主按钮以外的强调、图表主线） */
+  accent: string
+  /** 正向 / 正常（成功、上升） */
+  up: string
+  /** 负向 / 危险（失败、下降） */
+  down: string
+  /** 警示（接近上限、待处理） */
+  warn: string
+  /** 边框（卡片、表格外框） */
+  border: string
+  /** 分隔线 / 图表网格线（比边框更淡） */
+  split: string
+  /** 软底（指标块这类淡色面板） */
+  soft: string
+  /** 轨道底色（进度条未填充部分） */
+  track: string
+  /** 坐标轴 / 次要说明文字 */
+  axis: string
+  /** 主文字（图表里需要显式给色的文本） */
+  text: string
+  /** 面板底色（用来「压住」图形元素，例如折线端点的小圆点） */
+  surface: string
+}
+
+/**
+ * 亮色语义色：都按「文字压在面板底色上对比度 >= 3:1」挑过一档深色，
+ * 小字号数字才不虚（\`#16a34a\` 在白底只有 3.4，收深到 \`#15803d\` 是 4.9）。
+ */
+const LIGHT_SEMANTIC = {
+  accent: '#8b5cf6',
+  up: '#15803d',
+  down: '#ef4444',
+  warn: '#f59e0b'
+}
+
+/** 暗色语义色：在暗底上要「亮而不过曝」（antd 的 colorSuccess/colorError 做小字对比度不够） */
+const DARK_SEMANTIC = {
+  accent: '#a78bfa',
+  up: '#4ade80',
+  down: '#f87171',
+  warn: '#fbbf24'
+}
+
+/**
+ * 界面配色表：**组件里不出现字面量色值**，一律从这里取。
+ *
+ * 为什么不能靠 Tailwind 的 \`dark:\` 变体（真实事故：用户反馈「没有适配黑暗主题」）：
+ * 工坊编 \`plugin.css\` 用的是 \`tailwindcss/theme + utilities\`，没有 \`@custom-variant dark\`，
+ * 所以 \`dark:bg-x\` 落成的是 **\`@media (prefers-color-scheme: dark)\`**（跟操作系统配色）；
+ * 而宿主是靠 \`document.documentElement\` 上的 \`.dark\` 类 + antd \`darkAlgorithm\` 切主题的
+ * （主题模式还支持按时间自动切，与系统配色无关）。两者对不上：
+ * 应用暗色 + 系统亮色 = 插件仍画浅色；应用亮色 + 系统暗色 = 插件反而画暗色。
+ *
+ * 所以：
+ * - **中性色取 antd token**（\`theme.useToken()\`）——由 \`darkAlgorithm\` 算好，跟着主题走；
+ * - **语义色给亮/暗两份**，暗色判定用宿主 \`useTheme()\` 的 \`effectiveTheme\`
+ *   （与 antd 算法、\`.dark\` 类**同源**，不会三者不一致）；
+ * - 需要底色变化时用**中性半透明**（见 \`HOVER_BG\`），叠在主题底色上亮暗都成立。
+ */
+export function usePluginPalette(): PluginPalette {
+  const { token } = antdTheme.useToken()
+  const { effectiveTheme } = useTheme()
+  const dark = effectiveTheme === 'dark'
+  const semantic = dark ? DARK_SEMANTIC : LIGHT_SEMANTIC
+
+  return {
+    dark,
+    ...semantic,
+    border: token.colorBorderSecondary,
+    split: token.colorSplit,
+    // 暗色下 token 的软底偏亮，用更轻的手调值贴暗底观感
+    soft: dark ? 'rgba(255, 255, 255, 0.04)' : token.colorFillQuaternary,
+    track: token.colorFillSecondary,
+    axis: token.colorTextTertiary,
+    text: token.colorText,
+    surface: token.colorBgContainer
+  }
+}
+
+/**
+ * 悬停 / 选中的底色：**中性半透明**，叠在任意主题底色上都成立
+ * （宿主自己的侧栏也这么写）。写成固定的浅灰在暗色下就是一块亮斑。
+ */
+export const HOVER_BG = 'rgba(128, 128, 128, 0.12)'
+
+/** 可悬停的一行：底色用中性半透明（列表行、菜单项的通用壳子） */
+export function HoverRow(props: {
+  children: React.ReactNode
+  className?: string
+  onClick?: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      className={'flex items-center gap-2 rounded-md px-2 py-1.5 ' + (props.className ?? '')}
+      style={{ cursor: props.onClick ? 'pointer' : undefined }}
+      onClick={props.onClick}
+      onMouseEnter={(event) => {
+        event.currentTarget.style.backgroundColor = HOVER_BG
+      }}
+      onMouseLeave={(event) => {
+        event.currentTarget.style.backgroundColor = 'transparent'
+      }}
+    >
+      {props.children}
+    </div>
+  )
+}
+
+/**
+ * 表单弹窗的高度上限：**标题与按钮固定，正文自己滚**。
+ *
+ * 为什么必须限制（真实事故：用户反馈「弹出高度不能没有限制，会导致整体出现滚动条」）：
+ * 弹窗高度若由内容决定就没有上限——10 个字段的表单约 620px 正文，加头脚与 antd 默认的
+ * \`top: 100px\` 整块 737px。窗口矮一点（1200×660）就装不下，而这时候能滚的是
+ * \`.ant-modal-wrap\`（\`position: fixed; overflow: auto\`，**铺满整个视口**）：
+ * 窗口右边缘冒出一条「整页」滚动条，滚的是整个对话框——标题和「保存」一起被滚出视口，
+ * 按钮常常落在屏幕外点不到。
+ *
+ * 做法：给弹窗的白面板一个 \`max-height\` 并让它成为列方向的 flex 容器，头脚 \`shrink-0\`、
+ * 正文 \`flex:1 / min-height:0 / overflow:auto\`，挤出来的空间全给正文。
+ * **不要**给正文写死 \`max-height: calc(100vh - Npx)\`：头脚高度会随标题行数、字号、
+ * 语言变，写死的 N 一旦算少，wrap 的滚动条就又回来了；flex 链跟着容器走，不需要预算。
+ *
+ * 语义名注意：antd 6 里白面板叫 **\`container\`**（\`.ant-modal-container\`，v5 时代叫
+ * \`content\`/\`.ant-modal-content\`）。写 \`styles.content\` 会被 TS 直接拒绝（TS2353）。
+ *
+ * 用法：\`<Modal {...formModalProps} open={...}>\`；纯展示、字段很少的弹窗用 \`createModalProps\`
+ * （只收 top，不需要内部滚动）。**每个 Modal 至少展开其中一个。**
+ */
+export const formModalProps: Pick<ModalProps, 'style' | 'styles'> = {
+  style: { top: 24, paddingBottom: 24 },
+  styles: {
+    container: {
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: 'calc(100vh - 72px)',
+      minHeight: 0
+    },
+    header: { flexShrink: 0 },
+    body: { flex: 1, minHeight: 0, overflow: 'auto' },
+    footer: { flexShrink: 0 }
+  }
+}
+
+/** 内容恒定的短弹窗（确认框、说明框）：只把 top 收下来，其它交给 antd */
+export const createModalProps: Pick<ModalProps, 'style'> = { style: { top: 24 } }
+
+/**
+ * antd 6 Tabs 撑满高度的正确写法（**两个坑都在这里**）：
+ *
+ * 1. 每个页签**各自是一个 \`.ant-tabs-content\`**（老的 \`.ant-tabs-content-holder\` 结构已经没有了），
+ *    而且 antd 会把**访问过的**页签都留在 DOM 里。所以给 \`styles.content\` 写 \`flex:1\` 会让
+ *    这些 pane 瓜分高度——访问 6 个页签时当前页只剩 1/6 高，内容被裁。\`position:absolute; inset:0\`
+ *    才是对的（每个 pane 铺满 body，只有激活的那个可见）；
+ * 2. \`styles.content\` 里**绝对不能写 \`display\`**：antd 靠 \`.ant-tabs-content-hidden\`
+ *    这个**类选择器**隐藏非激活页签，内联样式优先级更高，一旦写了 \`display:flex\` 隐藏即失效，
+ *    访问过的页签会全部 absolute 叠在一起同时画出来（症状：「内容都挤在一堆」）。
+ *    页签内部的列布局交给 Pane（\`h-full\` + 自己的 flex）。
+ *
+ * 用法：\`<Tabs {...pageTabsProps} items={...} />\`，外层给它 \`min-h-0 flex-1\`。
+ */
+export const pageTabsProps = {
+  className: 'min-h-0 flex-1',
+  tabBarStyle: { marginBottom: 10 },
+  styles: {
+    body: {
+      position: 'relative' as const,
+      display: 'flex',
+      flexDirection: 'column' as const,
+      height: '100%',
+      minHeight: 0
+    },
+    content: {
+      position: 'absolute' as const,
+      inset: 0,
+      minHeight: 0,
+      overflow: 'hidden' as const
+    }
+  }
+}
+
+/**
+ * 页面外壳：撑满宿主给的高度、**自己不滚**。
+ *
+ * 根节点**绝不能带 \`overflow-auto\`**（这是最容易犯的错）：它会把标题、页签一起滚出窗口，
+ * 也就是用户看到的「整页滚动条」。页面内部要滚动的话，只给某一个内容块加
+ * \`min-h-0 flex-1 overflow-y-auto\`。
+ *
+ * \`scroll\` 是逃生舱：真的需要一根页面内滚动条时显式打开（此时头部仍然固定）。
+ */
+export function PageShell(props: {
+  header?: React.ReactNode
+  children: React.ReactNode
+  /** 内容区是否自己滚（默认 false：整页锁死在窗口内，内容按高度自适应） */
+  scroll?: boolean
+  className?: string
+}): React.JSX.Element {
+  return (
+    <div
+      className={'flex h-full min-h-0 w-full flex-col overflow-hidden px-5 pb-3 pt-4 ' + (props.className ?? '')}
+    >
+      {props.header ? <div className="shrink-0 pb-2">{props.header}</div> : null}
+      {props.scroll ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{props.children}</div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{props.children}</div>
+      )}
+    </div>
+  )
+}
+
+/** 页面头：标题 + 右侧操作，永远一行放下、不随内容滚动 */
+export function PageHeader(props: {
+  title: React.ReactNode
+  extra?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="flex min-w-0 items-center gap-2 text-[15px] font-semibold">{props.title}</span>
+      {props.extra ? <div className="flex items-center gap-2">{props.extra}</div> : null}
+    </div>
+  )
+}
+
+/** 页签内容区：铺满 pane（pane 是 absolute + inset:0，所以 h-full 就够） */
+export function Pane(props: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="h-full w-full min-h-0 overflow-hidden">{props.children}</div>
+}
+
+/**
+ * 面板：填满剩余高度、自身不出滚动条的卡片（标题栏固定，正文自己分配剩余空间）。
+ *
+ * 用 Card 的 \`styles.root/header/body\` 把内部结构打通成 flex 列——
+ * 默认的 Card 是「高度由内容决定」，放进一行 grid 里就会把网格顶破。
+ */
+export function Panel(props: {
+  title?: React.ReactNode
+  extra?: React.ReactNode
+  children: React.ReactNode
+  /** 正文是否自己滚（默认 false：正文里放自适应原语） */
+  bodyScroll?: boolean
+  className?: string
+}): React.JSX.Element {
+  return (
+    <Card
+      size="small"
+      variant="outlined"
+      className={props.className}
+      style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}
+      styles={{
+        root: { display: 'flex', flexDirection: 'column', minHeight: 0 },
+        header: { minHeight: 36, padding: '0 14px', fontSize: 13, fontWeight: 600 },
+        body: {
+          flex: 1,
+          minHeight: 0,
+          padding: '12px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: props.bodyScroll ? 'auto' : 'hidden'
+        }
+      }}
+      title={props.title}
+      extra={props.extra}
+    >
+      {props.children}
+    </Card>
+  )
+}
+
+/** 空态：一行居中灰字（与宿主空态同款；不写说明段落、不加按钮） */
+export function EmptyHint(props: { text: string }): React.JSX.Element {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      <span className="text-xs" style={{ color: 'var(--rb-hint, rgba(128,128,128,0.85))' }}>
+        {props.text}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 自适应表格：按**容器可用高度**算容量，永远不出纵向滚动条。
+ * 语义与 antd Table 一致（\`table\` 直接透传）。
+ *
+ * 两条硬规则（都是踩出来的）：
+ * 1. **不要用「量余量 → 加/减一行」的收敛环**：布局常晚于 effect 到位（字体、表格自身的
+ *    一次性布局），effect 量到的余量是 0 于是什么都不做，650ms 后其实已经溢出 18~54px。
+ *    这里改成「量部件高度（表头 / 行 / 分页器）→ 一次算容量」：容量是
+ *    \`f(容器高, 表头, 行高, 分页器占高)\` 的纯函数，与当前画了几行无关，所以不需要收敛也不会抖；
+ * 2. **\`pagination={false}\` 的语义是「不分页」= 把所有行都画出来**（实测 3 行 156px 塞进
+ *    115px 的盒子，被裁 41px）。要「少画几行」必须自己 \`dataSource.slice(0, rows)\`（下面就是）。
+ *
+ * 单元格内容一律 \`min-w-0\` + 省略号兜底：只要有列写了 \`ellipsis: true\`，表格就变成
+ * \`table-layout: fixed\`，没写 \`width\` 的列只分「剩余宽度」，而 \`td\` 的 overflow 是 visible
+ * ——比列宽宽的内容会**叠到隔壁列上**（不是被裁）。
+ */
+export function FitTable<T extends object>(props: {
+  table: TableProps<T>
+  /** 只用于初始估算；真实行高在运行时量出来 */
+  rowHeight?: number
+}): React.JSX.Element {
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [boxHeight, setBoxHeight] = useState(0)
+  const [rows, setRows] = useState(1)
+  const [pager, setPager] = useState(true)
+  const [tooSmall, setTooSmall] = useState(false)
+  // 部件实测高度（表头 / 行 / 分页器含外边距）；表格没画出来时沿用上次测到的值，
+  // 否则「退化」判断会因为「现在没画表格」把高度当 0，来回翻。
+  const headRef = useRef(40)
+  const rowRef = useRef(props.rowHeight ?? 40)
+  const pagerRef = useRef(56)
+  const dataLength = props.table.dataSource?.length ?? 0
+
+  useEffect(() => {
+    const element = boxRef.current
+    if (!element) return
+    const update = (): void => setBoxHeight(element.clientHeight)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  const measure = useCallback((): void => {
+    const element = boxRef.current
+    if (!element) return
+    const thead = element.querySelector('.ant-table-thead')
+    const firstRow = element.querySelector('.ant-table-tbody tr')
+    const pagination = element.querySelector('.ant-pagination')
+    if (thead instanceof HTMLElement) headRef.current = thead.offsetHeight
+    if (firstRow instanceof HTMLElement) rowRef.current = firstRow.offsetHeight
+    if (pagination instanceof HTMLElement) {
+      const style = getComputedStyle(pagination)
+      pagerRef.current =
+        pagination.offsetHeight + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0)
+    }
+    const available = element.clientHeight
+    if (available <= 0) return
+    // 连「表头 + 一行」都放不下：不画表格（画了必被裁），交给调用方给的兜底提示
+    if (available < headRef.current + rowRef.current) {
+      setTooSmall(true)
+      return
+    }
+    setTooSmall(false)
+    const withPager = Math.floor((available - headRef.current - pagerRef.current) / rowRef.current)
+    const withoutPager = Math.floor((available - headRef.current) / rowRef.current)
+    const capacity = withPager >= 1 ? withPager : withoutPager
+    setPager(withPager >= 1)
+    setRows(Math.max(1, Math.min(capacity, Math.max(1, dataLength))))
+  }, [dataLength])
+
+  // 高度变了就重算；再补两次延时重算，接住「晚于 effect 才到位」的布局
+  useEffect(() => {
+    measure()
+    const timers = [250, 900].map((delay) => window.setTimeout(measure, delay))
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [boxHeight, measure])
+
+  return (
+    <div
+      ref={boxRef}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      data-fit-rows={rows}
+      data-fit-small={tooSmall ? 1 : 0}
+    >
+      {tooSmall ? (
+        <span className="truncate p-1 text-xs opacity-50">空间不足，放大窗口后显示表格</span>
+      ) : (
+        <Table<T>
+          size="small"
+          {...props.table}
+          dataSource={
+            pager ? props.table.dataSource : (props.table.dataSource ?? []).slice(0, rows)
+          }
+          pagination={
+            pager
+              ? { size: 'small', pageSize: rows, showSizeChanger: false, ...(props.table.pagination ?? {}) }
+              : false
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * 自适应列表：**贪心**塞行——放不下的行一个都不画，剩下的用「还有 N 项」收尾。
+ *
+ * 为什么贪心而不是算行数：行距、分隔、尾行都会吃掉高度，贪心能保证
+ * 「画出来的东西加起来 <= 容器高度」这个硬约束。\`rowHeight\` 要**略大于**真实行高，
+ * 声明小了会一点点累积成裁切。
+ */
+export function FitList<T>(props: {
+  items: T[]
+  rowHeight: number
+  keyOf: (item: T, index: number) => React.Key
+  renderItem: (item: T) => React.ReactNode
+  empty?: React.ReactNode
+  moreLabel?: (count: number) => string
+  className?: string
+}): React.JSX.Element {
+  const [ref, size] = useSize()
+  const gap = 6
+  const moreHeight = 18
+  const available = size.height
+  const rendered: T[] = []
+  let used = 0
+
+  for (const item of props.items) {
+    const need = (rendered.length > 0 ? gap : 0) + props.rowHeight
+    if (used + need > available) break
+    used += need
+    rendered.push(item)
+  }
+
+  let more: string | null = null
+  if (props.moreLabel && rendered.length < props.items.length) {
+    const need = (rendered.length > 0 ? gap : 0) + moreHeight
+    if (used + need <= available) {
+      more = props.moreLabel(props.items.length - rendered.length)
+    } else if (rendered.length > 0) {
+      // 回退一行，把「还有 N 项」放进来（它比少显示一行更有用）
+      rendered.pop()
+      used -= props.rowHeight + gap
+      more = props.moreLabel(props.items.length - rendered.length)
+    }
+  }
+
+  return (
+    <div ref={ref} className={'flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden ' + (props.className ?? '')}>
+      {props.items.length === 0
+        ? (props.empty ?? <span className="text-xs opacity-50">-</span>)
+        : rendered.map((item, index) => (
+            <div key={props.keyOf(item, index)} className="min-w-0 shrink-0">
+              {props.renderItem(item)}
+            </div>
+          ))}
+      {more ? <span className="shrink-0 text-xs opacity-50">{more}</span> : null}
+    </div>
+  )
+}
+
+/**
+ * 图表容器：量好尺寸再把像素交给 SVG（不给 SVG 伸展，避免线条变形）。
+ * 刻意**不设最小高度**——容器多矮就画多矮，图表自己降级；
+ * 「最小高度」等于固定高度，会把面板和整页顶破。
+ */
+export function ChartBox(props: {
+  children: (size: Size) => React.ReactNode
+  className?: string
+}): React.JSX.Element {
+  const [ref, size] = useSize()
+  return (
+    <div ref={ref} className={'min-h-0 flex-1 ' + (props.className ?? '')}>
+      {size.width > 0 && size.height > 0 ? props.children({ width: size.width, height: size.height }) : null}
+    </div>
+  )
+}
+`
+}
+
 /** 渲染层：表单弹窗组件 */
 function fullRendererItemForm(vars: TemplateVars): string {
   const P = pascalOf(vars.id)
   return `import { useEffect, useState } from 'react'
 import { Input, Modal } from 'antd'
 import type { ${P}Item, ${P}ItemInput } from '../../shared/types'
+import { formModalProps } from './ui'
 
 /**
  * 新建 / 编辑记录的弹窗。
  *
  * 为什么拆出来：表单是**状态最多的那一块**（草稿值、校验、提交中），
  * 塞在页面组件里会让列表渲染跟着一起重渲染。组件只认 props 与本插件自己的 DTO。
+ *
+ * **每个 Modal 都要展开 formModalProps（或 createModalProps）**：
+ * 不限制高度的弹窗在矮窗口下会撑出「整页」滚动条（滚动容器是铺满视口的 .ant-modal-wrap），
+ * 标题与「保存」按钮一起被滚出视口。字段多、需要内部滚动的表单用 formModalProps。
  */
 export default function ItemForm(props: {
   open: boolean
@@ -1378,6 +1966,7 @@ export default function ItemForm(props: {
 
   return (
     <Modal
+      {...formModalProps}
       open={props.open}
       title={props.item ? props.labels.editTitle : props.labels.createTitle}
       okText={props.labels.save}
@@ -1408,27 +1997,41 @@ export default function ItemForm(props: {
 `
 }
 
-/** 渲染层：页面 */
+/**
+ * 渲染层：页面。
+ *
+ * 骨架照 \`components/ui.tsx\` 来（**别自己写根节点**）：PageShell 撑满宿主给的高度且不滚，
+ * 头部固定，剩下的交给页签；每个页签内容用 Pane 包一层。
+ * 这一页只有一个页签是刻意的——加第二个页签时照抄 \`items\` 的写法即可，
+ * 撑满高度的坑（antd 6 的 pane 结构 + content 不能写 display）已经在 pageTabsProps 里处理掉了。
+ */
 function fullPage(vars: TemplateVars): string {
   const P = pascalOf(vars.id)
   return `import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Checkbox, Empty, Typography } from 'antd'
+import { App, Button, Checkbox, Empty, Tabs, Tag, Typography } from 'antd'
 import { RiAddLine, RiDeleteBin6Line, RiRefreshLine } from '@remixicon/react'
 import { useTranslation } from '@host/renderer/i18n'
-import type { ${P}Item, ${P}ItemInput } from '../shared/types'
+import type { ${P}Item, ${P}ItemInput, ${P}Settings } from '../shared/types'
 import api from './api'
 import ItemForm from './components/ItemForm'
+import { EmptyHint, FitList, HoverRow, PageHeader, PageShell, Pane, Panel, pageTabsProps } from './components/ui'
 
 /**
  * ${vars.title} 的页面。
  *
  * 数据只走本插件的主进程通道（./api）；主进程改数据会推 \`plugin:${vars.id}:items-changed\`，
  * 这里订阅它做实时刷新——设置页那边改开关，这一页也会跟着变。
+ *
+ * 布局三条纪律（宿主容器高度是确定的，别把它撑破）：
+ * 1. 根节点不滚（PageShell 已经保证）——**不要**给根节点加 \`overflow-auto\`；
+ * 2. 「内容比窗口多」不靠滚动条解决，靠 FitList / FitTable 按可用高度少画几行；
+ * 3. 颜色从 usePluginPalette() 取，不写字面量色值（写死的浅色在暗色主题下就是白底白字）。
  */
 export default function Page(): React.JSX.Element {
   const { t } = useTranslation()
   const { modal } = App.useApp()
   const [items, setItems] = useState<${P}Item[]>([])
+  const [settings, setSettings] = useState<${P}Settings | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
@@ -1437,7 +2040,9 @@ export default function Page(): React.JSX.Element {
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      setItems(await api.list())
+      const [nextItems, nextSettings] = await Promise.all([api.list(), api.getSettings()])
+      setItems(nextItems)
+      setSettings(nextSettings)
     } finally {
       setLoading(false)
     }
@@ -1464,6 +2069,7 @@ export default function Page(): React.JSX.Element {
   }
 
   const toggle = async (item: ${P}Item, done: boolean): Promise<void> => {
+    setItems((previous) => previous.map((row) => (row.id === item.id ? { ...row, done } : row)))
     await api.update(item.id, { done })
     await load()
   }
@@ -1482,73 +2088,126 @@ export default function Page(): React.JSX.Element {
   }
 
   return (
-    <div className="h-full w-full overflow-auto p-6">
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            {t('${vars.id}.page.title')}
-          </Typography.Title>
-          <div className="flex items-center gap-2">
-            <Button
-              size="small"
-              icon={<RiRefreshLine size={14} />}
-              loading={loading}
-              onClick={() => void load()}
-            >
-              {t('common.action.refresh')}
-            </Button>
-            <Button
-              size="small"
-              type="primary"
-              icon={<RiAddLine size={14} />}
-              onClick={() => {
-                setEditing(null)
-                setFormOpen(true)
-              }}
-            >
-              {t('${vars.id}.page.add')}
-            </Button>
-          </div>
-        </div>
-
-        {items.length === 0 && !loading ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('${vars.id}.page.empty')} />
-        ) : (
-          <ul className="m-0 flex list-none flex-col gap-1 p-0">
-            {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors"
+    <PageShell
+      header={
+        <PageHeader
+          title={t('${vars.id}.page.title')}
+          extra={
+            <>
+              <Button
+                size="small"
+                icon={<RiRefreshLine size={14} />}
+                loading={loading}
+                onClick={() => void load()}
               >
-                <Checkbox
-                  checked={item.done}
-                  onChange={(event) => void toggle(item, event.target.checked)}
-                />
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 cursor-pointer truncate border-none bg-transparent p-0 text-left"
-                  onClick={() => {
-                    setEditing(item)
-                    setFormOpen(true)
-                  }}
-                >
-                  <span className={item.done ? 'line-through opacity-60' : undefined}>
-                    {item.title}
-                  </span>
-                  {item.note ? <span className="ml-2 text-xs opacity-60">{item.note}</span> : null}
-                </button>
-                <Button
-                  size="small"
-                  type="text"
-                  aria-label={t('common.action.delete')}
-                  icon={<RiDeleteBin6Line size={14} />}
-                  onClick={() => remove(item)}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                {t('common.action.refresh')}
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                icon={<RiAddLine size={14} />}
+                onClick={() => {
+                  setEditing(null)
+                  setFormOpen(true)
+                }}
+              >
+                {t('${vars.id}.page.add')}
+              </Button>
+            </>
+          }
+        />
+      }
+    >
+      <Tabs
+        {...pageTabsProps}
+        items={[
+          {
+            key: 'items',
+            label: t('${vars.id}.page.title'),
+            children: (
+              <Pane>
+                <div className="grid h-full min-h-0 grid-cols-12 grid-rows-1 gap-3">
+                  {/* 列布局一律 grid-cols-12 + 固定 col-span：用 Tailwind 断点切栏数，
+                      窗口一窄就退回单列、面板竖着堆，必然溢出。 */}
+                  <Panel
+                    className="col-span-8"
+                    title={t('${vars.id}.page.title')}
+                    extra={<span className="text-xs opacity-60">{items.length}</span>}
+                  >
+                    {/* 列表按可用高度贪心塞行：放不下的不画，末尾用「还有 N 项」收尾 */}
+                    <FitList
+                      items={items}
+                      rowHeight={38}
+                      keyOf={(item) => item.id}
+                      empty={
+                        loading ? null : (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={t('${vars.id}.page.empty')}
+                            style={{ margin: 0 }}
+                          />
+                        )
+                      }
+                      moreLabel={(count) => t('${vars.id}.page.moreItems', { count })}
+                      renderItem={(item) => (
+                        <HoverRow>
+                          <Checkbox
+                            checked={item.done}
+                            onChange={(event) => void toggle(item, event.target.checked)}
+                          />
+                          {/* 单元格内容必须能随列宽收缩：min-w-0 + truncate，
+                              固定宽度的块（shrink-0）会把内容挤到隔壁列上 */}
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 cursor-pointer truncate border-none bg-transparent p-0 text-left"
+                            onClick={() => {
+                              setEditing(item)
+                              setFormOpen(true)
+                            }}
+                          >
+                            <span className={item.done ? 'line-through opacity-60' : undefined}>
+                              {item.title}
+                            </span>
+                            {item.note ? (
+                              <span className="ml-2 text-xs opacity-60">{item.note}</span>
+                            ) : null}
+                          </button>
+                          <Button
+                            size="small"
+                            type="text"
+                            aria-label={t('common.action.delete')}
+                            icon={<RiDeleteBin6Line size={14} />}
+                            onClick={() => remove(item)}
+                          />
+                        </HoverRow>
+                      )}
+                    />
+                  </Panel>
+
+                  <Panel className="col-span-4" title={t('${vars.id}.settings.title')}>
+                    {settings ? (
+                      <div className="flex min-h-0 flex-col gap-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="opacity-60">{t('${vars.id}.settingsPage.enabledLabel')}</span>
+                          <Tag color={settings.enabled ? 'green' : undefined} style={{ marginInlineEnd: 0 }}>
+                            {settings.enabled ? t('${vars.id}.page.on') : t('${vars.id}.page.off')}
+                          </Tag>
+                        </div>
+                        <div className="min-w-0 truncate opacity-60">{settings.note || '-'}</div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {t('${vars.id}.settingsPage.storageHint')}
+                        </Typography.Text>
+                      </div>
+                    ) : (
+                      <EmptyHint text={t('${vars.id}.page.loading')} />
+                    )}
+                  </Panel>
+                </div>
+              </Pane>
+            )
+          }
+        ]}
+      />
 
       <ItemForm
         open={formOpen}
@@ -1570,7 +2229,7 @@ export default function Page(): React.JSX.Element {
         }}
         onSubmit={(input) => void submit(input)}
       />
-    </div>
+    </PageShell>
   )
 }
 `
@@ -1651,7 +2310,8 @@ export default function Settings(): React.JSX.Element {
 /** 渲染层入口：路由 + 菜单 + 设置页 + 词条 */
 function fullPlugin(vars: TemplateVars): string {
   const P = pascalOf(vars.id)
-  return `import { RiPuzzleLine } from '@remixicon/react'
+  const menuIcon = vars.menuIcon ?? MENU_ICON_FALLBACK
+  return `import { ${menuIcon}, RiSettings4Line } from '@remixicon/react'
 import { ${P}Locales } from '../locales'
 import type { PluginRenderContext } from './context'
 import Page from './Page'
@@ -1662,6 +2322,11 @@ import Settings from './Settings'
  *
  * 挂载点：route（页面）、menu（侧栏）、settingsSection（设置页）、i18n（词条）。
  * 都是可逆装配——插件停用时宿主自动摘除，不需要写反注册。
+ *
+ * 两个坑（见 WORKSHOP.md 第 6 节）：
+ * - 菜单的 \`icon\` 名字必须在 \`@remixicon/react\` 里真实存在，且与 \`plugin.json\` 的
+ *   \`menu.icon\` 是同一枚（清单图标只决定首帧，名单见宿主 declared-icons.tsx）；
+ * - 词条第一个参数是**命名空间**（'translation'），写成语言名会让界面显示原始键名。
  */
 const plugin = {
   install(ctx: PluginRenderContext): void {
@@ -1673,13 +2338,13 @@ const plugin = {
       // 菜单键必须与路由路径一致：点击菜单就是 navigate('/' + key)
       key: '${vars.id}',
       labelKey: '${vars.id}.menu.title',
-      icon: <RiPuzzleLine size={16} />,
+      icon: <${menuIcon} size={16} />,
       order: 60
     })
     ctx.use('settingsSection').register({
       tabKey: '${vars.id}',
       labelKey: '${vars.id}.settings.title',
-      icon: <RiPuzzleLine size={16} />,
+      icon: <RiSettings4Line size={16} />,
       group: 'assistant',
       order: 90,
       Component: Settings
@@ -1753,57 +2418,59 @@ export function renderTemplate(
   template: WorkshopTemplate,
   vars: TemplateVars
 ): Record<string, string> {
+  // 菜单图标在这里统一定：清单字符串与渲染层注册的组件必须同一枚（`menuIconOf` 的口径见其注释）
+  const resolved: TemplateVars = { ...vars, menuIcon: vars.menuIcon ?? menuIconOf() }
   const files: Record<string, string> = {
-    'WORKSHOP.md': workshopDoc(template, vars),
+    'WORKSHOP.md': workshopDoc(template, resolved),
     'renderer/context.ts': RENDERER_CONTEXT_DTS,
     'main/context.ts': MAIN_CONTEXT_DTS
   }
 
   switch (template) {
     case 'panel':
-      files['plugin.json'] = manifestFile(vars, {
+      files['plugin.json'] = manifestFile(resolved, {
         inject: ['settingsSection', 'i18n']
       })
-      files['main/index.ts'] = panelMain(vars)
-      files['renderer/plugin.tsx'] = panelPlugin(vars)
-      files['renderer/Settings.tsx'] = panelComponent(vars)
+      files['main/index.ts'] = panelMain(resolved)
+      files['renderer/plugin.tsx'] = panelPlugin(resolved)
+      files['renderer/Settings.tsx'] = panelComponent(resolved)
       files['workshop.smoke.mjs'] = smokeFile(
-        `plugin:${vars.id}:settings-set`,
+        `plugin:${resolved.id}:settings-set`,
         "[{ enabled: true, note: 'smoke' }]",
         "(value) => value && value.enabled === true && value.note === 'smoke'"
       )
       break
 
     case 'tool':
-      files['plugin.json'] = manifestFile(vars, {
+      files['plugin.json'] = manifestFile(resolved, {
         inject: ['settingsSection', 'i18n']
       })
-      files['main/index.ts'] = toolMain(vars)
-      files['renderer/plugin.tsx'] = toolPlugin(vars)
+      files['main/index.ts'] = toolMain(resolved)
+      files['renderer/plugin.tsx'] = toolPlugin(resolved)
       break
 
     case 'minimal':
-      files['plugin.json'] = manifestFile(vars, { inject: ['appProvider'] })
+      files['plugin.json'] = manifestFile(resolved, { inject: ['appProvider'] })
       files['main/index.ts'] = noopMain()
       files['renderer/plugin.tsx'] = minimalPlugin()
       break
 
     case 'page':
-      files['plugin.json'] = manifestFile(vars, {
+      files['plugin.json'] = manifestFile(resolved, {
         inject: ['route', 'menu', 'i18n'],
-        routes: [{ path: `/${vars.id}` }],
+        routes: [{ path: `/${resolved.id}` }],
         menu: {
-          key: vars.id,
-          labelKey: `${vars.id}.menu.title`,
-          icon: 'RiPuzzleLine',
+          key: resolved.id,
+          labelKey: `${resolved.id}.menu.title`,
+          icon: resolved.menuIcon ?? MENU_ICON_FALLBACK,
           order: 60
         }
       })
-      files['main/index.ts'] = pageMain(vars)
-      files['renderer/plugin.tsx'] = pagePlugin(vars)
-      files['renderer/Page.tsx'] = pageComponent(vars)
+      files['main/index.ts'] = pageMain(resolved)
+      files['renderer/plugin.tsx'] = pagePlugin(resolved)
+      files['renderer/Page.tsx'] = pageComponent(resolved)
       files['workshop.smoke.mjs'] = smokeFile(
-        `plugin:${vars.id}:state-set`,
+        `plugin:${resolved.id}:state-set`,
         "['smoke-value']",
         "(value) => value && value.value === 'smoke-value'"
       )
@@ -1815,34 +2482,35 @@ export function renderTemplate(
       // 并且**按真实插件仓库的分层来铺**（用户 2026-09-28：「和 ryten-plugins 比缺失了好多内容」）：
       // 自己的表（db/ddl + db/schema + db/mapper）、自己的词条（locales/）、通道封装（renderer/api）、
       // 工具文案（main/tool-texts）、组件拆分（renderer/components/）。
-      files['plugin.json'] = manifestFile(vars, {
+      files['plugin.json'] = manifestFile(resolved, {
         inject: ['route', 'menu', 'settingsSection', 'i18n'],
-        routes: [{ path: `/${vars.id}` }],
+        routes: [{ path: `/${resolved.id}` }],
         menu: {
-          key: vars.id,
-          labelKey: `${vars.id}.menu.title`,
-          icon: 'RiPuzzleLine',
+          key: resolved.id,
+          labelKey: `${resolved.id}.menu.title`,
+          icon: resolved.menuIcon ?? MENU_ICON_FALLBACK,
           order: 60
         }
       })
-      files['shared/types.ts'] = fullSharedTypes(vars)
-      files['locales/index.ts'] = fullLocalesIndex(vars)
-      files['locales/zh-CN.ts'] = fullLocalesZh(vars)
-      files['locales/en-US.ts'] = fullLocalesEn(vars)
-      files['main/index.ts'] = fullMain(vars)
-      files['main/ipc.ts'] = fullMainIpc(vars)
-      files['main/tools.ts'] = fullMainTools(vars)
-      files['main/tool-texts.ts'] = fullMainToolTexts(vars)
-      files['main/purge.ts'] = fullMainPurge(vars)
-      files['main/db/ddl.ts'] = fullDbDdl(vars)
-      files['main/db/schema.ts'] = fullDbSchema(vars)
-      files['main/db/mapper.ts'] = fullDbMapper(vars)
-      files['renderer/plugin.tsx'] = fullPlugin(vars)
-      files['renderer/api.ts'] = fullRendererApi(vars)
-      files['renderer/Page.tsx'] = fullPage(vars)
-      files['renderer/Settings.tsx'] = fullSettings(vars)
-      files['renderer/components/ItemForm.tsx'] = fullRendererItemForm(vars)
-      files['workshop.smoke.mjs'] = fullSmoke(vars)
+      files['shared/types.ts'] = fullSharedTypes(resolved)
+      files['locales/index.ts'] = fullLocalesIndex(resolved)
+      files['locales/zh-CN.ts'] = fullLocalesZh(resolved)
+      files['locales/en-US.ts'] = fullLocalesEn(resolved)
+      files['main/index.ts'] = fullMain(resolved)
+      files['main/ipc.ts'] = fullMainIpc(resolved)
+      files['main/tools.ts'] = fullMainTools(resolved)
+      files['main/tool-texts.ts'] = fullMainToolTexts(resolved)
+      files['main/purge.ts'] = fullMainPurge(resolved)
+      files['main/db/ddl.ts'] = fullDbDdl(resolved)
+      files['main/db/schema.ts'] = fullDbSchema(resolved)
+      files['main/db/mapper.ts'] = fullDbMapper(resolved)
+      files['renderer/plugin.tsx'] = fullPlugin(resolved)
+      files['renderer/api.ts'] = fullRendererApi(resolved)
+      files['renderer/Page.tsx'] = fullPage(resolved)
+      files['renderer/Settings.tsx'] = fullSettings(resolved)
+      files['renderer/components/ui.tsx'] = fullRendererUi()
+      files['renderer/components/ItemForm.tsx'] = fullRendererItemForm(resolved)
+      files['workshop.smoke.mjs'] = fullSmoke(resolved)
       break
   }
 
@@ -1890,6 +2558,7 @@ function workshopDoc(template: WorkshopTemplate, vars: TemplateVars): string {
 | \`renderer/plugin.tsx\` | 渲染层入口：\`export default { install(ctx) }\`，**只做装配**。**必需** |
 | \`renderer/api.ts\` | 主进程通道的薄封装（组件不直接写通道名） |
 | \`renderer/Page.tsx\` / \`renderer/Settings.tsx\` | 页面与设置页（路由的 \`load()\` 指向它们才会拆成懒加载 chunk） |
+| \`renderer/components/ui.tsx\` | **布局与配色原语**（PageShell / Panel / pageTabsProps / formModalProps / FitTable / FitList / ChartBox / usePluginPalette）。页面与组件都从这里取，**别自己重新发明根节点与弹窗样式**——第 6 节的坑都在这一个文件里解决掉了 |
 | \`renderer/components/*.tsx\` | 拆出来的组件（表单弹窗这类状态多的块别塞进页面） |
 | \`plugin.css\` | 可选：手写样式（\`workshop.json\` 的 \`css: 'file'\` 时原样进包）。默认 \`auto\`，由工坊用 Tailwind 扫源码生成 |
 | \`workshop.smoke.mjs\` | 可选：验收电池要跑的通道级冒烟用例 |
@@ -1906,7 +2575,7 @@ function workshopDoc(template: WorkshopTemplate, vars: TemplateVars): string {
   "builtin": false,              // 第三方插件必须是 false
   "inject": ["route", "menu", "settingsSection", "appProvider", "i18n", "events", "storage"],
   "routes": [{ "path": "/${vars.id}" }],                                   // 可选
-  "menu": { "key": "${vars.id}", "labelKey": "${vars.id}.menu.title", "icon": "RiPuzzleLine", "order": 60 }
+  "menu": { "key": "${vars.id}", "labelKey": "${vars.id}.menu.title", "icon": "${vars.menuIcon ?? MENU_ICON_FALLBACK}", "order": 60 }
 }
 \`\`\`
 
@@ -1914,7 +2583,7 @@ function workshopDoc(template: WorkshopTemplate, vars: TemplateVars): string {
 
 \`\`\`ts
 ctx.use('route').register({ path: '/x', load: () => import('./Page') })
-ctx.use('menu').register({ key: 'x', labelKey: 'x.menu.title', icon: <RiPuzzleLine size={16} />, order: 60 })
+ctx.use('menu').register({ key: 'x', labelKey: 'x.menu.title', icon: <${vars.menuIcon ?? MENU_ICON_FALLBACK} size={16} />, order: 60 })
 ctx.use('settingsSection').register({ tabKey: 'x', labelKey: 'x.settings.title', icon, group: 'assistant', order: 90, Component: Settings })
 ctx.use('appProvider').register({ Provider, order: 90 })
 ctx.use('i18n').addResources('translation', {
@@ -1997,11 +2666,120 @@ export async function listItems() {
 - 组件里一律 \`t('${vars.id}.page.xxx')\`，不写死文案；工具返回的文案放 \`main/tool-texts.ts\`
   （\`getMainLanguage()\` 选语言），它同样会显示给用户看。
 
-## 6. 样式
+## 6. 样式、布局与主题（**先读这一节再写界面**）
+
+这一节的每一条都对应一次真实事故（用户反馈 + 真机取证）。验收电池的 \`layout.scan\` 会按
+「文件:行号」点名违反下面几条的地方；模板里的 \`renderer/components/ui.tsx\` 是**正确写法的样板**，
+页面与组件直接复用它的原语，不要另外发明一套。
+
+### 6.1 整页不出滚动条（页面层）
+
+宿主给插件页面的高度是**确定的**：
+
+\`\`\`
+custom-frame-outer(100vh) → custom-frame(h100%, overflow hidden, flex col)
+  → frame-body(flex1, min-h0, overflow hidden)
+    → .frame-body-center(flex1, overflow auto, min-h0)  ← 插件页面挂在这里
+\`\`\`
+
+因此：
+
+- 根节点用 \`h-full\` 撑满，**自己不滚**：\`flex h-full min-h-0 w-full flex-col overflow-hidden\`。
+  **绝不能写 \`overflow-auto\`/\`overflow-scroll\` 配 \`h-full\`** —— 那会把标题、页签一起滚出窗口，
+  用户看到的就是「整个应用的滚动条」；
+- 头部/工具条 \`shrink-0\`，正文块 \`min-h-0 flex-1\`；
+- 「内容比窗口多」**不要用滚动条解决**（插件页面也不该有滚动条）：用
+  \`FitTable\`（按容器高度算行数）/ \`FitList\`（贪心塞行 + 「还有 N 项」）/ \`ChartBox\`（按容器尺寸重画）；
+- 真要一根滚动条，只给某个内容块加 \`min-h-0 flex-1 overflow-y-auto\`（\`PageShell\` 的 \`scroll\` 就是这个）。
+
+四条硬规则（1440×900 与 1200×660 × 六页签实测 0 溢出）：
+
+1. **单行的 CSS grid 必须写 \`grid-rows-1\`**（隐式行是 auto，按内容算高会把网格顶破）；
+2. **不要用 Tailwind 断点切栏数**（\`xl:col-span-8\` 在窄窗口退回单列 → 面板竖堆 → 必溢出）：
+   列布局一律固定 \`grid-cols-12\` + \`col-span-8/4\`；
+3. **自适应容器不要设「最小高度」**（\`minHeight\` 等于固定高度，会把面板顶破）；
+4. **自适应表格别猜尺寸**：antd 的表头/行/分页器高度会随版本与字号变。用「量部件 → 一次算容量」
+   （\`FitTable\` 就是这么写的），**不要**用「量余量 → 加/减一行」的收敛环。
+
+### 6.2 弹窗（浮层）必须有高度上限
+
+页面不出滚动条**还不够**：弹窗没有上限时，滚动容器会变成 \`.ant-modal-wrap\`
+（\`position: fixed; overflow: auto\`，**铺满整个视口**）——窗口右边缘冒出「整页」滚动条，
+滚的是整个对话框，标题与「保存」按钮一起被滚出视口。
+
+- 表单弹窗一律展开 \`formModalProps\`（模板 \`renderer/components/ui.tsx\`）：头脚 \`shrink-0\`、
+  正文 \`flex:1 / minHeight:0 / overflow:auto\`，**标题与按钮固定、正文自己滚**；
+- 短弹窗展开 \`createModalProps\`（只把 antd 默认的 \`top: 100px\` 收到 24px）；
+- **不要**给正文写死 \`max-height: calc(100vh - Npx)\`：头脚高度会随标题行数/字号/语言变，
+  N 一旦算少滚动条就回来了；
+- antd 6 的语义名是 **\`container\`**（\`.ant-modal-container\`，v5 叫 \`content\`/\`.ant-modal-content\`）：
+  写 \`styles.content\` 会被 TS 直接拒绝（TS2353），在探针里查 \`.ant-modal-content\` 也查不到。
+
+### 6.3 页签（antd 6 Tabs）撑满高度的正确写法
+
+用模板的 \`pageTabsProps\`，别自己写 \`styles\`。两个坑：
+
+1. 每个页签**各自是一个 \`.ant-tabs-content\`**（老的 \`.ant-tabs-content-holder\` 已不存在），
+   而且 antd 会把**访问过的**页签都留在 DOM 里 → 给 \`content\` 写 \`flex:1\` 会让这些 pane
+   **瓜分高度**（访问 6 个页签时当前页只剩 1/6 高）。正确：\`content\` = \`position:absolute; inset:0\`；
+2. \`content\` 里**绝对不能写 \`display\`**：antd 靠 \`.ant-tabs-content-hidden\` 这个**类**隐藏非激活页签，
+   内联样式优先级更高 → 隐藏失效 → 访问过的页签全部叠在一起同时画出来（症状「内容都挤在一堆」）。
+   页签内部的列布局交给 \`<Pane>\`（\`h-full\` + 自己的 flex）。
+
+### 6.4 主题（暗色）只能走 token 与 \`useTheme()\`
+
+**不能用 Tailwind 的 \`dark:\` 变体**：工坊编 \`plugin.css\` 用的是 \`tailwindcss/theme + utilities\`
+（没有 \`@custom-variant dark\`），\`dark:\` 落成的是 \`@media (prefers-color-scheme: dark)\`（跟**操作系统**
+配色）；而宿主是靠 \`document.documentElement\` 上的 \`.dark\` 类 + antd \`darkAlgorithm\` 切主题的
+（主题模式还有「跟随时间」的 auto，与系统配色无关）。两者对不上：应用暗色 + 系统亮色 = 插件仍画浅色。
+
+- **中性色取 antd token**（\`theme.useToken()\`）：\`colorBorderSecondary\` / \`colorSplit\` /
+  \`colorFillQuaternary\` / \`colorFillSecondary\` / \`colorTextTertiary\` / \`colorText\` / \`colorBgContainer\`；
+- **语义色按主题给两份**：判暗色用宿主 \`@host/renderer/hooks/useTheme\` 的 \`effectiveTheme\`
+  （与 antd 算法、\`.dark\` 类**同源**）。模板 \`renderer/components/ui.tsx\` 的 \`usePluginPalette()\`
+  已经把亮/暗两套挑好了（亮色语义色按「文字压在面板底色上对比度 ≥ 3:1」收深过一档），**直接用**；
+- **组件里不出现字面量色值**（用户数据的默认色除外，例如分类默认色）；
+- 悬停/选中底色用**中性半透明**（\`HOVER_BG = 'rgba(128,128,128,0.12)'\`）：叠在主题底色上亮暗都成立，
+  写死浅灰在暗色下就是一块亮斑；
+- SVG 图表：网格 \`stroke={p.split}\`、轴文字 \`fill={p.axis}\`、端点圆心 \`fill={p.surface}\`、
+  中心数字 \`fill={p.text}\`；
+- 一个例外要记住：\`DatePicker\` / \`ColorPicker\` 这类**靠 ConfigProvider 主题上下文**渲染浮层的组件，
+  直接用会拿到 antd 默认主题（不是宿主的）。要用它们就自己包一层
+  \`<ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>\`。
+
+### 6.5 表格单元格不得越出 \`td\`
+
+有列写了 \`ellipsis: true\` → 表格变 \`table-layout: fixed\` → 没写 \`width\` 的列只分「剩余宽度」，
+而 \`td\` 的 \`overflow\` 是 \`visible\` → 比列宽宽的内容**叠到隔壁列上**（不是被裁，是叠）。
+
+- 单元格内容一律 \`min-w-0\` + \`truncate\` 兜底；**不要**出现 \`shrink-0\` 的固定宽度块；
+- 要「宽窗一行、窄窗两行」就用 \`useSize()\` 量**单元格自己的宽度**再选排版
+  （按列宽选 ⇒ 同列每行同高 ⇒ 自适应表格量到的行高对每行都成立）；
+- 长文本列补 \`ellipsis: true\`。
+
+### 6.6 设置页的观感（字段顺排）
+
+设置页（\`settingsSection\`）与宿主的设置页放在一起看，所以：
+
+- **一行一个字段**，标签在左、控件在右；**不要**装饰性分组标题（强调色圆点 + 发丝线 +「连接/模型」
+  这类空标签），也**不要**带框的信息块 / 徽章面板 —— 分组标签只用纯文本；
+- 结构只在**携带信息**时才成立（状态、计数、明细），而且信息该放进字段本身（placeholder / 说明文字），
+  不要另加一块「当前值：…」的展示面板；
+- 悬停/浮层要展示明细时给**结构化面板**（标题行 + 发丝线 + 左右对齐的键值明细），
+  不要把信息拼成一行字符串。
+
+### 6.7 样式产物本身
 
 - 默认由工坊用 Tailwind（theme + utilities，**不含 preflight**）扫源码生成 \`plugin.css\` 并随包分发；
 - 因此**类名必须是字面量**（\`className="p-4 flex"\` 可以，\`className={'p-' + n}\` 扫不到）；
 - 宿主的 Tailwind 产物**不覆盖外部插件**：漏样式 = 界面变形，验收里的 \`style.coverage\` 会点名。
+
+### 6.8 图标
+
+- 渲染层 \`import { RiXxx } from '@remixicon/react'\` 的名字必须是宿主装的版本里**真实存在**的导出
+  （名字写错 = 运行期 \`undefined\` → JSX 直接抛「Element type is invalid」白屏）；
+- 清单 \`plugin.json\` 的 \`menu.icon\` 是**名字字符串**，只有宿主 \`declared-icons\` 表里的那几个能首帧正确显示，
+  其它一律先回退成通用图标（不报错，真实注册后覆盖）→ **清单图标与 \`renderer/plugin.tsx\` 注册的同一枚**。
 
 ## 7. 冒烟用例（可选）
 
@@ -2021,5 +2799,18 @@ export default {
 1. \`plugin_build\`：构建 + 静态审计（清单、宿主契约、体积）；
 2. \`plugin_verify\`：跑完整验收电池（含真实装载 main.cjs 的冒烟与渲染层探针），报告逐项给结论；
 3. \`plugin_publish\`：装进 \`userData/plugins/${vars.id}/\` 并启用，界面立即出现（菜单/设置页）。
+
+### 交付前的自查清单（照着逐条过一遍，能省掉一整轮返工）
+
+- [ ] **验收报告全绿**：\`plugin_verify\` 的致命项全过；\`layout.scan\` / \`style.coverage\` 没有点名；
+- [ ] **界面在窗口内**：根节点没有 \`overflow-auto\`、头部与正文用 \`shrink-0\` / \`min-h-0 flex-1\` 分层，
+      内容多了靠 \`FitTable\` / \`FitList\` 降级而不是滚动条（窄窗口 1200×660 也要看一眼）；
+- [ ] **每个 Modal 都展开 \`formModalProps\` 或 \`createModalProps\`**，矮窗口下标题与按钮都点得到；
+- [ ] **暗色主题**：切到暗色（设置 → 外观）后没有白底白字、没有比背景还亮的网格线，
+      代码里搜不到 \`dark:\` 与字面量色值；
+- [ ] **词条**：新增的文案都进 \`locales/\`（中英逐键对齐），界面上没有 \`${vars.id}.xxx\` 这样的原始键名；
+- [ ] **通道闭环**：渲染层用到的每个通道都在 \`main/ipc.ts\` 里注册、事件通道在 \`main/index.ts\` 里 \`registerEvent\`；
+- [ ] **版本号**：改了代码就把 \`plugin.json\` 的 \`version\` 升一位（面板据此显示更新）；
+- [ ] **数据与清理**：应用数据进自己的表、设置进 \`plugin-state/\`，\`PLUGIN_PURGE\` 的 \`label\` 写清「会删什么」。
 `
 }

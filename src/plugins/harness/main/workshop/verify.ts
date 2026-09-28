@@ -16,6 +16,7 @@ import {
   relativeSpecifiersInBundle
 } from './build'
 import { missingClasses, scanDraftCandidates } from './css'
+import { scanWorkshopLayouts } from './layout'
 import { isWorkshopConfigured, workshopHostOrNull, type WorkshopHost } from './host'
 
 /**
@@ -35,6 +36,7 @@ import { isWorkshopConfigured, workshopHostOrNull, type WorkshopHost } from './h
  * | `main.smoke` | **真的 require 产物 + 真实 install(ctx) 契约**，含草稿自带冒烟用例 | 致命 |
  * | `renderer.probe` | 在真渲染进程里 import + install（没窗口时 skip） | 非致命 |
  * | `style.coverage` | className 用到的类名在 plugin.css 里都有规则 | 非致命 |
+ * | `layout.scan` | 布局与主题反模式（整页滚动条 / 页签叠在一起 / `dark:` 变体 / 弹窗无高度上限） | 非致命 |
  * | `risk.scan` | 危险 API 清单（发布前给用户/模型看） | 非致命 |
  *
  * 致命项全过 = 装上去能用；非致命项失败 = 能跑但不对（样式塌了 / 有风险调用）。
@@ -730,6 +732,26 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
     hint:
       missing.length > 0
         ? "类名必须是字面量才能被 Tailwind 扫到（'p-' + n 扫不到）；也可以把 workshop.json 的 css 改成 'file' 手写 plugin.css"
+        : undefined
+  })
+
+  // ── 布局与主题体检（源码级：这几类问题编译能过、界面却是坏的）──────────────
+  const layoutFindings = scanWorkshopLayouts(id)
+  push({
+    id: 'layout.scan',
+    title: '布局与主题',
+    // warn 而非 fail：这些都是「能用但不好看/不对」的问题，不拦发布，但必须在报告里点名
+    status: layoutFindings.length === 0 ? 'pass' : 'warn',
+    fatal: false,
+    detail:
+      layoutFindings.length === 0
+        ? '没有命中布局与主题的反模式（整页滚动条 / 页签叠在一起 / dark: 变体 / 弹窗无高度上限）'
+        : layoutFindings
+            .map((finding) => `${finding.file}:${finding.line} ${finding.message}`)
+            .join('；'),
+    hint:
+      layoutFindings.length > 0
+        ? '按每条的文件:行号改；模板 full 的 renderer/components/ui.tsx 里有现成的正确写法（PageShell / pageTabsProps / formModalProps / usePluginPalette）'
         : undefined
   })
 
