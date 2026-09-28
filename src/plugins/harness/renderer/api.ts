@@ -314,40 +314,54 @@ export const harnessApi = {
       >,
 
     // 记忆管理（Mnemon 三层记忆）
+    // 末尾的 memoryScope 决定读**哪一套**记忆：`plugin:<插件 id>` = 这份插件自己的；
+    // 空 / 不传 = 当前工作区（见 renderer/memory-scope.ts）
     selectMemoryDirectory: () =>
       invoke('plugin:harness:harness-select-memory-directory') as Promise<string | null>,
-    mnemonSnapshot: () => invoke('plugin:harness:mnemon-snapshot') as Promise<MnemonSnapshot>,
-    mnemonRuntimeMutate: (request: {
-      action: string
-      target: string
-      content?: string
-      old_text?: string
-      importance?: string
-    }) =>
-      invoke('plugin:harness:mnemon-runtime-mutate', request) as Promise<{
+    mnemonSnapshot: (memoryScope?: string | null) =>
+      invoke('plugin:harness:mnemon-snapshot', memoryScope ?? null) as Promise<MnemonSnapshot>,
+    mnemonRuntimeMutate: (
+      request: {
+        action: string
+        target: string
+        content?: string
+        old_text?: string
+        importance?: string
+      },
+      memoryScope?: string | null
+    ) =>
+      invoke('plugin:harness:mnemon-runtime-mutate', request, memoryScope ?? null) as Promise<{
         success: boolean
         message: string
       }>,
-    mnemonBodies: () => invoke('plugin:harness:mnemon-bodies') as Promise<MnemonBodiesView>,
-    mnemonBodyCreate: (name: string, description: string) =>
-      invoke('plugin:harness:mnemon-body-create', { name, description }) as Promise<{
+    mnemonBodies: (memoryScope?: string | null) =>
+      invoke('plugin:harness:mnemon-bodies', memoryScope ?? null) as Promise<MnemonBodiesView>,
+    mnemonBodyCreate: (name: string, description: string, memoryScope?: string | null) =>
+      invoke(
+        'plugin:harness:mnemon-body-create',
+        { name, description },
+        memoryScope ?? null
+      ) as Promise<{
         success: boolean
         body?: MnemonBodyRef
         message?: string
       }>,
     mnemonBodyUpdate: (
       id: string,
-      request: { name?: string; description?: string; active?: boolean }
+      request: { name?: string; description?: string; active?: boolean },
+      memoryScope?: string | null
     ) =>
-      invoke('plugin:harness:mnemon-body-update', id, request) as Promise<{
+      invoke('plugin:harness:mnemon-body-update', id, request, memoryScope ?? null) as Promise<{
         success: boolean
         body?: MnemonBodyRef
         message?: string
       }>,
-    mnemonBodyList: (memoryBodyIds?: string[]) =>
-      invoke('plugin:harness:mnemon-body-list', memoryBodyIds) as Promise<MnemonBodyInsight[]>,
-    mnemonDocumentSnapshot: () =>
-      invoke('plugin:harness:mnemon-document-snapshot') as Promise<
+    mnemonBodyList: (memoryBodyIds?: string[], memoryScope?: string | null) =>
+      invoke('plugin:harness:mnemon-body-list', memoryBodyIds, memoryScope ?? null) as Promise<
+        MnemonBodyInsight[]
+      >,
+    mnemonDocumentSnapshot: (memoryScope?: string | null) =>
+      invoke('plugin:harness:mnemon-document-snapshot', memoryScope ?? null) as Promise<
         MnemonSnapshot['documents'] | null
       >,
 
@@ -423,8 +437,9 @@ export const harnessApi = {
       invoke('plugin:harness:harness-tool-output-get', topicId, callId) as Promise<string | null>,
 
     // 按虚拟路径读取文本文件（卡片「打开文件」；工作区与记忆挂载都可读）
-    readVirtualFile: (virtualPath: string) =>
-      invoke('plugin:harness:harness-vfs-read', virtualPath) as Promise<
+    // 记忆挂载按**当前会话的作用域**解析（插件会话读的是这份插件自己的记忆目录）
+    readVirtualFile: (virtualPath: string, memoryScope?: string | null) =>
+      invoke('plugin:harness:harness-vfs-read', virtualPath, memoryScope ?? null) as Promise<
         { content: string } | { error: string }
       >
   },

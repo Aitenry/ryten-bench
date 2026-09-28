@@ -34,6 +34,7 @@ import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../shared/types'
 import type { WorkshopDraftSummary } from '../../shared/workshop'
 import { harnessApi } from '../api'
+import { useMemoryScope, useMemoryScopeName } from '../memory-scope'
 
 interface HarnessSidebarProps {
   /** 当前工作区的会话列表（实时 + 分页，由 useHarness 维护） */
@@ -459,11 +460,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [memoryExpanded, setMemoryExpanded] = useState(false)
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [memorySnap, setMemorySnap] = useState<MnemonSidebarSnapshot | null>(null)
+  /**
+   * 记忆跟着**当前会话**走（用户口径 2026-09-28「插件的记忆，并没有像工作里面的记忆一样
+   * 显示在侧边栏」）：插件会话 → 这份插件自己的记忆；工作会话 / 空白会话 → 当前工作区。
+   * 值由 useHarnessHandlers 在切会话时写（见 renderer/memory-scope.ts）。
+   */
+  const memoryScope = useMemoryScope()
+  /** 插件作用域时显示插件名（工作区作用域 = null，界面按既有样子只写「记忆」） */
+  const memoryScopeName = useMemoryScopeName()
 
   const loadMnemonSnapshot = useCallback(async () => {
     setMemoryLoading(true)
     try {
-      const snap = await harnessApi.harness.mnemonSnapshot()
+      const snap = await harnessApi.harness.mnemonSnapshot(memoryScope)
       if (!snap.configured) {
         setMemorySnap({ configured: false })
       } else {
@@ -488,7 +497,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     } finally {
       setMemoryLoading(false)
     }
-  }, [])
+  }, [memoryScope])
 
   // 展开记忆面板时加载概览
   const handleToggleMemory = useCallback(async () => {
@@ -498,6 +507,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       await loadMnemonSnapshot()
     }
   }, [memoryExpanded, loadMnemonSnapshot])
+
+  /**
+   * 作用域一变（切到别的插件会话／回到工作会话）就重载。
+   * 展开态先清空再拉：那是**另一个目录**的记忆，留着上一个作用域的条目会看成串了记忆。
+   */
+  const scopeRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (scopeRef.current === memoryScope) return
+    scopeRef.current = memoryScope
+    if (!memoryExpanded) return
+    setMemorySnap(null)
+    void loadMnemonSnapshot()
+  }, [memoryScope, memoryExpanded, loadMnemonSnapshot])
 
   // 打开系统设置记忆页
   const handleOpenMemorySettings = useCallback(() => {
@@ -1352,142 +1374,157 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )}
       </div>
 
-      {/* Mnemon 记忆概览（记忆属于会话侧：插件模式下整块不渲染，而不是拿 CSS 藏起来） */}
-      {mode === 'chat' && (
-        <div className="border-t flex-shrink-0" style={{ borderColor: colorFillAlter }}>
-          <button
-            onClick={handleToggleMemory}
-            className="flex items-center justify-between w-full px-4 py-2 text-left transition-colors"
-            style={{ color: colorTextSecondary }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-          >
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <RiBrain4Line size={16} />
-              {t('harness.sidebar.memory')}
-            </span>
-            <span className="flex items-center gap-2">
-              {memoryExpanded ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
-            </span>
-          </button>
+      {/*
+        Mnemon 记忆概览：两个模式都常驻（用户口径 2026-09-28「插件的记忆，并没有像工作里面的
+        记忆一样显示在侧边栏」）——它显示的是**当前会话**那套记忆，插件会话就是这份插件自己的
+        （`<memoryPath>/plugin-<id>/`）。是插件作用域时在标题后面缀上插件名，免得看成工作记忆。
+      */}
+      <div
+        data-harness-memory-block="1"
+        className="border-t flex-shrink-0"
+        style={{ borderColor: colorFillAlter }}
+      >
+        <button
+          onClick={handleToggleMemory}
+          className="flex items-center justify-between w-full px-4 py-2 text-left transition-colors"
+          style={{ color: colorTextSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium min-w-0">
+            <RiBrain4Line size={16} className="shrink-0" />
+            <span className="shrink-0">{t('harness.sidebar.memory')}</span>
+            {memoryScopeName && (
+              <span
+                data-harness-memory-scope={memoryScopeName}
+                className="truncate"
+                style={{ fontSize: 12, fontWeight: 400, color: colorTextTertiary }}
+              >
+                · {memoryScopeName}
+              </span>
+            )}
+          </span>
+          <span className="flex items-center gap-2">
+            {memoryExpanded ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
+          </span>
+        </button>
 
-          {memoryExpanded && (
-            <div className="overflow-y-auto history-scrollbar px-3 pb-3" style={{ maxHeight: 300 }}>
-              {memoryLoading ? (
-                <div className="px-1 py-2">
-                  <SkeletonTextLines lines={5} />
-                </div>
-              ) : !memorySnap?.configured ? (
-                <div className="pt-2">
-                  <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
-                    {t('harness.sidebar.memoryNotConfigured')}
-                  </p>
-                  <button
-                    onClick={handleOpenMemorySettings}
-                    className="flex items-center justify-center gap-1 w-full py-2 rounded text-xs transition-colors"
-                    style={{ color: '#1677ff', background: colorFillAlter }}
-                  >
-                    <RiSettings4Line size={13} />
-                    {t('harness.sidebar.memoryGoSettings')}
-                  </button>
-                </div>
-              ) : (
-                <div className="pt-1">
-                  {/* 用户画像（USER）——仅显示数量，不展示内容 */}
-                  {memorySnap.runtime && userEntries.length > 0 && (
-                    <div className="mb-2">
-                      <div
-                        className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
-                        style={{ color: colorTextSecondary }}
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <span
-                            className="rounded-sm"
-                            style={{ width: 3, height: 12, background: '#1677ff' }}
-                          />
-                          {t('harness.sidebar.memoryUserProfile')}
-                        </span>
-                        <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
-                          {t('harness.sidebar.memoryCount', { count: userEntries.length })}
-                        </span>
-                      </div>
+        {memoryExpanded && (
+          <div className="overflow-y-auto history-scrollbar px-3 pb-3" style={{ maxHeight: 300 }}>
+            {memoryLoading ? (
+              <div className="px-1 py-2">
+                <SkeletonTextLines lines={5} />
+              </div>
+            ) : !memorySnap?.configured ? (
+              <div className="pt-2">
+                <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
+                  {t('harness.sidebar.memoryNotConfigured')}
+                </p>
+                <button
+                  onClick={handleOpenMemorySettings}
+                  className="flex items-center justify-center gap-1 w-full py-2 rounded text-xs transition-colors"
+                  style={{ color: '#1677ff', background: colorFillAlter }}
+                >
+                  <RiSettings4Line size={13} />
+                  {t('harness.sidebar.memoryGoSettings')}
+                </button>
+              </div>
+            ) : (
+              <div className="pt-1">
+                {/* 用户画像（USER）——仅显示数量，不展示内容 */}
+                {memorySnap.runtime && userEntries.length > 0 && (
+                  <div className="mb-2">
+                    <div
+                      className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
+                      style={{ color: colorTextSecondary }}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className="rounded-sm"
+                          style={{ width: 3, height: 12, background: '#1677ff' }}
+                        />
+                        {t('harness.sidebar.memoryUserProfile')}
+                      </span>
+                      <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
+                        {t('harness.sidebar.memoryCount', { count: userEntries.length })}
+                      </span>
                     </div>
-                  )}
-
-                  {/* 项目记忆（MEMORY）——仅显示数量，不展示内容 */}
-                  {memorySnap.runtime && memoryEntries.length > 0 && (
-                    <div className="mb-2">
-                      <div
-                        className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
-                        style={{ color: colorTextSecondary }}
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <span
-                            className="rounded-sm"
-                            style={{ width: 3, height: 12, background: '#52c41a' }}
-                          />
-                          {t('harness.sidebar.memoryProject')}
-                        </span>
-                        <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
-                          {t('harness.sidebar.memoryCount', { count: memoryEntries.length })}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {!memorySnap.runtime ||
-                    (memorySnap.runtime.entries.length === 0 && (
-                      <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
-                        {t('harness.sidebar.memoryEmpty')}
-                      </p>
-                    ))}
-
-                  {/* 统计行（换行排列，不挤压） */}
-                  <div
-                    className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-2 text-xs"
-                    style={{
-                      color: colorTextTertiary,
-                      borderTop: `1px solid ${colorFillAlter}`
-                    }}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <RiBrain4Line size={13} />
-                      {memorySnap.runtime
-                        ? t('harness.sidebar.memoryHotCount', {
-                            count: memorySnap.runtime.entries.length
-                          })
-                        : t('harness.sidebar.memoryHotEmpty')}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <RiDatabase2Line size={13} />
-                      {t('harness.sidebar.memorySpaces', {
-                        active: memorySnap.bodies?.activeCount ?? 0,
-                        total: memorySnap.bodies?.total ?? 0
-                      })}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <RiFileTextLine size={13} />
-                      {t('harness.sidebar.memoryDocuments', {
-                        count: memorySnap.documents?.total ?? 0
-                      })}
-                    </span>
                   </div>
+                )}
 
-                  {/* 管理入口 */}
-                  <button
-                    onClick={handleOpenMemorySettings}
-                    className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
-                    style={{ color: '#1677ff', background: colorFillAlter }}
-                  >
-                    <RiSettings4Line size={13} />
-                    {t('harness.sidebar.memoryManage')}
-                  </button>
+                {/* 项目记忆（MEMORY）——仅显示数量，不展示内容 */}
+                {memorySnap.runtime && memoryEntries.length > 0 && (
+                  <div className="mb-2">
+                    <div
+                      className="flex items-center justify-between gap-1.5 mb-1.5 text-xs font-medium"
+                      style={{ color: colorTextSecondary }}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className="rounded-sm"
+                          style={{ width: 3, height: 12, background: '#52c41a' }}
+                        />
+                        {t('harness.sidebar.memoryProject')}
+                      </span>
+                      <span style={{ color: colorTextTertiary, fontWeight: 400 }}>
+                        {t('harness.sidebar.memoryCount', { count: memoryEntries.length })}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {!memorySnap.runtime ||
+                  (memorySnap.runtime.entries.length === 0 && (
+                    <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
+                      {t('harness.sidebar.memoryEmpty')}
+                    </p>
+                  ))}
+
+                {/* 统计行（换行排列，不挤压） */}
+                <div
+                  className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-2 text-xs"
+                  style={{
+                    color: colorTextTertiary,
+                    borderTop: `1px solid ${colorFillAlter}`
+                  }}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <RiBrain4Line size={13} />
+                    {memorySnap.runtime
+                      ? t('harness.sidebar.memoryHotCount', {
+                          count: memorySnap.runtime.entries.length
+                        })
+                      : t('harness.sidebar.memoryHotEmpty')}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <RiDatabase2Line size={13} />
+                    {t('harness.sidebar.memorySpaces', {
+                      active: memorySnap.bodies?.activeCount ?? 0,
+                      total: memorySnap.bodies?.total ?? 0
+                    })}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <RiFileTextLine size={13} />
+                    {t('harness.sidebar.memoryDocuments', {
+                      count: memorySnap.documents?.total ?? 0
+                    })}
+                  </span>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+
+                {/* 管理入口 */}
+                <button
+                  onClick={handleOpenMemorySettings}
+                  className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
+                  style={{ color: '#1677ff', background: colorFillAlter }}
+                >
+                  <RiSettings4Line size={13} />
+                  {t('harness.sidebar.memoryManage')}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 新建草稿弹窗（插件模式的 ＋；与设置页工坊共用同一个组件） */}
       <NewDraftModal

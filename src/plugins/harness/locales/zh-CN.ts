@@ -577,7 +577,7 @@ export const harnessZhCN = {
     page: {
       title: '记忆（Mnemon）',
       description:
-        '三层记忆：热记忆（每轮注入）· 长期记忆空间（按需召回）· 项目档案（完整文档）。存储于记忆根目录下，并按工作区目录隔离（每个工作区一套独立记忆，互不串扰）。'
+        '三层记忆：热记忆（每轮注入）· 长期记忆空间（按需召回）· 项目档案（完整文档）。存储于记忆根目录下，并按会话作用域隔离：每个工作区一套、每个插件各一套（插件会话用自己的记忆，互不串扰）。'
     },
     storage: {
       sectionTitle: '记忆存储目录',
@@ -595,6 +595,8 @@ export const harnessZhCN = {
     },
     manage: {
       sectionTitle: '记忆管理',
+      /** 插件会话进来时标注管的是哪份插件的记忆（工作区作用域不标注） */
+      scopePlugin: '插件「{{name}}」',
       snapshotFailed: '加载记忆快照失败: {{reason}}'
     },
     tabs: {

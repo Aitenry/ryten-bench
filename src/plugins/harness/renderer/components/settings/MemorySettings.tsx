@@ -18,12 +18,16 @@ import {
   SettingRow
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../api'
+import { useMemoryScope, useMemoryScopeName } from '../../memory-scope'
 
 /**
  * Mnemon 记忆管理（三层记忆）
  * - 热记忆：USER 用户画像 / MEMORY 项目记忆（每轮注入 prompt，容量 4KiB / 10KiB）
  * - 长期空间：Memory Spaces（PGlite 数据库 + 关系图，按需召回）
  * - 档案：Project Documents（完整 Markdown，active/archived 冷热分层）
+ *
+ * **跟着当前会话的作用域走**：插件会话里进来管的就是这份插件自己的记忆
+ * （`<memoryPath>/plugin-<id>/`），工作会话里就是当前工作区那套（renderer/memory-scope.ts）。
  */
 
 type MnemonSnapshot = Awaited<ReturnType<typeof harnessApi.harness.mnemonSnapshot>>
@@ -326,6 +330,10 @@ const MemorySettings: React.FC = () => {
   const [savingPath, setSavingPath] = useState(false)
   const [snapshot, setSnapshot] = useState<MnemonSnapshot | null>(null)
   const [loadingSnapshot, setLoadingSnapshot] = useState(false)
+  /** 当前会话的记忆作用域（插件会话 = 这份插件自己的记忆；空 = 当前工作区） */
+  const memoryScope = useMemoryScope()
+  /** 插件作用域时显示插件名，供页面标注「现在管的是谁的记忆」 */
+  const memoryScopeName = useMemoryScopeName()
 
   // 热记忆添加表单
   const [addTarget, setAddTarget] = useState<'user' | 'memory'>('memory')
@@ -363,7 +371,7 @@ const MemorySettings: React.FC = () => {
   const loadSnapshot = useCallback(async () => {
     setLoadingSnapshot(true)
     try {
-      const snap = await harnessApi.harness.mnemonSnapshot()
+      const snap = await harnessApi.harness.mnemonSnapshot(memoryScope)
       setSnapshot(snap)
     } catch (error) {
       viewMessage(
@@ -374,7 +382,7 @@ const MemorySettings: React.FC = () => {
     } finally {
       setLoadingSnapshot(false)
     }
-  }, [viewMessage, translate])
+  }, [viewMessage, translate, memoryScope])
 
   useEffect(() => {
     loadSettings().then()
@@ -386,7 +394,7 @@ const MemorySettings: React.FC = () => {
     }
   }, [settings?.harness?.memoryPath, loadSnapshot])
 
-  // 切换工作区后重载记忆快照（记忆按工作区目录隔离，旧工作区数据必须失效）
+  // 切换作用域（换会话 / 换工作区）后重载快照：那是另一套记忆，旧数据必须失效
   useEffect(() => {
     const handleWorkspaceChanged = (): void => {
       if (settings?.harness?.memoryPath) {
@@ -452,12 +460,15 @@ const MemorySettings: React.FC = () => {
     }
     setAdding(true)
     try {
-      const result = await harnessApi.harness.mnemonRuntimeMutate({
-        action: 'add',
-        target: addTarget,
-        content,
-        importance: addImportance
-      })
+      const result = await harnessApi.harness.mnemonRuntimeMutate(
+        {
+          action: 'add',
+          target: addTarget,
+          content,
+          importance: addImportance
+        },
+        memoryScope
+      )
       viewMessage(msgKey, result.success ? 'success' : 'warning', result.message, 3)
       if (result.success) {
         setAddContent('')
@@ -476,11 +487,14 @@ const MemorySettings: React.FC = () => {
     const msgKey = 'mnemon-runtime-remove'
     try {
       const oldText = entry.content.slice(0, 60)
-      const result = await harnessApi.harness.mnemonRuntimeMutate({
-        action: 'remove',
-        target: entry.target,
-        old_text: oldText
-      })
+      const result = await harnessApi.harness.mnemonRuntimeMutate(
+        {
+          action: 'remove',
+          target: entry.target,
+          old_text: oldText
+        },
+        memoryScope
+      )
       viewMessage(msgKey, result.success ? 'success' : 'warning', result.message, 3)
       loadSnapshot().then()
     } catch (error) {
@@ -496,9 +510,13 @@ const MemorySettings: React.FC = () => {
   const handleToggleBody = async (id: string, active: boolean): Promise<void> => {
     const msgKey = 'mnemon-body-toggle'
     try {
-      const result = await harnessApi.harness.mnemonBodyUpdate(id, {
-        active
-      })
+      const result = await harnessApi.harness.mnemonBodyUpdate(
+        id,
+        {
+          active
+        },
+        memoryScope
+      )
       viewMessage(msgKey, result.success ? 'success' : 'warning', result.message ?? '', 2)
       loadSnapshot().then()
     } catch (error) {
@@ -521,7 +539,8 @@ const MemorySettings: React.FC = () => {
     try {
       const result = await harnessApi.harness.mnemonBodyCreate(
         createName.trim(),
-        createDescription.trim()
+        createDescription.trim(),
+        memoryScope
       )
       const createdMessage = result.success
         ? translate('memorySettings.bodies.created', { name: result.body?.name })
@@ -543,7 +562,7 @@ const MemorySettings: React.FC = () => {
     setBrowsingLoading(true)
     setBodyInsights([])
     try {
-      const items = await harnessApi.harness.mnemonBodyList([body.id])
+      const items = await harnessApi.harness.mnemonBodyList([body.id], memoryScope)
       setBodyInsights(items)
     } catch {
       setBodyInsights([])
@@ -1005,13 +1024,24 @@ const MemorySettings: React.FC = () => {
           icon={<DatabaseOutlined size={14} />}
           bodyPadding={12}
           extra={
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={loadingSnapshot}
-              onClick={() => loadSnapshot()}
-            />
+            <>
+              {/* 管的是**谁的**记忆：插件会话进来时写清插件名（工作区会话沿用既有样子，不标注） */}
+              {memoryScopeName && (
+                <span
+                  data-memory-scope={memoryScopeName}
+                  style={{ fontSize: 12, color: t.textSecondary, whiteSpace: 'nowrap' }}
+                >
+                  {translate('memorySettings.manage.scopePlugin', { name: memoryScopeName })}
+                </span>
+              )}
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={loadingSnapshot}
+                onClick={() => loadSnapshot()}
+              />
+            </>
           }
         >
           {loadingSnapshot && !snapshot ? (

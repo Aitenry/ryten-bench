@@ -11,6 +11,7 @@ import { settingsStore } from '../../../../main/context'
 import { harnessQueue } from '../queue-store'
 import { clearTopicCache } from '../preload-cache'
 import type { HarnessSettings } from '../../../../main/types/settings'
+import { memoryScopeRoot, parseMemoryScope } from '../memory-scope'
 import {
   getAllWorkspaces,
   createWorkspace,
@@ -166,10 +167,18 @@ export function harnessTopicIpcHandlers(): MainIpcHandlers {
       // 清理该话题的摘要压缩 checkpoint（topic_compactions 表）
       await deleteCompactionByTopic(id)
       // 清理该话题的工具结果溢出文件（spill 目录）
+      // 落点按**这条会话的作用域**算：工作会话在 <memoryPath>/workspace-<id>/spill/，
+      // 插件会话在 <memoryPath>/plugin-<id>/spill/（与 Runtime 的 memoryPath 同一口径，
+      // 否则删了话题、溢出文件还留在那个作用域目录里）
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+      const topicRows = await getTopicById(id).catch(() => [])
+      const topicRow = topicRows[0]
       SpillStore.pruneTopic(
         harnessSettings?.workspacePath || undefined,
-        harnessSettings?.memoryPath || undefined,
+        memoryScopeRoot(
+          harnessSettings?.memoryPath || undefined,
+          parseMemoryScope(topicRow?.memory_scope, topicRow?.workspace_id ?? 0)
+        ),
         id
       )
       // 清理该话题的工具结果详情（聊天卡片点开的 ls/glob/grep/execute 结果）

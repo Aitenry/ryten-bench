@@ -1,4 +1,5 @@
 import * as path from 'path'
+import { pluginIdOfMemoryScope, pluginMemoryScope } from '../shared/memory-scope'
 
 /**
  * 记忆作用域：一套记忆（热记忆 USER.md / MEMORY.md + 档案 + 记忆空间）落在哪个目录。
@@ -52,18 +53,18 @@ export function memoryScopeRoot(
   return path.join(memoryPath, memoryScopeDirName(scope))
 }
 
-/** 存进 `harness_topic.memory_scope` 的字符串；工作区作用域存 null（老数据不用回填） */
+/**
+ * 存进 `harness_topic.memory_scope` 的字符串；工作区作用域存 null（老数据不用回填）。
+ * 字符串口径在 `shared/memory-scope.ts`（渲染层也读同一份）。
+ */
 export function serializeMemoryScope(scope: MemoryScope): string | null {
-  return scope.kind === 'plugin' ? `plugin:${scope.pluginId}` : null
+  return scope.kind === 'plugin' ? pluginMemoryScope(scope.pluginId) : null
 }
 
 /** 解析 `harness_topic.memory_scope`（空 / 非法 / 老数据 → 工作区作用域） */
 export function parseMemoryScope(raw: unknown, workspaceId: number): MemoryScope {
-  if (typeof raw === 'string' && raw.startsWith('plugin:')) {
-    const pluginId = raw.slice('plugin:'.length).trim()
-    if (pluginId) return pluginScope(pluginId)
-  }
-  return workspaceScope(workspaceId)
+  const pluginId = pluginIdOfMemoryScope(raw)
+  return pluginId ? pluginScope(pluginId) : workspaceScope(workspaceId)
 }
 
 /** 该作用域是否独立于工作区（给日志/界面用的判断） */

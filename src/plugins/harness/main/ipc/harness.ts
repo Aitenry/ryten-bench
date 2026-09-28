@@ -61,7 +61,7 @@ import {
   getDialoguesByTopicId,
   getTopicById
 } from '../db/mapper/harness'
-import { parseMemoryScope, type MemoryScope } from '../memory-scope'
+import { memoryScopeRoot, parseMemoryScope, type MemoryScope } from '../memory-scope'
 import { getActiveWorkspaceId } from '../../../../main/database/workspace-context'
 import { sumUsage, type ModelUsageRecord } from '../runtime/usage'
 import { startRendererMemorySampling, stopRendererMemorySampling } from '../renderer-memory'
@@ -1761,13 +1761,22 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
   // 按虚拟路径读取文本文件（工具卡片「打开文件」用）：
   // 与 workspace-read-file 的区别是这里按挂载解析（工作区 + 记忆目录），
   // 边界仍是「必须落在某个已挂载根目录内」。
-  handle('harness-vfs-read', (virtualPath: string) => {
+  //
+  // 第二个参数是**当前会话的记忆作用域**（`plugin:<id>`，渲染层从作用域 store 带过来）：
+  // 记忆挂载根是作用域目录（`<memoryPath>/plugin-<id>/`），跟 Runtime 的 /memories/ 同一口径——
+  // 不按作用域解析的话，插件会话里点开 `/memories/...` 会去找工作区那份（找不到）。
+  handle('harness-vfs-read', (virtualPath: string, scope?: string | null) => {
     try {
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
       return readVirtualTextFile(
         {
           workspacePath: harnessSettings?.workspacePath || undefined,
-          memoryPath: harnessSettings?.memoryPath || undefined
+          memoryPath:
+            memoryScopeRoot(
+              harnessSettings?.memoryPath || undefined,
+              parseMemoryScope(scope, harnessSettings?.activeWorkspaceId ?? 0)
+            ) ??
+            (harnessSettings?.memoryPath || undefined)
         },
         virtualPath
       )

@@ -14,6 +14,7 @@ import type { FileChangeView } from '../types/file-change'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../api'
+import { getMemoryScope } from '../memory-scope'
 
 interface WorkspacePanelProps {
   workspacePath: string
@@ -190,7 +191,9 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
           return
         }
         try {
-          const result = await harnessApi.harness.readVirtualFile(virtualPath)
+          // `/memories/...` 按当前会话的作用域解析（插件会话 → 这份插件自己的记忆目录），
+          // 与聊天里 Runtime 的挂载口径一致
+          const result = await harnessApi.harness.readVirtualFile(virtualPath, getMemoryScope())
           if ('error' in result) {
             viewMessage('workspace-open-file', 'error', result.error)
             return

@@ -28,6 +28,7 @@ import type {
 import type { Attachment, HarnessToolInfo, Message } from '../types'
 import type { LlmProviderConfig } from '../../../../main/database/mapper/provider'
 import { harnessApi } from '../api'
+import { getMemoryScope, setMemoryScope } from '../memory-scope'
 
 const TOPICS_PAGE_SIZE = 20
 const MESSAGES_PAGE_SIZE = 20 // 10对消息
@@ -1265,6 +1266,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     assistantIdByTopicRef.current.clear()
     // 普通「新建会话」不带插件记忆作用域（插件行 ＋ 会在之后把 id 放进来，见 harness-focus-input）
     pendingPluginIdRef.current = null
+    // 记忆作用域同步归零：空会话 = 工作区那套（插件行 ＋ 是同步紧跟着派发的，会立刻改写回来）
+    setMemoryScope(null)
   }, [saveSessionToCache])
 
   /**
@@ -1279,6 +1282,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     const handler = (event: Event): void => {
       const pluginId = (event as CustomEvent<{ pluginId?: string }>).detail?.pluginId
       pendingPluginIdRef.current = typeof pluginId === 'string' && pluginId ? pluginId : null
+      // 还没有话题的这段时间里，界面（侧栏记忆块 / 设置 → 记忆）也要显示这份插件的记忆
+      setMemoryScope(pendingPluginIdRef.current ? `plugin:${pendingPluginIdRef.current}` : null)
       setFocusInputToken((n) => n + 1)
     }
     window.addEventListener('harness-focus-input', handler)
@@ -1297,6 +1302,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
       // 选中的话题自带记忆作用域（存在话题行上，主进程按它走）→ 清掉「下一条新话题」的挂起值
       pendingPluginIdRef.current = null
+      // 记忆跟着当前会话走：这条会话是插件会话就显示这份插件的记忆，否则回工作区
+      // （重开应用后点开会话也认——作用域是话题行上存着的，不靠渲染层记得住）
+      setMemoryScope(topic.memory_scope ?? null)
 
       currentTopicIdRef.current = topic.id
       setCurrentTopicId(topic.id)
@@ -1372,7 +1380,14 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         const title = t('harness.handlers.branchTitle', {
           title: firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 30)
         })
-        const newTopicId = await harnessApi.harness.createTopic(workspaceId, title)
+        const newTopicId = await harnessApi.harness.createTopic(
+          workspaceId,
+          title,
+          undefined,
+          undefined,
+          // 分支出来的会话跟原会话用**同一套记忆**（否则从插件会话分出来的支会掉回工作记忆）
+          getMemoryScope()
+        )
         for (const item of slice) {
           await harnessApi.harness.addDialogue({
             topic_id: newTopicId,
@@ -1559,6 +1574,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             memoryScope
           )
           // 作用域已经落进话题行，之后由主进程按话题读；用完就清，避免影响下一条新会话
+          // （界面这一侧的作用域 store 保持不动：话题就是这条会话的作用域，等切会话时再改写）
           pendingPluginIdRef.current = null
           currentTopicIdRef.current = topicId
           setCurrentTopicId(topicId)
@@ -1820,6 +1836,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           currentTopicIdRef.current = null
           messagesBelongToTopicRef.current = null
           setCurrentTopicId(null)
+          // 会话空了 = 回到了空白态：记忆也回到工作区那套（下一条会话默认按工作区建）
+          pendingPluginIdRef.current = null
+          setMemoryScope(null)
           if (deletedTopicId != null) {
             sessionsRef.current.delete(deletedTopicId)
             isLoadingMapRef.current.delete(deletedTopicId)

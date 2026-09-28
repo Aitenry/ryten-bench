@@ -577,7 +577,7 @@ export const harnessEnUS: typeof harnessZhCN = {
     page: {
       title: 'Memory (Mnemon)',
       description:
-        'Three layers of memory: runtime memory (injected every turn), long-term memory spaces (recalled on demand), and project documents (full archives). Stored under the memory root directory and isolated per workspace, so each workspace keeps its own memory.'
+        'Three layers of memory: runtime memory (injected every turn), long-term memory spaces (recalled on demand), and project documents (full archives). Stored under the memory root directory and isolated per session scope: one set per workspace and one per plugin (plugin conversations keep their own memory), so they never mix.'
     },
     storage: {
       sectionTitle: 'Memory storage directory',
@@ -596,6 +596,8 @@ export const harnessEnUS: typeof harnessZhCN = {
     },
     manage: {
       sectionTitle: 'Memory management',
+      /** Shown when a plugin conversation is active; the workspace scope stays unlabelled */
+      scopePlugin: 'Plugin "{{name}}"',
       snapshotFailed: 'Failed to load memory snapshot: {{reason}}'
     },
     tabs: {
