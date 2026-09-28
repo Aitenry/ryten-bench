@@ -16,10 +16,26 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # 注意：**不要**在这里排除 `node_modules/esbuild/**`。
+  # asarUnpack 的语义是「先打进 asar，再复制一份到 app.asar.unpacked」——
+  # 用 files 排除掉它，就没有任何东西可解，两份都会消失
+  # （2026-09-29 试过，asar 里 0 条、unpacked 里也没有，构建直接坏掉）。
+  # asar 里存在一份是无害的，只要加载器优先用 app.asar.unpacked（见
+  # src/plugins/harness/main/workshop/wiring.ts 的 loaderBases）。
 asarUnpack:
   - resources/**
   # koffi 是原生 FFI 绑定（沙箱 runner 用它调 Win32 API）：.node 不能从 asar 里加载
   - '**/koffi/**'
+  # 插件工坊在**打包后的应用里**也要构建插件：workshop/host.ts 的 createNodeLoader 从
+  # app.asar.unpacked 解析 esbuild / tailwindcss / jszip。asar 里的文件既读不出来、
+  # 也不能被 spawn，而 esbuild 的 JS 主模块要 spawn 平台二进制
+  # （@esbuild/<platform>/esbuild.exe），所以整棵树都必须解包。
+  # 前置条件：esbuild 必须在 dependencies 里——只在 devDependencies（原先只有
+  # drizzle-kit / electron-vite / vite 传递依赖它）会被上面的 files 规则排除，
+  # 装出来的应用里根本没有它，表现就是工坊「构建 / 更新安装均失败，本地却正常」
+  # （2026-09-29 真机根因）。
+  - '**/esbuild/**'
+  - '**/@esbuild/**'
 extraResources:
   # drizzle 迁移文件（由 pnpm drizzle-kit generate 生成），启动时由 src/main/database/orm.ts 按序应用
   - from: drizzle

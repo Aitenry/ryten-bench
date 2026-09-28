@@ -19,6 +19,7 @@ import { settingsStore } from '../../../../main/context'
 import type { HarnessSettings } from '../../../../main/types/settings'
 import { WORKSHOP_EVENT_CHANNELS } from '../ipc/workshop'
 import { configureWorkshopHost, createNodeLoader } from './host'
+import { resolveLoaderBases } from './loader-bases'
 import { configurePluginsRoot } from './paths'
 import { probeRendererPlugin } from './probe'
 
@@ -40,16 +41,18 @@ import { probeRendererPlugin } from './probe'
  * | 渲染层探针 | `probe.probeRendererPlugin` | 在真界面里 import + install 一遍 |
  */
 
-/** 模块加载器的候选基准（顺序即优先级） */
+/**
+ * 模块加载器的候选基准（顺序即优先级；约束与踩坑记录见 `./loader-bases.ts`）。
+ *
+ * 一句话：**`app.asar.unpacked` 必须排在 `app.asar` 前面** —— asar 里的文件对 `require`
+ * 可见、对 `spawn` 不可见，顺序反了 `esbuild` 会"解析成功"再去 spawn 一个不存在的
+ * `app.asar\…\@esbuild\win32-x64\esbuild.exe`。
+ */
 function loaderBases(): string[] {
-  const bases = [app.getAppPath()]
-  // 打包后：asarUnpack 解出来的 node_modules 才是能被读/被 spawn 的那一份
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  if (resourcesPath) {
-    bases.push(path.join(resourcesPath, 'app.asar.unpacked'))
-    bases.push(path.join(resourcesPath, 'app'))
-  }
-  return bases
+  return resolveLoaderBases({
+    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    appPath: app.getAppPath()
+  })
 }
 
 /**
