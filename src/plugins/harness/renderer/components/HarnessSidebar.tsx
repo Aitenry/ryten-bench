@@ -34,7 +34,7 @@ import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../shared/types'
 import type { WorkshopDraftSummary } from '../../shared/workshop'
 import { harnessApi } from '../api'
-import { useMemoryScope, useMemoryScopeName } from '../memory-scope'
+import { useMemoryScope } from '../memory-scope'
 
 interface HarnessSidebarProps {
   /** 当前工作区的会话列表（实时 + 分页，由 useHarness 维护） */
@@ -464,10 +464,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 记忆跟着**当前会话**走（用户口径 2026-09-28「插件的记忆，并没有像工作里面的记忆一样
    * 显示在侧边栏」）：插件会话 → 这份插件自己的记忆；工作会话 / 空白会话 → 当前工作区。
    * 值由 useHarnessHandlers 在切会话时写（见 renderer/memory-scope.ts）。
+   *
+   * 标题**只写「记忆」**，不缀作用域名（用户口径 2026-09-28「不需要（记忆 · 个人记账台账）
+   * 这个内容」）：这一行本来就在会话侧，读哪一套由当前会话决定，不必再复述一遍。
+   * 设置 → 记忆页那边不一样——那一页脱离了会话上下文，仍然标出管的是哪份插件。
    */
   const memoryScope = useMemoryScope()
-  /** 插件作用域时显示插件名（工作区作用域 = null，界面按既有样子只写「记忆」） */
-  const memoryScopeName = useMemoryScopeName()
 
   const loadMnemonSnapshot = useCallback(async () => {
     setMemoryLoading(true)
@@ -1377,7 +1379,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       {/*
         Mnemon 记忆概览：两个模式都常驻（用户口径 2026-09-28「插件的记忆，并没有像工作里面的
         记忆一样显示在侧边栏」）——它显示的是**当前会话**那套记忆，插件会话就是这份插件自己的
-        （`<memoryPath>/plugin-<id>/`）。是插件作用域时在标题后面缀上插件名，免得看成工作记忆。
+        （`<memoryPath>/plugin-<id>/`）。标题只写「记忆」，不缀作用域名（同一天的「不需要
+        （记忆 · 个人记账台账）这个内容」）。
       */}
       <div
         data-harness-memory-block="1"
@@ -1391,18 +1394,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
-          <span className="flex items-center gap-2 text-sm font-medium min-w-0">
-            <RiBrain4Line size={16} className="shrink-0" />
-            <span className="shrink-0">{t('harness.sidebar.memory')}</span>
-            {memoryScopeName && (
-              <span
-                data-harness-memory-scope={memoryScopeName}
-                className="truncate"
-                style={{ fontSize: 12, fontWeight: 400, color: colorTextTertiary }}
-              >
-                · {memoryScopeName}
-              </span>
-            )}
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <RiBrain4Line size={16} />
+            {t('harness.sidebar.memory')}
           </span>
           <span className="flex items-center gap-2">
             {memoryExpanded ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
