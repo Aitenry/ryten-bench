@@ -988,10 +988,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 「＋（针对这个插件新建会话）」——与工作区行的两个行内动作一一对应
    * （用户口径 2026-09-27「插件没有像工作区那样的功能」）。
    *
-   * 这份插件开过会话之后，标题右边多一个折叠箭头：展开就是**它自己的会话**
+   * 这份插件开过会话之后，**行首那个 16px 槽位**就是折叠箭头，且**常驻**：展开就是**它自己的会话**
    * （会话挂在「插件工作区」下 = 插件源码目录，见 main/workshop/workspace.ts）。
    * 与工作区行的差别只在触发方式——那一行整行可点（点行 = 展开），
-   * 这一行整行是「打开工坊详情」，所以折叠要单独给一个箭头，不抢既有的点击语义。
+   * 这一行整行是「打开工坊详情」，所以折叠得是一个自己的按钮，不抢既有的点击语义。
+   *
+   * 用户口径 2026-09-28「折叠重复显示了，一开始显示折叠按钮，移动进入又是折叠按钮，
+   * 直接常驻在开头，和工作模式要一致」：折叠箭头原先夹在标题与状态文字之间——
+   * 静止时挨着「草稿/使用中」，悬停时那两个 22px 动作把状态文字顶掉，箭头于是**左移 24px**，
+   * 同一个控件在两个状态里出现在两个位置，看着就像冒出第二个折叠按钮（实测 x 156 → 132）。
+   * 工作区行（工作模式）的折叠指示本来就是**行首那个常驻图标**（文件夹开/合），这里对齐它：
+   * 箭头常驻行首槽位 ⇒ 标题右边只剩状态与悬停动作，两态都不再位移。
+   * 还没开过会话（没有可展开的东西）时，行首仍是插件图标。
    * 用户口径 2026-09-28「插件目录不进『工作』列表，只属于那份插件」。
    */
   const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
@@ -1020,16 +1028,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             if (!expanded) e.currentTarget.style.background = 'transparent'
           }}
         >
-          <span
-            className="flex items-center justify-center shrink-0"
-            style={{ width: 16, color: colorTextSecondary }}
-          >
-            {busy ? <ChaseDots size={14} color={colorTextTertiary} /> : <RiPuzzleLine size={15} />}
-          </span>
-          <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
-            {draft.title}
-          </span>
-          {pluginWsId != null && (
+          {/*
+            行首 16px 槽位（与工作区行的文件夹图标同一个槽、同一个 x ⇒ 标题都落在 30px）：
+            有会话可展开时是**常驻的折叠箭头**，箭头形状与深浅都照工作区行的文件夹
+            （合 = 三级灰、开 = 二级灰）；还没开过会话就仍是插件图标。
+          */}
+          {pluginWsId != null ? (
             <button
               onClick={(e) => {
                 e.stopPropagation()
@@ -1042,9 +1046,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               }
               className="flex items-center justify-center shrink-0 rounded"
               style={{
-                width: 20,
-                height: 20,
-                color: colorTextTertiary,
+                width: 16,
+                height: 16,
+                color: expanded ? colorTextSecondary : colorTextTertiary,
                 background: 'transparent'
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
@@ -1052,6 +1056,26 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             >
               {expanded ? <RiArrowDownSLine size={15} /> : <RiArrowRightSLine size={15} />}
             </button>
+          ) : (
+            <span
+              className="flex items-center justify-center shrink-0"
+              style={{ width: 16, color: colorTextSecondary }}
+            >
+              <RiPuzzleLine size={15} />
+            </span>
+          )}
+          {/* 标题字号/字重与工作区行一致（两行都是这棵树的顶层行，会话行才是常规字重） */}
+          <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13, fontWeight: 500 }}>
+            {draft.title}
+          </span>
+          {/*
+            状态槽：跑构建/验收/安装时是转圈（原先在行首，让位给常驻的折叠箭头），
+            其余时候是状态文字（悬停让位给「⋯ ＋」）。
+          */}
+          {busy && (
+            <span className="shrink-0 flex items-center justify-center" style={{ width: 20 }}>
+              <ChaseDots size={14} color={colorTextTertiary} />
+            </span>
           )}
           {!busy && (
             <span
