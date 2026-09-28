@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Modal, Button, Input, theme } from 'antd'
 import {
   RiErrorWarningLine,
@@ -10,6 +10,7 @@ import { useTranslation } from '@renderer/i18n'
 
 import type { PendingQuestionView } from '../../shared/types'
 import { harnessApi } from '../api'
+import { useTopicPending } from '../hooks/useTopicPending'
 
 /**
  * 模型请求失败专用弹窗（换模型继续）。
@@ -21,6 +22,8 @@ import { harnessApi } from '../api'
  * （不结束本轮、不重发问题、不重跑已执行工具）。
  *
  * 与通用 AskQuestionModal 分工：kind='model-recovery' 由本组件处理，AskQuestionModal 忽略。
+ * **按会话隔离**（与另外两个弹窗同款，见 hooks/useTopicPending）：只显示当前这条会话挂起的
+ * 那一条，切到别的会话就收起、点回来再拉出来（否则这条提问会永远挂着，用户看不到也答不了）。
  */
 interface ModelRecoveryModalProps {
   currentTopicId: number | null
@@ -61,10 +64,6 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
   } = theme.useToken()
   const { t } = useTranslation()
 
-  const currentTopicIdRef = useRef(currentTopicId)
-  currentTopicIdRef.current = currentTopicId
-
-  const [pending, setPending] = useState<PendingQuestionView | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [query, setQuery] = useState('')
@@ -74,26 +73,28 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
   const [queriedItems, setQueriedItems] = useState<PickerItem[]>([])
   const [queryFailed, setQueryFailed] = useState(false)
 
+  // 「换模型继续」的提问：只认当前这条会话（切会话时按话题重新拉，见 useTopicPending）
+  const { pending, clear: clearPending } = useTopicPending<PendingQuestionView>({
+    currentTopicId,
+    fetchPending: (topicId) => harnessApi.harness.getQuestion(topicId),
+    subscribe: (listener) => harnessApi.harness.onQuestionAsked(listener),
+    accept: (p) => p.questions.some((q) => q.kind === 'model-recovery')
+  })
+
   const close = useCallback((): void => {
-    setPending(null)
+    clearPending()
     setSelected(null)
     setSubmitting(false)
     setQuery('')
     setCollapsed(new Set())
     setQueriedItems([])
     setQueryFailed(false)
-  }, [])
+  }, [clearPending])
 
-  // 常驻监听：kind='model-recovery' 的提问 → 弹专用选择窗
+  // 换了一条提问（或收起）就清掉上一轮的临时选择态
   useEffect(() => {
-    const unsubscribe = harnessApi.harness.onQuestionAsked((p) => {
-      if (!p.questions.some((q) => q.kind === 'model-recovery')) return
-      if (p.topicId !== currentTopicIdRef.current) return
-      setPending(p)
-      setSelected(null)
-    })
-    return unsubscribe
-  }, [])
+    setSelected(null)
+  }, [pending?.requestId])
 
   // 弹窗打开（拿到提问）后查询已启用模型列表，构建目录树
   const question = pending?.questions.find((q) => q.kind === 'model-recovery')
@@ -125,33 +126,9 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
     }
   }, [question])
 
-  // 流结束/出错 → 收起（提问已随流取消或不再有意义）；只响应当前话题，
-  // 避免后台目标自动续跑轮的 done/error 误关本弹窗（主进程提问仍挂起）
-  useEffect(() => {
-    const closeForTopic = (payload?: { topicId?: number }): void => {
-      if (
-        payload &&
-        typeof payload.topicId === 'number' &&
-        payload.topicId !== currentTopicIdRef.current
-      ) {
-        return
-      }
-      close()
-    }
-    const unDone = harnessApi.harness.onStreamDone(closeForTopic)
-    const unErr = harnessApi.harness.onStreamError(closeForTopic)
-    return () => {
-      unDone()
-      unErr()
-    }
-  }, [close])
-
-  // 切换话题时若弹窗还开着，自动关闭
-  useEffect(() => {
-    if (pending && pending.topicId !== currentTopicId) {
-      close()
-    }
-  }, [currentTopicId, pending, close])
+  // 流结束/出错 → 按话题重新核对、切话题 → 换成本话题挂起的那一条：
+  // 都在 useTopicPending 里统一处理（此前这里各自写了一份，才会出现「别的会话的 done
+  // 把本弹窗误关」「切走再切回来弹窗就再也不出现了」这两种事故）
 
   // 目录树条目：优先查询结果；查询失败/为空时回退到提问载荷里的选项（按 label 提交）
   const treeItems = useMemo<PickerItem[]>(() => {

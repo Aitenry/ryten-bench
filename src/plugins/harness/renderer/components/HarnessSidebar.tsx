@@ -745,7 +745,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
   const handlePluginSession = useCallback(
     async (
-      draft: WorkshopDraftSummary,
+      draft: { id: string },
       options?: { topic?: HarnessTopicRow; focus?: boolean }
     ): Promise<void> => {
       // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
@@ -1457,9 +1457,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 切到「工作」那一侧的内容：上次那条工作会话；没有就回到用户工作区的空白会话 */
   const enterWorkModeContent = useCallback(async (): Promise<void> => {
     if (!inPluginContent) return
+    // 现取一份工作区列表（本地那份可能刚被刷新过）：切模式是靠它找「上次那个用户工作区」的
+    const { list } = await loadWorkspaces()
+    const userList = list.filter((ws) => !pluginWorkspaceIds.has(ws.id))
     const remembered = workContentRef.current
     if (remembered?.topicId != null) {
-      const ws = workspaces.find((w) => w.id === remembered.workspaceId)
+      const ws = userList.find((w) => w.id === remembered.workspaceId)
       const topic = ws ? await fetchTopicRow(remembered.topicId) : null
       if (ws && topic) {
         if (activeWorkspaceId !== ws.id) await switchWorkspace(ws)
@@ -1471,7 +1474,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       workContentRef.current = { workspaceId: remembered.workspaceId, topicId: null }
     }
     const target =
-      workspaces.find((w) => w.id === lastWorkWorkspaceIdRef.current) ?? userWorkspaces[0] ?? null
+      userList.find((w) => w.id === lastWorkWorkspaceIdRef.current) ?? userList[0] ?? null
     if (!target) {
       // 一个用户工作区都没有（只剩插件工作区）：回到「尚未配置工作区」的空白态
       try {
@@ -1497,8 +1500,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     inPluginContent,
     activeWorkspaceId,
     pluginWorkspaceIds,
-    workspaces,
-    userWorkspaces,
+    loadWorkspaces,
     fetchTopicRow,
     switchWorkspace,
     onSelectTopic,
@@ -1508,35 +1510,31 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /**
    * 切到「插件」那一侧的内容：上次那条插件会话；这份插件还没开过会话时走「＋」那套
    * （取插件工作区 + 空白会话 + 记忆作用域）——那就是插件模式里的默认选中项。
+   *
+   * 刻意**只依赖记住的那条记录**（插件 id + 话题 id），不去查本地缓存里的草稿/工作区列表：
+   * 那两份缓存可能刚被刷新过（工作区行是刚建的、草稿在重载），拿它们当门槛会让「切回来」
+   * 偶发退化成空白会话。工作区由主进程按插件 id 现取（`handlePluginSession` 里的
+   * `ensureWorkspace`），话题按 id 现读——主进程才是真源，这样切回来稳定命中同一条会话。
    */
   const enterPluginModeContent = useCallback(async (): Promise<void> => {
     if (inPluginContent) return
     const remembered = pluginContentRef.current
     if (remembered) {
-      const ws = workspaces.find((w) => w.id === remembered.workspaceId)
-      const topic = remembered.topicId != null ? await fetchTopicRow(remembered.topicId) : null
-      if (ws && (topic || remembered.topicId == null)) {
-        const draft = drafts.find((item) => item.id === remembered.pluginId)
-        if (draft) {
-          await handlePluginSession(draft, { focus: false, topic: topic ?? undefined })
-          return
-        }
+      const topic = remembered.topicId != null ? await fetchTopicRow(remembered.topicId) : undefined
+      if (topic || remembered.topicId == null) {
+        await handlePluginSession(
+          { id: remembered.pluginId },
+          { focus: false, topic: topic ?? undefined }
+        )
+        return
       }
+      // 那条会话已经被删了：退回「这份插件的空白会话」
       pluginContentRef.current = null
     }
     const fallback = visibleDrafts[0] ?? drafts[0] ?? null
     if (!fallback) return
     await handlePluginSession(fallback, { focus: false })
-  }, [
-    inPluginContent,
-    activeWorkspaceId,
-    pluginWorkspaceIds,
-    workspaces,
-    drafts,
-    visibleDrafts,
-    fetchTopicRow,
-    handlePluginSession
-  ])
+  }, [inPluginContent, drafts, visibleDrafts, fetchTopicRow, handlePluginSession])
 
   /** 模式开关：切模式 = 同时把内容切到那一侧（用户口径 2026-09-28） */
   const switchMode = useCallback(

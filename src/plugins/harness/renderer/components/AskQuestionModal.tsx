@@ -1,19 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Modal, Radio, Checkbox, Input, theme } from 'antd'
 import { RiQuestionAnswerLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 
 import type { PendingQuestionView } from '../../shared/types'
 import { harnessApi } from '../api'
+import { useTopicPending } from '../hooks/useTopicPending'
 
 /**
  * 提问弹窗（ask_user_question）— 模型执行 ask_user_question 工具时挂起等待，
  * 主进程广播 harness-question-asked；本组件弹出表单收集答案并回写，流在原轮内继续。
  *
- * - 只响应当前话题的提问（topicId 匹配）；
+ * **按会话隔离**（用户口径 2026-09-28「一直卡住，会被其他的会话占用……点击不同会话才显示
+ * 弹出窗口」）：只显示**当前这条会话**挂起的提问，切到别的会话就收起、点回来再拉出来
+ * （取数逻辑见 hooks/useTopicPending）。
+ *
  * - 单选（Radio）/ 多选（Checkbox）/ 自由文本（Input → custom）；
  * - 无跳过按钮（DSH 语义：无超时、必须回答）；用户点「停止生成」中止整条流，
- *   挂起提问随之取消（主进程 questionService.abortAll），本组件在 done/error 时收起；
+ *   挂起提问随之取消（主进程 questionService.abortTopic），本组件在 done/error 时收起；
  * - 提交 → harnessApi.harness.answerQuestion(requestId, answers) → 主进程回写 → 模型继续。
  */
 
@@ -26,46 +30,21 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
   const { token } = theme.useToken()
   const { t } = useTranslation()
 
-  const [pending, setPending] = useState<PendingQuestionView | null>(null)
   const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({})
   const [submitting, setSubmitting] = useState(false)
 
-  const currentTopicIdRef = useRef(currentTopicId)
-  currentTopicIdRef.current = currentTopicId
+  const { pending, clear: clearPending } = useTopicPending<PendingQuestionView>({
+    currentTopicId,
+    fetchPending: (topicId) => harnessApi.harness.getQuestion(topicId),
+    subscribe: (listener) => harnessApi.harness.onQuestionAsked(listener),
+    // 「换模型继续」由专用 ModelRecoveryModal 处理，通用提问弹窗忽略，避免重复弹窗
+    accept: (p) => !p.questions.some((q) => q.kind === 'model-recovery')
+  })
 
+  // 换了一条提问就清空草稿（同一张表单不该带着上一条的答案）
   useEffect(() => {
-    const unsubscribe = harnessApi.harness.onQuestionAsked((p) => {
-      // 「换模型继续」由专用 ModelRecoveryModal 处理，通用提问弹窗忽略，避免重复弹窗
-      if (p.questions.some((q) => q.kind === 'model-recovery')) return
-      if (p.topicId === currentTopicIdRef.current) {
-        setPending(p)
-        setDrafts({})
-      }
-    })
-    return unsubscribe
-  }, [])
-
-  // 流结束/出错 → 收起弹窗（提问已取消或已无意义）
-  useEffect(() => {
-    const close = (payload?: { topicId?: number }): void => {
-      // 只响应当前话题的流结束（修复：此前任意话题 done/error 都会误关当前话题挂起的
-      // 提问——如后台目标自动续跑流结束,弹窗被误关而主进程提问仍挂起）
-      if (
-        payload &&
-        typeof payload.topicId === 'number' &&
-        payload.topicId !== currentTopicIdRef.current
-      ) {
-        return
-      }
-      setPending(null)
-    }
-    const unDone = harnessApi.harness.onStreamDone(close)
-    const unErr = harnessApi.harness.onStreamError(close)
-    return () => {
-      unDone()
-      unErr()
-    }
-  }, [])
+    setDrafts({})
+  }, [pending?.requestId])
 
   const updateDraft = (id: string, patch: Partial<AnswerDraft>): void => {
     setDrafts((prev) => ({
@@ -94,7 +73,7 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
         custom: drafts[q.id]?.custom?.trim() || undefined
       }))
       await harnessApi.harness.answerQuestion(pending.requestId, answers)
-      setPending(null)
+      clearPending()
     } finally {
       setSubmitting(false)
     }

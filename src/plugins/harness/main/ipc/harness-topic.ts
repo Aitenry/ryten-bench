@@ -5,6 +5,8 @@ import { goalStore } from '../runtime/goal'
 import { jobsRegistry } from '../runtime/jobs'
 import { subagentSessions } from '../runtime/subagent-sessions'
 import { SpillStore } from '../runtime/spill'
+import { questionService } from '../runtime/ask'
+import { permissionGate } from '../runtime/permission-gate'
 import { getToolOutputStore } from '../runtime/tool-output-store'
 import { deleteCompactionByTopic } from '../db/mapper/compaction'
 import { settingsStore } from '../../../../main/context'
@@ -185,6 +187,11 @@ export function harnessTopicIpcHandlers(): MainIpcHandlers {
       getToolOutputStore()?.removeTopic(id)
       // 清理该话题的插话队列（含待注入缓冲：那条插话已随话题一起消失）
       harnessQueue.clear(id)
+      // 该话题挂起的提问 / 审批：按「已取消 / 拒绝」结算。
+      // 不结算的话，删掉这条会话后那次调用永远等不到回答（工具卡片一直「执行中…」、
+      // 主进程还挂着一个 promise）——提问/审批按会话隔离，这一条会话没了就该一起收尾
+      questionService.abortTopic(id)
+      permissionGate.abortTopic(id)
       return await deleteTopic(id)
     } catch (error) {
       logger.error('Error in harness-topic-delete:', error)

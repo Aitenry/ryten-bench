@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState } from 'react'
 import { Modal, theme } from 'antd'
 import { RiShieldKeyholeLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 
 import type { ApprovalDecision, ApprovalRequestView, PermissionMode } from '../../shared/types'
 import { harnessApi } from '../api'
+import { useTopicPending } from '../hooks/useTopicPending'
 
 /**
  * 沙箱审批弹窗 —— 主进程拦下一次「越界 / 危险 / 无法判定」的调用后挂起等待用户决定，
@@ -14,9 +15,9 @@ import { harnessApi } from '../api'
  * 与提问弹窗（AskQuestionModal）的关系：形状同源（挂起 → 弹窗 → 回写 → 原轮继续），
  * 但语义不同，因此独立一个组件：
  * - **只有临时决定**（DSH 同款）：允许一次 / 拒绝，没有「总是允许」——持久策略归档位选择器；
- * - 只响应当前话题的审批；但**当前还没有话题时（新会话第一轮）也照常显示**，
- *   否则第一次危险调用会因为前端还不知道 topicId 而无人应答（闸门只能一直挂着）；
- * - 无超时（与提问一致）：点「停止生成」撤回本轮，挂起审批随之按拒绝结算。
+ * - **按会话隔离**：只显示当前这条会话挂起的审批，切到别的会话就收起、点回来再拉出来
+ *   （取数逻辑见 hooks/useTopicPending；用户口径 2026-09-28「会被其他的会话占用后，授权也一样」）；
+ * - 无超时（与提问一致）：点「停止生成」撤回**这一条会话**的挂起审批并按拒绝结算。
  */
 
 /** 档位显示名的词条键（i18n 键是字面量，动态拼键过不了 t() 的类型校验） */
@@ -42,68 +43,28 @@ const PermissionApprovalModal: React.FC<{ currentTopicId: number | null }> = ({
   const { token } = theme.useToken()
   const { t } = useTranslation()
 
-  const [pending, setPending] = useState<ApprovalRequestView | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  const currentTopicIdRef = useRef(currentTopicId)
-  currentTopicIdRef.current = currentTopicId
-
-  useEffect(() => {
-    const unsubscribe = harnessApi.harness.onApprovalAsked((p) => {
-      // 新会话第一轮时前端还没拿到 topicId（null）——这时也必须弹，否则无人应答
-      if (currentTopicIdRef.current == null || p.topicId === currentTopicIdRef.current) {
-        setPending(p)
-      }
-    })
-    return unsubscribe
-  }, [])
-
-  // 切话题：把该话题当前挂起的审批拉回来（弹窗可能在别的界面挂起，或页面刚重载）
-  useEffect(() => {
-    if (currentTopicId == null) {
-      setPending(null)
-      return
-    }
-    let cancelled = false
-    void harnessApi.harness
-      .getApproval(currentTopicId)
-      .then((view) => {
-        if (!cancelled) setPending(view ?? null)
-      })
-      .catch(() => {
-        // 通道不可用（插件停用）时保持现状即可
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [currentTopicId])
-
-  // 流结束 / 出错 → 收起弹窗（审批已随本轮撤回，弹窗再留着就没有意义了）
-  useEffect(() => {
-    const close = (payload?: { topicId?: number }): void => {
-      if (
-        payload &&
-        typeof payload.topicId === 'number' &&
-        payload.topicId !== currentTopicIdRef.current
-      ) {
-        return
-      }
-      setPending(null)
-    }
-    const unDone = harnessApi.harness.onStreamDone(close)
-    const unErr = harnessApi.harness.onStreamError(close)
-    return () => {
-      unDone()
-      unErr()
-    }
-  }, [])
+  /**
+   * 只显示**当前这条会话**挂起的审批（取数逻辑见 hooks/useTopicPending）。
+   *
+   * 用户口径 2026-09-28「一直卡住，会被其他的会话占用后，授权也一样，应该是按会话进行隔离，
+   * 点击不同会话才显示弹出窗口」：此前「当前话题为 null 时也弹」那条口子会把**别的会话**的
+   * 审批弹到空白会话上，用户一点就把别人的调用允许了；切话题时虽然会重拉，但重拉失败/未重拉
+   * 的窗口期里弹窗还留着上一条会话的内容。
+   */
+  const { pending, clear: clearPending } = useTopicPending<ApprovalRequestView>({
+    currentTopicId,
+    fetchPending: (topicId) => harnessApi.harness.getApproval(topicId),
+    subscribe: (listener) => harnessApi.harness.onApprovalAsked(listener)
+  })
 
   const decide = async (decision: ApprovalDecision): Promise<void> => {
     if (!pending || submitting) return
     setSubmitting(true)
     try {
       await harnessApi.harness.decideApproval(pending.requestId, decision)
-      setPending(null)
+      clearPending()
     } finally {
       setSubmitting(false)
     }

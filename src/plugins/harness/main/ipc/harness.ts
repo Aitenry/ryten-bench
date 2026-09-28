@@ -1683,9 +1683,17 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
       harnessQueue.dropInjections(topicId)
       broadcastQueue(topicId)
     }
-    questionService.abortAll()
-    // 沙箱审批同样撤回：用户点了停止，就不该再有「等待审批」的调用挂在那里
-    permissionGate.abortAll()
+    // 挂起的提问 / 审批：**只撤回这条会话自己的**。
+    // 此前无差别 abortAll()：在 B 会话点「停止生成」会把 A 会话挂着的提问/审批一起按拒绝结算
+    // （用户口径 2026-09-28「会被其他的会话占用……应该是按会话进行隔离」）。
+    // 认不出话题（理论上不该发生）时才退回全撤，宁可多撤也别让调用永远挂着。
+    if (topicId != null) {
+      questionService.abortTopic(topicId)
+      permissionGate.abortTopic(topicId)
+    } else {
+      questionService.abortAll()
+      permissionGate.abortAll()
+    }
   })
 
   // 对话计划清单（write_todos）变更 → 广播到渲染进程（输入框上方的进行中任务卡片）
