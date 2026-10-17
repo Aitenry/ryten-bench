@@ -48,6 +48,12 @@ export interface PermissionStateView {
   defaultMode: PermissionMode
 }
 
+/**
+ * 「对话」模式动作的返回形状：与工坊同一套约定（失败不抛错，渲染层把 `error` 原文显示出来）。
+ * 直接复用 `WorkshopActionResult`，免得同一件事有两个类型。
+ */
+export type ChatActionResult<T = unknown> = WorkshopActionResult<T>
+
 /** 沙箱后端状态（设置页展示「有没有真正的内核级隔离」） */
 export interface SandboxStatusView {
   platform: string
@@ -373,6 +379,26 @@ export const harnessApi = {
       invoke('plugin:harness:workspace-update', id, updates) as Promise<boolean>,
     deleteWorkspace: (id: number) =>
       invoke('plugin:harness:workspace-delete', id) as Promise<boolean>,
+
+    /**
+     * 「对话」模式：它没有工作区概念，但模型需要一个可写的根目录（见 main/chat/workspace.ts）。
+     * `ensureWorkspace` = 进入这个模式（或在该模式里新建会话）；`activateTopic` = 打开某条会话
+     * （活动目录切到 `chat/<话题 id>/`）；`removeTopicDir` = 删话题后清理那条会话的目录。
+     */
+    ensureChatWorkspace: () =>
+      invoke('plugin:harness:chat-ensure-workspace') as Promise<
+        ChatActionResult<{ workspaceId: number; dir: string }>
+      >,
+    activateChatTopic: (topicId: number) =>
+      invoke('plugin:harness:chat-activate-topic', topicId) as Promise<
+        ChatActionResult<{ workspaceId: number; dir: string }>
+      >,
+    chatWorkspaces: () =>
+      invoke('plugin:harness:chat-workspaces') as Promise<
+        ChatActionResult<{ ids: number[]; rootWorkspaceId: number | null }>
+      >,
+    removeChatTopicDir: (topicId: number) =>
+      invoke('plugin:harness:chat-remove-topic-dir', topicId) as Promise<ChatActionResult<boolean>>,
 
     // 话题管理
     getAllTopics: (workspaceId: number) =>

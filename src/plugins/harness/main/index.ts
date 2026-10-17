@@ -20,6 +20,7 @@ import { closeAllMnemon } from './mnemon-singleton'
 import { syncWorkspaceWatcher, stopWorkspaceWatcher } from './workspace'
 import { HARNESS_EVENT_CHANNELS, installHarnessIpc } from './ipc/harness'
 import { harnessTopicIpcHandlers } from './ipc/harness-topic'
+import { chatIpcHandlers } from './ipc/chat'
 import { mnemonIpcHandlers } from './ipc/mnemon'
 import { workspaceIpcHandlers } from './ipc/workspace'
 import { agentIpcHandlers } from './ipc/agent'
@@ -53,8 +54,8 @@ const HARNESS_DOC_CHANGED_CHANNEL = 'plugin:harness:harness-doc-changed'
  * harness 插件主进程入口（契约见 src/plugins/README.md）。
  *
  * 装的是「AI 助手」这一整块内容：
- * - 通道表：6 个域一个文件（harness 主体 / 话题对话 / Mnemon 记忆 / 工作区文件与改动审查 /
- *   智能体配置 / **插件工坊**），全部经 `ctx.registerIpc`；
+ * - 通道表：7 个域一个文件（harness 主体 / 话题对话 / **对话模式的目录与会话** / Mnemon 记忆 /
+ *   工作区文件与改动审查 / 智能体配置 / **插件工坊**），全部经 `ctx.registerIpc`；
  * - 事件通道：主进程 → 渲染层的推送（流式 chunk、队列、目标、后台任务、子代理、
  *   提问、计划清单、工作区磁盘变化、改动记录、文档改写、工坊状态变化与装载探针）
  *   逐个 `ctx.registerEvent` 声明，否则 preload 白名单会拒绝渲染层订阅（notes 那轮踩过）；
@@ -72,9 +73,10 @@ const HARNESS_DOC_CHANGED_CHANNEL = 'plugin:harness:harness-doc-changed'
  *   workspace 表下），随本轮搬进 `ipc/agent.ts`，provider.ts 只留模型 Provider。
  */
 export function install(ctx: MainPluginContext): void {
-  // ── 通道表（6 个域）─────────────────────────────────────────────────────
+  // ── 通道表（7 个域）─────────────────────────────────────────────────────
   installHarnessIpc(ctx)
   ctx.registerIpc(harnessTopicIpcHandlers())
+  ctx.registerIpc(chatIpcHandlers())
   ctx.registerIpc(mnemonIpcHandlers())
   ctx.registerIpc(workspaceIpcHandlers())
   ctx.registerIpc(agentIpcHandlers())

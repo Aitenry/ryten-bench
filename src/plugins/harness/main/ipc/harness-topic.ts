@@ -13,7 +13,10 @@ import { settingsStore } from '../../../../main/context'
 import { harnessQueue } from '../queue-store'
 import { clearTopicCache } from '../preload-cache'
 import type { HarnessSettings } from '../../../../main/types/settings'
+import { isChatScope } from '../../shared/memory-scope'
 import { memoryScopeRoot, parseMemoryScope } from '../memory-scope'
+import { resolveTopicMemoryScope } from '../topic-scope'
+import { activateChatTopic } from '../chat/activation'
 import {
   getAllWorkspaces,
   createWorkspace,
@@ -126,12 +129,28 @@ export function harnessTopicIpcHandlers(): MainIpcHandlers {
       title: string,
       model?: string,
       selectedTools?: string,
-      /** 记忆作用域（`plugin:<插件 id>`；空 = 工作区记忆，见 main/memory-scope.ts） */
+      /** 记忆作用域（`plugin:<插件 id>` / `chat`；空 = 按工作区种类兜底，见 resolveTopicMemoryScope） */
       memoryScope?: string | null
     ) => {
       try {
         clearTopicCache()
-        return await createTopic(workspaceId, title, model, selectedTools, memoryScope)
+        // 作用域的单一真源：显式值优先，没给就按工作区种类兜底（对话 / 插件工作区不会因为
+        // 渲染层那个挂起值为空就悄悄掉回工作区记忆）。见 main/topic-scope.ts。
+        const scope = await resolveTopicMemoryScope(workspaceId, memoryScope)
+        const topicId = await createTopic(workspaceId, title, model, selectedTools, scope)
+        // 「对话」模式的每条会话都有自己的工作目录：话题一建好就把活动目录切过去。
+        // **在这里做**（而不是只靠渲染层）：新建会话的第一条消息、分支会话、以及任何别的
+        // 建话题路径都走这条通道，模型的文件工具才不会在「根目录」里乱放文件、之后换会话
+        // 又找不到（2026-10-11 实测：第一轮写的文件落在 chat/，切回来变成 chat/<id>/ 就空了）。
+        // 切换失败不能影响建话题本身：只记日志，下一轮/点开会话时还会再切一次。
+        if (isChatScope(scope)) {
+          try {
+            await activateChatTopic(topicId)
+          } catch (err) {
+            logger.warn('[Chat] 新话题的会话目录切换失败（不影响建话题）:', err)
+          }
+        }
+        return topicId
       } catch (error) {
         logger.error('Error in harness-topic-create:', error)
         throw error

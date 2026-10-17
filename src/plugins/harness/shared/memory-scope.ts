@@ -1,18 +1,24 @@
 /**
- * 记忆作用域的**字符串口径**（跨进程 DTO）：`plugin:<插件 id>` = 这份插件自己的记忆，
- * 空 = 跟当前工作区走。
+ * 记忆作用域的**字符串口径**（跨进程 DTO）：
+ * - `plugin:<插件 id>` = 这份插件自己的记忆；
+ * - `chat` = **「对话」模式**自己的记忆（该模式没有工作区，记忆也不该挂到某个工作区上）；
+ * - 空 = 跟当前工作区走。
  *
  * 为什么单独一个文件：这个字符串要同时被三处读懂——
  *  - 主进程落库（`harness_topic.memory_scope`，见 `main/db/mapper/harness.ts`）；
- *  - 主进程取记忆组件（`main/ipc/mnemon.ts` 把渲染层传回来的作用域翻成插件 id）；
+ *  - 主进程取记忆组件（`main/ipc/mnemon.ts` 把渲染层传回来的作用域翻成目录）；
  *  - 渲染层（侧栏记忆块与设置 → 记忆页按它决定「读谁的记忆」，见 `renderer/memory-scope.ts`）。
  *
- * 目录名（`plugin-<id>` / `workspace-<id>`）与路径拼接只在主进程做（`main/memory-scope.ts`），
- * 这个文件里**没有任何 path 逻辑**：渲染层拿到的东西永远只是一段可校验的字符串。
+ * 目录名（`plugin-<id>` / `chat` / `workspace-<id>`）与路径拼接只在主进程做
+ * （`main/memory-scope.ts`），这个文件里**没有任何 path 逻辑**：渲染层拿到的东西永远只是
+ * 一段可校验的字符串。
  */
 
 /** 插件作用域前缀（改这里就等于改全链路口径） */
 export const PLUGIN_SCOPE_PREFIX = 'plugin:'
+
+/** 「对话」模式的记忆作用域（该模式没有工作区，一份记忆给整个模式共用） */
+export const CHAT_SCOPE = 'chat'
 
 /**
  * 插件 id → 作用域字符串；空 id 返回 null（= 工作区作用域）。
@@ -26,9 +32,27 @@ export function pluginMemoryScope(pluginId: unknown): string | null {
   return id ? `${PLUGIN_SCOPE_PREFIX}${id}` : null
 }
 
-/** 作用域字符串 → 插件 id；工作区作用域 / 空 / 非法 / 老数据一律 null */
+/** 作用域字符串 → 插件 id；工作区作用域 / 对话作用域 / 空 / 非法 / 老数据一律 null */
 export function pluginIdOfMemoryScope(raw: unknown): string | null {
   if (typeof raw !== 'string' || !raw.startsWith(PLUGIN_SCOPE_PREFIX)) return null
   const pluginId = raw.slice(PLUGIN_SCOPE_PREFIX.length).trim()
   return pluginId || null
+}
+
+/** 该作用域字符串是不是「对话」模式的（渲染层与主进程都按这个判，别各自写一遍字符串比较） */
+export function isChatScope(raw: unknown): boolean {
+  return raw === CHAT_SCOPE
+}
+
+/**
+ * 归一化一个**渲染层传上来的**作用域字符串：`plugin:<id>` / `chat` 原样通过，其余一律 null
+ * （= 跟当前工作区走）。
+ *
+ * 渲染层的记忆作用域是一个模块级单例（见 renderer/memory-scope.ts），切会话/切模式时会被
+ * 各种入口写入；这是它唯一的把关口——非法值绝不允许流到主进程的目录拼接那一步。
+ */
+export function normalizeMemoryScope(raw: unknown): string | null {
+  if (isChatScope(raw)) return CHAT_SCOPE
+  const pluginId = pluginIdOfMemoryScope(raw)
+  return pluginId ? `${PLUGIN_SCOPE_PREFIX}${pluginId}` : null
 }

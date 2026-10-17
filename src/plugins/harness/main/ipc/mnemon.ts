@@ -3,7 +3,6 @@ import type { MainIpcHandlers } from '../../../../main/plugins/context'
 import { mainMessages } from '../../../../main/i18n'
 import { getActiveWorkspaceId } from '../../../../main/database/workspace-context'
 import { HarnessSettings } from '../../../../main/types/settings'
-import { pluginIdOfMemoryScope } from '../../shared/memory-scope'
 import type { MnemonComponent } from '../runtime/mnemon/index'
 
 // 当前记忆目录（从设置读取）
@@ -15,16 +14,16 @@ function currentMemoryPath(): string | undefined {
 /**
  * 当前会话的 Mnemon 组件。
  *
- * @param rawScope 渲染层带回来的作用域（`plugin:<插件 id>`；空/非法 = 当前工作区）。
+ * @param rawScope 渲染层带回来的作用域（`plugin:<插件 id>` / `chat`；空/非法 = 当前工作区）。
  *   **跟着当前会话走**：插件会话读这份插件自己的记忆（`<memoryPath>/plugin-<id>/mnemon`），
- *   工作会话读 `<memoryPath>/workspace-<id>/mnemon`（用户口径 2026-09-28「插件的记忆，
- *   并没有像工作里面的记忆一样显示在侧边栏」）。作用域只是字符串，路径消毒在主进程
- *   `memoryScopeDirName` 里做，渲染层改不出 memoryPath。
+ *   「对话」模式的会话读 `<memoryPath>/chat/mnemon`（该模式没有工作区，记忆也不该挂到
+ *   某个工作区上），工作会话读 `<memoryPath>/workspace-<id>/mnemon`（用户口径 2026-09-28
+ *   「插件的记忆，并没有像工作里面的记忆一样显示在侧边栏」）。作用域只是字符串，
+ *   路径消毒在主进程 `memoryScopeDirName` 里做，渲染层改不出 memoryPath。
  */
 async function currentMnemonComponent(rawScope?: unknown): Promise<MnemonComponent | undefined> {
   const { getMnemonComponent } = await import('../mnemon-singleton')
-  const pluginId = pluginIdOfMemoryScope(rawScope)
-  return getMnemonComponent(currentMemoryPath(), getActiveWorkspaceId(), pluginId ?? undefined)
+  return getMnemonComponent(currentMemoryPath(), getActiveWorkspaceId(), rawScope as string | null)
 }
 
 /**

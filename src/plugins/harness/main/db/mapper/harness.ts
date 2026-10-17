@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, ne, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import logger from 'electron-log'
 import { withOrm } from '../../../../../main/database/orm'
@@ -10,6 +10,7 @@ import {
   topic_compactions,
   workspace
 } from '../../../../../main/database/schema'
+import type { WorkspaceKind } from '../../../../../main/database/schema/workspace'
 
 // --- 类型定义 ---
 
@@ -41,13 +42,69 @@ async function getAllWorkspaces(): Promise<WorkspaceRow[]> {
   })
 }
 
-async function createWorkspace(name: string, path: string): Promise<number> {
+async function createWorkspace(
+  name: string,
+  path: string,
+  /** 工作区种类：'user'（默认，工作模式里用户自己选的目录）/ 'plugin' / 'chat' */
+  kind: WorkspaceKind = 'user'
+): Promise<number> {
   return withOrm('createWorkspace', async (db) => {
-    const rows = await db.insert(workspace).values({ name, path }).returning({ id: workspace.id })
+    const rows = await db
+      .insert(workspace)
+      .values({ name, path, kind })
+      .returning({ id: workspace.id })
     const newId = rows[0].id
-    logger.info(`Created workspace ID=${newId}, name="${name}", path="${path}"`)
+    logger.info(`Created workspace ID=${newId}, name="${name}", path="${path}", kind=${kind}`)
     // 文档/知识库/待办为全局数据（不属于任一工作区），无需承接存量
     return newId
+  })
+}
+
+/**
+ * 改工作区种类（只给「认领已有行」用：历史上那批插件工作区是 0010 之前建的，
+ * 它们的 kind 是默认的 'user'，取插件工作区时顺手就地分类；启动时的 migrateWorkspaceData
+ * 也会按路径把它们一次性归位）。路径与名字都不动，因此不刷 updated_at。
+ */
+async function setWorkspaceKind(id: number, kind: WorkspaceKind): Promise<boolean> {
+  return withOrm('setWorkspaceKind', async (db) => {
+    const updated = await db
+      .update(workspace)
+      .set({ kind })
+      // ⚠️ `ne(kind, 'plugin')` 对 NULL 行是 NULL（不是 true）：0010 之前若有人手写库或
+      // 迁移异常留下 NULL，认领会静默不生效。显式把 NULL 也算成「需要分类」。
+      .where(and(eq(workspace.id, id), or(isNull(workspace.kind), ne(workspace.kind, kind))))
+      .returning({ id: workspace.id })
+    if (updated.length > 0) {
+      logger.info(`Workspace ID=${id} classified as kind=${kind}`)
+    }
+    return updated.length > 0
+  })
+}
+
+/** 按 id 取一行工作区（找不到返回 null）：建话题时按工作区种类兜底记忆作用域用它 */
+async function getWorkspaceById(id: number): Promise<WorkspaceRow | null> {
+  return withOrm('getWorkspaceById', async (db) => {
+    const rows = await db.select().from(workspace).where(eq(workspace.id, id)).limit(1)
+    return rows[0] ?? null
+  })
+}
+
+/** 按路径找一行工作区（找不到返回 null）：插件工作区认领、chat 目录核对都用它 */
+async function findWorkspaceByPath(path: string): Promise<WorkspaceRow | null> {
+  return withOrm('findWorkspaceByPath', async (db) => {
+    const rows = await db.select().from(workspace).where(eq(workspace.path, path)).limit(1)
+    return rows[0] ?? null
+  })
+}
+
+/** 某一类工作区（侧栏按 kind 分流：user → 工作列表，plugin / chat → 各自的模式） */
+async function getWorkspacesByKind(kind: WorkspaceKind): Promise<WorkspaceRow[]> {
+  return withOrm('getWorkspacesByKind', async (db) => {
+    return db
+      .select()
+      .from(workspace)
+      .where(eq(workspace.kind, kind))
+      .orderBy(asc(workspace.created_at))
   })
 }
 
@@ -435,6 +492,10 @@ async function getUsageSummaryByWorkspace(workspaceId: number): Promise<
 export {
   getAllWorkspaces,
   createWorkspace,
+  setWorkspaceKind,
+  getWorkspaceById,
+  findWorkspaceByPath,
+  getWorkspacesByKind,
   updateWorkspace,
   deleteWorkspace,
   getAllTopics,

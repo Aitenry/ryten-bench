@@ -19,8 +19,17 @@ export interface HarnessContentRef {
   topicId: number | null
 }
 
-/** 侧栏停在哪一侧：工作（工作区 → 会话）/ 插件（插件草稿） */
-export type HarnessSidebarMode = 'chat' | 'plugin'
+/**
+ * 侧栏停在哪一侧：
+ * - `work`：工作（工作区 → 会话）；
+ * - `chat`：**对话**（没有工作区概念，只有一份会话列表；应用自带一个按系统初始化的目录）；
+ * - `plugin`：插件（插件工坊里的草稿）。
+ *
+ * 历史：`work` 这一档早先叫 `'chat'`（那时还没有「对话」模式）。改名后盘上可能存着旧的
+ * `'chat'` 值——渲染层读取时按 `'work'` 归一（见 HarnessSidebar 的 restoreLastContent），
+ * 因此不必为它写数据迁移。
+ */
+export type HarnessSidebarMode = 'work' | 'chat' | 'plugin'
 
 export interface HarnessSettings {
   /** 技能（Skills）存储目录，空/未设置表示不启用；目录下每个含 SKILL.md 的子目录即一个技能 */
@@ -32,17 +41,19 @@ export interface HarnessSettings {
   /** 当前活跃的工作区 ID，用于按工作区筛选话题 */
   activeWorkspaceId?: number
   /**
-   * 侧栏停在哪一侧 + 两侧各自「当前那一条内容」——**重启后照着它恢复**
+   * 侧栏停在哪一侧 + 各侧「当前那一条内容」——**重启后照着它恢复**
    * （用户口径 2026-09-28「要记住工作模式和插件模式，选中的会话，下次进来可以记住」）。
    *
    * 覆盖早先「模式开关不持久化」的口径（2026-09-27「一进来默认不能选中插件这个栏，要看当前
    * 是在工作的选中内容还是插件的选中内容」）：当时恢复不了内容，模式一旦持久化就会让开关与
-   * 主区域打架（侧栏列着插件、内容还是工作会话）；现在两侧内容一起记，开关跟着恢复出来的
+   * 主区域打架（侧栏列着插件、内容还是工作会话）；现在各侧内容一起记，开关跟着恢复出来的
    * 内容走，两边始终一致。命中不了（会话/工作区/插件已删）就退回该侧的默认落点，不报错。
    */
   activeMode?: HarnessSidebarMode
   /** 工作模式当前那一条内容（没选过 = null） */
   workContent?: HarnessContentRef | null
+  /** 「对话」模式当前那一条内容（那一侧的 workspaceId 就是应用初始化的对话工作区） */
+  chatContent?: HarnessContentRef | null
   /** 插件模式当前那一条内容（含是哪份插件；没选过 = null） */
   pluginContent?: (HarnessContentRef & { pluginId: string }) | null
   /** 记忆（Memory）存储根目录，空/未设置表示不启用；其下按工作区 ID 目录隔离（workspace-<id>/），每个工作区一套独立记忆 */

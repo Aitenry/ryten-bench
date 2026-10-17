@@ -330,10 +330,10 @@ const MemorySettings: React.FC = () => {
   const [savingPath, setSavingPath] = useState(false)
   const [snapshot, setSnapshot] = useState<MnemonSnapshot | null>(null)
   const [loadingSnapshot, setLoadingSnapshot] = useState(false)
-  /** 当前会话的记忆作用域（插件会话 = 这份插件自己的记忆；空 = 当前工作区） */
+  /** 当前会话的记忆作用域（插件会话 = 这份插件自己的记忆；对话模式 = 该模式自己的那份；空 = 当前工作区） */
   const memoryScope = useMemoryScope()
-  /** 插件作用域时显示插件名，供页面标注「现在管的是谁的记忆」 */
-  const memoryScopeName = useMemoryScopeName()
+  /** 插件作用域时显示插件名、「对话」模式时显示该模式的名字，供页面标注「现在管的是谁的记忆」 */
+  const memoryScopeName = useMemoryScopeName(translate('memorySettings.manage.scopeChat'))
 
   // 热记忆添加表单
   const [addTarget, setAddTarget] = useState<'user' | 'memory'>('memory')

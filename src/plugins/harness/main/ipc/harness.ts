@@ -61,10 +61,16 @@ import {
   getDialoguesByTopicId,
   getTopicById
 } from '../db/mapper/harness'
-import { memoryScopeRoot, parseMemoryScope, type MemoryScope } from '../memory-scope'
+import {
+  memoryScopeRoot,
+  parseMemoryScope,
+  serializeMemoryScope,
+  type MemoryScope
+} from '../memory-scope'
 import { getActiveWorkspaceId } from '../../../../main/database/workspace-context'
 import { sumUsage, type ModelUsageRecord } from '../runtime/usage'
 import { startRendererMemorySampling, stopRendererMemorySampling } from '../renderer-memory'
+import { activateChatTopic } from '../chat/activation'
 
 /**
  * 主进程 → 渲染层的事件通道（只有发送方、没有 ipcMain 处理器）。
@@ -240,7 +246,7 @@ async function runHarnessTurn(
 
   // 加载主智能体默认配置（electron-store）
   const mainAgentDefaults = settingsStore.get('mainAgent') as MainAgentConfig | undefined
-  const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+  let harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
   logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
 
   // 0. 本轮的记忆作用域与「插件模式」。**必须在建话题、建工具之前定下来**：
@@ -253,7 +259,6 @@ async function runHarnessTurn(
     harnessSettings?.activeWorkspaceId ?? 0
   )
   const pluginMode = memoryScope.kind === 'plugin'
-  const memoryPluginId = memoryScope.kind === 'plugin' ? memoryScope.pluginId : undefined
 
   // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具
   const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
@@ -274,9 +279,19 @@ async function runHarnessTurn(
         title,
         undefined,
         selectedTools.length ? JSON.stringify(selectedTools) : undefined,
-        // 记忆作用域：插件会话建话题时就落库（见 memory-scope.ts）
-        options?.memoryScope ?? null
+        // 记忆作用域：插件 / 对话会话建话题时就落库（见 memory-scope.ts）
+        serializeMemoryScope(memoryScope)
       )
+      // 「对话」模式：这条会话的目录就是本轮的工作目录（渲染层通常已先建好话题并切过，
+      // 这里是兜底路径，保证「没有话题 id 的首次发送」也不会把文件写进根目录）。
+      if (memoryScope.kind === 'chat' && topicId) {
+        try {
+          await activateChatTopic(topicId)
+          harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+        } catch (err) {
+          logger.warn('[Chat] 本轮会话目录切换失败（不影响本轮）:', err)
+        }
+      }
     } catch (err) {
       logger.error('Failed to create topic:', err)
       topicId = 0
@@ -414,7 +429,7 @@ async function runHarnessTurn(
       harnessSettings?.memoryPath || undefined,
       harnessSettings?.activeWorkspaceId ?? 0,
       maxToolRounds,
-      memoryPluginId
+      memoryScope
     )
   } catch (err) {
     // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
@@ -1295,7 +1310,7 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
         harnessSettings?.memoryPath || undefined,
         harnessSettings?.activeWorkspaceId ?? 0,
         maxToolRounds,
-        syncMemoryScope.kind === 'plugin' ? syncMemoryScope.pluginId : undefined
+        syncMemoryScope
       )
       return await harnessService.sendMessage(question, options)
     }
@@ -1536,7 +1551,7 @@ export function installHarnessIpc(ctx: MainPluginContext): void {
         question,
         workspaceId: harnessSettings?.activeWorkspaceId ?? 0,
         memoryPath: harnessSettings?.memoryPath || undefined,
-        pluginId: memoryAgentScope.kind === 'plugin' ? memoryAgentScope.pluginId : undefined,
+        memoryScope: serializeMemoryScope(memoryAgentScope),
         // 优先用那条回复自己的供应商（前端从用量行带过来），拿不到再走默认供应商
         providerId: payload.providerId,
         maxToolRounds

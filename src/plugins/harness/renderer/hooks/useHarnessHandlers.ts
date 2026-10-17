@@ -29,6 +29,7 @@ import type { Attachment, HarnessToolInfo, Message } from '../types'
 import type { LlmProviderConfig } from '../../../../main/database/mapper/provider'
 import { harnessApi } from '../api'
 import { getMemoryScope, setMemoryScope } from '../memory-scope'
+import { isChatScope } from '../../shared/memory-scope'
 
 const TOPICS_PAGE_SIZE = 20
 const MESSAGES_PAGE_SIZE = 20 // 10对消息
@@ -188,14 +189,22 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
    */
   const [focusInputToken, setFocusInputToken] = useState(0)
   /**
-   * 下一条**新话题**要用的插件记忆作用域（插件行「＋ 新建会话」带过来的插件 id）。
+   * 下一条**新话题**要用的记忆作用域（插件行「＋」带过来的 `plugin:<id>`、
+   * 「对话」模式带过来的 `chat`）。
    *
    * 用户口径 2026-09-28：「插件里面的记忆应该是独立的，现在是直接使用工作里面之前选中的记忆上下文，
    * 会导致有问题」——所以插件会话开话题时把 `plugin:<id>` 写进 `harness_topic.memory_scope`，
-   * 之后（含重启后再打开这个会话）主进程都按话题上存的作用域走（见 main/memory-scope.ts）。
+   * 之后（含重启后再打开这个会话）主进程都按话题上存的作用域走（见 main/memory-scope.ts）；
+   * 「对话」模式同理写 `chat`（该模式没有工作区，记忆也不该挂到某个工作区上）。
+   *
+   * 三种取值各有含义，别混：
+   * - `undefined` = **没人在等**：用当前话题自己存的作用域（往已有会话里发第二条消息走这条）；
+   * - `null` = 显式要**工作区**那套（普通「新建会话」清掉上一条挂起值时就写它）；
+   * - 字符串 = 这条新话题要用 `plugin:<id>` / `chat`。
+   *
    * 只有在「还没有话题」的这一小段时间里需要它，话题一建就清掉。
    */
-  const pendingPluginIdRef = useRef<string | null>(null)
+  const pendingMemoryScopeRef = useRef<string | null | undefined>(undefined)
   const [availableTools, setAvailableTools] = useState<HarnessToolInfo[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -215,6 +224,19 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     } catch {
       return activeWorkspaceIdRef.current
     }
+  }, [])
+
+  /**
+   * 建完一条「对话」模式的话题后，让界面跟上**新的活动工作目录**。
+   *
+   * 主进程在 `harness-topic-create` 里已经把活动工作区切到 `<userData>/chat/<话题 id>/`
+   * （见 ipc/harness-topic.ts），但那是主进程的设置；渲染层这边的工作区路径（资源管理器根、
+   * 工具卡片 → 真实路径的映射）与侧栏活动态都靠这个事件重读。少了它，第一条消息写出来的
+   * 文件在面板里会按**上一个**目录去打开（点开报「文件不存在」）。
+   */
+  const notifyChatTopicActivated = useCallback((workspaceId: number): void => {
+    if (!workspaceId) return
+    window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId } }))
   }, [])
 
   /** 当前活跃的智能体 causeId 集合：用于把智能体事件路由到正确块 */
@@ -1264,27 +1286,32 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     // 新会话没有插话队列；当前段落指针也一并复位
     setQueuedMessages([])
     assistantIdByTopicRef.current.clear()
-    // 普通「新建会话」不带插件记忆作用域（插件行 ＋ 会在之后把 id 放进来，见 harness-focus-input）
-    pendingPluginIdRef.current = null
-    // 记忆作用域同步归零：空会话 = 工作区那套（插件行 ＋ 是同步紧跟着派发的，会立刻改写回来）
+    // 普通「新建会话」不带独立记忆作用域（插件行「＋」/「对话」模式会在之后把它放进来，
+    // 见 harness-focus-input）：显式写 null，把上一条挂起值清掉，别让它漏给这一条新会话
+    pendingMemoryScopeRef.current = null
+    // 记忆作用域同步归零：空会话 = 工作区那套（插件行「＋」是同步紧跟着派发的，会立刻改写回来）
     setMemoryScope(null)
   }, [saveSessionToCache])
 
   /**
-   * 外部请求「开一个（可选带插件记忆作用域的）新会话，并把焦点放进输入框」（`harness-focus-input`）。
+   * 外部请求「开一个（可选带独立记忆作用域的）新会话，并把焦点放进输入框」（`harness-focus-input`）。
    *
-   * 用途：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
+   * 用途一：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
    * （首个话题在首次发送时才落库），**刻意不预填任何文字**（用户口径 2026-09-28
    * 「我需要的是不要显示：给插件「个人记账台账」（id: personal-ledger）这个玩意」），
    * 只把光标送进输入框 + 记住这条会话该用**哪份插件的记忆**。
+   *
+   * 用途二：「对话」模式的 ＋ 同名事件带 `scope: 'chat'`——记忆用该模式自己那一套。
    */
   useEffect(() => {
     const handler = (event: Event): void => {
-      const detail = (event as CustomEvent<{ pluginId?: string; focus?: boolean }>).detail
+      const detail = (event as CustomEvent<{ pluginId?: string; scope?: string; focus?: boolean }>)
+        .detail
       const pluginId = detail?.pluginId
-      pendingPluginIdRef.current = typeof pluginId === 'string' && pluginId ? pluginId : null
-      // 还没有话题的这段时间里，界面（侧栏记忆块 / 设置 → 记忆）也要显示这份插件的记忆
-      setMemoryScope(pendingPluginIdRef.current ? `plugin:${pendingPluginIdRef.current}` : null)
+      const scope = detail?.scope === 'chat' ? 'chat' : pluginId ? `plugin:${pluginId}` : null
+      pendingMemoryScopeRef.current = scope
+      // 还没有话题的这段时间里，界面（侧栏记忆块 / 设置 → 记忆）也要显示这套记忆
+      setMemoryScope(scope)
       // 切模式自动进入的那条空白会话只带作用域、不抢光标（用户只是在看插件这一侧的内容）
       if (detail?.focus !== false) setFocusInputToken((n) => n + 1)
     }
@@ -1303,8 +1330,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       setEditingOrphanId(null)
 
       // 选中的话题自带记忆作用域（存在话题行上，主进程按它走）→ 清掉「下一条新话题」的挂起值
-      pendingPluginIdRef.current = null
-      // 记忆跟着当前会话走：这条会话是插件会话就显示这份插件的记忆，否则回工作区
+      pendingMemoryScopeRef.current = undefined
+      // 记忆跟着当前会话走：这条会话是插件会话就显示这份插件的记忆，「对话」模式的会话
+      // 显示该模式自己的那份，否则回工作区
       // （重开应用后点开会话也认——作用域是话题行上存着的，不靠渲染层记得住）
       setMemoryScope(topic.memory_scope ?? null)
 
@@ -1382,14 +1410,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         const title = t('harness.handlers.branchTitle', {
           title: firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 30)
         })
+        const branchScope = getMemoryScope()
         const newTopicId = await harnessApi.harness.createTopic(
           workspaceId,
           title,
           undefined,
           undefined,
           // 分支出来的会话跟原会话用**同一套记忆**（否则从插件会话分出来的支会掉回工作记忆）
-          getMemoryScope()
+          branchScope
         )
+        // 「对话」模式的分支是**另一条会话**：它有自己的目录，主进程建话题时已切好，
+        // 这里同步一次活动路径（否则新分支仍在父会话的目录里读写文件）
+        if (isChatScope(branchScope)) notifyChatTopicActivated(workspaceId)
         for (const item of slice) {
           await harnessApi.harness.addDialogue({
             topic_id: newTopicId,
@@ -1426,7 +1458,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         viewMessage(messageKey, 'error', t('harness.handlers.branchFailed'))
       }
     },
-    [messages, getActiveWorkspaceId, handleSelectTopic, refreshTopics, viewMessage, t]
+    [
+      messages,
+      getActiveWorkspaceId,
+      handleSelectTopic,
+      notifyChatTopicActivated,
+      refreshTopics,
+      viewMessage,
+      t
+    ]
   )
 
   const handleDeleteTopic = useCallback(
@@ -1565,9 +1605,13 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           const title = userMessage.content.slice(0, 50)
           const workspaceId = await getActiveWorkspaceId()
           // 记忆作用域：插件行「＋」开出来的会话带 `plugin:<id>`（这份插件自己的记忆），
-          // 普通会话留空 = 跟工作区走（见 main/memory-scope.ts）
-          const pluginId = pendingPluginIdRef.current
-          const memoryScope = pluginId ? `plugin:${pluginId}` : null
+          // 「对话」模式的会话带 `chat`，普通会话留空 = 跟工作区走（见 main/memory-scope.ts）。
+          // 取值三种含义见 pendingMemoryScopeRef 的说明；`undefined` 时用**当前话题**存的那一份
+          // （往已有会话里发消息不建话题，这里根本不会走到），兜底仍是工作区。
+          const memoryScope =
+            pendingMemoryScopeRef.current !== undefined
+              ? pendingMemoryScopeRef.current
+              : getMemoryScope()
           topicId = await harnessApi.harness.createTopic(
             workspaceId,
             title,
@@ -1577,9 +1621,12 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           )
           // 作用域已经落进话题行，之后由主进程按话题读；用完就清，避免影响下一条新会话
           // （界面这一侧的作用域 store 保持不动：话题就是这条会话的作用域，等切会话时再改写）
-          pendingPluginIdRef.current = null
+          pendingMemoryScopeRef.current = undefined
           currentTopicIdRef.current = topicId
           setCurrentTopicId(topicId)
+          // 「对话」模式的会话目录按话题 id 分：主进程建话题时已把活动目录切过去，
+          // 这里广播一次让资源管理器 / 文件路径映射跟上（见 notifyChatTopicActivated）
+          if (isChatScope(memoryScope)) notifyChatTopicActivated(workspaceId)
           refreshTopics().then()
         }
 
@@ -1668,6 +1715,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       startStreamListener,
       syncLoadingTopics,
       getActiveWorkspaceId,
+      notifyChatTopicActivated,
       refreshTopics,
       t
     ]
@@ -1838,9 +1886,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           currentTopicIdRef.current = null
           messagesBelongToTopicRef.current = null
           setCurrentTopicId(null)
-          // 会话空了 = 回到了空白态：记忆也回到工作区那套（下一条会话默认按工作区建）
-          pendingPluginIdRef.current = null
-          setMemoryScope(null)
+          // 会话空了 = 回到了空白态：挂起值交回**当前会话那一套**（undefined → 建话题时用
+          // 当前作用域，主进程再按工作区种类兜底）。**不重置成工作区**：插件 /「对话」会话
+          // 清空全部消息后仍然是这一侧的内容，掉回工作区记忆会让侧栏和下一轮都串味。
+          pendingMemoryScopeRef.current = undefined
           if (deletedTopicId != null) {
             sessionsRef.current.delete(deletedTopicId)
             isLoadingMapRef.current.delete(deletedTopicId)

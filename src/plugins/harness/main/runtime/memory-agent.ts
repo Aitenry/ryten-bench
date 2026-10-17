@@ -58,10 +58,11 @@ export interface StartMemoryAgentParams {
   /** 当前工作区（记忆按工作区隔离） */
   workspaceId: number
   /**
-   * 插件 id：非空表示这条会话是插件的，记忆落进**那份插件自己的**作用域
-   * （`<memoryPath>/plugin-<id>/`，见 main/memory-scope.ts），与工作记忆零交叉。
+   * 这条会话的记忆作用域**字符串**（`plugin:<id>` / `chat`；空 = 工作区）。
+   * 见 main/memory-scope.ts 与 shared/memory-scope.ts：插件会话落进那份插件自己的目录，
+   * 「对话」模式落进 `<memoryPath>/chat/`，与工作记忆零交叉。
    */
-  pluginId?: string
+  memoryScope?: string | null
   /** 记忆存储根；未配置时记忆系统整体不可用 */
   memoryPath?: string
   /** 供应商 ID，缺省用默认供应商 */
@@ -121,7 +122,7 @@ export function buildTaskMessage(answer: string, question?: string): string {
 export async function startMemoryAgent(
   params: StartMemoryAgentParams
 ): Promise<StartMemoryAgentResult> {
-  const mnemon = getMnemonComponent(params.memoryPath, params.workspaceId, params.pluginId)
+  const mnemon = getMnemonComponent(params.memoryPath, params.workspaceId, params.memoryScope)
   if (!mnemon) return { ok: false, reason: 'memory-disabled' }
 
   // 惰性导入：与 runtime.ts 的 resolveSubAgentModel 同款做法，模块本身不绑死供应商层

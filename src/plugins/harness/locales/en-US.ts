@@ -19,14 +19,17 @@ export const harnessEnUS: typeof harnessZhCN = {
       title: 'Workspaces',
       searchPlaceholder: 'Search workspaces and conversations',
       searchDraftPlaceholder: 'Search plugin drafts',
+      searchTopicPlaceholder: 'Search conversations',
       searchTooltip: 'Search workspaces and conversations',
       exitSearch: 'Exit search',
       assistantSettings: 'Assistant settings',
       newWorkspace: 'New workspace',
       mode: {
-        chat: 'Work',
+        work: 'Work',
+        chat: 'Chat',
         plugin: 'Plugins',
-        chatHint: 'Work mode: workspaces and conversations',
+        workHint: 'Work mode: workspaces and conversations',
+        chatHint: 'Chat mode: talk directly, no workspace (just one conversation list)',
         pluginHint: 'Plugin mode: drafts in the Plugin Workshop (click one to open it)'
       },
       newDraft: 'New plugin draft',
@@ -69,6 +72,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceDeleteConfirmContent:
         'Delete "{{name}}"? All conversations and memories in this workspace will be deleted too.',
       newSession: 'New conversation',
+      newSessionRunning: 'A conversation is running — stop it before starting a new one',
       renameWorkspace: 'Rename workspace',
       workspaceNamePlaceholder: 'Workspace name',
       workspaceNameRequired: 'Please enter a workspace name',
@@ -601,6 +605,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       sectionTitle: 'Memory management',
       /** Shown when a plugin conversation is active; the workspace scope stays unlabelled */
       scopePlugin: 'Plugin "{{name}}"',
+      /** Shown in chat mode: that memory belongs to the mode itself (it has no workspace) */
+      scopeChat: 'Chat',
       snapshotFailed: 'Failed to load memory snapshot: {{reason}}'
     },
     tabs: {

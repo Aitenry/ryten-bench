@@ -28,14 +28,17 @@ export const harnessZhCN = {
       title: '工作区',
       searchPlaceholder: '搜索工作区与会话',
       searchDraftPlaceholder: '搜索插件草稿',
+      searchTopicPlaceholder: '搜索会话',
       searchTooltip: '搜索工作区与会话',
       exitSearch: '退出搜索',
       assistantSettings: '助手设置',
       newWorkspace: '新建工作区',
       mode: {
-        chat: '工作',
+        work: '工作',
+        chat: '对话',
         plugin: '插件',
-        chatHint: '工作模式：工作区与会话',
+        workHint: '工作模式：工作区与会话',
+        chatHint: '对话模式：直接对话，没有工作区（只有一份会话列表）',
         pluginHint: '插件模式：插件工坊里的草稿（点一行打开它的详情）'
       },
       newDraft: '新建插件草稿',
@@ -77,6 +80,7 @@ export const harnessZhCN = {
       workspaceDeleteConfirmContent:
         '确定要删除「{{name}}」吗？该工作区下的所有会话与记忆也将被删除。',
       newSession: '新建会话',
+      newSessionRunning: '有会话正在生成，先停止再新建',
       renameWorkspace: '重命名工作区',
       workspaceNamePlaceholder: '工作区名称',
       workspaceNameRequired: '请输入工作区名称',
@@ -600,6 +604,8 @@ export const harnessZhCN = {
       sectionTitle: '记忆管理',
       /** 插件会话进来时标注管的是哪份插件的记忆（工作区作用域不标注） */
       scopePlugin: '插件「{{name}}」',
+      /** 「对话」模式进来时标注：那份记忆归这个模式自己（它没有工作区） */
+      scopeChat: '对话',
       snapshotFailed: '加载记忆快照失败: {{reason}}'
     },
     tabs: {
