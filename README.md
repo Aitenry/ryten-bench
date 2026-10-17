@@ -341,6 +341,25 @@ npx eslint --cache src examples electron.vite.config.ts
 > scripts run `build:plugins` first. If you only changed core code, `pnpm build` is enough; if you
 > changed anything under `src/plugins/**`, the plugin packages must be rebuilt before packaging.
 
+## Releases
+
+Every push to `main` publishes a real version — there is no alpha channel and nobody edits the
+version by hand. `.github/scripts/resolve-version.mjs` derives it from the last stable tag and the
+commit messages:
+
+| Change since the last release  | Next version                    |
+| ------------------------------ | ------------------------------- |
+| `fix(...)`, `chore(...)`, …    | patch — `0.1.0` → `0.1.1`       |
+| `feat(...)`                    | minor — `0.1.1` → `0.2.0`       |
+| `BREAKING CHANGE:` / `feat!:`  | major — `0.2.x` → `1.0.0`       |
+
+`[release:major|minor|patch]` in a commit message overrides the inference, and the first release
+takes the version already in `package.json`. The build stamps the resolved version in before
+packaging, so installer file names and `app.getVersion()` report it, and a release is published only
+when every platform artifact is present. After a successful publish the version is committed back to
+`main` as `chore(release): <version> [skip ci]`, which never counts as a change; rerunning a
+workflow for an already published commit is a no-op.
+
 ---
 
 ## Project structure
