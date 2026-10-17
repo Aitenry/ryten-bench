@@ -3,6 +3,7 @@ import { RiRefreshLine, RiSunCloudyLine } from '@remixicon/react'
 import { useTheme } from '@renderer/hooks/useTheme'
 import { useTranslation } from '@renderer/i18n'
 import { useBottomBarItems } from '@renderer/plugin-host/PluginHostContext'
+import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import type { BottomBarItemRegistration } from '@renderer/plugin-host/types'
 import { Window } from '../../../../resource/types/window'
 
@@ -48,11 +49,24 @@ const BottomBar: React.FC<BottomBarProps> = ({
   // 可见性触发器：插件在 subscribe 回调里 bump 一次，宿主重渲染时重新读 isVisible()
   const [, forceVisibilityRefresh] = useReducer((n: number) => n + 1, 0)
   useEffect(() => {
-    const unsubscribes = pluginItems
-      .map((reg) => reg.subscribe?.(forceVisibilityRefresh))
-      .filter((unsub): unsub is () => void => typeof unsub === 'function')
+    const unsubscribes: Array<() => void> = []
+    for (const reg of pluginItems) {
+      // 插件的 subscribe 是第三方代码：它抛错不能连累宿主底栏（否则整条底栏消失）
+      try {
+        const unsub = reg.subscribe?.(forceVisibilityRefresh)
+        if (typeof unsub === 'function') unsubscribes.push(unsub)
+      } catch (err) {
+        console.error(`[plugin:${reg.pluginId}] 底栏 subscribe 失败（已忽略）:`, err)
+      }
+    }
     return () => {
-      for (const unsub of unsubscribes) unsub()
+      for (const unsub of unsubscribes) {
+        try {
+          unsub()
+        } catch (err) {
+          console.error('[plugins] 底栏 unsubscribe 失败（已忽略）:', err)
+        }
+      }
     }
   }, [pluginItems])
 
@@ -98,9 +112,17 @@ const BottomBar: React.FC<BottomBarProps> = ({
 
   // 插件条目在前（order 已由宿主排好）、天气恒在最后——保持原有的「音乐 → 天气」顺序。
   // 刻意不 memo：可见性来自插件侧快照，每次渲染都要重新读 isVisible()。
-  const carouselItems: CarouselItem[] = pluginItems
-    .filter((reg) => reg.isVisible())
-    .map((reg) => ({ kind: 'plugin', reg }))
+  // isVisible 是插件代码：抛错只当作「这一项不可见」，不能把整条底栏带下去。
+  const carouselItems: CarouselItem[] = []
+  for (const reg of pluginItems) {
+    let visible = false
+    try {
+      visible = Boolean(reg.isVisible())
+    } catch (err) {
+      console.error(`[plugin:${reg.pluginId}] 底栏 isVisible() 抛错（按不可见处理）:`, err)
+    }
+    if (visible) carouselItems.push({ kind: 'plugin', reg })
+  }
   carouselItems.push({ kind: 'weather' })
 
   useEffect(() => {
@@ -131,6 +153,7 @@ const BottomBar: React.FC<BottomBarProps> = ({
 
   // 索引兜底：可见性变化（例如播放结束）会让条目数减少，避免渲染越界
   const activeItem = carouselItems[Math.min(carouselIndex, carouselItems.length - 1)]
+  const activePluginId = activeItem?.kind === 'plugin' ? activeItem.reg.pluginId : ''
   const ActiveTab = activeItem?.kind === 'plugin' ? activeItem.reg.Tab : null
   const ActivePopup = activeItem?.kind === 'plugin' ? activeItem.reg.Popup : null
 
@@ -147,7 +170,19 @@ const BottomBar: React.FC<BottomBarProps> = ({
             }}
           >
             {ActivePopup ? (
-              <ActivePopup />
+              // 插件弹层自己炸掉时退化成一行占位：底栏与天气照常可用
+              <PluginBoundary
+                pluginId={activePluginId}
+                surface="bottomBar"
+                quiet
+                fallback={
+                  <div className="text-sm" style={{ color: colorTextSecondary }}>
+                    {t('shell.pluginBoundary.unavailable')}
+                  </div>
+                }
+              >
+                <ActivePopup />
+              </PluginBoundary>
             ) : (
               <div className="text-sm">
                 {weatherLoading ? (
@@ -229,7 +264,18 @@ const BottomBar: React.FC<BottomBarProps> = ({
             onMouseEnter={handleCarouselEnter}
           >
             {ActiveTab ? (
-              <ActiveTab />
+              <PluginBoundary
+                pluginId={activePluginId}
+                surface="bottomBar"
+                quiet
+                fallback={
+                  <span className="flex items-center gap-1.5" style={{ color: colorTextSecondary }}>
+                    {t('shell.pluginBoundary.unavailable')}
+                  </span>
+                }
+              >
+                <ActiveTab />
+              </PluginBoundary>
             ) : (
               <span className="flex items-center gap-1.5">
                 <RiSunCloudyLine size={14} />

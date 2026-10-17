@@ -24,6 +24,8 @@ import * as providerService from '../provider/service'
 import * as safeSend from '../safe-send'
 import * as weatherUtils from '../shared/weather-utils'
 import * as sharedModelParams from '../../shared/model-params'
+import * as sharedPluginCssSafety from '../../shared/plugin/css-safety'
+import * as sharedPluginMenuIcons from '../../shared/plugin/menu-icons'
 
 /**
  * 主进程**宿主运行时**（插件打包方案见 src/plugins/PACKAGING.md）。
@@ -96,7 +98,11 @@ const HOST_MAIN: Record<string, unknown> = {
 
 /** `@host/shared/**` → `src/shared/**`（三端共用的纯模块；插件直接 import @shared/*） */
 const HOST_SHARED: Record<string, unknown> = {
-  '@host/shared/model-params': sharedModelParams
+  '@host/shared/model-params': sharedModelParams,
+  // 插件工坊与插件宿主共用：plugin.css 的宿主保护、声明式菜单图标名单
+  // （`scripts/build-plugins.mjs` 会把 `src/shared/**` 的导入统一外部化成 `@host/shared/**`）
+  '@host/shared/plugin/css-safety': sharedPluginCssSafety,
+  '@host/shared/plugin/menu-icons': sharedPluginMenuIcons
 }
 
 /** 宿主解析基准：应用根（dev = 仓库根，打包后 = app.asar 根），再兜底进程工作目录 */

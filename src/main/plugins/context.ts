@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import logger from 'electron-log'
 import { addContribution, listContributions, removeContributions } from './contributions'
+import { withPluginScope } from './plugin-guard'
 
 /**
  * 主进程插件上下文（与渲染层 `plugin-host/context.ts` 对称的轻量实现）。
@@ -124,7 +125,22 @@ export class MainPluginContextImpl implements MainPluginContext {
         if (typeof handler !== 'function') {
           throw new Error(`通道 '${channel}' 缺少处理函数`)
         }
-        ipcMain.handle(channel, async (_event, ...args: unknown[]) => handler(...(args as never[])))
+        ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
+          // 每次调用都进插件上下文：① 让插件的 `process.exit` 之类被归因并拦住；
+          // ② handler 里的异常带上插件 id 记日志（否则只剩一句没有上下文的
+          //    "Error invoking remote method"）。
+          return await withPluginScope(
+            { id: this.id, surface: 'ipc', channel },
+            async () => {
+              try {
+                return await handler(...(args as never[]))
+              } catch (err) {
+                logger.error(`[Plugins] ${this.id} 通道 ${channel} 处理失败:`, err)
+                throw err
+              }
+            }
+          )
+        })
         this.ownedChannels.add(channel)
         registered.push(channel)
       }
@@ -156,12 +172,16 @@ export class MainPluginContextImpl implements MainPluginContext {
   effect(register: () => void | (() => void)): void {
     let undo: void | (() => void)
     try {
-      undo = register()
+      // 注册本身就在 install 的插件上下文里；回滚发生在停用时（上下文已不在），
+      // 这里也套一层，让「停用时的清理代码」同样不能 process.exit 把应用带走。
+      undo = withPluginScope({ id: this.id, surface: 'effect' }, register)
     } catch (err) {
       logger.warn(`[Plugins] ${this.id} effect 注册失败:`, err)
       return
     }
-    if (typeof undo === 'function') this.effects.push(undo)
+    if (typeof undo === 'function') {
+      this.effects.push(() => withPluginScope({ id: this.id, surface: 'effect:undo' }, undo!))
+    }
   }
 
   contribute<T>(key: string, value: T): void {

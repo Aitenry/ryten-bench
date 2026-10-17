@@ -9,6 +9,7 @@ import { installHostRuntime } from './runtime'
 import { registerCoreIpc } from '../ipc'
 import { BUILTIN_PLUGIN_MANIFESTS } from '../../plugins/manifests'
 import { MainPluginContextImpl } from './context'
+import { installPluginProcessGuard, withPluginScope } from './plugin-guard'
 import { IPC_PLUGIN_CHANNELS_SYNC, IPC_PLUGIN_CHANNELS_UPDATED } from '../../shared/plugin/protocol'
 
 /**
@@ -35,7 +36,8 @@ const externalMains = new Map<string, { ctx: MainPluginContextImpl; teardown: ()
 function runTeardown(id: string, dispose: void | (() => void), ctx: MainPluginContextImpl): void {
   if (typeof dispose === 'function') {
     try {
-      dispose()
+      // 停用时的清理同样是插件代码：同一条进程保护要覆盖到
+      withPluginScope({ id, surface: 'install:dispose' }, dispose)
     } catch (err) {
       logger.warn(`[Plugins] ${id} install dispose 异常:`, err)
     }
@@ -58,6 +60,9 @@ export function initPluginHost(): void {
   //    之后的扫描/装载就只剩「磁盘包」一条路径；
   // ③ core 自己的 IPC 与 preload 的通道同步入口（都必须在窗口创建之前）。
   installHostRuntime()
+  // 进程保护必须早于任何插件 main.cjs 被 require：插件装载期的一行 process.exit
+  // 就能让应用在启动途中消失（见 plugin-guard.ts）。
+  installPluginProcessGuard()
   ensureBundledPluginsInstalled()
   registerCoreIpc()
   registerPluginChannelsSync()
@@ -123,7 +128,11 @@ export function loadExternalMain(id: string): void {
   const ctx = new MainPluginContextImpl(id)
   let dispose: void | (() => void)
   try {
-    dispose = (install as (c: MainPluginContextImpl) => void | (() => void))(ctx)
+    // install 是插件代码：在它的上下文里执行，最致命的 process.exit / abort 会被拦截
+    // 成一次装载失败（宿主继续启动其它插件），而不是让整个应用消失。
+    dispose = withPluginScope({ id, surface: 'install' }, () =>
+      (install as (c: MainPluginContextImpl) => void | (() => void))(ctx)
+    )
   } catch (err) {
     ctx.dispose()
     throw err

@@ -6,6 +6,7 @@ import {
   RiDiscLine,
   RiPlugLine
 } from '@remixicon/react'
+import type { DeclaredMenuIconName } from '@shared/plugin/menu-icons'
 
 /**
  * **声明项**的菜单图标解析（`PluginListEntry.menu.icon` 是 remixicon 名字符串）。
@@ -16,10 +17,11 @@ import {
  * 插件的 plugin.json 没写 icon）一律回退到通用图标，绝不抛错——声明项只是首帧的
  * 占位，几百毫秒后会被插件的真实注册覆盖。
  *
- * 名单按内置插件清单里**实际用到的**名字维护（当前是 notes / harness）；新增内置插件时在这里补一行即可。
- * 独立插件（task-planner / music-player）的清单也写名字，装上后同样经这里解析。
+ * 名单的**唯一真源**是 `@shared/plugin/menu-icons`（工坊生成模板时引用同一份）；
+ * 这里的 Record 用 `DeclaredMenuIconName` 做键类型，漏映射会直接编译失败。
  */
-const DECLARED_MENU_ICONS: Record<string, ReactNode> = {
+const DECLARED_MENU_ICONS: Record<DeclaredMenuIconName, ReactNode> = {
+  RiPlugLine: <RiPlugLine size={16} />,
   RiDashboardLine: <RiDashboardLine size={16} />,
   RiCalendar2Line: <RiCalendar2Line size={16} />,
   RiDiscLine: <RiDiscLine size={16} />,
@@ -32,5 +34,5 @@ const FALLBACK_MENU_ICON: ReactNode = <RiPlugLine size={16} />
 /** 按名字解析声明项的菜单图标（未知名字回退通用图标） */
 export function declaredMenuIcon(name: string | undefined): ReactNode {
   if (!name) return FALLBACK_MENU_ICON
-  return DECLARED_MENU_ICONS[name] ?? FALLBACK_MENU_ICON
+  return DECLARED_MENU_ICONS[name as DeclaredMenuIconName] ?? FALLBACK_MENU_ICON
 }

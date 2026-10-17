@@ -28,6 +28,19 @@ import type {
 
 type FiberState = PluginState
 
+/**
+ * 宿主内核自己的设置页签（见 `components/system/settings/SettingsModal.tsx` 的 `STATIC_TABS`）。
+ *
+ * 插件注册这些键会与内核页签撞名（`tabMeta` 是「后写覆盖」），界面表现为「通用设置
+ * 变成了某个插件页」——不允许，直接让插件的 enable 失败。
+ */
+const CORE_SETTINGS_TABS: ReadonlySet<string> = new Set([
+  'general',
+  'model',
+  'system',
+  'plugins'
+])
+
 /** 包一层 pluginId 的注册表：register 返回注销函数；宿主可整组清空 */
 class ScopedRegistry<T extends { pluginId: string }> {
   private items = new Map<string, T[]>()
@@ -50,6 +63,14 @@ class ScopedRegistry<T extends { pluginId: string }> {
 
   removeAll(pluginId: string, bump: () => void): void {
     if (this.items.delete(pluginId)) bump()
+  }
+
+  /** 谁已经占了这条注册项（没有返回 null；用于跨插件冲突判定） */
+  ownerOf(predicate: (item: T) => boolean): string | null {
+    for (const [pluginId, list] of this.items) {
+      if (list.some(predicate)) return pluginId
+    }
+    return null
   }
 
   getAll(): T[] {
@@ -210,31 +231,83 @@ export class PluginHost {
 
   // ---------- 服务获取 ----------
 
-  /** 为插件构建指定键的 scoped 服务（默认经 effect 注册，卸载自动回滚） */
+  /**
+   * 占位冲突检查：**同一个位置只允许一个插件占**。
+   *
+   * 为什么不做「后注册的覆盖前面的」：插件是第三方代码，静默覆盖意味着 A 插件能顶掉
+   * B 插件的路由/菜单（比如把 `/notes` 指到自己的页面），而且用户完全看不出来是哪个
+   * 插件干的。冲突时直接让 enable 失败（插件面板里状态是 error、错误可读），
+   * 比「界面被悄悄换掉」好得多。
+   *
+   * 同一个插件重复注册同一项是允许的（重载/热替换路径），声明式占位不参与这套判定。
+   */
+  private claimSlot<T extends { pluginId: string }>(
+    registry: ScopedRegistry<T>,
+    pluginId: string,
+    kind: string,
+    key: string,
+    match: (item: T) => boolean
+  ): void {
+    const owner = registry.ownerOf(match)
+    if (owner && owner !== pluginId) {
+      throw new PluginError(
+        PLUGIN_ERROR.SERVICE_MISSING,
+        `插件 '${pluginId}' 的${kind} '${key}' 已被插件 '${owner}' 占用（宿主不允许两个插件占同一个位置）`
+      )
+    }
+  }
+
+  /** 每个插件只给自己构建指定键的 scoped 服务（默认经 effect 注册，卸载自动回滚） */
   serviceFor<K extends HostServiceKey>(key: K, pluginId: string): HostServices[K] {
     switch (key) {
       case 'route':
         return {
-          register: (r) =>
-            this.routeRegistry.register(pluginId, r as Omit<RegisteredRoute, 'pluginId'>, () =>
-              this.bump()
-            )
+          register: (r) => {
+            const item = r as Omit<RegisteredRoute, 'pluginId'>
+            // 路由只允许**具体路径**：`*` 会兜住其它插件的所有路由、`:` 会抢别人的参数段，
+            // 两者都能让一个插件「接管」整个界面（React Router 取第一个匹配）。
+            if (
+              typeof item.path !== 'string' ||
+              !item.path.startsWith('/') ||
+              item.path.includes('*') ||
+              item.path.includes(':')
+            ) {
+              throw new PluginError(
+                PLUGIN_ERROR.SERVICE_MISSING,
+                `插件 '${pluginId}' 的路由 '${String(item.path)}' 不合法：必须以 / 开头，且不能含 * 或 :（占位与参数会抢别的插件的路由）`
+              )
+            }
+            this.claimSlot(this.routeRegistry, pluginId, '路由', item.path, (x) => x.path === item.path)
+            return this.routeRegistry.register(pluginId, item, () => this.bump())
+          }
         } as HostServices[K]
       case 'menu':
         return {
-          register: (m) =>
-            this.menuRegistry.register(pluginId, m as Omit<RegisteredMenuItem, 'pluginId'>, () =>
-              this.bump()
-            )
+          register: (m) => {
+            const item = m as Omit<RegisteredMenuItem, 'pluginId'>
+            this.claimSlot(this.menuRegistry, pluginId, '菜单键', item.key, (x) => x.key === item.key)
+            return this.menuRegistry.register(pluginId, item, () => this.bump())
+          }
         } as HostServices[K]
       case 'settingsSection':
         return {
-          register: (s) =>
-            this.settingsRegistry.register(
+          register: (s) => {
+            const item = s as Omit<SettingsSectionRegistration, 'pluginId'>
+            if (CORE_SETTINGS_TABS.has(item.tabKey)) {
+              throw new PluginError(
+                PLUGIN_ERROR.SERVICE_MISSING,
+                `设置页键 '${item.tabKey}' 是宿主内核页签，插件不能占用（换一个 tabKey）`
+              )
+            }
+            this.claimSlot(
+              this.settingsRegistry,
               pluginId,
-              s as Omit<SettingsSectionRegistration, 'pluginId'>,
-              () => this.bump()
+              '设置页键',
+              item.tabKey,
+              (x) => x.tabKey === item.tabKey
             )
+            return this.settingsRegistry.register(pluginId, item, () => this.bump())
+          }
         } as HostServices[K]
       case 'appProvider':
         return {
@@ -344,7 +417,19 @@ export class PluginHost {
    * 都会删掉该 id 的声明，否则停用/卸载后菜单会残留到下次启动。
    */
   declare(id: string, declaration: PluginDeclaration): void {
-    this.declarations.set(id, declaration)
+    // 声明项来自磁盘上的 plugin.json（没有 TS 类型校验），同样不能是兜底路由：
+    // `*` / `:` 会抢其它插件的路由，即使是首帧占位也不行（真实注册也有同一道校验）。
+    const routes = (declaration.routes ?? []).filter(
+      (route) =>
+        typeof route.path === 'string' &&
+        route.path.startsWith('/') &&
+        !route.path.includes('*') &&
+        !route.path.includes(':')
+    )
+    this.declarations.set(id, {
+      ...(declaration.menu ? { menu: declaration.menu } : {}),
+      ...(routes.length > 0 ? { routes } : {})
+    })
     this.bump()
   }
 

@@ -1,4 +1,5 @@
 import { pluginUrl } from '@shared/plugin/protocol'
+import { sanitizePluginCss } from '@shared/plugin/css-safety'
 
 /**
  * **插件自带的样式表**（`plugin://<id>/plugin.css`）的注入与摘除。
@@ -23,6 +24,10 @@ import { pluginUrl } from '@shared/plugin/protocol'
  *   带堆栈的假 warn——内置插件本就由宿主构建期 Tailwind 扫描 `src/plugins/**` 出类名，
  *   不带 plugin.css，于是每次启用都刷日志）；
  * - 同一个 id 重复注入时先移除旧的（幂等），停用后 `document` 里不留痕迹。
+ * - **注入前过一遍宿主保护**（`@shared/plugin/css-safety`）：`html` / `body` / `#root` /
+ *   `*` / 宿主外壳的类名一律丢弃，`:root` 只允许放变量。一条 `body { display:none }`
+ *   就能让整个应用白屏——样式是插件能影响宿主最省事的一条路径，必须在入口拦住。
+ *   被丢掉的规则会打一条 warn（带选择器原文），验收报告也会点名。
  */
 
 const STYLE_ATTR = 'data-plugin-css'
@@ -47,11 +52,33 @@ export async function installPluginCss(id: string): Promise<boolean> {
     }
     const css = await res.text()
     if (css.trim() === '') return false
+    let audit: ReturnType<typeof sanitizePluginCss>
+    try {
+      audit = sanitizePluginCss(css)
+    } catch (err) {
+      // 清洗器自身异常时**宁可不注入**也不要把未清洗的全局 CSS 放进宿主文档
+      console.warn(`[plugin:${id}] plugin.css 安全清洗失败，已跳过样式注入:`, err)
+      return false
+    }
+    if (audit.dropped.length > 0 || audit.imports.length > 0) {
+      const dropped = audit.dropped.slice(0, 6).join(' | ')
+      console.warn(
+        `[plugin:${id}] plugin.css 里有 ${audit.dropped.length} 条会波及宿主的全局规则已被丢弃` +
+          (audit.imports.length > 0 ? `，另有 ${audit.imports.length} 条 @import 被移除` : '') +
+          (dropped ? `：${dropped}${audit.dropped.length > 6 ? ' …' : ''}` : '')
+      )
+    }
+    if (audit.css.trim() === '') {
+      console.warn(`[plugin:${id}] plugin.css 清洗后为空（全部是全局规则），未注入样式`)
+      return false
+    }
     const style = document.createElement('style')
     style.setAttribute(STYLE_ATTR, id)
-    style.textContent = css
+    style.textContent = audit.css
     document.head.appendChild(style)
-    console.info(`[plugin:${id}] 已注入插件样式 plugin.css（${(css.length / 1024).toFixed(1)}KB）`)
+    console.info(
+      `[plugin:${id}] 已注入插件样式 plugin.css（${(audit.css.length / 1024).toFixed(1)}KB）`
+    )
     return true
   } catch (err) {
     console.warn(`[plugin:${id}] 注入 plugin.css 失败（忽略，不影响插件功能）:`, err)

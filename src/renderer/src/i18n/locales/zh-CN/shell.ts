@@ -32,6 +32,14 @@ export const zhCNShell = {
     title: '界面渲染时发生了一个未预期的错误',
     reload: '重新加载'
   },
+  pluginBoundary: {
+    title: '插件「{{name}}」未能显示',
+    detail: '这块界面由插件自己渲染；宿主已把它隔离，其它功能不受影响。',
+    retry: '重试',
+    disable: '停用插件',
+    disableFailed: '停用失败：{{error}}',
+    unavailable: '插件暂时不可用'
+  },
   notificationList: {
     empty: '暂无消息',
     completed: '已完成'

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import RouteSkeleton from './RouteSkeleton'
 import { lazyViewFor } from './lazyViewCache'
 import { usePluginMenus, usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
+import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import type { RegisteredRoute } from '@renderer/plugin-host/types'
 
 // 路由级代码分割：Harness（含代码编辑器、差异视图等重型依赖）等页面按需加载，
@@ -15,10 +16,14 @@ const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // 「切到尚未加载的路由」陷入 Suspense 重试死循环，视图永远停在上一页。
   const View = route.load ? lazyViewFor(route.load) : null
   if (View) {
+    // 边界放在 Suspense **外面**：chunk 加载失败（文件被删/包没打全）时 Promise 会 reject，
+    // Suspense 不接错误，只有错误边界能把「白屏」换成一张可读的卡片 + 停用按钮。
     return (
-      <Suspense fallback={<RouteSkeleton variant={route.skeleton ?? 'generic'} />}>
-        <View />
-      </Suspense>
+      <PluginBoundary pluginId={route.pluginId} surface="route">
+        <Suspense fallback={<RouteSkeleton variant={route.skeleton ?? 'generic'} />}>
+          <View />
+        </Suspense>
+      </PluginBoundary>
     )
   }
   const Eager = route.Component
@@ -27,7 +32,12 @@ const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // ② **首帧声明式预注册**的占位路由（宿主按清单 `routes` 元数据登记，等插件渲染模块
   //    加载完成后由真实注册按 path 覆盖，见 plugin-host/host.ts 的 declare()）。
   // ②是常规路径，这里渲染骨架屏而不是空白，正好衔接到真实路由。
-  return Eager ? <Eager /> : <RouteSkeleton variant={route.skeleton ?? 'generic'} />
+  if (!Eager) return <RouteSkeleton variant={route.skeleton ?? 'generic'} />
+  return (
+    <PluginBoundary pluginId={route.pluginId} surface="route">
+      <Eager />
+    </PluginBoundary>
+  )
 }
 
 const MainRoutes: React.FC = () => {

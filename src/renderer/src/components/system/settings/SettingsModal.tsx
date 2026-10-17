@@ -7,6 +7,7 @@ import ModelSettings from './ModelSettings'
 import PluginsPanel from './PluginsPanel'
 import { useTranslation } from '@renderer/i18n'
 import { usePluginSettingsSections } from '@renderer/plugin-host/PluginHostContext'
+import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import {
   getSettingsModalState,
   setSettingsModalTab,
@@ -193,7 +194,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
       default: {
         // 插件注册页（music/graph/agents/skills/memory 等）
         const section = pluginSections.find((s) => s.tabKey === activeTab)
-        return section ? <section.Component /> : null
+        if (!section) return null
+        // 单个设置页崩溃只坏它自己：宿主设置弹窗的其它页签照常可用（否则会整页白掉）
+        return (
+          <PluginBoundary pluginId={section.pluginId} surface="settings">
+            <section.Component />
+          </PluginBoundary>
+        )
       }
     }
   }

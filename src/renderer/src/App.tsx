@@ -15,6 +15,7 @@ import type { Plugin } from '@renderer/plugin-host/types'
 import type { PluginListEntry } from '@shared/plugin/types'
 import { vendorModules } from '@renderer/plugin-host/host-ui'
 import { loadExternalPlugin } from '@renderer/plugin-host/external-loader'
+import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 
 // shell 常驻 Provider（插件系统之外的应用骨架层）。
 // 插件自己的 Provider（如音乐播放器的 AudioProvider、首页的图谱构建进度）随插件注册，
@@ -39,8 +40,21 @@ const CoreProviders = composeProviders(
 // 不重挂载；启用/停用插件时 Provider 增删本身即期望的重构。
 const PluginProvidersShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const pluginProviders = usePluginProviders()
+  // 每个 Provider 各自一层边界：某个插件的 Provider 在渲染期抛错时，只跳过它自己，
+  // 它包着的子树（fallback = 同一棵子树）照常渲染——不能因为一个 Provider 坏掉就让
+  // 整个 AppContent 变成一张错误卡片。三者的组合顺序与嵌套关系保持不变。
   const nested = pluginProviders.reduceRight(
-    (acc, p) => <p.Provider key={p.pluginId}>{acc}</p.Provider>,
+    (acc, p) => (
+      <PluginBoundary
+        key={p.pluginId}
+        pluginId={p.pluginId}
+        surface="provider"
+        quiet
+        fallback={acc}
+      >
+        <p.Provider>{acc}</p.Provider>
+      </PluginBoundary>
+    ),
     children
   )
   return <>{nested}</>

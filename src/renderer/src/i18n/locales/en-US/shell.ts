@@ -31,6 +31,14 @@ export const enUSShell: typeof zhCNShell = {
     title: 'Something unexpected happened while rendering the interface',
     reload: 'Reload'
   },
+  pluginBoundary: {
+    title: 'Plugin "{{name}}" failed to render',
+    detail: 'This surface belongs to the plugin. The host isolated the failure, so everything else keeps working.',
+    retry: 'Retry',
+    disable: 'Disable plugin',
+    disableFailed: 'Could not disable: {{error}}',
+    unavailable: 'Plugin unavailable'
+  },
   notificationList: {
     empty: 'No notifications',
     completed: 'Completed'
