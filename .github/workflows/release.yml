@@ -1,0 +1,281 @@
+name: Release
+
+# 正式版发布（用户口径 2026-10：「后续都是真实版本」）。
+#
+# - 只有 main 会出包；main 每推一次就是一次正式发版。
+# - 版本号不再拿「提交数量」拼（旧的 0.1.0-alpha.<提交数>.<重试数> 是假号），改由
+#   .github/scripts/resolve-version.mjs 算：上一个正式 tag + 本次提交类型
+#     · feat                → minor（0.1.1 → 0.2.0）
+#     · fix / 其余           → patch（0.1.0 → 0.1.1）
+#     · BREAKING CHANGE     → major（0.1.x → 1.0.0）
+#     · [release:major|minor|patch] → 提交信息里强制指定
+#   首个正式版直接取 package.json 的 0.1.0（历史 alpha tag 不参与比较）。
+# - 构建前把算出来的版本写进 package.json：安装包文件名、app.getVersion()（设置页的版本号）
+#   都是这个真号，而不是仓库里过期的 0.1.0。
+# - 发布成功后再把这个版本回写到 main（`chore(release): … [skip ci]`）：仓库里的版本号
+#   始终等于刚发出去的那个。该提交不参与下一次 bump 计算。
+# - 已经在跑的这一次不会被新推送取消（cancel-in-progress: false）；两个推送挨得很近时
+#   它们会排队，后一次从新 tag 继续算版本。
+on:
+  push:
+    branches:
+      - 'main'
+  # 只在「上次构建挂了、要重跑」时手动触发；版本已发布会自动跳过（should_release=false）
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      previous_tag: ${{ steps.resolve.outputs.previous_tag }}
+      bump: ${{ steps.resolve.outputs.bump }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 全历史 + tag：要么按上一个正式 tag 算提交，要么一条都读不到
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve next version
+        id: resolve
+        run: node .github/scripts/resolve-version.mjs
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            script: build:win
+            artifact_pattern: dist/*.exe
+          - platform: macos
+            os: macos-latest
+            script: build:mac
+            artifact_pattern: |
+              dist/*.dmg
+              dist/*.zip
+          - platform: linux
+            os: ubuntu-latest
+            script: build:linux
+            artifact_pattern: |
+              dist/*.AppImage
+              dist/*.deb
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 版本号必须在打包**之前**写进去：electron-builder 用它命名安装包、写 app.asar 里的
+      # package.json（app.getVersion() 就返回它）。
+      - name: Stamp the release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs')
+            const file = 'package.json'
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'))
+            pkg.version = process.env.RELEASE_VERSION
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n')
+          "
+          node -e "console.log('packaging version ' + require('./package.json').version)"
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # 沙箱资产（resources/sandbox）由 build:sandbox 产出，而 build:win/mac/linux 的第一步就是它；
+      # 下面两步分别验证「资产构建成功」与「装进产物」，任何一步失败都让发布停下来
+      # ——否则会出现「装完即用」失效：后端缺失 → 命令被故障关闭、直接拒绝执行。
+      - name: Build installer
+        run: pnpm ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify sandbox assets were built
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f resources/sandbox/win32-sandbox-runner.cjs
+          case "${{ matrix.platform }}" in
+            linux)
+              launcher=$(ls resources/sandbox/linux-*/ryten-landlock-launcher | head -n1)
+              test -n "${launcher}"
+              test -x "${launcher}"
+              # 真跑一次：证明这个内核上「自限 + exec」确实可用（不是只编出了个文件）
+              "${launcher}" --ro / --rw /dev -- true
+              echo "Linux 启动器可用：${launcher}"
+              ;;
+            macos)
+              echo "macOS 用系统自带 sandbox-exec，无需自带二进制"
+              ;;
+          esac
+          ls -la resources/sandbox
+
+      # 真正的闸门：拿**打包产物**里的沙箱做一次真机自检（Windows 用产物里的 Electron
+      # 二进制跑 runner、Linux 跑自研启动器），含「工作区外写入必须被拒」与「对照组可写」。
+      # 这一步曾经不存在，于是「runner 在 Electron 里崩」这类只在打包后才暴露的问题没人拦。
+      - name: Verify the packaged app carries a working sandbox
+        run: node native/build-sandbox.mjs --selfcheck
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: ${{ matrix.artifact_pattern }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish ${{ needs.version.outputs.tag }}
+    needs: [version, build]
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 用事件里的那个提交：tag 与说明必须落在**实际被打包**的提交上
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-windows
+          path: release/windows
+
+      - name: Download macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-macos
+          path: release/macos
+
+      - name: Download Linux installer
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-linux
+          path: release/linux
+
+      - name: Compose release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BUMP: ${{ needs.version.outputs.bump }}
+          PREVIOUS_TAG: ${{ needs.version.outputs.previous_tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            git log --no-merges --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..${SHA}" > all-changes.txt
+          else
+            # 首个正式版：没有可对比的 tag，列出最近 40 条说明这一版装了什么
+            git log --no-merges --pretty=format:'- %s (%h)' -n 40 "${SHA}" > all-changes.txt
+          fi
+          head -n 60 all-changes.txt > changes.txt || true
+          if [ ! -s changes.txt ]; then
+            printf '%s\n' '- 版本号回写与文档更新。' > changes.txt
+          fi
+          {
+            echo '## Changes'
+            cat changes.txt
+            echo
+            echo '## Build Info'
+            echo "- Version: ${VERSION}"
+            echo "- Bump: ${BUMP}"
+            echo "- Commit: ${SHA}"
+            echo '- Platforms: Windows (NSIS), macOS (DMG/ZIP), Linux (AppImage/DEB)'
+          } > release-body.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          body_path: release-body.md
+          files: |
+            release/windows/*.exe
+            release/macos/*.dmg
+            release/macos/*.zip
+            release/linux/*.AppImage
+            release/linux/*.deb
+          # 缺任何一个平台的产物就不发：宁可这一次失败，也不要发一个只有一半文件的正式版
+          fail_on_unmatched_files: true
+          prerelease: false
+          make_latest: true
+
+  # 把刚发出去的版本记回仓库：此后 package.json 的版本 == 最新正式版，
+  # 下一位接手的人（或下一轮工作流）不会看到一个过期的 0.1.0。
+  stamp:
+    name: Record ${{ needs.version.outputs.version }} in package.json
+    needs: [version, release]
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: 'main'
+          fetch-depth: 0
+
+      - name: Commit the released version back to main
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node -e "
+            const fs = require('fs')
+            const file = 'package.json'
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'))
+            pkg.version = process.env.VERSION
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n')
+          "
+          if git diff --quiet -- package.json; then
+            echo "package.json 已经是 ${VERSION}，无需回写"
+            exit 0
+          fi
+          git add package.json
+          git commit -m "chore(release): ${VERSION} [skip ci]"
+          # 发版期间若有人又推了 main，先 rebase 再推一次；仍失败就让这一步红着脸报错
+          git push origin HEAD:main || { git pull --rebase origin main; git push origin HEAD:main; }
