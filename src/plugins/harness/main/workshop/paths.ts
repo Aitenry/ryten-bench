@@ -56,6 +56,17 @@ export function exportsRoot(): string {
 }
 
 /**
+ * 覆盖草稿前的**备份目录**：`<userData>/plugin-workshop/backups/<id>-<时间戳>/`。
+ *
+ * 为什么需要：`plugin_draft create --overwrite` 的对象是用户自己选定的源码目录
+ * （能进 git、能用编辑器打开），直接 `rm -rf` 等于把可能还没提交的工作一起删掉。
+ * 覆盖前先整份拷到这里，至少留一条后悔路；保留最近若干份，不让它无限长。
+ */
+export function backupsRoot(): string {
+  return path.join(workshopRoot(), 'backups')
+}
+
+/**
  * 旧版草稿目录（每份草稿在自己的工作目录特性之前，源码都落在 `<userData>/plugin-workshop/drafts/`）。
  *
  * 现在只用来**迁移**：用户第一次配置插件存放路径时，这里已有的草稿会被搬过去，
@@ -135,6 +146,22 @@ const DRAFT_ID_MAX = 40
  */
 export const RESERVED_DRAFT_IDS: ReadonlySet<string> = new Set(['host'])
 
+/**
+ * Windows 保留设备名：`con` / `prn` / `aux` / `nul` / `com1..9` / `lpt1..9`。
+ *
+ * 这些名字完全符合 kebab 规则，但在 Windows 上 `mkdir('con')` 会失败（或被当成设备）；
+ * 插件 id 同时是目录名，所以必须在这里挡掉，而不是在建目录时抛系统错误。
+ * 其它平台不需要，但「同一份草稿在哪都能建」比按平台分叉简单。
+ */
+const WINDOWS_DEVICE_NAMES: ReadonlySet<string> = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`)
+])
+
 /** 校验草稿 id（不合法直接抛可读错误） */
 export function assertDraftId(id: unknown): string {
   if (typeof id !== 'string' || id === '') {
@@ -150,6 +177,9 @@ export function assertDraftId(id: unknown): string {
   }
   if (RESERVED_DRAFT_IDS.has(id)) {
     throw new Error(`草稿 id '${id}' 是宿主保留 id，请换一个名字`)
+  }
+  if (WINDOWS_DEVICE_NAMES.has(id)) {
+    throw new Error(`草稿 id '${id}' 是 Windows 保留设备名，请换一个名字（例如 '${id}-app'）`)
   }
   return id
 }

@@ -1,13 +1,14 @@
 import * as path from 'path'
 import {
   createWorkspace,
-  getAllWorkspaces,
+  findWorkspaceByPath,
+  getWorkspacesByKind,
   reparentPluginTopics,
+  setWorkspaceKind,
   updateWorkspace
 } from '../db/mapper/harness'
 import type { WorkspaceRow } from '../db/mapper/harness'
-import { isSameFsPath } from '../../shared/workshop'
-import { draftDir, pluginsRootPath } from './paths'
+import { draftDir } from './paths'
 import { draftSummary } from './service'
 
 /**
@@ -33,8 +34,7 @@ import { draftSummary } from './service'
 /** 某份插件的插件工作区（没有则 null，不创建） */
 export async function findPluginWorkspace(pluginId: string): Promise<WorkspaceRow | null> {
   const dir = draftDir(pluginId)
-  const rows = await getAllWorkspaces()
-  return rows.find((row) => isSameFsPath(row.path, dir)) ?? null
+  return await findWorkspaceByPath(dir)
 }
 
 /**
@@ -44,21 +44,23 @@ export async function findPluginWorkspace(pluginId: string): Promise<WorkspaceRo
  * - 把插件行和它自己的会话对上（`draftId` → `workspaceId`）；
  * - 把插件工作区从「工作」列表里滤掉（用户口径 2026-09-28「插件目录不进『工作』列表」）。
  *
- * 判定 = 「路径是插件存放路径的直接子目录」：这样连**草稿已经删掉**的插件工作区也认得出来
- * （否则它会漏进工作列表），也不需要读草稿目录。
+ * 判据 = 行自己的 `kind='plugin'`（0010 起的单一真源）。此前是「路径是插件存放路径的直接
+ * 子目录」现算——插件根一改配置、或用户恰好把工作区选在插件根下面，同一条记录就会被
+ * 两个列表都说成是自己那一类；`kind` 没有这个问题。**草稿已经删掉**的插件工作区照样算数
+ * （kind 不会因为草稿没了而变），正是这里需要的语义。
  */
 export async function listPluginWorkspaces(): Promise<
   { draftId: string; workspaceId: number; path: string }[]
 > {
-  const root = pluginsRootPath()
-  if (!root) return []
-  const rows = await getAllWorkspaces()
+  const rows = await getWorkspacesByKind('plugin')
   const result: { draftId: string; workspaceId: number; path: string }[] = []
   for (const row of rows) {
     if (!row.path) continue
-    const resolved = path.resolve(row.path)
-    if (!isSameFsPath(path.dirname(resolved), root)) continue
-    result.push({ draftId: path.basename(resolved), workspaceId: row.id, path: row.path })
+    result.push({
+      draftId: path.basename(path.resolve(row.path)),
+      workspaceId: row.id,
+      path: row.path
+    })
   }
   return result
 }
@@ -79,10 +81,12 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
       // 插件改过名：工作区名跟着走（这些行不在「工作」列表里，用户不会自己去改名）
       await updateWorkspace(existing.id, { name })
     }
+    // 0010 之前建的行 kind 还是默认的 'user'：认领时就地分类，别再塞回「工作」列表
+    if (existing.kind !== 'plugin') await setWorkspaceKind(existing.id, 'plugin')
     await reparentPluginTopics(existing.id, `plugin:${pluginId}`)
-    return { ...existing, name }
+    return { ...existing, name, kind: 'plugin' }
   }
-  const id = await createWorkspace(name, dir)
+  const id = await createWorkspace(name, dir, 'plugin')
   const created = await findPluginWorkspace(pluginId)
   if (!created) {
     // 刚建完必然查得到；查不到说明库出了别的问题，如实抛出去而不是编一行假数据

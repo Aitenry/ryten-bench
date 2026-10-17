@@ -1,4 +1,5 @@
 import type { WorkshopTemplate } from '../../shared/workshop'
+import { pickDeclaredMenuIcon } from '../../../../shared/plugin/menu-icons'
 
 /**
  * 草稿模板：`plugin_draft create` 生成的骨架。
@@ -88,27 +89,25 @@ export function toolNameOf(id: string, suffix = 'echo'): string {
 const MENU_ICON_FALLBACK = 'RiPlugLine'
 
 /**
- * 宿主 `src/renderer/src/plugin-host/declared-icons.tsx` 的 `DECLARED_MENU_ICONS` 名单。
- *
- * 这份名单**只影响首帧**：清单里的 `menu.icon` 是字符串，宿主要靠它换成组件；
- * 名单外的名字一律先回退成通用图标（不报错，等插件真实注册后覆盖）。
- * 放在这里是「宿主加图标时要同步改两份」的显式提醒（源码守卫会核对两边一致）。
- */
-const DECLARED_MENU_ICONS = ['RiDashboardLine', 'RiCalendar2Line', 'RiDiscLine', 'RiChatAiLine']
-
-/**
  * 给这份草稿挑一枚「首帧就能显示」的菜单图标名。
  *
  * 两个条件必须同时成立：
- * 1. 名字在宿主 `DECLARED_MENU_ICONS` 名单里 —— 否则首帧是通用图标；
+ * 1. 名字在共享名单 `@shared/plugin/menu-icons` 里 —— 否则首帧是通用图标；
  * 2. 名字在宿主装的 `@remixicon/react` 里**真实存在** —— 否则运行期拿到 `undefined`，
- *    JSX 直接抛「Element type is invalid」白屏（名单里的四枚都核对过）。
+ *    JSX 直接抛「Element type is invalid」白屏（工装会核对名单里的每一枚）。
  *
  * 同一枚名字还要用在 `renderer/plugin.tsx` 的 `ctx.use('menu').register({ icon })` 里：
  * 清单图标与真实注册不一致时，首帧与注册后会出现两个图标。
+ *
+ * 按 id 散列选（见 `pickDeclaredMenuIcon`）：所有草稿都用同一个图标时，侧栏里
+ * 几份草稿长得一模一样，用户分不出谁是谁。
  */
-export function menuIconOf(): string {
-  return DECLARED_MENU_ICONS[0] ?? MENU_ICON_FALLBACK
+export function menuIconOf(id?: string): string {
+  try {
+    return pickDeclaredMenuIcon(id ?? '') ?? MENU_ICON_FALLBACK
+  } catch {
+    return MENU_ICON_FALLBACK
+  }
 }
 
 /** SQL 标识符里的安全形态（表名/索引名只能由字母数字下划线组成） */
@@ -452,9 +451,6 @@ export default function Settings(): React.JSX.Element {
       <Typography.Title level={5} style={{ marginTop: 0 }}>
         ${vars.title}
       </Typography.Title>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        这一页由插件自己注册（settingsSection 挂载点），停用插件后这一页随之消失。
-      </Typography.Paragraph>
       <Space direction="vertical" size={12} style={{ width: '100%', maxWidth: 560 }}>
         <div className="flex items-center justify-between gap-4">
           <span>启用示例开关</span>
@@ -788,6 +784,8 @@ import { withOrm } from '@host/main/database/orm'
  *
  * 三条约束：
  * - **幂等**：一律 \`IF NOT EXISTS\`，插件每次装载都会跑一遍；
+ * - **升级只做加法**：以后加列就往下补一条 \`ALTER TABLE … ADD COLUMN IF NOT EXISTS\`，
+ *   数据迁移写成带 \`WHERE\` 保护的幂等 UPDATE；**不删列、不改列类型**（旧数据会丢）；
  * - **只动自己的表**：表名带插件前缀，绝不碰别的插件或宿主的表；
  * - **装载期就可以调用**：插件主模块是在**数据库初始化之前**被宿主装载的
  *   （\`initPluginHost()\` 早于 \`createLoadingWindow()\`），所以这里不能在装载期假设库已就绪。
@@ -2277,9 +2275,6 @@ export default function Settings(): React.JSX.Element {
       <Typography.Title level={5} style={{ marginTop: 0 }}>
         {t('${vars.id}.settings.title')}
       </Typography.Title>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        {t('${vars.id}.settingsPage.intro')}
-      </Typography.Paragraph>
       <div className="flex max-w-[560px] flex-col gap-3">
         <div className="flex items-center justify-between gap-4">
           <span>{t('${vars.id}.settingsPage.enabledLabel')}</span>
@@ -2297,9 +2292,6 @@ export default function Settings(): React.JSX.Element {
         <Button type="primary" loading={busy} onClick={() => void save({ note: settings.note })}>
           {t('${vars.id}.settingsPage.save')}
         </Button>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {t('${vars.id}.settingsPage.storageHint')}
-        </Typography.Text>
       </div>
     </div>
   )
@@ -2358,7 +2350,7 @@ export default plugin
 `
 }
 
-/** 完整骨架的冒烟用例：真的走一遍「建一条 → 列出来」 */
+/** 完整骨架的冒烟用例：真的走一遍「建一条 → 列出来 → 设置能存住」，并把写进去的还原 */
 function fullSmoke(vars: TemplateVars): string {
   return `/**
  * 草稿自带的冒烟用例（工坊验收电池会执行它）。
@@ -2368,9 +2360,15 @@ function fullSmoke(vars: TemplateVars): string {
  * 加新通道时在这里补一条——它比「装上去点一下」更早发现问题。
  *
  * 这几条连起来就是一条业务路径：**建一条记录 → 列出来能看见它 → 设置能存住**。
+ * \`cleanup\` 会把这些操作写进用户库/设置文件的东西还原（验收不该留下 smoke-item，
+ * 也不该把用户的开关改成 false）：参数里的 \`$result:<通道名>#<字段>\` 指向前面的返回值。
  */
 export default {
   channels: {
+    'plugin:${vars.id}:settings-get': {
+      args: [],
+      expect: (value) => value && typeof value === 'object'
+    },
     'plugin:${vars.id}:items-create': {
       args: [{ title: 'smoke-item', note: 'created by workshop smoke' }],
       expect: (value) => value && value.title === 'smoke-item' && typeof value.id === 'number'
@@ -2383,27 +2381,57 @@ export default {
       args: [{ enabled: false, note: 'smoke' }],
       expect: (value) => value && value.enabled === false && value.note === 'smoke'
     }
-  }
+  },
+  cleanup: [
+    {
+      channel: 'plugin:${vars.id}:settings-set',
+      args: ['$result:plugin:${vars.id}:settings-get']
+    },
+    {
+      channel: 'plugin:${vars.id}:items-delete',
+      args: ['$result:plugin:${vars.id}:items-create#id'],
+      expect: (value) => value === true
+    }
+  ]
 }
 `
 }
 
-/** 冒烟用例（工坊的验收电池会真的调用这些通道；模板变量由调用方拼进 channel/args/expect） */
-function smokeFile(channel: string, args: string, expect: string): string {
+/**
+ * 冒烟用例文件（工坊的验收电池会真的调用这些通道）。
+ *
+ * `cleanup` 里的参数可以写 `$result:<通道名>#<字段>` 引用前面用例的返回值——
+ * 验收会真的读写用户数据库/设置文件，跑完必须还原（见 verify.ts 的 `resolveSmokeArgs`）。
+ */
+function smokeFile(options: {
+  cases: Array<{ channel: string; args: string; expect: string }>
+  cleanup?: Array<{ channel: string; args: string }>
+}): string {
+  const cases = options.cases
+    .map(
+      (entry) =>
+        `    '${entry.channel}': {\n      args: ${entry.args},\n      expect: ${entry.expect}\n    }`
+    )
+    .join(',\n')
+  const cleanup = options.cleanup?.length
+    ? `\n  cleanup: [\n${options.cleanup
+        .map((entry) => `    {\n      channel: '${entry.channel}',\n      args: ${entry.args}\n    }`)
+        .join(',\n')}\n  ],`
+    : ''
   return `/**
  * 草稿自带的冒烟用例（工坊验收电池会执行它）。
  *
  * 语义：\`channels\` 里的每一项都会用**真实装载的插件**调用对应 IPC 处理器，
  * 参数是 args 数组，返回值交给 expect 断言（返回 true = 通过，返回字符串 = 失败原因）。
+ * \`cleanup\` 在全部用例之后**无论如何都会执行**，用来把验收写进用户库/设置里的东西
+ * 还原——参数里的 \`$result:<通道名>#<字段>\` 指向前面的用例返回值。
+ *
  * 没写这个文件时工坊只做契约级冒烟（能装载、通道命名合法、可回滚）。
  */
 export default {
   channels: {
-    '${channel}': {
-      args: ${args},
-      expect: ${expect}
-    }
-  }
+${cases}
+  },${cleanup}
 }
 `
 }
@@ -2419,7 +2447,7 @@ export function renderTemplate(
   vars: TemplateVars
 ): Record<string, string> {
   // 菜单图标在这里统一定：清单字符串与渲染层注册的组件必须同一枚（`menuIconOf` 的口径见其注释）
-  const resolved: TemplateVars = { ...vars, menuIcon: vars.menuIcon ?? menuIconOf() }
+  const resolved: TemplateVars = { ...vars, menuIcon: vars.menuIcon ?? menuIconOf(vars.id) }
   const files: Record<string, string> = {
     'WORKSHOP.md': workshopDoc(template, resolved),
     'renderer/context.ts': RENDERER_CONTEXT_DTS,
@@ -2434,11 +2462,27 @@ export function renderTemplate(
       files['main/index.ts'] = panelMain(resolved)
       files['renderer/plugin.tsx'] = panelPlugin(resolved)
       files['renderer/Settings.tsx'] = panelComponent(resolved)
-      files['workshop.smoke.mjs'] = smokeFile(
-        `plugin:${resolved.id}:settings-set`,
-        "[{ enabled: true, note: 'smoke' }]",
-        "(value) => value && value.enabled === true && value.note === 'smoke'"
-      )
+      files['workshop.smoke.mjs'] = smokeFile({
+        cases: [
+          {
+            channel: `plugin:${resolved.id}:settings-get`,
+            args: '[]',
+            expect: '(value) => value && typeof value === "object"'
+          },
+          {
+            channel: `plugin:${resolved.id}:settings-set`,
+            args: "[{ enabled: true, note: 'smoke' }]",
+            expect: "(value) => value && value.enabled === true && value.note === 'smoke'"
+          }
+        ],
+        // 验收会真的改设置文件：跑完把原值放回去（用户不该因为「验一下」被改配置）
+        cleanup: [
+          {
+            channel: `plugin:${resolved.id}:settings-set`,
+            args: `['$result:plugin:${resolved.id}:settings-get']`
+          }
+        ]
+      })
       break
 
     case 'tool':
@@ -2469,11 +2513,26 @@ export function renderTemplate(
       files['main/index.ts'] = pageMain(resolved)
       files['renderer/plugin.tsx'] = pagePlugin(resolved)
       files['renderer/Page.tsx'] = pageComponent(resolved)
-      files['workshop.smoke.mjs'] = smokeFile(
-        `plugin:${resolved.id}:state-set`,
-        "['smoke-value']",
-        "(value) => value && value.value === 'smoke-value'"
-      )
+      files['workshop.smoke.mjs'] = smokeFile({
+        cases: [
+          {
+            channel: `plugin:${resolved.id}:state-get`,
+            args: '[]',
+            expect: '(value) => value && typeof value === "object"'
+          },
+          {
+            channel: `plugin:${resolved.id}:state-set`,
+            args: "['smoke-value']",
+            expect: "(value) => value && value.value === 'smoke-value'"
+          }
+        ],
+        cleanup: [
+          {
+            channel: `plugin:${resolved.id}:state-set`,
+            args: `['$result:plugin:${resolved.id}:state-get#value']`
+          }
+        ]
+      })
       break
 
     case 'full':
@@ -2650,6 +2709,10 @@ export async function listItems() {
 \`\`\`
 
 - **表名前缀 = 插件 id 的 SQL 形态**（\`${sqlNameOf(vars.id)}_\`）：一个库里装着所有插件的表，撞名就是事故；
+- **表结构只做加法**：升级用 \`ALTER TABLE … ADD COLUMN IF NOT EXISTS\` / \`CREATE INDEX IF NOT EXISTS\`；
+  不删列、不改列类型、不改主键（旧数据会丢，卸载重装后的库还会和迁移记录分叉）。
+  数据迁移写成**幂等 UPDATE**（带 \`WHERE\` 保护、目标键已存在时跳过）——真实插件
+  （ryten-plugins 的 douyin-link）就是这么把旧画像键补上角色后缀的，升级不丢用户已经花过钱的数据；
 - \`@host/main/database/orm\` 的 \`withOrm(op, fn)\` 给 drizzle 实例并统一记异常（务必用它，别自己拿连接）；
 - \`schemaReady\` 是承诺：装载即建表，但**不保证建表先于第一次查询**，mapper / purge 都要 await 它；
 - **插件是在数据库初始化之前被装载的**（宿主 \`initPluginHost()\` 早于 \`createLoadingWindow()\`）：
@@ -2790,11 +2853,44 @@ export default {
       args: ['参数1', 2],
       expect: (value) => value?.ok === true || '失败原因'
     }
-  }
+  },
+  // 验收会真的读写用户库/设置：收尾把它们还原（$result:<通道>#<字段> 指向前面的返回值）
+  cleanup: [
+    { channel: 'plugin:${vars.id}:some-reset', args: ['$result:plugin:${vars.id}:some-get#value'] }
+  ]
 }
 \`\`\`
 
-## 8. 做完之后
+- \`channels\`：每条用真实 handler 调用一次，\`expect\` 返回 true = 通过、字符串 = 失败原因；
+- \`cleanup\`：**无论前面的用例是否通过都会执行**。模板自带的冒烟会建一条记录、改一次设置，
+  所以都带收尾——否则用户下次打开插件会看到 \`smoke-item\`，设置也被改成 false；
+- 收尾失败同样算验收失败：「验一下就改了用户数据」不是可接受的行为。
+
+## 8. 不要影响宿主运转（硬约束）
+
+插件主进程代码跑在宿主进程里、渲染层代码跑在宿主页面里——「能做什么」不是一张权限表
+能挡住的。因此下面几条既是**验收会判失败的**（\`safety.scan\`），也是运行期会被拦截/降级的：
+
+- **不要 \`process.exit()\` / \`process.abort()\` / \`process.kill(自己)\`**：宿主会把它拦成一次
+  可读错误（在 IPC handler 里就是这次调用失败，在 \`install\` 里就是插件装载失败）。
+  应用的生命周期归宿主。发布前验收命中即 **FAIL**。
+- **不要直接 \`ipcMain.handle\` / \`ipcMain.on\`**：通道一律经 \`ctx.registerIpc\` 注册，
+  否则停用/卸载时摘不掉——一个插件就能在宿主里留下永远应答的通道。验收命中即 **FAIL**。
+- **全局样式不许动宿主**：\`html\` / \`body\` / \`#root\` / \`*\` / \`.custom-frame\` / \`.frame-*\` /
+  \`.custom-scrollbar\` / \`.ant-app\` / \`.ant-*\`（antd 全局组件）的规则会在注入前被**丢弃**，
+  \`:root\` 只允许放 \`--变量\`。插件自己的样式写成类名（Tailwind 工具类，或带自己的前缀的类），
+  只作用在自己的 DOM 上；要改 antd 组件就用 token 或 \`ConfigProvider\`，不要全局改类名。
+- **\`install\` 里不做重活**：装载期只登记通道/贡献/路由；建表、读盘、起网络与定时器放进
+  \`ctx.effect\`，并且返回的清理函数要真的停掉它们（停用插件后不该还有定时器在跑）。
+- **后台循环要能被停掉、也要自己兜错**：\`setInterval\` 的回调里自己 \`try/catch\`（未捕获异常
+  会以「插件崩溃」的样子冒到宿主日志）；间隔别小于 1s；批量查库要分页，不要一次
+  \`select *\` 几十万行把主进程卡住。
+- **只写自己的数据**：数据进自己的表（表名带插件前缀）、设置进
+  \`userData/plugin-state/${vars.id}.json\`；绝不写用户工作区，也不删/改别的插件的表与文件。
+- **AI 工具要有边界**：外部请求设超时、结果截断（工具输出会原样进对话），不要把整库数据
+  一次返回给模型。
+
+## 9. 做完之后
 
 1. \`plugin_build\`：构建 + 静态审计（清单、宿主契约、体积）；
 2. \`plugin_verify\`：跑完整验收电池（含真实装载 main.cjs 的冒烟与渲染层探针），报告逐项给结论；
@@ -2809,6 +2905,12 @@ export default {
 - [ ] **暗色主题**：切到暗色（设置 → 外观）后没有白底白字、没有比背景还亮的网格线，
       代码里搜不到 \`dark:\` 与字面量色值；
 - [ ] **词条**：新增的文案都进 \`locales/\`（中英逐键对齐），界面上没有 \`${vars.id}.xxx\` 这样的原始键名；
+- [ ] **不碰宿主生命周期**：没有 \`process.exit\` / \`process.abort\` / 直接 \`ipcMain.*\`
+      （\`safety.scan\` 全过），通道都走 \`ctx.registerIpc\`；
+- [ ] **样式不外溢**：\`plugin.css\` 里没有 \`html\` / \`body\` / \`#root\` / \`*\` / 宿主外壳类名 /
+      \`.ant-*\`，\`:root\` 只有变量；
+- [ ] **后台任务可停**：定时器/网络请求都在 \`ctx.effect\` 里，返回的清理函数真的停掉它们，
+      回调自己 \`try/catch\`（停用插件后不该还有活着的定时器）；
 - [ ] **通道闭环**：渲染层用到的每个通道都在 \`main/ipc.ts\` 里注册、事件通道在 \`main/index.ts\` 里 \`registerEvent\`；
 - [ ] **版本号**：改了代码就把 \`plugin.json\` 的 \`version\` 升一位（面板据此显示更新）；
 - [ ] **数据与清理**：应用数据进自己的表、设置进 \`plugin-state/\`，\`PLUGIN_PURGE\` 的 \`label\` 写清「会删什么」。

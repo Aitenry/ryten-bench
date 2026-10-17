@@ -92,11 +92,13 @@ resources/plugins/<id>/      ──▶   userData/plugins/<id>/
 打包后统计出的接口面（去重，2026-09-26 实测；契约以 `src/main/plugins/runtime.ts` 与
 `src/renderer/src/plugin-host/host-ui.ts` 的表为准，`node test/audit-plugin-host-contract.mjs` 会核对）：
 
-**主进程 21 个**：`@host/main/` 下的 `context`（settingsStore）、
+**主进程 23 个**：`@host/main/` 下的 `context`（settingsStore）、
 `database/{instance,orm,schema,schema/common,schema/workspace,workspace-context}`、
 `database/mapper/provider`、`i18n`、`i18n/tool-results-{agent,docs,fs,todos}`、
 `plugins/{app-events,app-hooks,contributions,tool-contract}`、
-`provider/{cache,service}`、`safe-send`、`shared/weather-utils`，外加 `@host/shared/model-params`。
+`provider/{cache,service}`、`safe-send`、`shared/weather-utils`，外加
+`@host/shared/{model-params,plugin/css-safety,plugin/menu-icons}`（后两个是插件样式保护与
+声明式菜单图标名单：工坊与宿主 UI 共用同一份，**纯 TS、无副作用**）。
 
 **插件工坊追加的 7 个**（2026-09-27）：`plugins/{host,host-ui-bridge,lifecycle,package-install,scanner,store}`
 与 `ipc/plugins` —— 工坊（`src/plugins/harness/main/workshop/`）装/卸插件时借的是宿主自己那套函数。

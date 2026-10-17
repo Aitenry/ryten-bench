@@ -1,4 +1,4 @@
-﻿import * as fs from 'fs'
+import * as fs from 'fs'
 import * as path from 'path'
 import { builtinModules } from 'node:module'
 import type {
@@ -18,6 +18,7 @@ import {
 import { missingClasses, scanDraftCandidates } from './css'
 import { scanWorkshopLayouts } from './layout'
 import { isWorkshopConfigured, workshopHostOrNull, type WorkshopHost } from './host'
+import { sanitizePluginCss } from '../../../../shared/plugin/css-safety'
 
 /**
  * 验收电池：把「这个插件装上去能不能用」变成一组可复现的检查。
@@ -116,8 +117,21 @@ function contextFacade(record: RecordingContext): Record<string, unknown> {
 }
 
 /** 冒烟用例（`workshop.smoke.mjs`）的结构 */
+interface SmokeCase {
+  args?: unknown[]
+  expect?: unknown
+}
 interface SmokeCases {
-  channels: Record<string, { args?: unknown[]; expect?: unknown }>
+  channels: Record<string, SmokeCase>
+  /**
+   * 收尾调用：**无论前面的用例通过与否都会执行**，用来把验收自己写进用户库/设置里的
+   * 东西还原（验收不该改变用户的真实数据）。
+   *
+   * 参数里可以用 `$result:<通道名>#<字段路径>` 引用前面某条用例的返回值，
+   * 例如 `$result:plugin:demo:items-create#id`、`$result:plugin:demo:settings-get`
+   * （整份对象作为参数）。
+   */
+  cleanup?: Array<SmokeCase & { channel?: string }>
 }
 
 /**
@@ -143,6 +157,9 @@ function loadSmokeCases(draftRoot: string): { cases: SmokeCases | null; error?: 
     const value = new Function(`return (${match[1]});`)() as SmokeCases
     if (!value || typeof value !== 'object' || typeof value.channels !== 'object') {
       return { cases: null, error: 'workshop.smoke.mjs 的 default 需要形如 { channels: { … } }' }
+    }
+    if (value.cleanup !== undefined && !Array.isArray(value.cleanup)) {
+      return { cases: null, error: 'workshop.smoke.mjs 的 cleanup 需要是数组' }
     }
     return { cases: value }
   } catch (err) {
@@ -170,6 +187,39 @@ async function runExpect(
   return same
     ? { ok: true }
     : { ok: false, detail: `期望 ${JSON.stringify(expect)}，实际 ${JSON.stringify(value)}` }
+}
+
+/**
+ * 解析 cleanup 参数里的结果引用：`$result:<通道名>#<a.b.c>`（`#` 后面可省略 = 整份返回值）。
+ *
+ * 通道名本身带冒号（`plugin:<id>:items-create`），所以用**最后一个 `#`** 切分，
+ * 不能用 `:` 切。
+ */
+function resolveSmokeArgs(
+  args: unknown[] | undefined,
+  results: Map<string, unknown>
+): { args: unknown[]; missing: string[] } {
+  const missing: string[] = []
+  const resolved = (Array.isArray(args) ? args : []).map((arg) => {
+    if (typeof arg !== 'string' || !arg.startsWith('$result:')) return arg
+    const body = arg.slice('$result:'.length)
+    const hash = body.lastIndexOf('#')
+    const channel = hash === -1 ? body : body.slice(0, hash)
+    const path = hash === -1 ? '' : body.slice(hash + 1)
+    if (!results.has(channel)) {
+      missing.push(arg)
+      return undefined
+    }
+    let value = results.get(channel)
+    if (path !== '') {
+      for (const segment of path.split('.')) {
+        if (value === null || typeof value !== 'object') return undefined
+        value = (value as Record<string, unknown>)[segment]
+      }
+    }
+    return value
+  })
+  return { args: resolved, missing }
 }
 
 /** 清单检查（工坊自己的一份：提示要能直接落到「改哪个字段」） */
@@ -227,6 +277,53 @@ const RISK_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /webContents\.(send|executeJavaScript)/, label: '直接操作渲染进程（webContents）' },
   { re: /ipcMain\.(handle|on)\(/, label: '绕过 ctx.registerIpc 直接注册通道' }
 ]
+
+/**
+ * **会破坏宿主运转**的调用（与 `risk.scan` 的区别：这些是 FATAL，不修就不许发布）。
+ *
+ * 清单刻意很短：只收「一个插件就能让整个应用消失/留下摘不掉的通道」这一类确定性问题。
+ * `child_process`、`eval` 这类只是有风险、很多正当用途，留在 `risk.scan` 里提示。
+ * 运行期还有 `main/plugins/plugin-guard.ts` 兜底拦截 exit/abort/kill-self。
+ */
+const HOST_SAFETY_RULES: Array<{ re: RegExp; label: string; hint: string }> = [
+  {
+    re: /\bprocess\.exit\s*\(/,
+    label: 'process.exit()',
+    hint: '删掉退出调用：插件是宿主的一部分，应用何时退出由宿主决定（运行期也会被拦截）'
+  },
+  {
+    re: /\bprocess\.abort\s*\(/,
+    label: 'process.abort()',
+    hint: '删掉 abort：它会让整个应用无清理地死掉（运行期也会被拦截）'
+  },
+  {
+    re: /\bprocess\.kill\s*\(\s*process\.pid/,
+    label: 'process.kill(自己)',
+    hint: '删掉自杀调用：应用何时退出由宿主决定（运行期也会被拦截）'
+  },
+  {
+    re: /\bipcMain\s*\.\s*(?:handle|handleOnce|on)\s*\(/,
+    label: '直接注册 ipcMain 通道',
+    hint: '通道一律经 ctx.registerIpc 注册，否则停用/卸载时摘不掉（宿主会留下永远应答的通道）'
+  }
+]
+
+/** 扫描主进程产物里的「破坏宿主」调用（产物是压缩过的，正则只看调用形态） */
+function safetyScan(outDir: string): Array<{ label: string; hint: string; file: string }> {
+  const file = path.join(outDir, 'main.cjs')
+  if (!fs.existsSync(file)) return []
+  let code = ''
+  try {
+    code = fs.readFileSync(file, 'utf-8')
+  } catch {
+    return []
+  }
+  const findings: Array<{ label: string; hint: string; file: string }> = []
+  for (const rule of HOST_SAFETY_RULES) {
+    if (rule.re.test(code)) findings.push({ label: rule.label, hint: rule.hint, file: 'main.cjs' })
+  }
+  return findings
+}
 
 function riskScan(outDir: string): string[] {
   const findings = new Set<string>()
@@ -358,6 +455,8 @@ async function runMainSmoke(
     smoke.cases.push({ name: 'workshop.smoke.mjs', ok: false, detail: loadedCases.error })
     problems.push(loadedCases.error)
   } else if (loadedCases.cases) {
+    /** 用例通道名 → 返回值（cleanup 的 `$result:` 引用靠它解析） */
+    const results = new Map<string, unknown>()
     for (const [channel, test] of Object.entries(loadedCases.cases.channels ?? {})) {
       const caseStarted = Date.now()
       const handler = record.channels[channel] as ((...args: unknown[]) => unknown) | undefined
@@ -372,6 +471,7 @@ async function runMainSmoke(
       }
       try {
         const value = await Promise.resolve(handler(...(test?.args ?? [])))
+        results.set(channel, value)
         const verdict = await runExpect(test?.expect, value)
         smoke.cases.push({
           name: channel,
@@ -388,6 +488,61 @@ async function runMainSmoke(
         })
       }
     }
+
+    /**
+     * 收尾：验收**不能改变用户的真实数据**。
+     *
+     * 模板里的冒烟会真的建记录、改设置（那是唯一能证明通道闭环的办法），因此必须
+     * 用 `cleanup` 把它们还原。收尾失败也算验收失败——否则用户下次打开插件会看到
+     * 一堆名叫 `smoke-item` 的脏数据，或者设置被悄悄改成了 false。
+     */
+    for (const step of loadedCases.cases.cleanup ?? []) {
+      const channel = typeof step.channel === 'string' ? step.channel : ''
+      const caseStarted = Date.now()
+      if (channel === '') {
+        smoke.cases.push({ name: 'cleanup', ok: false, detail: 'cleanup 缺少 channel' })
+        continue
+      }
+      const handler = record.channels[channel] as ((...args: unknown[]) => unknown) | undefined
+      if (typeof handler !== 'function') {
+        smoke.cases.push({
+          name: `cleanup ${channel}`,
+          ok: false,
+          detail: '收尾通道不存在',
+          durationMs: Date.now() - caseStarted
+        })
+        continue
+      }
+      const resolved = resolveSmokeArgs(step.args, results)
+      if (resolved.missing.length > 0) {
+        // 前置用例没跑成 → 没有可还原的结果；这不是收尾本身的失败（避免连锁报错）
+        smoke.cases.push({
+          name: `cleanup ${channel}`,
+          ok: true,
+          detail: `跳过（前置结果不可用：${resolved.missing.join('、')}）`,
+          durationMs: Date.now() - caseStarted
+        })
+        continue
+      }
+      try {
+        const value = await Promise.resolve(handler(...resolved.args))
+        const verdict = await runExpect(step.expect, value)
+        smoke.cases.push({
+          name: `cleanup ${channel}`,
+          ok: verdict.ok,
+          detail: verdict.ok ? undefined : verdict.detail,
+          durationMs: Date.now() - caseStarted
+        })
+      } catch (err) {
+        smoke.cases.push({
+          name: `cleanup ${channel}`,
+          ok: false,
+          detail: `收尾抛出：${(err as Error).message}`,
+          durationMs: Date.now() - caseStarted
+        })
+      }
+    }
+
     const failedCases = smoke.cases.filter((c) => !c.ok)
     if (failedCases.length > 0) {
       problems.push(
@@ -733,6 +888,38 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
       missing.length > 0
         ? "类名必须是字面量才能被 Tailwind 扫到（'p-' + n 扫不到）；也可以把 workshop.json 的 css 改成 'file' 手写 plugin.css"
         : undefined
+  })
+
+  // ── 样式是否只作用在自己身上（运行期会被丢弃的全局规则）──────────────────
+  const cssAudit = sanitizePluginCss(css)
+  push({
+    id: 'style.safety',
+    title: '样式作用域',
+    status: cssAudit.dropped.length === 0 && cssAudit.imports.length === 0 ? 'pass' : 'warn',
+    fatal: false,
+    detail:
+      cssAudit.dropped.length === 0 && cssAudit.imports.length === 0
+        ? 'plugin.css 没有会波及宿主的全局规则'
+        : `以下规则会作用于宿主，运行期会被丢弃：${cssAudit.dropped.join('、') || '（无）'}` +
+          (cssAudit.imports.length > 0 ? `；另有 ${cssAudit.imports.length} 条 @import 被移除` : ''),
+    hint:
+      cssAudit.dropped.length > 0 || cssAudit.imports.length > 0
+        ? '改成自己的类名（Tailwind 工具类或带前缀的类）作用在插件 DOM 上：html/body/#root/*/宿主外壳类名与 :root 里的真声明都会被丢'
+        : undefined
+  })
+
+  // ── 破坏宿主的调用（exit / abort / 直接 ipcMain）——致命，不修不许发布 ──────
+  const safetyFindings = safetyScan(outDir)
+  push({
+    id: 'safety.scan',
+    title: '宿主安全',
+    status: safetyFindings.length === 0 ? 'pass' : 'fail',
+    fatal: true,
+    detail:
+      safetyFindings.length === 0
+        ? '没有会破坏宿主运转的调用（process.exit / abort / 直接 ipcMain）'
+        : safetyFindings.map((finding) => `${finding.label}（${finding.file}）`).join('、'),
+    hint: safetyFindings[0]?.hint
   })
 
   // ── 布局与主题体检（源码级：这几类问题编译能过、界面却是坏的）──────────────

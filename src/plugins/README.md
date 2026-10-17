@@ -112,6 +112,24 @@ P1~P4 期间 core 还持有两张**静态注册表**（`src/main/plugins/builtin
 应用里不再有任何插件实现的应用内 import（`node test/verify-plugin-restructure.mjs` 断言）。
 方案与分轮验收见 `PACKAGING.md`。
 
+## 隔离与边界（插件不能影响宿主运转）
+
+插件是第三方代码，但**它坏掉时不该把应用带走**。下面五层是已经落地并各有回归的边界；
+它们不假装是「沙箱」（主进程代码仍在同一进程、渲染层代码仍在同一 realm），
+而是把「一个插件能随手搞坏整个应用」的那几条最短路径逐一堵上：
+
+| 层 | 机制 | 位置 / 回归 |
+|----|------|-------------|
+| 渲染层崩溃 | 每个插件挂载点各一层错误边界（路由 / 设置页 / appProvider / 底栏）：只坏它自己，卡片上可直接「停用插件」；Provider 崩溃时跳过该 Provider、子树照常渲染 | `renderer/src/plugin-host/PluginBoundary.tsx`、`test/verify-plugin-isolation.mjs` |
+| 路由/菜单/设置页劫持 | 注册表拒绝**跨插件**占用同一个 `path` / `key` / `tabKey`（`enable` 直接失败并在插件面板显示可读错误）；路由必须是具体路径（`/` 开头、不含 `*` / `:`），内核设置页签保留 | `plugin-host/host.ts` 的 `claimSlot` |
+| 全局样式 | 注入前过滤 `plugin.css`：`html` / `body` / `#root` / `*`（非纯变量）/ `.custom-frame` / `.frame-*` / `.custom-scrollbar` / `.ant-*` 整条丢弃，`:root` 只留自定义属性；被丢的选择器进 warn 与验收报告 | `shared/plugin/css-safety.ts`、`plugin-host/plugin-css.ts` |
+| 主进程自杀 | `AsyncLocalStorage` 给插件 `install` / IPC handler / effect 打上下文，其中的 `process.exit` / `abort` / `kill(self)` 被拦成可读错误；handler 异常带插件 id 记日志 | `main/plugins/plugin-guard.ts`、`main/plugins/context.ts` |
+| 发布闸门 | 验收新增 `safety.scan`（命中 exit/abort/直接 `ipcMain` 即 FATAL，不修不许 `plugin_publish`）与 `style.safety`（全局样式点名）；冒烟用例新增 `cleanup`，验收不再往用户库里留 `smoke-item`、也不再改用户的设置 | `workshop/verify.ts` |
+
+信任模型仍然存在：插件能读写文件、发网络请求、注册全局监听器。这两层只保证
+**最致命/最常见的破坏被拦住并留下可读日志**；要彻底隔离需要把主进程插件搬进子进程、
+渲染层插件搬进 iframe/worker，那是另一套架构（见 `PACKAGING.md` 的讨论）。
+
 ## 结构与契约入口
 
 内置插件（`notes` / `harness`）与独立插件（`task-planner` / `music-player`，源码在

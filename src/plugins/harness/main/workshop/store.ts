@@ -111,7 +111,13 @@ export function listDraftIds(): string[] {
     return []
   }
   return entries
-    .filter((entry) => entry.isDirectory() && draftExists(entry.name))
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        // 以 `.` 开头的是临时/隐藏目录（scaffold 的 staging、用户的编辑器目录），不是草稿
+        !entry.name.startsWith('.') &&
+        draftExists(entry.name)
+    )
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b, 'en'))
 }

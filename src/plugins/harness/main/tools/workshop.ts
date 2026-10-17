@@ -34,7 +34,7 @@ import type { WorkshopBuildInfo, WorkshopReport } from '../../shared/workshop'
  * |------|------|
  * | `plugin_draft` | 草稿与文件（create / list / tree / read / write / remove） |
  * | `plugin_build` | 构建 + 静态体检（宿主说明符、第三方依赖、语法） |
- * | `plugin_verify` | 自动化验收（构建 + 十项检查电池，含真实装载冒烟） |
+ * | `plugin_verify` | 自动化验收（构建 + 完整检查电池：真实装载冒烟 / 样式作用域 / 宿主安全） |
  * | `plugin_publish` | 装进应用并启用 / 停用 / 卸载 / 导出 zip |
  *
  * 这样模型在每一步都拿到**针对那一步的诊断**：构建失败给的是 esbuild 的文件:行:列，
@@ -181,6 +181,7 @@ const createDraftTool = (): StructuredToolInterface =>
             return (
               `${result.overwritten ? '已按模板重建' : '已创建'}草稿 '${result.meta.id}'（模板 ${result.meta.template}）\n` +
               `目录：${result.dir}\n` +
+              (result.backupDir ? `旧草稿已备份到：${result.backupDir}\n` : '') +
               `文件：${result.files.join('、')}\n` +
               `下一步：读 WORKSHOP.md 了解契约 → 按需要删掉骨架里用不上的部分 → plugin_build。\n` +
               `提示：默认模板 'full' 已经把页面/设置页/AI 工具/事件推送/卸载清数据都摆好了，` +
@@ -324,8 +325,9 @@ const verifyTool = (): StructuredToolInterface =>
       description:
         'Run the automated acceptance battery on a plugin draft: rebuild, then check manifest, entry files, plugin identity, ' +
         'host runtime/UI contract, chunk specifiers, real main-process smoke (loads main.cjs and drives install(ctx), plus the ' +
-        "draft's own workshop.smoke.mjs cases), renderer load probe, CSS coverage and risky API usage.\n" +
-        'This is how you guarantee the plugin actually works before publishing - always run it before plugin_publish.',
+        "draft's own workshop.smoke.mjs cases and cleanup), renderer load probe, CSS coverage/scope and host-safety " +
+        '(process.exit / process.abort / direct ipcMain are fatal).\n' +
+        'This is how you guarantee the plugin actually works without breaking the host - always run it before plugin_publish.',
       schema: z.object({
         id: z.string().describe('插件 id'),
         probe: z
@@ -354,8 +356,8 @@ const publishTool = (): StructuredToolInterface =>
             const report = lastReport(input.id)
             if (!report || !report.ok) {
               return (
-                `拒绝安装：'${input.id}' 还没有一次通过的验收。先跑 plugin_verify（构建 + 十项检查），` +
-                `全绿再安装——没验过的插件装上去大概率是「菜单不出现 / 调用报无处理器」。`
+                `拒绝安装：'${input.id}' 还没有一次通过的验收。先跑 plugin_verify（构建 + 全部检查，` +
+                `含宿主安全的 safety.scan），全绿再安装——没验过的插件装上去大概率是「菜单不出现 / 调用报无处理器」。`
               )
             }
             if (buildStale(input.id)) {
