@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { join } from 'path'
+import { dirname, join, resolve } from 'path'
 import type { PGlite } from '@electric-sql/pglite'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import logger from 'electron-log'
@@ -55,22 +55,58 @@ async function revertAutoCreatedWorkspace(db: Orm, path: string, label: string):
 }
 
 /**
+ * 把历史上那批**插件工作区**从默认的 'user' 就地分类成 'plugin'（幂等，只跑一次有实际效果）。
+ *
+ * 为什么需要：`workspace.kind` 是 0010 才加的列，老库里的插件工作区全是默认值；认不出来
+ * 它们就会漏进侧栏的「工作」列表（用户口径 2026-09-28「插件目录不进『工作』列表」）。
+ * 判据与运行时那条（harness 的 `listPluginWorkspaces`）必须一致：**插件源码目录的直接子目录**。
+ *
+ * 为什么放在 core 的启动迁移里而不是插件安装时：这是一次性的数据搬迁，一次 UPDATE 就完事；
+ * 放在这里能保证「第一次打开新版本就已经是对的」，不必等助手插件被打开过。
+ * 只动 kind，不动名字与路径（也不刷 updated_at——那是侧栏排序用的，搬家不该把行顶到前面）。
+ */
+async function classifyLegacyPluginWorkspaces(db: Orm, pluginsRoot?: string): Promise<void> {
+  if (!pluginsRoot) return
+  const root = resolve(pluginsRoot)
+  const rows = await db
+    .select({ id: workspace.id, path: workspace.path })
+    .from(workspace)
+    .where(eq(workspace.kind, 'user'))
+  let classified = 0
+  for (const row of rows) {
+    if (!row.path) continue
+    const resolved = resolve(row.path)
+    // 大小写不敏感（Windows）：两侧都小写后比父目录
+    if (dirname(resolved).toLowerCase() !== root.toLowerCase()) continue
+    await db.update(workspace).set({ kind: 'plugin' }).where(eq(workspace.id, row.id))
+    classified += 1
+  }
+  if (classified > 0) {
+    logger.info(`[WorkspaceMigration] Classified ${classified} legacy plugin workspace(s)`)
+  }
+}
+
+/**
  * 工作区数据迁移（启动时执行，幂等）：
  * 1. 回滚旧版本自动创建的「默认工作区」（Documents 路径与 userData 路径各一次，
  *    仅当其没有会话与智能体配置时）；
- * 2. 确定活动工作区：沿用设置里的 activeWorkspaceId（若仍存在），否则取第一个；
+ * 2. 分类历史上的插件工作区（`kind` = 'plugin'，见上）；
+ * 3. 确定活动工作区：沿用设置里的 activeWorkspaceId（若仍存在），否则取第一个；
  *    一个工作区都没有时返回 null —— 应用不再自动创建，由对话页的引导让用户选择目录。
  *
  * 注意：文档 / 知识库 / 待办已是全局数据（无 workspace_id 列），不参与任何回填或归属处理。
  */
 export async function migrateWorkspaceData(
   client: PGlite,
-  getActiveWorkspaceId: () => number | undefined
+  getActiveWorkspaceId: () => number | undefined,
+  /** 插件存放路径（分类历史插件工作区用；未配置 = 跳过该步） */
+  pluginsRoot?: string
 ): Promise<WorkspaceMigrationResult> {
   const db = ormForClient(client)
 
   await revertAutoCreatedWorkspace(db, legacyAutoPath(), 'legacy-documents')
   await revertAutoCreatedWorkspace(db, legacyUserDataAutoPath(), 'legacy-userData')
+  await classifyLegacyPluginWorkspaces(db, pluginsRoot)
 
   // 确定活动工作区（不创建）
   const workspaces = await db
