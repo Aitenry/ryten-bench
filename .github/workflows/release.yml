@@ -10,6 +10,9 @@ name: Release
 #     · BREAKING CHANGE     → major（0.1.x → 1.0.0）
 #     · [release:major|minor|patch] → 提交信息里强制指定
 #   首个正式版直接取 package.json 的 0.1.0（历史 alpha tag 不参与比较）。
+# - tag 一律带 `v` 前缀（v0.1.0 / v0.1.1 / v1.0.0）：开发分支是按版本命名的
+#   （0.1.0、0.2.0 …），分支与 tag 同名时 git 会把裸名优先解析成 tag，
+#   在 main 上 `git merge 0.2.0` 会静默合不到东西。tag 带 v 后两者永不歧义。
 # - 构建前把算出来的版本写进 package.json：安装包文件名、app.getVersion()（设置页的版本号）
 #   都是这个真号，而不是仓库里过期的 0.1.0。
 # - 发布成功后再把这个版本回写到 main（`chore(release): … [skip ci]`）：仓库里的版本号
@@ -228,7 +231,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
+          # 标题只写版本号：tag 是 v0.1.0，但发布页读起来还是「0.1.0」
+          name: ${{ needs.version.outputs.version }}
           body_path: release-body.md
           files: |
             release/windows/*.exe

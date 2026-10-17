@@ -2,8 +2,12 @@
 /**
  * 正式版版本号解析器（GitHub Actions 里跑，本机也能直接跑）。
  *
- * 用户口径（2026-10）：从 0.1.0 开始发**真实版本**，之后按 0.1.1 / 0.2.0 / 1.0.0 这样递增；
- * 不再有 `0.1.0-alpha.<提交数>.<重试数>` 那种拿提交数量拼出来的假号。
+ * 用户口径（2026-10）：
+ * - 从 0.1.0 开始发**真实版本**，之后按 0.1.1 / 0.2.0 / 1.0.0 这样递增；
+ *   不再有 `0.1.0-alpha.<提交数>.<重试数>` 那种拿提交数量拼出来的假号。
+ * - 开发分支**按版本命名**（0.1.0、0.2.0 …），所以发布 tag 一律带 `v` 前缀（`v0.1.0`）：
+ *   分支与 tag 同名时 git 会把裸名优先解析成 tag，在 main 上 `git merge 0.2.0`
+ *   就会静默合不到东西。带 v 之后两者永不歧义。
  *
  * 规则：
  * - 第一个正式版 = `package.json` 的版本（0.1.0）——历史 alpha tag 不参与比较；
@@ -143,12 +147,13 @@ function main() {
     version = kind === 'none' ? format(latest.parts) : format(bump(latest.parts, kind))
   }
 
-  const alreadyReleased = tags.includes(version) || tags.includes(`v${version}`)
+  const releaseTag = `v${version}`
+  const alreadyReleased = tags.includes(releaseTag) || tags.includes(version)
   const shouldRelease = kind !== 'none' && !alreadyReleased
 
   const outputs = {
     version,
-    tag: version,
+    tag: releaseTag,
     previous_tag: latest ? latest.tag : '',
     bump: alreadyReleased ? 'none' : kind,
     should_release: String(shouldRelease),
@@ -163,7 +168,7 @@ function main() {
   console.log(lines.join('\n'))
   if (!shouldRelease) {
     const reason = alreadyReleased
-      ? `tag ${version} 已经存在（工作流重跑？）`
+      ? `tag ${releaseTag} 已经存在（工作流重跑？）`
       : `上次发版（${latest ? latest.tag : '无'}）之后没有新的提交`
     console.log(`::notice::这次没有可发布的版本：${reason}`)
   }

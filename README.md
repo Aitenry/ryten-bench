@@ -354,11 +354,14 @@ commit messages:
 | `BREAKING CHANGE:` / `feat!:`  | major — `0.2.x` → `1.0.0`       |
 
 `[release:major|minor|patch]` in a commit message overrides the inference, and the first release
-takes the version already in `package.json`. The build stamps the resolved version in before
-packaging, so installer file names and `app.getVersion()` report it, and a release is published only
-when every platform artifact is present. After a successful publish the version is committed back to
-`main` as `chore(release): <version> [skip ci]`, which never counts as a change; rerunning a
-workflow for an already published commit is a no-op.
+takes the version already in `package.json`. Development happens on a branch named after the version
+(`0.1.0`, `0.2.0`, …), so release tags carry a `v` prefix (`v0.1.0`, `v0.1.1`): when a branch and a
+tag share a name, git resolves the bare name to the tag, so `git merge 0.2.0` would silently merge
+nothing. The build stamps the resolved version in before packaging, so installer file names and
+`app.getVersion()` report it, and a release is published only when every platform artifact is
+present. After a successful publish the version is committed back to `main` as
+`chore(release): <version> [skip ci]`, which never counts as a change; rerunning a workflow for an
+already published commit is a no-op.
 
 ---
 
