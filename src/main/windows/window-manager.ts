@@ -1,40 +1,26 @@
 import { BrowserWindow } from 'electron'
 
-// 窗口状态与交接（加载窗口 → 主窗口）
-let loadingWindow: BrowserWindow | null = null
-let mainWindow: BrowserWindow | null = null // 预创建的主窗口（隐藏预热，初始化完成后展示）
-let initComplete = false // 初始化任务是否已完成（加载窗口→主窗口交接标志）
+// 窗口状态（只有主窗口；启动页已搬进主窗口渲染层，不再有独立加载窗口）
+let mainWindow: BrowserWindow | null = null
+let initComplete = false // 初始化任务是否已完成（启动页据此淡出）
 let mainWindowReady = false // 主窗口渲染进程是否已就绪（ready-to-show）
-
-export function setLoadingWindow(win: BrowserWindow | null): void {
-  loadingWindow = win
-}
-
-export function getLoadingWindow(): BrowserWindow | null {
-  return loadingWindow
-}
 
 export function setMainWindow(win: BrowserWindow | null): void {
   mainWindow = win
+  // 新窗口（macOS activate 重建）需要等它自己的 ready-to-show，不能沿用旧状态
+  if (win) mainWindowReady = false
 }
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow
 }
 
-/** 标记初始化完成（初始化流程结束 / 加载页兜底回发时调用） */
+/** 标记初始化完成（初始化流程结束时调用） */
 export function markInitComplete(): void {
   initComplete = true
   tryShowMainWindow()
 }
 
-/**
- * 初始化是否已完成。
- *
- * 加载窗口用它决定「还要不要露脸」：热启动时初始化可能在加载页画出来之前就结束了，
- * 这时如果照样显示，用户看到的就是一块还没绘制的窗口闪一下（2026-09-27 用户报的
- * 「每次启动都闪一个窗口」）。
- */
 export function isInitComplete(): boolean {
   return initComplete
 }
@@ -46,14 +32,12 @@ export function markMainWindowReady(): void {
 }
 
 /**
- * 尝试展示主窗口：仅当「初始化完成」且「主窗口渲染就绪」两个条件同时满足时才展示。
- * 两个窗口直接交接（先关加载窗口再显示主窗口），避免桌面空隙。
+ * 尝试展示主窗口：只要渲染进程就绪就显示。
+ *
+ * 和旧版不同：不再等初始化完成——主窗口先显示，渲染层用启动页（StartupSplash）
+ * 盖住界面，等初始化 + 首屏数据都就绪后再淡出进入主界面（用户 2026-11-20 口径）。
  */
 export function tryShowMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed() || !initComplete || !mainWindowReady) return
-  if (loadingWindow && !loadingWindow.isDestroyed()) {
-    loadingWindow.close()
-    loadingWindow = null
-  }
-  mainWindow.show()
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindowReady) return
+  if (!mainWindow.isVisible()) mainWindow.show()
 }

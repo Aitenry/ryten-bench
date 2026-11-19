@@ -31,9 +31,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const savedTheme = settings.theme as ThemeMode | undefined
         const mode = savedTheme || 'auto'
         setThemeModeState(mode)
-        if (mode !== 'auto') {
-          setEffectiveTheme(mode)
-        }
+        setEffectiveTheme(mode === 'auto' ? getTimeBasedTheme() : mode)
       } catch {
         // 加载失败时使用默认值
       }
@@ -61,18 +59,22 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [isDark])
 
+  /**
+   * 切换主题：一次性提交 React 状态（整棵树一起换），落库异步做、不阻塞界面。
+   *
+   * 标题栏右侧的系统按钮条（Window Controls Overlay）由 ShellTitleBar 在
+   * useLayoutEffect 里、**绘制之前**把新配色发给主进程——和界面同一帧换色。
+   * 不要再提前改外壳 CSS 变量或推迟 React 提交：那会把界面拆成「外壳先变、内容后变」，
+   * 中间几百毫秒里是半套主题，反而更难看（用户 2026-11-19「越改越不行了」）。
+   */
   const setThemeMode = useCallback(async (mode: ThemeMode): Promise<void> => {
-    // 先存储到后端，失败也不影响本地状态更新
+    const next = mode === 'auto' ? getTimeBasedTheme() : mode
+    setThemeModeState(mode)
+    setEffectiveTheme(next)
     try {
       await (window as unknown as Window).api.systemSettings.update({ theme: mode })
     } catch {
       // 静默处理
-    }
-    setThemeModeState(mode)
-    if (mode !== 'auto') {
-      setEffectiveTheme(mode)
-    } else {
-      setEffectiveTheme(getTimeBasedTheme())
     }
   }, [])
 

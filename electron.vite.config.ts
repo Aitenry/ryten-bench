@@ -7,6 +7,8 @@ export default defineConfig({
   main: {
     resolve: {
       alias: {
+        // 系统级功能目录（harness / notes 已移出插件）
+        '@features': resolve('src/features'),
         // 自包含插件目录（主进程侧：src/plugins/<id>/main、shared）
         '@plugins': resolve('src/plugins'),
         '@shared': resolve('src/shared')
@@ -26,8 +28,9 @@ export default defineConfig({
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
+        // 系统级功能目录（harness / notes 已移出插件）
+        '@features': resolve('src/features'),
         // 自包含插件目录（渲染层侧：src/plugins/<id>/renderer、shared、locales）。
-        // 未迁移的插件仍在 '@renderer/plugins/<id>' 下，两者同时可用。
         '@plugins': resolve('src/plugins'),
         '@shared': resolve('src/shared')
       }
@@ -45,8 +48,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           // 定义多个入口点
-          main: resolve(__dirname, 'src/renderer/resource/index.html'),
-          loading: resolve(__dirname, 'src/renderer/resource/loading.html')
+          main: resolve(__dirname, 'src/renderer/resource/index.html')
         }
       }
     }

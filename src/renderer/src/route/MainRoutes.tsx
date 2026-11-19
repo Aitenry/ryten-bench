@@ -2,8 +2,11 @@ import React, { Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import RouteSkeleton from './RouteSkeleton'
 import { lazyViewFor } from './lazyViewCache'
-import { usePluginMenus, usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
+import { usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
+import { systemRouteViews } from '@renderer/system'
+import PluginRepository from '@renderer/pages/PluginRepository'
+import PluginDetail from '@renderer/pages/PluginDetail'
 import type { RegisteredRoute } from '@renderer/plugin-host/types'
 
 // 路由级代码分割：Harness（含代码编辑器、差异视图等重型依赖）等页面按需加载，
@@ -42,18 +45,30 @@ const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
 
 const MainRoutes: React.FC = () => {
   const routes = usePluginRoutes()
-  const menus = usePluginMenus()
-  // 默认页 = 第一个有序启用的菜单键；宿主装载完成前（menus 尚空）不渲染兜底重定向，
-  // 避免 Navigate 指向尚未注册的路由
-  const defaultPath: string | null = menus.length > 0 ? `/${menus[0].key}` : null
 
   return (
     <Routes>
-      {defaultPath && <Route path="/" element={<Navigate to={defaultPath} replace />} />}
+      {/* 系统级页面：对话（默认）/ 资料库。harness/notes 已移出插件系统 */}
+      <Route path="/" element={<Navigate to="/harness" replace />} />
+      {systemRouteViews.map((r) => (
+        <Route
+          key={r.path}
+          path={r.path}
+          element={
+            <Suspense fallback={<RouteSkeleton variant="generic" />}>
+              <r.Component />
+            </Suspense>
+          }
+        />
+      ))}
+      {/* 系统级插件仓库 */}
+      <Route path="/plugins" element={<PluginRepository />} />
+      <Route path="/plugins/:pluginId" element={<PluginDetail />} />
+      {/* 第三方插件路由（仍由插件宿主注册；不再进入左侧系统导航） */}
       {routes.map((r) => (
         <Route key={r.path} path={r.path} element={<PluginRouteView route={r} />} />
       ))}
-      {defaultPath && <Route path="*" element={<Navigate to={defaultPath} replace />} />}
+      <Route path="*" element={<Navigate to="/harness" replace />} />
     </Routes>
   )
 }

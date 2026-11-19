@@ -12,7 +12,18 @@ export const enUSShell: typeof zhCNShell = {
     minimize: 'Minimize',
     maximize: 'Maximize',
     restore: 'Restore',
-    close: 'Close'
+    close: 'Close',
+    app: 'App',
+    edit: 'Edit',
+    settings: 'Settings…',
+    reload: 'Reload',
+    quit: 'Quit',
+    undo: 'Undo',
+    redo: 'Redo',
+    cut: 'Cut',
+    copy: 'Copy',
+    paste: 'Paste',
+    selectAll: 'Select all'
   },
   rightBar: {
     messages: 'Notifications',
@@ -33,15 +44,38 @@ export const enUSShell: typeof zhCNShell = {
   },
   pluginBoundary: {
     title: 'Plugin "{{name}}" failed to render',
-    detail: 'This surface belongs to the plugin. The host isolated the failure, so everything else keeps working.',
+    detail:
+      'This surface belongs to the plugin. The host isolated the failure, so everything else keeps working.',
     retry: 'Retry',
     disable: 'Disable plugin',
     disableFailed: 'Could not disable: {{error}}',
     unavailable: 'Plugin unavailable'
   },
+  windowTitle: {
+    library: 'Library',
+    pluginRepo: 'Plugin repository',
+    chatMode: 'Chat mode',
+    workMode: 'Work mode',
+    pluginMode: 'Plugin mode'
+  },
+  appearance: {
+    toLight: 'Switch to light',
+    toDark: 'Switch to dark'
+  },
+  startup: {
+    title: 'RytenBench, I got you',
+    preparing: 'Preparing your workspace…',
+    failed: 'Startup failed'
+  },
   notificationList: {
+    title: 'Notifications',
+    markAllRead: 'Mark all read',
     empty: 'No notifications',
-    completed: 'Completed'
+    emptyHint: 'Task progress and system notices will show up here',
+    completed: 'Completed',
+    timeJustNow: 'Just now',
+    timeMinutesAgo: '{{count}} min ago',
+    timeHoursAgo: '{{count}} h ago'
   },
   miniPlayer: {
     idle: 'Nothing playing'

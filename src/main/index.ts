@@ -4,7 +4,7 @@ import logger from 'electron-log'
 import { initPluginHost, pushPluginChannels } from './plugins/host'
 import { registerPluginScheme, registerPluginProtocolHandler } from './plugins/protocol'
 import { registerLifecycleHooks } from './lifecycle'
-import { createLoadingWindow } from './windows/loading-window'
+import { registerStartupIpc, runStartupInitialization } from './windows/startup'
 import { createMainWindow } from './windows/main-window'
 import { registerMermaidPreviewIpc } from './windows/mermaid-preview'
 import { createTray } from './tray'
@@ -70,12 +70,12 @@ app
     // Mermaid 预览窗口（HTML 模板存于资源文件 ./resource/mermaid-preview.html）
     registerMermaidPreviewIpc()
 
-    await createLoadingWindow()
-
-    // 预热主窗口：在初始化任务运行的同时（后台）加载渲染进程，
-    // 初始化完成后直接交接显示，省去「加载窗口结束后再等 2~3 秒」的空白期。
-    // 注：此时 initializationPromise 已赋值，渲染进程早期 IPC 会等待数据库初始化完成。
+    // 启动页（用户 2026-11-20 口径）：不再有独立加载窗口。
+    // 先建主窗口并立刻显示（渲染层里盖着 StartupSplash 启动页），
+    // 初始化任务同时在后台跑，进度通过 IPC 推给启动页；全部完成后再进入主界面。
+    registerStartupIpc()
     createMainWindow()
+    void runStartupInitialization()
 
     // 天气 IPC 与自动刷新只注册/启动一次（主窗口推送；修复：此前随 createMainWindow
     // 重复调用会二次注册 ipcMain.handle 抛错）
@@ -84,8 +84,8 @@ app
     // 系统托盘：关闭窗口可驻留后台（是否驻留由「通用设置 → 系统托盘」控制）
     createTray()
 
-    // macOS activate：窗口全部关闭后只重建主窗口（修复：此前重跑 createLoadingWindow +
-    // createMainWindow 会二次建库、重复注册 IPC 导致崩溃；初始化只需执行一次）
+    // macOS activate：窗口全部关闭后只重建主窗口（初始化只需执行一次；此前重跑
+    // createMainWindow 会二次建库、重复注册 IPC 导致崩溃）
     app.on('activate', function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         createMainWindow()

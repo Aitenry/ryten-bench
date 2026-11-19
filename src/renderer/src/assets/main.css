@@ -2,10 +2,15 @@
 @import 'animate.css';
 
 /**
- * 自包含插件目录（src/plugins/**）在 Vite root（src/renderer）之外，
- * Tailwind v4 的自动扫描扫不到它们——不显式声明，插件里用到的工具类就不会进产物 CSS。
+ * 系统功能目录（src/features/**：harness 对话页、notes 资料库）与自包含插件目录
+ * （src/plugins/**）都在 Vite root（src/renderer）之外，Tailwind v4 的自动扫描扫不到
+ * 它们——不显式声明，这些页面里用到的工具类就不会进产物 CSS，页面会以「无样式」
+ * 形态渲染（2026-11-19 用户反馈「对话窗口整体不可用」就是 harness 移出插件后
+ * src/features 没被扫到：max-w-4xl / px-8 / min-h-0 等类全部缺失，消息区被撑到
+ * 3600px 宽、布局整体错乱）。
  * 路径相对本 CSS 文件（../../../ = 仓库 src/）。
  */
+@source '../../../features/**/*.{ts,tsx}';
 @source '../../../plugins/**/*.{ts,tsx}';
 
 /* ======== 文档级约束：窗口就是一个固定视口，永远不许出现滚动条 ======== */
@@ -30,241 +35,6 @@ body {
 
 #root {
   height: 100%;
-}
-
-/* ======== 自定义窗口框架 ======== */
-
-/* 最外层：占满视口，仅做背景层，不裁剪内容（让 antd 浮层可挂载到 body 不受遮挡）。
-   **必须用 100vh，不能换成 100%**：它和 #root 之间还隔着 antd `AntApp` 渲染的 `.ant-app`
-   包装（没有高度），`height:100%` 会相对 auto 高度的父级解析 → 退化成内容高度、整页塌掉。
-   （2026-09-19 犯过：为了躲 100vw 含滚动条宽度的问题改成 100%，把应用布局搞塌了。
-   现在文档级滚动条已被上面的 overflow:hidden 关掉，100vw 不再有那个问题。） */
-.custom-frame-outer {
-  width: 100vw;
-  height: 100vh;
-  box-sizing: border-box;
-}
-
-/* 框架容器：圆角 + 阴影 + 内容裁剪 */
-.custom-frame {
-  width: 100%;
-  height: 100%;
-  border-radius: 12px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06),
-  0 4px 24px rgba(0, 0, 0, 0.1);
-}
-
-/* 暗色模式：外层更暗，边框用白色半透明 */
-.dark .custom-frame {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08),
-  0 4px 24px rgba(0, 0, 0, 0.25);
-}
-
-/* ======== 标题栏 ======== */
-.frame-titlebar {
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 3px;
-  -webkit-app-region: drag;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.frame-titlebar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  -webkit-app-region: drag;
-}
-
-/* 图标描边徽标：亮色黑描边 / 暗色白描边（描边色对比于框架底色，不用 antd token 以免过淡）
-   尺寸 = 16px 图标 + 1px 内边距 + 1px 描边 */
-.frame-titlebar-icon-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 1px;
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  border-radius: 6px;
-  box-sizing: border-box;
-  -webkit-app-region: drag;
-}
-
-.dark .frame-titlebar-icon-badge {
-  border-color: rgba(255, 255, 255, 0.18);
-}
-
-.frame-titlebar-icon {
-  width: 16px;
-  height: 16px;
-  -webkit-app-region: drag;
-}
-
-.frame-titlebar-title {
-  font-size: 12px;
-  font-weight: 500;
-  -webkit-app-region: drag;
-}
-
-.frame-titlebar-controls {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  -webkit-app-region: no-drag;
-}
-
-.frame-titlebar-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  color: inherit;
-  transition: background 0.15s;
-}
-
-.frame-titlebar-btn:hover {
-  background: rgba(128, 128, 128, 0.15);
-}
-
-.frame-titlebar-btn-close:hover {
-  background: #e81123;
-  color: #fff;
-}
-
-/* ======== 主体区域 ======== */
-.frame-body {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-  min-height: 0;
-}
-
-.frame-body-left,
-.frame-body-right {
-  display: flex;
-  align-items: flex-start;
-  flex-shrink: 0;
-}
-
-.frame-body-center {
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
-  border-radius: 6px;
-}
-
-/* ======== 两边栏菜单 ======== */
-.frame-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 26px;
-  padding: 8px 0;
-  height: 100%;
-}
-
-.frame-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  margin: 0 auto;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s,
-  color 0.15s;
-}
-
-.frame-menu-item:hover {
-  background: rgba(128, 128, 128, 0.12);
-}
-
-.frame-menu-item-active {
-  background: rgba(22, 119, 255, 0.1);
-  color: #1677ff;
-}
-
-/* ======== 底部信息栏 ======== */
-.frame-bottombar {
-  flex-shrink: 0;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  position: relative;
-}
-
-.frame-bottombar-inner {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding-right: 6px;
-  position: relative;
-}
-
-/* 弹出详情卡片 */
-.frame-bottombar-popup {
-  position: absolute;
-  bottom: 100%;
-  right: 48px;
-  width: 280px;
-  padding: 16px;
-  border-radius: 12px;
-  z-index: 10;
-  animation: popupSlideUp 0.2s ease-out;
-}
-
-@keyframes popupSlideUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.frame-bottombar-track {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.frame-bottombar-item {
-  font-size: 12px;
-  cursor: default;
-  user-select: none;
-}
-
-.frame-bottombar-dots {
-  display: flex;
-  gap: 4px;
-}
-
-.frame-bottombar-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: rgba(128, 128, 128, 0.3);
-  transition: background 0.3s,
-  width 0.3s;
 }
 
 /* ======== 滚动条 ======== */
@@ -543,4 +313,426 @@ body.home-resizing * {
     -webkit-mask-position: -100% 0;
     mask-position: -100% 0;
   }
+}
+
+/* ======== 新系统外壳（自绘标题栏 + 深色侧栏 + 浅色主内容） ======== */
+
+.shell-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fcfcfd;
+}
+
+/* 自绘标题栏：左侧应用菜单，右侧区域由系统绘制窗口按钮（Window Controls Overlay）。
+   整条是可拖拽区（-webkit-app-region: drag），菜单按钮内部改回 no-drag 才能点。 */
+.shell-titlebar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px 0 10px;
+  background: var(--shell-titlebar-bg, #1b1b1d);
+  /* 分隔线**不能**画在标题条自己身上：右侧 36px 由系统按钮覆盖层整块盖住，
+     自绘的 border-bottom 会在覆盖层边界处断一截（用户 2026-11-19 反馈「颜色不一样」）。
+     改由下方 .shell-body 的 border-top 画，整行贯通、覆盖层盖不到。 */
+  -webkit-app-region: drag;
+  user-select: none;
+  color: var(--shell-text-secondary, #b0b0b8);
+}
+.shell-titlebar-menu {
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 24px;
+  border-radius: 5px;
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+.shell-titlebar-menu:hover {
+  background: var(--shell-hover, #26262a);
+  color: var(--shell-text, #f0f0f2);
+}
+
+/* 标题栏以下的身体：左侧栏 + 主内容区 */
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+/* 只有存在自绘标题栏时才有这条分隔线（Linux 走系统原生边框，没有标题条） */
+.shell-titlebar + .shell-body {
+  border-top: 1px solid var(--shell-border, #2b2b2f);
+}
+
+.shell-sidebar {
+  width: 272px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1d;
+  border-right: 1px solid #2b2b2f;
+  color: #f0f0f2;
+}
+
+/* 侧栏品牌区（logo / 名称 / 版本号） */
+.shell-brand {
+  /* 高度与右侧内容区顶部头栏（33px）齐平：品牌区与对话记录顶部对齐居中 */
+  height: 33px;
+  flex-shrink: 0;
+  padding: 0 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.shell-brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: block;
+}
+.shell-brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #f0f0f2;
+}
+.shell-brand-ver {
+  font-size: 10px;
+  color: #6f6f76;
+  margin-top: 1px;
+}
+
+.shell-nav {
+  padding: 2px 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.shell-nav-item {
+  height: 32px;
+  border-radius: 7px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  color: #b0b0b8;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.shell-nav-item svg {
+  color: #8b8b92;
+}
+.shell-nav-item:hover {
+  background: #26262a;
+  color: #e6e6e9;
+}
+.shell-nav-item.active {
+  background: #2b2b2f;
+  color: #f2f2f4;
+  font-weight: 500;
+}
+.shell-nav-item.active svg {
+  color: #f2f2f4;
+}
+
+.shell-assistant {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.shell-assistant > * {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.shell-user {
+  height: 48px;
+  flex-shrink: 0;
+  border-top: 1px solid #2b2b2f;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.shell-avatar {
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8d7a68, #5b473d);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+.shell-user-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #ededf0;
+}
+.shell-user-sub {
+  font-size: 9.5px;
+  color: #73737b;
+  margin-top: 2px;
+}
+.shell-user-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 1px;
+}
+.shell-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b8b92;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.shell-icon-btn:hover {
+  background: #2a2a2e;
+  color: #e6e6e9;
+}
+
+/* 侧栏用户区铃铛的未读小红点 */
+.shell-icon-btn-bell {
+  position: relative;
+}
+.shell-unread-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff4d4f;
+  box-shadow: 0 0 0 2px var(--shell-sidebar-bg, #1b1b1d);
+}
+
+/* ======== 通知中心弹层 ========
+   不再用 antd Popover 浮在铃铛上方（会横向溢出侧边栏、压到主内容区），
+   改成侧边栏底部的「消息面板」：左边缘与侧边栏对齐、宽度 = 侧边栏宽度（272px），
+   浮在用户区之上，右下角带未读红点的铃铛负责开关。 */
+.shell-user-dock {
+  position: relative;
+  flex-shrink: 0;
+}
+.shell-notif-panel {
+  position: absolute;
+  /* 左右各留 8px：面板不再贴着侧边栏边框，而是像一张浮在侧栏里的卡片 */
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 8px);
+  z-index: 1200;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  overflow: hidden;
+  animation: shell-notif-pop 0.14s ease-out;
+}
+@keyframes shell-notif-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* 兜底色用「布局色」而不是「容器色」：主内容区（对话/资料库卡片）是容器色，
+     两者必须有差，卡片左上角等处的圆角才看得见（用户 2026-11-19「左上角增加圆角」）。 */
+  background: #f5f5f5;
+}
+.shell-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+/* min-width: 0 必须显式给：flex 项的 min-width 默认是 auto（min-content），
+   页面内容一宽（长路径/命令行/表格）就会把整行撑出容器、再被 overflow:hidden
+   从窗口右侧裁掉——表现为「对话区只占了左半边、右边一片空」。 */
+.shell-content > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ======== 外壳主题变量（跟随设置里的亮色 / 暗色） ======== */
+.shell-root {
+  background: var(--shell-bg, #fcfcfd);
+  color: var(--shell-text);
+}
+.shell-sidebar {
+  background: var(--shell-sidebar-bg, #1b1b1d);
+  border-right-color: var(--shell-border, #2b2b2f);
+  color: var(--shell-text, #f0f0f2);
+}
+.shell-brand-name {
+  color: var(--shell-text, #f0f0f2);
+}
+.shell-brand-ver {
+  color: var(--shell-text-tertiary, #6f6f76);
+}
+.shell-nav-item {
+  color: var(--shell-text-secondary, #b0b0b8);
+}
+.shell-nav-item svg {
+  color: var(--shell-text-tertiary, #8b8b92);
+}
+.shell-nav-item:hover {
+  background: var(--shell-hover, #26262a);
+  color: var(--shell-text, #f0f0f2);
+}
+.shell-nav-item.active {
+  background: var(--shell-active, #2b2b2f);
+  color: var(--shell-text, #f2f2f4);
+}
+.shell-nav-item.active svg {
+  color: var(--shell-text, #f2f2f4);
+}
+.shell-user {
+  border-top-color: var(--shell-border, #2b2b2f);
+}
+.shell-user-name {
+  color: var(--shell-text, #ededf0);
+}
+.shell-user-sub {
+  color: var(--shell-text-tertiary, #73737b);
+}
+.shell-icon-btn {
+  color: var(--shell-text-tertiary, #8b8b92);
+}
+.shell-icon-btn:hover {
+  background: var(--shell-hover, #2a2a2e);
+  color: var(--shell-text, #e6e6e9);
+}
+.shell-main {
+  background: var(--shell-bg, #f5f5f5);
+}
+
+/* ======== 启动页（主窗口内，盖在界面之上；初始化完成后淡出） ======== */
+.startup-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--startup-bg, #f7f6f1);
+  color: var(--startup-title, #1c1812);
+  opacity: 1;
+  transition: opacity 0.42s ease;
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+.startup-splash.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+.startup-splash-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px;
+}
+.startup-splash-mascot {
+  width: 188px;
+  height: 188px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+.startup-splash-mascot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  animation: startup-bob 2.6s ease-in-out infinite;
+  filter: drop-shadow(0 12px 28px var(--startup-mascot-shadow, rgba(28, 24, 18, 0.16)));
+}
+.startup-splash-mascot.is-error img {
+  animation: none;
+  filter: grayscale(0.35)
+    drop-shadow(0 12px 28px var(--startup-mascot-shadow, rgba(28, 24, 18, 0.12)));
+}
+@keyframes startup-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-7px) scale(1.02);
+  }
+}
+.startup-splash-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--startup-title, #1c1812);
+}
+.startup-splash-subtitle {
+  margin: 10px 0 0;
+  min-height: 20px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--startup-sub, rgba(28, 24, 18, 0.58));
+}
+.startup-splash-subtitle.is-error {
+  color: var(--startup-error, #b42318);
+}
+.startup-splash-track {
+  margin-top: 22px;
+  width: 264px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--startup-track, rgba(28, 24, 18, 0.1));
+  overflow: hidden;
+}
+.startup-splash-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--startup-fill, #1c1812);
+  transition: width 0.25s ease;
+}
+.startup-splash-percent {
+  margin-top: 10px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--startup-percent, rgba(28, 24, 18, 0.45));
+}
+.startup-splash-error {
+  margin-top: 18px;
+  max-width: 520px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--startup-error, #b42318);
 }

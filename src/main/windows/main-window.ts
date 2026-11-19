@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import icon from '../../../resources/logo.png?asset'
@@ -9,6 +9,7 @@ import { isCloseToTrayEnabled, isTrayAvailable, syncTrayState } from '../tray'
 import { isQuittingNow, markQuitting } from '../lifecycle'
 import { listContributions } from '../plugins/contributions'
 import { APP_RENDERER_MEMORY_DUMP, type AppHook } from '../plugins/app-hooks'
+import { syncWindowBorderColor } from './dwm-border'
 
 /** 各窗口的最大化状态（主窗口与 mermaid 预览窗口共用；随窗口销毁清理） */
 const windowMaxStates = new Map<
@@ -114,18 +115,145 @@ function registerWindowControlIpcOnce(): void {
     const win = winFromEvent(event)
     return win ? (windowMaxStates.get(win.id)?.isMaximized ?? false) : false
   })
+
+  /**
+   * 窗口标题（原生标题栏）：渲染层按当前内容更新成 `xxx - RytenBench`。
+   * 只接受纯文本并截断，避免把超长/带换行的内容塞进标题栏。
+   */
+  ipcMain.on('window-set-title', (event, title: unknown) => {
+    const win = winFromEvent(event)
+    if (!win || win.isDestroyed() || typeof title !== 'string') return
+    const clean = title
+      .replace(/[\r\n\t]+/g, ' ')
+      .trim()
+      .slice(0, 160)
+    win.setTitle(clean || 'RytenBench')
+  })
+
+  /**
+   * 自绘标题栏（Window Controls Overlay，Windows / Linux）的主题同步：
+   * 渲染层把测得的侧栏底色与前景色送上来，主进程更新系统绘制的窗口按钮配色。
+   * 窗口按钮本身仍是**系统绘制**的（不是渲染层画出来的假按钮），只是配色/底条跟着主题走。
+   */
+  ipcMain.on('window-titlebar-overlay', (event, payload: unknown) => {
+    const win = winFromEvent(event)
+    if (!win || win.isDestroyed()) return
+    const data = (payload ?? {}) as { color?: unknown; symbolColor?: unknown; height?: unknown }
+    const color = typeof data.color === 'string' ? data.color : undefined
+    const symbolColor = typeof data.symbolColor === 'string' ? data.symbolColor : undefined
+    const height = typeof data.height === 'number' ? data.height : undefined
+    const overlay = {
+      ...(color ? { color } : {}),
+      ...(symbolColor ? { symbolColor } : {}),
+      ...(height ? { height } : {})
+    }
+    const apply = (): void => {
+      if (win.isDestroyed()) return
+      try {
+        win.setTitleBarOverlay(overlay)
+      } catch (err) {
+        // 平台不支持 WCO（macOS / 老 Electron）时静默降级；标题栏仍能正常显示
+        logger.debug('[Window] setTitleBarOverlay 不可用:', err)
+      }
+      // 系统窗口边框（DWM 画的那 1~2px）颜色跟随标题栏底色，避免亮色主题下顶部残留深色边
+      if (color) syncWindowBorderColor(win, color)
+    }
+    apply()
+    // Windows 的 WCO 覆盖层在切主题时偶尔不会立刻重绘（最大化窗口里尤其明显）；
+    // 下一帧与稍后再补两次，确保系统按钮条和渲染层自绘标题条的底色同步。
+    setTimeout(apply, 80)
+    setTimeout(apply, 260)
+  })
+
+  /**
+   * 让**系统绘制的窗口边框/标题栏明暗**跟随应用主题。
+   *
+   * 用户 2026-11-19 反馈「顶部会出现这种情况」：应用切到亮色后，窗口最上沿仍有一条深灰边
+   * ——那是 Windows 按「系统深色模式」画的 DWM 窗口边框，不跟随应用内主题。
+   * 通过 nativeTheme.themeSource 把系统侧明暗声明成与应用一致，DWM 边框/阴影就会跟着变。
+   */
+  ipcMain.on('window-native-theme', (_event, mode: unknown) => {
+    if (mode === 'light' || mode === 'dark' || mode === 'system') {
+      nativeTheme.themeSource = mode
+    }
+  })
+
+  // 应用菜单命令（自绘标题栏的「应用 / 编辑」下拉）：只做窗口内动作，不暴露任意 IPC
+  ipcMain.on('window-reload', (event) => {
+    winFromEvent(event)?.webContents.reload()
+  })
+  ipcMain.on('app-quit', () => {
+    markQuitting()
+    app.quit()
+  })
+  ipcMain.on('window-edit-command', (event, command: unknown) => {
+    const wc = event.sender
+    if (!wc || wc.isDestroyed()) return
+    switch (command) {
+      case 'undo':
+        wc.undo()
+        break
+      case 'redo':
+        wc.redo()
+        break
+      case 'cut':
+        wc.cut()
+        break
+      case 'copy':
+        wc.copy()
+        break
+      case 'paste':
+        wc.paste()
+        break
+      case 'selectAll':
+        wc.selectAll()
+        break
+      default:
+        break
+    }
+  })
 }
 
 export function createMainWindow(): void {
+  const isWindows = process.platform === 'win32'
+  const isMac = process.platform === 'darwin'
+  /** 标题栏底色（窗口首帧兜底色；macOS 的 hiddenInset 也用它） */
+  const TITLEBAR_BG = '#1b1b1d'
+  /** 窗口标题（原生标题栏左侧显示的名称；渲染层会按当前内容更新成 `xxx - RytenBench`） */
+  const APP_TITLE = 'RytenBench'
+
   const win = new BrowserWindow({
     width: 1200,
     height: 800, // 打开应用时即为最小尺寸（与 min 一致），可后续手动拉大
     minWidth: 1200,
     minHeight: 800,
     show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    /**
+     * 标题栏形态（用户 2026-11-20 口径）：
+     *
+     * 「把顶部的那个区域的内容移除掉换成原生的内容」——放弃自绘标题栏 + WCO
+     * （应用/编辑 菜单那套颜色同步问题反复调不好），Windows 改用**系统原生标题栏**：
+     * 拖动、最小化/最大化/关闭全部由系统绘制；左侧保留项目自己的图标 + 名称
+     * （用户 2026-11-20 追加「增加名称」）。
+     * 明暗仍跟随应用主题（nativeTheme.themeSource 由渲染层同步）。
+     * macOS 保持 hiddenInset + 交通灯位置；Linux 本来就是原生边框。
+     */
+    ...(isWindows
+      ? {
+          frame: true,
+          title: APP_TITLE,
+          backgroundColor: TITLEBAR_BG
+        }
+      : isMac
+        ? {
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: { x: 16, y: 17 },
+            backgroundColor: TITLEBAR_BG
+          }
+        : {
+            frame: true,
+            backgroundColor: TITLEBAR_BG
+          }),
     autoHideMenuBar: true,
     ...{ icon },
     webPreferences: {
@@ -135,7 +263,19 @@ export function createMainWindow(): void {
   })
   setMainWindow(win)
 
-  // 渲染就绪后标记 ready；只有「初始化完成 + 渲染就绪」才会真正展示（tryShowMainWindow 交接）
+  if (isWindows) {
+    // 原生标题栏：去掉菜单栏；标题固定为应用名（页面 document.title 的回写不覆盖它）。
+    // 图标保留：Windows 原生标题栏的图标位去不掉（置空会回退成 Electron 默认图标），
+    // 所以用项目自己的 logo（吉祥物，见 resources/logo.png，由 BrowserWindow 的 icon 指定）。
+    win.setMenu(null)
+    win.on('page-title-updated', (event) => {
+      event.preventDefault()
+      win.setTitle(APP_TITLE)
+    })
+  }
+
+  // 渲染就绪后**立即**显示主窗口：启动页（StartupSplash）盖在渲染层最上面，
+  // 等初始化任务与首屏数据完成后再淡出进入主界面（不再由主进程控制「交接」时机）
   win.on('ready-to-show', () => {
     logger.info('[Window] Main window ready-to-show')
     markMainWindowReady()

@@ -10,7 +10,7 @@ import { safeSend } from '../safe-send'
 import { mainMessages } from '../i18n'
 import { ThemeMode, TraySettings } from '../types/settings'
 
-// 系统托盘：品牌视觉图标（暖纸圆角方 + 墨色 Georgia R + 朱砂划线，1x/2x 双表示）。
+// 系统托盘：品牌视觉图标（吉祥物圆角徽章，1x/2x 双表示；菜单头部同一张图内嵌在 tray-menu.html）。
 // 左键单击显示主窗口；右键弹出「自绘菜单窗口」（src/main/resource/tray-menu.html，
 // 编辑部风格、随应用主题明暗——原生 Menu 无法定制样式，故用独立无边框窗口实现）。
 // 托盘与菜单窗口引用必须保存在模块级变量中，否则会被 GC 回收导致图标消失。

@@ -18,12 +18,20 @@ export interface ScannedExternalPlugin {
 }
 
 /**
- * **宿主保留 id**：`plugin://host/ui.js` 是渲染层宿主 UI 桥的地址（见
- * `src/main/plugins/host-ui-bridge.ts`），路径形态 `plugin://<id>/<relPath>` 会让协议
- * 处理器把 `host` 当成插件 id 先匹配。若用户真在 `userData/plugins/host/` 放一个插件，
- * 它永远取不到自己的文件，还会让桥的行为变得难以预测——所以扫描时直接跳过并告警。
+ * **宿主保留 id**：
+ * - `host`：`plugin://host/ui.js` 渲染层宿主 UI 桥的地址段，用户插件不能占用；
+ * - `harness` / `notes`：已升级为系统级功能，由 `src/main/system-services.ts` 直接装配，
+ *   不再从 `userData/plugins/**` 扫描或装载（旧版本残留的插件包会被忽略）。
  */
-export const RESERVED_PLUGIN_IDS: ReadonlySet<string> = new Set(['host'])
+export const RESERVED_PLUGIN_IDS: ReadonlySet<string> = new Set(['host', 'harness', 'notes'])
+
+/**
+ * 已告警过的保留 id。
+ *
+ * 扫描是热路径（插件列表、查找单插件都会走），旧版本残留的 `userData/plugins/harness`
+ * 会跟着每次扫描各告警一次，日志被刷屏反而掩盖真正的问题。按 id 只提示一次即可。
+ */
+const warnedReservedIds = new Set<string>()
 
 /** 外部插件根目录（userData/plugins），确保存在 */
 export function externalPluginsRoot(): string {
@@ -59,11 +67,15 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
         logger.warn(`[Plugins] ${entry.name}: manifest.id(${manifest.id}) 与目录名不一致，跳过`)
         continue
       }
-      // 宿主保留 id（host 是宿主 UI 桥的地址段）：即便目录与清单都合法也不装载
+      // 保留 id（host 是宿主 UI 桥地址段；harness/notes 是系统级功能）：合法清单也不装载
       if (RESERVED_PLUGIN_IDS.has(entry.name)) {
-        logger.warn(
-          `[Plugins] ${entry.name}: 这是宿主的保留 id（plugin://host/… 供宿主 UI 桥使用），跳过`
-        )
+        if (!warnedReservedIds.has(entry.name)) {
+          warnedReservedIds.add(entry.name)
+          logger.warn(
+            `[Plugins] ${entry.name}: 保留 id（宿主 UI 桥 / 系统级功能），不再作为插件装载，跳过；` +
+              `旧版本残留的插件目录可以手动删除：${dir}`
+          )
+        }
         continue
       }
       out.push({ id: entry.name, dir, manifest })

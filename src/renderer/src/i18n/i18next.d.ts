@@ -1,7 +1,7 @@
 import 'i18next'
 import type { zhCN } from './locales/zh-CN'
-import type { harnessZhCN } from '@plugins/harness/locales/zh-CN'
-import type { notesZhCN } from '@plugins/notes/locales/zh-CN'
+import type { harnessZhCN } from '@features/harness/locales/zh-CN'
+import type { notesZhCN } from '@features/notes/locales/zh-CN'
 
 /**
  * 为 i18next 注入资源类型：`t()` 的键路径由中文源语言推导，

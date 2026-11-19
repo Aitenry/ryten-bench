@@ -19,12 +19,12 @@ export * from './workspace'
 // 内置插件表：唯一真源在 `src/plugins/<id>/main/db/schema*.ts`，这里用**相对路径** re-export
 // （drizzle-kit 不解析 tsconfig paths，`@plugins/*` 到这里会解析失败）。
 // harness 插件表（file-change 依赖 harness_topic，agent 依赖 workspace，顺序与原先一致）
-export * from '../../../plugins/harness/main/db/schema/harness'
-export * from '../../../plugins/harness/main/db/schema/file-change'
-export * from '../../../plugins/harness/main/db/schema/agent'
+export * from '../../../features/harness/main/db/schema/harness'
+export * from '../../../features/harness/main/db/schema/file-change'
+export * from '../../../features/harness/main/db/schema/agent'
 // notes 插件表（document 依赖 wiki，graph 依赖 wiki，顺序与原先一致）
-export * from '../../../plugins/notes/main/db/schema/todo'
-export * from '../../../plugins/notes/main/db/schema/wiki'
-export * from '../../../plugins/notes/main/db/schema/document'
-export * from '../../../plugins/notes/main/db/schema/graph'
+export * from '../../../features/notes/main/db/schema/todo'
+export * from '../../../features/notes/main/db/schema/wiki'
+export * from '../../../features/notes/main/db/schema/document'
+export * from '../../../features/notes/main/db/schema/graph'
 export * from './provider'

@@ -33,10 +33,6 @@ import {
 export function registerMiscIpc(): void {
   ipcMain.on('ping', () => logger.info('pong'))
 
-  ipcMain.on('init-progress', (_event, data) => {
-    logger.info('Init progress:', data)
-  })
-
   ipcMain.handle('app-lifecycle-hooks', () => ({
     preload: listContributions<AppHook>(APP_PRELOAD).map((h) => h.label),
     beforeQuit: listContributions<AppHook>(APP_BEFORE_QUIT).map((h) => h.label),

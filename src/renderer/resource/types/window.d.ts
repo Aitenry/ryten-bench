@@ -12,21 +12,30 @@ import { SystemSettings } from '@renderer/types/settings'
 
 export interface Window {
   loading: {
-    onInitProgress: (
-      callback: (
-        event: Event,
-        data: {
-          progress: number
-          currentTask: string
-          taskIndex: number
-          totalTasks: number
-        }
-      ) => void
-    ) => void
-    onInitComplete: (callback: () => void) => void
-    onInitError: (callback: (event: Event, errorMessage: string) => void) => void
-    notifyInitComplete: () => void
+    /** 应用版本（启动页可展示） */
     getAppVersion: () => Promise<string>
+    /** 初始化进度快照（启动页挂载时先取一次，处理初始化已经开始/已完成的情况） */
+    getInitState: () => Promise<{
+      complete: boolean
+      error: string | null
+      currentTask: string
+      progress: number
+      taskIndex: number
+      totalTasks: number
+    }>
+    /** 初始化进度（返回取消订阅函数） */
+    onInitProgress: (
+      callback: (data: {
+        currentTask: string
+        progress: number
+        taskIndex: number
+        totalTasks: number
+      }) => void
+    ) => () => void
+    /** 初始化完成（返回取消订阅函数） */
+    onInitComplete: (callback: () => void) => () => void
+    /** 初始化失败（返回取消订阅函数） */
+    onInitError: (callback: (errorMessage: string) => void) => () => void
   }
   api: {
     file: {
@@ -78,7 +87,25 @@ export interface Window {
       close: () => void
       isMaximized: () => Promise<boolean>
       onMaximized: (callback: (maximized: boolean) => void) => () => void
+      /** 同步系统窗口按钮覆盖层的配色（自绘标题栏跟随主题） */
+      setTitleBarOverlay: (options: {
+        color?: string
+        symbolColor?: string
+        height?: number
+      }) => void
+      /** 同步系统窗口边框/标题栏的明暗（避免亮色应用顶部残留深色 DWM 边框） */
+      setNativeTheme: (mode: 'light' | 'dark' | 'system') => void
+      /** 设置窗口标题（原生标题栏：`内容 - RytenBench`） */
+      setTitle: (title: string) => void
+      /** 重新加载当前窗口（标题栏「应用 → 重新加载」） */
+      reload: () => void
+      /** 退出应用（标题栏「应用 → 退出」） */
+      quit: () => void
+      /** 原生编辑命令（标题栏「编辑」菜单） */
+      edit: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => void
     }
+    /** 当前运行平台（win32 / darwin / linux） */
+    platform: NodeJS.Platform
     weather: {
       getCurrent: (force?: boolean) => Promise<WeatherData>
       onUpdate: (callback: (data: WeatherData) => void) => () => void

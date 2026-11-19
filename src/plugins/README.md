@@ -1,9 +1,14 @@
 # 插件目录契约（src/plugins/<id>/）
 
-> 目标：**每个功能（内容）是一个自包含插件**——它的界面、IPC、数据表、业务服务、词条都在同一个目录里，
-> 而不是按「层」散落在 `src/main/ipc`、`src/main/database`、`src/main/harness`、`src/renderer/src/i18n` 等处。
+> 目标：**每个插件是一个自包含包**——它的界面、IPC、数据表、业务服务、词条都在同一个目录里，
+> 而不是按「层」散落在 `src/main/ipc`、`src/main/database`、`src/renderer/src/i18n` 等处。
 > core 只保留外壳（窗口/托盘/主题/i18n 内核）、插件宿主、DB 引擎（PGlite + drizzle 迁移器）、
 > 模型 Provider 与 preload 通用桥。
+>
+> **2026-11 起 harness / notes 已移出插件系统**，作为系统级功能放在 `src/features/<id>/` 并由
+> `src/main/system-services.ts` 装配。它们仍然复用本文的 `MainPluginContext` 契约（通道名、
+> 可逆 effect、贡献点），但不再经过插件安装器 / 磁盘包 / 启用态开关，也不会出现在插件面板里。
+> 本目录下的 `src/plugins/<id>/` 形态只用于**随包分发的内置插件**（当前没有）与第三方插件源码。
 
 ## 目录形态
 
@@ -148,7 +153,7 @@ core 只剩「外壳 + 插件宿主 + DB 引擎 + 模型 Provider + 通用 prelo
 | 宿主装载/卸载与 preload 白名单推送                  | `src/main/plugins/host.ts`                                             |
 | 插件清单唯一定义                                | `src/plugins/manifests.ts`                                             |
 | 各插件的通道名                                 | `src/plugins/<id>/main/ipc/**`、渲染层的 `src/plugins/<id>/renderer/api.ts` |
-| **用对话让助手做插件（工坊：构建/自动验收/发布）**             | `src/plugins/harness/main/workshop/README.md`                          |
+| **用对话让助手做插件（工坊：构建/自动验收/发布）**             | `src/features/harness/main/workshop/README.md`                         |
 | 迁移历史、踩过的坑、跨插件耦合清单                       | `src/plugins/MIGRATION.md`、`test/plugin-coupling-notes.md`             |
 
 core 的边界（本轮收尾后）：

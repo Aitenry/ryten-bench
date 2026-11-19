@@ -13,7 +13,19 @@ export const zhCNShell = {
     minimize: '最小化',
     maximize: '最大化',
     restore: '还原',
-    close: '关闭'
+    close: '关闭',
+    /** 自绘标题栏左侧的两个应用菜单（与参考形态一致：应用 / 编辑） */
+    app: '应用',
+    edit: '编辑',
+    settings: '设置…',
+    reload: '重新加载',
+    quit: '退出',
+    undo: '撤销',
+    redo: '重做',
+    cut: '剪切',
+    copy: '复制',
+    paste: '粘贴',
+    selectAll: '全选'
   },
   rightBar: {
     messages: '消息',
@@ -40,9 +52,31 @@ export const zhCNShell = {
     disableFailed: '停用失败：{{error}}',
     unavailable: '插件暂时不可用'
   },
+  windowTitle: {
+    library: '资料库',
+    pluginRepo: '插件仓库',
+    chatMode: '对话模式',
+    workMode: '工作模式',
+    pluginMode: '插件模式'
+  },
+  appearance: {
+    toLight: '切换到亮色',
+    toDark: '切换到暗色'
+  },
+  startup: {
+    title: 'RytenBench，我帮你',
+    preparing: '正在准备你的工作台…',
+    failed: '启动失败'
+  },
   notificationList: {
+    title: '消息',
+    markAllRead: '全部已读',
     empty: '暂无消息',
-    completed: '已完成'
+    emptyHint: '任务进度、系统提醒会出现在这里',
+    completed: '已完成',
+    timeJustNow: '刚刚',
+    timeMinutesAgo: '{{count}} 分钟前',
+    timeHoursAgo: '{{count}} 小时前'
   },
   miniPlayer: {
     idle: '未在播放'

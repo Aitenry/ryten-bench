@@ -219,6 +219,9 @@ export function installBundledPlugin(id: string, force = false): boolean {
 export function ensureBundledPluginsInstalled(): void {
   ensureDevPackagesBuilt()
   removeRetiredBundledPlugins()
+  // 当前形态：harness / notes 已是系统级功能，`src/plugins` 下没有随包插件，
+  // 所以「没有插件目录」是**正常状态**，不该在每次启动时告警。
+  if (BUILTIN_IDS.size === 0) return
   const ids = listBundledPluginIds()
   if (ids.length === 0) {
     logger.warn(

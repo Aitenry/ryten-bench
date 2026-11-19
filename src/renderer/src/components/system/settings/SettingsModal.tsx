@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useCallback, useSyncExternalStore } from 'react'
 import { Modal, theme } from 'antd'
-import { RiSettings3Line, RiBrainAi3Line, RiComputerLine, RiPlugLine } from '@remixicon/react'
+import { RiSettings3Line, RiBrainAi3Line, RiComputerLine } from '@remixicon/react'
 import GeneralSettings from './GeneralSettings'
 import SystemInfo from './SystemInfo'
 import ModelSettings from './ModelSettings'
-import PluginsPanel from './PluginsPanel'
 import { useTranslation } from '@renderer/i18n'
-import { usePluginSettingsSections } from '@renderer/plugin-host/PluginHostContext'
-import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
+import { systemSettingsSections } from '@renderer/system'
 import {
   getSettingsModalState,
   setSettingsModalTab,
@@ -15,12 +13,14 @@ import {
 } from './settings-modal-state'
 
 /**
- * 设置弹窗 = shell 核心页（静态）+ 插件注册页（settingsSection 注册点动态合并）。
+ * 设置弹窗 = shell 核心页（静态）+ 系统级功能页（systemSettingsSections）。
  *
  * - 核心页：general / model / system，始终存在；
- * - 插件页：music（音乐设置，随 music 插件）、graph（图谱设置，随 notes 插件）、
- *   agents / skills / memory（随 harness 插件）……注册页随插件启停即时出现/消失；
- * - 聚焦模式（assistant）：只显示 assistant 分组页 + model（智能体 → 模型 → 技能 → 记忆）。
+ * - 系统页：agents / skills / memory / mcp（助手）、graph（资料库）——随应用一起启动；
+ * - **不含**插件相关页：插件工坊、第三方插件自己的设置页、以及原来的「插件」管理页，
+ *   全部收进「插件仓库」页（用户 2026-11-19 口径「移除设置里面的这两个内容/插件」——
+ *   插件相关的查看、安装、卸载、设置都在插件仓库里做，设置弹窗只放应用自己的配置）。
+ * - 聚焦模式（assistant）：只显示 assistant 分组页 + model（智能体 → 模型 → 技能 → 记忆 → MCP）。
  */
 
 export type SettingsTab = string
@@ -40,15 +40,13 @@ interface GroupDef {
 const STATIC_TABS = {
   general: { labelKey: 'settings.nav.general', order: 10 },
   model: { labelKey: 'settings.nav.model', order: 20 },
-  system: { labelKey: 'settings.nav.system', order: 50 },
-  plugins: { labelKey: 'settings.nav.plugins', order: 60 }
+  system: { labelKey: 'settings.nav.system', order: 50 }
 } as const
 
 const STATIC_ICONS: Record<string, React.ReactNode> = {
   general: <RiSettings3Line size={16} />,
   model: <RiBrainAi3Line size={16} />,
-  system: <RiComputerLine size={16} />,
-  plugins: <RiPlugLine size={16} />
+  system: <RiComputerLine size={16} />
 }
 
 const GROUP_GENERAL = 'settings.nav.groupGeneral'
@@ -80,10 +78,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
 
   const { t } = useTranslation()
 
-  // 插件注册的设置页（已按 order 排序）
-  const pluginSections = usePluginSettingsSections()
+  // 系统级设置页（harness / notes）。第三方插件的设置页不在这里，见插件仓库。
+  const allSections = useMemo(
+    () => systemSettingsSections.map((section) => ({ ...section, pluginId: 'system' })),
+    []
+  )
 
-  /** 全部页签元数据（图标常驻，文案随语言变化；插件页来自注册表） */
+  /** 全部页签元数据（图标常驻，文案随语言变化；系统页来自 systemSettingsSections） */
   const tabMeta = useMemo<Record<string, TabItem>>(() => {
     const meta: Record<string, TabItem> = {}
     for (const [key, def] of Object.entries(STATIC_TABS)) {
@@ -94,7 +95,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
         order: def.order
       }
     }
-    for (const s of pluginSections) {
+    for (const s of allSections) {
       meta[s.tabKey] = {
         key: s.tabKey,
         label: t(s.labelKey as never),
@@ -103,25 +104,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
       }
     }
     return meta
-  }, [pluginSections, t])
+  }, [allSections, t])
 
-  /** 分组结构：general（核心页 + 插件通用页）、assistant（插件助手页） */
+  /** 分组结构：general（核心页 + 系统通用页）、assistant（助手页） */
   const navGroupDefs = useMemo<GroupDef[]>(() => {
     const groups: GroupDef[] = []
     const generalItems = [
       ...Object.entries(STATIC_TABS).map(([key, d]) => ({ key, order: d.order })),
-      ...pluginSections
+      ...allSections
         .filter((s) => s.group === 'general')
         .map((s) => ({ key: s.tabKey, order: s.order }))
     ].sort((a, b) => a.order - b.order)
     if (generalItems.length > 0) groups.push({ labelKey: GROUP_GENERAL, items: generalItems })
-    const assistantItems = pluginSections
+    const assistantItems = allSections
       .filter((s) => s.group === 'assistant')
       .map((s) => ({ key: s.tabKey, order: s.order }))
       .sort((a, b) => a.order - b.order)
     if (assistantItems.length > 0) groups.push({ labelKey: GROUP_ASSISTANT, items: assistantItems })
     return groups
-  }, [pluginSections])
+  }, [allSections])
 
   /** 聚焦模式页签：助手分组页 + model 页（模型排在首项之后，维持 智能体 → 模型 → … 惯例） */
   const focusedTabs = useMemo<string[]>(() => {
@@ -189,18 +190,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
         return <ModelSettings />
       case 'system':
         return <SystemInfo />
-      case 'plugins':
-        return <PluginsPanel />
       default: {
-        // 插件注册页（music/graph/agents/skills/memory 等）
-        const section = pluginSections.find((s) => s.tabKey === activeTab)
-        if (!section) return null
-        // 单个设置页崩溃只坏它自己：宿主设置弹窗的其它页签照常可用（否则会整页白掉）
-        return (
-          <PluginBoundary pluginId={section.pluginId} surface="settings">
-            <section.Component />
-          </PluginBoundary>
-        )
+        // 系统级设置页（agents / skills / memory / mcp / graph）——应用自身代码，无需插件隔离
+        const section = allSections.find((s) => s.tabKey === activeTab)
+        return section ? <section.Component /> : null
       }
     }
   }

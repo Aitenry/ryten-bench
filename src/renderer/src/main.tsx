@@ -3,7 +3,7 @@ import './assets/main.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App as AntApp } from 'antd'
-import App from './App'
+import Root from './Root'
 import { LanguageProvider } from './contexts/LanguageContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { installHostUi } from './plugin-host/host-ui'
@@ -52,7 +52,7 @@ createRoot(document.getElementById('root')!).render(
     <LanguageProvider>
       <ThemeProvider>
         <AntApp>
-          <App />
+          <Root />
         </AntApp>
       </ThemeProvider>
     </LanguageProvider>

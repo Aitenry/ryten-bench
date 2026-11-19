@@ -37,8 +37,9 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-// 只打**内置**插件：task-planner / music-player 是独立插件，构建与发布在 ryten-plugins 仓库
-const PLUGIN_IDS = ['notes', 'harness']
+// harness / notes 已是系统级功能，不再打包为插件。
+// 目前没有随应用分发的内置插件；第三方插件由 ryten-plugins 仓库自行构建。
+const PLUGIN_IDS = []
 
 const args = process.argv.slice(2)
 const onlyIndex = args.indexOf('--plugin')

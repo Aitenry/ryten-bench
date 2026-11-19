@@ -134,8 +134,31 @@ const api = {
       return () => {
         ipcRenderer.off('window-maximized', handler)
       }
+    },
+    /**
+     * 自绘标题栏与系统窗口按钮覆盖层（Window Controls Overlay）的主题同步。
+     * 只影响系统绘制按钮的配色与标题栏底色，不改变按钮行为。
+     */
+    setTitleBarOverlay: (options: { color?: string; symbolColor?: string; height?: number }) => {
+      ipcRenderer.send('window-titlebar-overlay', options)
+    },
+    /** 让系统窗口边框/标题栏明暗跟随应用主题（亮色应用顶部不再残留深色 DWM 边框） */
+    setNativeTheme: (mode: 'light' | 'dark' | 'system') => {
+      ipcRenderer.send('window-native-theme', mode)
+    },
+    /** 设置窗口标题（原生标题栏：内容 - RytenBench） */
+    setTitle: (title: string) => ipcRenderer.send('window-set-title', title),
+    /** 重新加载当前窗口（标题栏「应用 → 重新加载」） */
+    reload: () => ipcRenderer.send('window-reload'),
+    /** 退出应用（标题栏「应用 → 退出」；走正常退出清理，不是隐藏到托盘） */
+    quit: () => ipcRenderer.send('app-quit'),
+    /** 编辑命令（标题栏「编辑」菜单）：交给主进程调用 webContents 的原生编辑动作 */
+    edit: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => {
+      ipcRenderer.send('window-edit-command', command)
     }
   },
+  /** 当前平台（渲染层据此决定是否绘制自绘标题栏、是否给 macOS 交通灯留位） */
+  platform: process.platform as NodeJS.Platform,
   mermaid: {
     preview: (svg: string) => ipcRenderer.invoke('mermaid-preview', svg) as Promise<void>
   },
@@ -323,36 +346,53 @@ const api = {
 
 // 将特定的 API 暴露给渲染进程
 const loadingAPI = {
-  // 添加主窗口就绪监听
-  onMainWindowReady: (callback: () => void) => ipcRenderer.on('main-window-ready', callback),
-
-  // 如果需要，添加初始化完成通知
-  notifyInitComplete: () => ipcRenderer.send('init-complete'),
-
-  // 应用版本（加载页展示,替代 loading.html 硬编码版本号）
+  /** 应用版本（启动页可展示） */
   getAppVersion: () => ipcRenderer.invoke('app-version') as Promise<string>,
 
-  // 添加初始化进度监听
+  /** 初始化进度快照：启动页挂载时先取一次（初始化可能已经推进/完成） */
+  getInitState: () =>
+    ipcRenderer.invoke('init-state') as Promise<{
+      complete: boolean
+      error: string | null
+      currentTask: string
+      progress: number
+      taskIndex: number
+      totalTasks: number
+    }>,
+
+  /** 初始化进度（返回取消订阅函数） */
   onInitProgress: (
-    callback: (
-      event: Electron.IpcRendererEvent,
-      data: {
-        currentTask: string
-        progress: number
-        taskIndex: number
-        totalTasks: number
-      }
-    ) => void
-  ) => ipcRenderer.on('init-progress', callback),
+    callback: (data: {
+      currentTask: string
+      progress: number
+      taskIndex: number
+      totalTasks: number
+    }) => void
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: Parameters<typeof callback>[0]
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('init-progress', handler)
+    return () => ipcRenderer.off('init-progress', handler)
+  },
 
-  // 添加初始化完成监听
-  onInitComplete: (callback: () => void) => ipcRenderer.on('init-complete', callback),
+  /** 初始化完成（返回取消订阅函数） */
+  onInitComplete: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('init-complete', handler)
+    return () => ipcRenderer.off('init-complete', handler)
+  },
 
-  // 添加初始化错误监听
-  onInitError: (callback: (event: Electron.IpcRendererEvent, errorMessage: string) => void) =>
-    ipcRenderer.on('init-error', callback)
+  /** 初始化失败（返回取消订阅函数） */
+  onInitError: (callback: (errorMessage: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: string): void => callback(message)
+    ipcRenderer.on('init-error', handler)
+    return () => ipcRenderer.off('init-error', handler)
+  }
 }
-
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.

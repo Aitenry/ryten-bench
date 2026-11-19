@@ -1,3 +1,4 @@
+import * as fs from 'fs'
 import * as path from 'path'
 import { app } from 'electron'
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite'
@@ -40,9 +41,17 @@ export async function getOrm(): Promise<Orm> {
  * 迁移目录：开发模式读仓库根目录的 drizzle/；打包后随 extraResources 复制到 resources/database/drizzle。
  */
 export function getMigrationsFolder(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'database', 'drizzle')
-    : path.join(app.getAppPath(), 'drizzle')
+  /**
+   * 优先用随包分发的迁移目录；不存在时回退到仓库根目录的 drizzle/。
+   *
+   * 为什么需要回退：某些启动方式（`electron .` / preview）下 `app.isPackaged`
+   * 仍可能为 true，但 `process.resourcesPath` 指向的是 Electron 自己的 resources，
+   * 里面没有本项目迁移文件——只按 isPackaged 判断会让启动停在「迁移缺失」，
+   * 而不是真正跑起来。迁移目录存在与否是更可靠的判据。
+   */
+  const packaged = path.join(process.resourcesPath, 'database', 'drizzle')
+  if (fs.existsSync(path.join(packaged, 'meta', '_journal.json'))) return packaged
+  return path.join(app.getAppPath(), 'drizzle')
 }
 
 /**

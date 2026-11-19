@@ -6,6 +6,7 @@
     "src/renderer/src/**/*.tsx",
     "src/renderer/src/types/**/*",
     "src/main/types/**/*",
+    "src/features/**/*",
     "src/plugins/**/*",
     "src/shared/**/*",
     "src/preload/*.d.ts"
@@ -14,7 +15,7 @@
     "node_modules",
     "out",
     "dist",
-    "src/plugins/**/main/**"
+    "src/features/**/main/**"
   ],
   "compilerOptions": {
     "composite": true,
@@ -23,6 +24,9 @@
     "paths": {
       "@renderer/*": [
         "src/renderer/src/*"
+      ],
+      "@features/*": [
+        "src/features/*"
       ],
       "@plugins/*": [
         "src/plugins/*"

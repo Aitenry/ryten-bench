@@ -133,8 +133,9 @@ globalThis.__RB_HOST_RESOLVE__(spec) // '@host/main/database/orm' → 宿主那�
 
 ### 装载顺序：插件主模块早于数据库初始化（2026-09-28 修）
 
-`initPluginHost()`（扫描并 require 每个插件的 `main.cjs`）跑在 `createLoadingWindow()` **之前**，
-而数据库要等后者才起步（`setInitializationPromise` / `setDatabaseInstance` 都在那个流程里）。
+`initPluginHost()`（扫描并 require 每个插件的 `main.cjs`）跑在启动初始化（`windows/startup.ts` 的
+`runStartupInitialization()`）**之前**，而数据库要等后者才起步（`setInitializationPromise` /
+`setDatabaseInstance` 都在那个流程里）。
 所以插件主模块**装载期**碰库时，宿主这边「既没有实例、也没有进行中的初始化」。
 
 老代码在这时直接抛 `Database has not been initialized yet.`：插件在装载期建表（工坊 full 模板的
