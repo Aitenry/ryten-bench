@@ -27,12 +27,13 @@ RytenBench is a cross-platform Electron desktop application that puts two things
   LangGraph runtime with streaming, tool calling, sub-agents, background jobs, OS-level sandboxed
   command execution and a three-layer memory system.
 
-The two flagship views — **Notes** and the **AI assistant** — are **system features** that live in
-this repository under `src/features/` and are mounted by the application shell itself. The core
-process owns the window / tray / theme / i18n shell, the system-feature wiring, the PGlite database
-engine, the model provider factory and the generic preload bridge. Everything else is a **plugin**:
-third-party extensions are loaded from on-disk packages (`userData/plugins/<id>/`) through the plugin
-host and can be enabled, disabled or uninstalled at any time.
+The two flagship views — **Notes** and the **AI assistant** — are **system features**, not plugins:
+their code lives in this repository under `src/features/` and is compiled into the application by
+the shell itself. They never enter the plugin registry and have no install, enable or uninstall
+step. The core process owns the window / tray / theme / i18n shell, the system-feature wiring, the
+PGlite database engine, the model provider factory and the generic preload bridge. Everything else
+is a **plugin** — third-party extensions loaded from on-disk packages (`userData/plugins/<id>/`)
+through the plugin host, which can be enabled, disabled or uninstalled at any time.
 
 ---
 
@@ -112,15 +113,16 @@ host and can be enabled, disabled or uninstalled at any time.
   plus per-file change history. The diff view supports per-hunk Keep / Revert, Keep all and
   Revert all, and older revisions can be inspected without losing the pending review.
 - **Sandboxed commands & permission modes** — every session runs under one of three modes —
-  仅可查看 (`read-only`), 工作区内修改 (`workspace-write`, the default) and 完全权限
-  (`danger-full-access`) — and the `execute` tool wraps shell commands in an OS-level sandbox:
+  **Read only** (`read-only`), **Workspace write** (`workspace-write`, the default) and
+  **Full access** (`danger-full-access`) — and the `execute` tool wraps shell commands in an
+  OS-level sandbox:
   a restricted token with capability SIDs on Windows, a self-built Landlock launcher (or `bwrap`
   when it is installed) on Linux, and the system `sandbox-exec` on macOS. A write outside the
   workspace is refused by the kernel and comes back to the model as a `[sandbox: …]` marker; when
   no backend is available the command is **not** run, with no unsandboxed fallback. Risky commands
   are shown for approval first, and a denied call can be retried once through the narrowly wider
   mode with an explicit prompt. Backend status and workspace-ACE cleanup live in
-  Settings → 智能体 → 沙箱.
+  Settings → Agents → Sandbox.
 - **Failure recovery** — when a model request fails, a recovery dialog lets you switch to another
   configured model and resume from the interruption point: the prompt is not resent and completed
   tool calls are not re-run.
@@ -146,21 +148,21 @@ host and can be enabled, disabled or uninstalled at any time.
   carries the app icon, the name RytenBench and the system minimize / maximize / close buttons, and
   the app's light / dark choice is pushed to the system title bar and the DWM window border so the
   frame never keeps the wrong colour. macOS keeps `titleBarStyle: hiddenInset` with the traffic
-  lights plus a slim self-drawn 应用 / 编辑 menu strip; Linux uses the native frame.
-- **Shell** — a themed sidebar (brand and version, 资料库 / 插件仓库 navigation, the assistant's
-  conversation sidebar with its mode switcher, workspace tree and memory, and the user area with
-  the notification popover, Settings and a light / dark toggle) next to the content area. The old
-  frameless shell — bottom bar, right bar, plugin-registered navigation — is gone; plugin routes
-  still render in the content area but no longer own the chrome.
-- **System pages** — 对话 (AI assistant, `/harness`, the default route), 资料库 (notes, `/notes`)
-  and 插件仓库 (`/plugins`, with a per-plugin detail page at `/plugins/:pluginId`), with the shared
+  lights plus a slim self-drawn App / Edit menu strip; Linux uses the native frame.
+- **Shell** — a themed sidebar (brand and version, Library / Plugin repository navigation, the
+  assistant's conversation sidebar with its mode switcher, workspace tree and memory, and the user
+  area with the notification popover, Settings and a light / dark toggle) next to the content area.
+  The old frameless shell — bottom bar, right bar, plugin-registered navigation — is gone; plugin
+  routes still render in the content area but no longer own the chrome.
+- **System pages** — the assistant (`/harness`, the default route), Library (`/notes`) and Plugin
+  repository (`/plugins`, with a per-plugin detail page at `/plugins/:pluginId`), with the shared
   assistant sidebar always available on the left.
 - **Weather** — local conditions and a three-day forecast from Open-Meteo, located through IP
   geolocation and cached by the main process (exposed through `window.api.weather`).
 - **Settings** — a two-group modal. **General**: General (interface language, theme, tray
-  behaviour, lock screen), Models, Graph and System info. **Assistant**: Agents, Skills, Memory and
-  MCP. Plugin management, the plugin workshop and third-party plugin settings pages are dialogs
-  inside 插件仓库; Settings itself only holds the app's own configuration.
+  behaviour, lock screen), Models, Graph and System. **Assistant**: Agents, Skills, Memory and MCP.
+  Plugin management, the plugin workshop and third-party plugin settings pages are dialogs inside
+  Plugin repository; Settings itself only holds the app's own configuration.
 - **Localization** — Simplified Chinese and English, switchable at runtime without restart, and
   the main process renders tool output and progress text in the current language too.
 - **Theme** — light / dark / auto, where auto follows the time of day (light from 6:00 to 18:00).
@@ -179,29 +181,24 @@ host and can be enabled, disabled or uninstalled at any time.
 
 ---
 
-## Plugin system
+## Plugins
 
-### System features and third-party plugins
+Plugins are third-party extensions. They are not bundled with the app, they are loaded from
+on-disk packages (`userData/plugins/<id>/`) through the plugin host, and they can be enabled,
+disabled or uninstalled at any time.
 
-| Feature / plugin | Kind           | What it provides                                                      |
-| ---------------- | -------------- | --------------------------------------------------------------------- |
-| `notes`          | System feature | Documents, knowledge bases, todos, knowledge graph, dashboard         |
-| `harness`        | System feature | AI assistant workbench: topics, streaming, tools, memory, files       |
-| `task-planner`   | Plugin         | Planner with a Gantt chart and hierarchical task tree                 |
-| `music-player`   | Plugin         | Folder playlists, playback controls, mini player, metadata extraction |
+The two flagship views are **not** plugins: Notes and the AI assistant are system features compiled
+into the application (see [Features](#features)), so they never appear in the registry below.
 
-`notes` and `harness` are **compiled into the app**: their source lives under `src/features/<id>/`
-(`main/`, `shared/`, `renderer/`), the shell mounts them directly (routes `/notes` and `/harness`,
-providers, settings pages, i18n copy) and the main process wires them through
-`src/main/system-services.ts` at startup. They keep the historical channel namespace
-(`plugin:notes:*` / `plugin:harness:*`) and the same reversible context contract, so the renderer API
-and the preload bridge did not have to change; they simply never appear in the plugin registry and
-cannot be disabled or uninstalled.
+| Plugin         | What it provides                                                      |
+| -------------- | --------------------------------------------------------------------- |
+| `task-planner` | Planner with a Gantt chart and hierarchical task tree                 |
+| `music-player` | Folder playlists, playback controls, mini player, metadata extraction |
 
-Everything else is a third-party plugin. Plugins are not bundled with the app: `task-planner` and
-`music-player` are published in the companion repository
+Both are published in the companion repository
 [`Aitenry/ryten-plugins`](https://github.com/Aitenry/ryten-plugins) and installed from the in-app
-plugin repository page (`插件仓库`, route `/plugins`).
+plugin repository page (route `/plugins`). A fresh install therefore has an empty plugin registry
+until the user adds one.
 
 ### Installing plugins
 
@@ -254,8 +251,8 @@ Source layout before bundling, as used by the companion repositories:
 `pnpm build:plugins` bundles each configured plugin into a loadable disk package —
 `resources/plugins/<id>/{plugin.json,main.cjs,renderer.mjs,chunk-*.mjs}` — which is what ships as an
 `extraResources` entry and what the host actually loads. The id list lives in
-`scripts/build-plugins.mjs`; this application currently ships no bundled plugins (notes and the
-assistant are system features), so the list is empty.
+`scripts/build-plugins.mjs`; this application currently ships no bundled plugins, so the list is
+empty.
 
 ### Host contract
 
@@ -274,10 +271,10 @@ host injects the single instances it already has:
 Main-process context API: `registerIpc`, `registerEvent`, `effect` (LIFO rollback), `contribute`
 and `provide`. Renderer slots: `route`, `menu`, `settingsSection`, `appProvider`,
 `globalComponent`, `api`, `i18n`, `events`, `storage` — plugin settings sections and the workshop
-render as dialogs inside 插件仓库, and the shell slots of the old frameless UI (title bar, bottom
-bar, right bar) are no longer rendered. Contribution points let plugins extend each other without
-importing each other, and the same contract is reused by the system features: the assistant pulls
-AI tools from `harness.tool` contributions (this is how the notes system feature exposes its
+render as dialogs inside Plugin repository, and the shell slots of the old frameless UI (title bar,
+bottom bar, right bar) are no longer rendered. Contribution points let plugins extend each other
+without importing each other, and the same contract is reused by the system features: the assistant
+pulls AI tools from `harness.tool` contributions (this is how the notes system feature exposes its
 document, wiki, todo and graph tools to the model), and `plugin.purge` lets a feature or plugin
 clean up its own data on uninstall.
 
@@ -388,11 +385,11 @@ npx eslint --cache src examples electron.vite.config.ts
 
 > Plugin packages and sandbox assets are generated artifacts: `resources/plugins/` and
 > `resources/sandbox/` are not committed, and packaging scripts run `build:plugins` and
-> `build:sandbox` first. This app currently bundles no plugins (notes and the assistant are system
-> features), so the list in `scripts/build-plugins.mjs` is empty; a plugin added to that list is
-> built from `src/plugins/<id>/` and shipped as an `extraResources` entry. The sandbox sources live
-> in `native/`, and CI runs its `--selfcheck` against the packaged app, so a build only ships when
-> the sandbox inside the installer really enforces the write boundary.
+> `build:sandbox` first. This app currently bundles no plugins, so the list in
+> `scripts/build-plugins.mjs` is empty; a plugin added to that list is built from
+> `src/plugins/<id>/` and shipped as an `extraResources` entry. The sandbox sources live in
+> `native/`, and CI runs its `--selfcheck` against the packaged app, so a build only ships when the
+> sandbox inside the installer really enforces the write boundary.
 
 ## Releases
 
@@ -469,8 +466,8 @@ RytenBench/
 │   │       ├── shared/
 │   │       ├── renderer/             # components/, providers/, settings/
 │   │       └── locales/
-│   └── plugins/                      # Plugin host docs + built-in manifest registry
-│       ├── manifests.ts              # Built-in manifest registry (currently empty: no bundled plugins)
+│   └── plugins/                      # Plugin host docs + bundled-plugin registry
+│       ├── manifests.ts              # Bundled-plugin registry (currently empty)
 │       └── README.md  PACKAGING.md  MIGRATION.md
 ├── native/                           # Self-built sandbox backends (no third-party dependency)
 │   ├── build-sandbox.mjs             # Builds resources/sandbox, --selfcheck runs the packaged app
@@ -495,17 +492,19 @@ RytenBench/
 
 - **Main process** (`src/main/`) — application lifecycle, windows, tray, weather, the PGlite /
   Drizzle database engine, the model provider factory, the plugin host, the startup sequence
-  (`windows/startup.ts`) and the system-feature wiring (`system-services.ts`). Core IPC covers
-  window, settings, dialog and provider management; the feature/plugin channel namespaces are
-  declared through the same context contract.
+  (`windows/startup.ts`) and the system-feature wiring (`system-services.ts`). `system-services.ts`
+  mounts the notes workspace and the AI assistant with the same reversible context contract the
+  plugin host exposes, so their `plugin:<id>:*` channels and renderer APIs stay unchanged. Core IPC
+  covers window, settings, dialog and provider management; plugin and system-feature channel
+  namespaces are declared through that same contract.
 - **Preload** (`src/preload/`) — a context-bridged API surface: core capabilities plus a generic
   bridge (`window.api.plugin.invoke` / `on`) that only allows channels declared by an enabled
   plugin or a system feature, gated by an authoritative channel list pushed from the main process.
 - **Renderer** (`src/renderer/`) — a React 19 single-page app with hash routing, mounted under
   `Root.tsx` (the startup splash wraps `App.tsx`). The shell renders the sidebar, the system pages
-  (对话, 资料库, 插件仓库), the settings modal and the notifications, and macOS additionally renders
-  the self-drawn title strip. Third-party plugin routes arrive through plugin registrations, while
-  the native window title is derived per page in `window-title.ts`.
+  (assistant, Library, Plugin repository), the settings modal and the notifications, and macOS
+  additionally renders the self-drawn title strip. Third-party plugin routes arrive through plugin
+  registrations, while the native window title is derived per page in `window-title.ts`.
 
 ### Plugin host
 
