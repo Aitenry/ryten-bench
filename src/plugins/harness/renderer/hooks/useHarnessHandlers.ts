@@ -1232,7 +1232,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         id: `goal-user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         role: 'user',
         content: objective,
-        blocks: [{ type: 'goalRound', round }],
+        blocks: [{ type: 'goalRound', round, objective }],
         timestamp: Date.now()
       }
       const aiMessageId = `goal-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -1494,7 +1494,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         assistantIdByTopicRef.current.delete(topicId)
 
         if (currentTopicIdRef.current === topicId) {
+          // 删的是**正在看的**这条：先把指针挪开再清视图。
+          // `handleNewHarness()` 开头会 `saveSessionToCache()`（按 currentTopicIdRef 写缓存），
+          // 指针还指着这条已删会话的话，就会把刚删掉的历史又写回 `sessionsRef`；
+          // 之后任何一次「重新选中这个 id」（旧行、迟到的事件）都会命中缓存、把历史原样放回屏幕
+          // ——用户口径 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」。
+          currentTopicIdRef.current = null
           handleNewHarness()
+          // 双保险：清视图过程中若又落了缓存，这里补删一次
+          sessionsRef.current.delete(topicId)
         }
         await refreshTopics()
       } catch (err) {

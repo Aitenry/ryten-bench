@@ -308,8 +308,13 @@ async function runHarnessTurn(
       userDialogueId = options.reuseUserDialogueId
       await updateDialogueContent(userDialogueId, question)
     } else {
-      const userBlocks: { type: string; image_url?: string; fileName?: string; round?: number }[] =
-        []
+      const userBlocks: {
+        type: string
+        image_url?: string
+        fileName?: string
+        round?: number
+        objective?: string
+      }[] = []
       if (options?.images?.length) {
         for (const img of options.images) {
           userBlocks.push({ type: 'image', image_url: img })
@@ -321,7 +326,11 @@ async function runHarnessTurn(
         }
       }
       if (options?.turnMeta?.source === 'goal-round') {
-        userBlocks.push({ type: 'goalRound', round: options.turnMeta.goalRound })
+        userBlocks.push({
+          type: 'goalRound',
+          round: options.turnMeta.goalRound,
+          objective: options.turnMeta.objective ?? ''
+        })
       }
       userDialogueId = await addDialogue({
         topic_id: topicId,

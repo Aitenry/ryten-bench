@@ -12,6 +12,7 @@ import { ChatBedrockConverse } from '@langchain/aws'
 import { ChatCloudflareWorkersAI } from '@langchain/cloudflare'
 import logger from 'electron-log'
 import { getDefaultProvider, getProviderById, LlmProviderConfig } from '../database/mapper/provider'
+import { mainFormat, mainMessages } from '../i18n'
 import { buildThinkingParams } from './thinking-params'
 import { TOP_K_PROVIDERS } from '../../shared/model-params'
 
@@ -54,21 +55,17 @@ class ProviderService {
    */
   async createModel(providerId?: number): Promise<BaseChatModel> {
     if (providerId == null) {
-      throw new Error('目标模型不存在：请先在聊天界面顶部选择一个可用的 AI 模型。')
+      throw new Error(mainMessages().error.modelNotSelected)
     }
 
     const config = await this.resolveConfig(providerId)
 
     if (!config) {
-      throw new Error(
-        `目标模型不存在：未找到 ID 为 ${providerId} 的供应商配置，或该供应商已被禁用。`
-      )
+      throw new Error(mainFormat(mainMessages().error.providerNotFound, { id: providerId }))
     }
 
     if (!config.model || config.model.trim() === '') {
-      throw new Error(
-        `目标模型不存在：供应商 "${config.name}" 未指定模型名称，请在设置中配置模型。`
-      )
+      throw new Error(mainFormat(mainMessages().error.modelNameMissing, { name: config.name }))
     }
 
     return this.buildModel(config)
@@ -80,7 +77,7 @@ class ProviderService {
   async getConfig(providerId?: number): Promise<LlmProviderConfig> {
     const config = await this.resolveConfig(providerId)
     if (!config) {
-      throw new Error('No LLM provider configured.')
+      throw new Error(mainMessages().error.noProviderConfigured)
     }
     return config
   }

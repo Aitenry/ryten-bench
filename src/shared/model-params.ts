@@ -40,38 +40,35 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 500
 /** 思考模式：auto = 跟随模型默认配置（不注入任何参数） */
 export type ThinkingMode = 'auto' | 'on' | 'off'
 
-/** 思考模式下拉/单选选项 */
-export const THINKING_MODE_OPTIONS: ReadonlyArray<{ value: ThinkingMode; label: string }> = [
-  { value: 'auto', label: '跟随模型默认配置' },
-  { value: 'on', label: '开启' },
-  { value: 'off', label: '关闭' }
+/** 思考模式下拉/单选选项（label 由界面层按当前语言解析） */
+export const THINKING_MODE_OPTIONS: ReadonlyArray<{ value: ThinkingMode }> = [
+  { value: 'auto' },
+  { value: 'on' },
+  { value: 'off' }
 ]
 
-/** 采样参数：留空即「使用最佳配置」，范围与占位提示一一对应 */
+/** 采样参数：范围与步进；占位提示由界面层按当前语言解析 */
 export const SAMPLING_PARAM_SPECS = [
   {
     name: 'temperature',
     label: 'Temperature',
     min: 0,
     max: 2,
-    step: 0.1,
-    placeholder: '留空使用最佳配置，或输入 0 ~ 2 之间的数值'
+    step: 0.1
   },
   {
     name: 'top_p',
     label: 'Top P',
     min: 0,
     max: 1,
-    step: 0.05,
-    placeholder: '留空使用最佳配置，或输入 0 ~ 1 之间的数值'
+    step: 0.05
   },
   {
     name: 'top_k',
     label: 'Top K',
     min: 1,
     max: 100,
-    step: 1,
-    placeholder: '留空使用最佳配置，或输入 1 ~ 100 之间的数值'
+    step: 1
   }
 ] as const
 

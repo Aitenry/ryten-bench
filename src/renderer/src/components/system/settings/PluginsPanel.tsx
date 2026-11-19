@@ -352,7 +352,11 @@ const PluginsPanel: React.FC = () => {
             }}
           >
             {entry.description}
-            {failed && <span style={{ color: token.colorError, marginLeft: 8 }}>（加载失败）</span>}
+            {failed && (
+              <span style={{ color: token.colorError, marginLeft: 8 }}>
+                {t('settings.plugins.loadFailed')}
+              </span>
+            )}
           </div>
         </div>
         {/* 行内操作收进「⋯」菜单：更新 / 启用停用 / 卸载（2026-09-26 用户要求）。

@@ -7,9 +7,8 @@
  *
  * 中文是源语言，`enUS` 用 `typeof zhCN` 约束，缺键/多键都是编译期错误。
  *
- * 注意：这里的键只覆盖 mnemon 写工具的返回文本。记忆空间/文档的**持久化默认名**
- * （`热记忆归档` / `未命名记忆空间` / `记忆空间 <id>` / `磁盘发现的记忆空间`）
- * 是数据不是文案，按名查找依赖它们，绝不能放到这里。
+ * 记忆空间的默认名只是创建时的初始展示文案：业务逻辑按结构化 `role` 查找归档空间，
+ * 不再依赖任何名称字面量。
  */
 export const zhCNToolResults = {
   mnemon: {
@@ -17,6 +16,15 @@ export const zhCNToolResults = {
     targets: {
       user: '用户画像',
       memory: '项目记忆'
+    },
+
+    /** 记忆空间的默认展示名（仅新建时使用；查找归档空间靠 role，不靠名称） */
+    defaultNames: {
+      archiveSpace: '热记忆归档',
+      archiveSpaceDescription: 'MEMORY 热记忆溢出的自动归档目标；内容为项目长期事实与经验。',
+      untitledSpace: '未命名记忆空间',
+      discoveredSpace: '记忆空间 {{id}}',
+      discoveredSpaceDescription: '磁盘发现的记忆空间'
     },
 
     // ----- mnemon_runtime_memory：工具层拼装的成功文案 -----
@@ -127,6 +135,15 @@ export const enUSToolResults: typeof zhCNToolResults = {
     targets: {
       user: 'User Profile',
       memory: 'Project Memory'
+    },
+
+    defaultNames: {
+      archiveSpace: 'Memory Archive',
+      archiveSpaceDescription:
+        'Automatic archive target for MEMORY overflow; holds long-term project facts and lessons.',
+      untitledSpace: 'Untitled Memory Space',
+      discoveredSpace: 'Memory Space {{id}}',
+      discoveredSpaceDescription: 'Memory space discovered on disk'
     },
 
     entryCount_one: '{{count}} entry',

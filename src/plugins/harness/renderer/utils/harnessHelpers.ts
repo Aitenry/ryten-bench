@@ -304,58 +304,6 @@ export function buildToolRuns(items: MessageBlock[], indices: number[]): ToolRun
 }
 
 /**
- * 目标原文：从「目标续跑」消息里取出人类可读的目标描述。
- *
- * 主进程下发的 goalRound 消息，content 有两种形态：
- *  - 干净的：单行 `CNCBD 知识资源模块：把"专家/机构"从手输文本改成真实关联…`；
- *  - 提示词原文：`<goal_round>\nObjective: CNCBD…\n(Automatic continuation round 2/40…)\n…</goal_round>`。
- * 单行形态**不能**按冒号切（目标本身常含全角冒号，会把正文切掉），所以规则是：
- * 多行时取第二行并剥掉 `Objective:` / `目标：` 这类短标签；单行时原样返回。
- */
-export const goalObjective = (content: string): string => {
-  const lines = (content ?? '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  if (lines.length === 0) return ''
-  if (lines.length === 1) return lines[0]
-  const second = lines[1]
-  const stripped = second.replace(/^\s*[A-Za-z_\u4e00-\u9fa5]{1,16}\s*[:：]\s*/, '')
-  return stripped || second
-}
-
-/**
- * 「继续执行」这类短指令：只表示「再跑一轮」，不是提问。
- *
- * 背景（用户 2026-09-19）：「会出现独立的内容，是因为断开之后，用户会发送『继续执行』，
- * 这个导致页面看起来不连贯。」目标自动续跑被 disarm / 停止后，用户会手动补一句继续指令，
- * 它被当成普通提问渲染成蓝色气泡，页面就断开了。
- *
- * 必须是**整条消息就是这句指令**才算（前后带别的要求的不算，例如「继续，但先改 X」），
- * 且只认这几种写法；渲染成居中的低调分隔行（见 ContinuationNote），不做任何语义推断。
- */
-const CONTINUATION_PROMPTS: RegExp[] = [
-  /^继续执行$/,
-  /^继续$/,
-  /^接着执行$/,
-  /^接着做$/,
-  /^继续做$/,
-  /^继续推进$/,
-  /^往下做$/,
-  /^continue$/i,
-  /^go on$/i,
-  /^keep going$/i,
-  /^resume$/i
-]
-
-/** 判断一条用户消息是否只是「继续」指令 */
-export const isContinuationPrompt = (content: string): boolean => {
-  const text = (content ?? '').trim().replace(/[。.!！~～,，]+$/, '')
-  if (!text) return false
-  return CONTINUATION_PROMPTS.some((re) => re.test(text))
-}
-
-/**
  * 合批内合并「累积形态」的同类增量（正文 / 思考各自成段）。
  *
  * 背景（2026-09-18 渲染进程内存实测）：合批只减少了 React commit 次数，逐 chunk 应用时

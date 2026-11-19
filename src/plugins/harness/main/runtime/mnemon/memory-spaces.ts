@@ -183,14 +183,17 @@ export class MemoryBodyRegistry {
     name: string
     description: string
     active?: boolean
+    role?: 'archive'
   }): Promise<MemoryBody> {
+    const tm = mainToolMessages().mnemon
     const id = crypto.randomUUID()
     const now = this.now().toISOString()
     const body: MemoryBody = {
       id,
-      name: request.name.trim() || '未命名记忆空间',
+      name: request.name.trim() || tm.defaultNames.untitledSpace,
       description: request.description.trim(),
       active: request.active ?? true,
+      ...(request.role ? { role: request.role } : {}),
       dbPath: path.join(this.directory, id),
       createdAt: now,
       updatedAt: now
@@ -335,8 +338,10 @@ export class MemoryBodyRegistry {
           const now = this.now().toISOString()
           this.bodies.push({
             id: entry.name,
-            name: `记忆空间 ${entry.name.slice(0, 8)}`,
-            description: '磁盘发现的记忆空间',
+            name: mainFormat(mainToolMessages().mnemon.defaultNames.discoveredSpace, {
+              id: entry.name.slice(0, 8)
+            }),
+            description: mainToolMessages().mnemon.defaultNames.discoveredSpaceDescription,
             active: true,
             dbPath,
             createdAt: now,

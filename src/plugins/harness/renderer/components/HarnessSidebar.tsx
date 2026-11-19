@@ -1645,7 +1645,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 disabled: isTopicLoading,
                 icon: <RiDeleteBin6Line size={14} />,
                 // 删除非当前工作区的会话：useHarness 只刷新当前工作区列表，这里补刷本地缓存
-                onClick: async () => {
+                onClick: async ({ domEvent }) => {
+                  // 菜单是 Dropdown 的一部分、挂在**这一行的 React 子树**里（portal 只换 DOM 位置，
+                  // React 事件仍按组件树冒泡）：不拦住的话，点「删除会话」还会顺带触发行的
+                  // onClick → handleOpenTopic 把这条刚删掉的会话重新选中（历史又回到屏幕上）。
+                  // 用户口径 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」。
+                  domEvent.stopPropagation()
                   if (isTopicLoading) return
                   const isChatTopic = chatWorkspaceIds.has(workspaceId)
                   const pluginId = pluginWorkspaces.find(
@@ -1766,7 +1771,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     key: 'rename',
                     label: t('common.action.rename'),
                     icon: <RiEditLine size={14} />,
-                    onClick: () => openRename(ws)
+                    // 同会话行：菜单点击别冒泡到工作区行的 onClick（那会顺手折叠/展开它）
+                    onClick: ({ domEvent }) => {
+                      domEvent.stopPropagation()
+                      openRename(ws)
+                    }
                   },
                   {
                     key: 'delete',
@@ -1777,7 +1786,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     danger: true as const,
                     disabled: hasRunningTopic,
                     icon: <RiDeleteBin6Line size={14} />,
-                    onClick: () => {
+                    onClick: ({ domEvent }) => {
+                      domEvent.stopPropagation()
                       if (hasRunningTopic) return
                       handleDeleteWorkspace(ws)
                     }

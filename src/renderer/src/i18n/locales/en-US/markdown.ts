@@ -76,7 +76,23 @@ export const enUSMarkdown: typeof zhCNMarkdown = {
     table: 'Table',
     tableDescription: '3×3 table (with header row)',
     horizontalRule: 'Divider',
-    horizontalRuleDescription: '--- horizontal divider'
+    horizontalRuleDescription: '--- horizontal divider',
+    keywords: {
+      paragraph: 'paragraph text plain',
+      heading1: 'heading1 heading h1 title',
+      heading2: 'heading2 heading h2 title',
+      heading3: 'heading3 heading h3 title',
+      bulletList: 'bullet list unordered point',
+      orderedList: 'ordered list numbered number',
+      taskList: 'todo task check checkbox checklist',
+      blockquote: 'quote blockquote quotation',
+      codeBlock: 'code block snippet fence',
+      inlineMath: 'math latex katex formula inline',
+      blockMath: 'math latex katex formula equation block',
+      mermaid: 'diagram flow chart sequence gantt',
+      table: 'table grid cell',
+      horizontalRule: 'hr divider rule separator'
+    }
   },
   mermaid: {
     label: 'Mermaid',

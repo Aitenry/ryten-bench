@@ -80,7 +80,24 @@ export const zhCNMarkdown = {
     table: '表格',
     tableDescription: '3×3 表格（含表头）',
     horizontalRule: '分割线',
-    horizontalRuleDescription: '--- 水平分割线'
+    horizontalRuleDescription: '--- 水平分割线',
+    /* 斜杠菜单检索词（空格分隔）：属界面词条，随语言切换 */
+    keywords: {
+      paragraph: '正文 文本 text paragraph',
+      heading1: '标题1 标题一 h1 heading heading1 title',
+      heading2: '标题2 标题二 h2 heading heading2 title',
+      heading3: '标题3 标题三 h3 heading heading3 title',
+      bulletList: '列表 无序 ul bullet list unordered point',
+      orderedList: '列表 有序 ol ordered list numbered number',
+      taskList: '任务 待办 todo task check checkbox checklist',
+      blockquote: '引用 quote blockquote quotation',
+      codeBlock: '代码 代码块 code block snippet fence',
+      inlineMath: '公式 数学 行内 math latex katex formula inline',
+      blockMath: '公式 数学 块级 math latex katex formula equation',
+      mermaid: '图表 图 流程图 mermaid diagram flow chart sequence gantt',
+      table: '表格 table grid cell',
+      horizontalRule: '分割线 水平线 hr divider rule separator'
+    }
   },
   mermaid: {
     label: 'Mermaid',

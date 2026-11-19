@@ -225,6 +225,7 @@ export class MnemonService {
     name: string
     description: string
     active?: boolean
+    role?: 'archive'
   }): Promise<MemoryBody> {
     this.validateWrite()
     return await this.registry.create(request)

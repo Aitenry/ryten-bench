@@ -233,6 +233,8 @@ export interface MemoryBody {
   name: string
   description: string
   active: boolean
+  /** 空间用途（结构化角色；archive=热记忆溢出归档目标），不依赖名称判定 */
+  role?: 'archive'
   dbPath: string
   createdAt: string
   updatedAt: string

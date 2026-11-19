@@ -8,13 +8,20 @@ import { mainMessages } from '../i18n'
 let mermaidPreviewWin: BrowserWindow | null = null
 let cachedHtml: string | null = null
 
-/** 从 HTML 资源文件构建预览页（仅注入 SVG 内容，图标/样式/交互均在文件内） */
+/** 从 HTML 资源文件构建预览页（注入 SVG 内容与当前语言文案，图标/样式/交互均在文件内） */
 function buildMermaidPreviewHtml(svg: string): string {
   if (cachedHtml === null) {
     cachedHtml = fs.readFileSync(mermaidPreviewHtmlPath, 'utf-8')
   }
+  // 文案由主进程 i18n 注入，HTML 里不再写死任何语言的界面文字
+  const i18nJson = JSON.stringify(mainMessages().window.mermaidPreview).replace(/</g, '\\u003c')
   // 函数形式替换，避免 svg 中的 $ 字符触发 replace 特殊序列
-  return cachedHtml.replace('<!-- __MERMAID_SVG__ -->', () => svg)
+  return cachedHtml
+    .replace('<!-- __MERMAID_SVG__ -->', () => svg)
+    .replace(
+      '<!-- __MERMAID_I18N__ -->',
+      () => `<script>window.__MERMAID_I18N__=${i18nJson}</script>`
+    )
 }
 
 export function registerMermaidPreviewIpc(): void {
@@ -41,7 +48,7 @@ export function registerMermaidPreviewIpc(): void {
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
-      title: mainMessages().window.mermaidPreview,
+      title: mainMessages().window.mermaidPreview.title,
       autoHideMenuBar: true,
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),

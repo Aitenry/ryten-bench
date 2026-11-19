@@ -5,8 +5,6 @@ import { useTranslation } from '@renderer/i18n'
 import UserMessage from './messages/UserMessage'
 import AssistantMessage from './messages/AssistantMessage'
 import GoalRoundBanner from './messages/GoalRoundBanner'
-import ContinuationNote from './messages/ContinuationNote'
-import { isContinuationPrompt, goalObjective } from '../utils/harnessHelpers'
 import ScrollToBottomButton from './ScrollToBottomButton'
 import MessageLocator from './MessageLocator'
 import WelcomeIntro from './WelcomeIntro'
@@ -356,82 +354,43 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
    * 也可以减少渲染。」
    *
    * 数据形态：目标轮次驱动器（主进程 goal-driver）每轮先下发 `goalRound` 标记 chunk，渲染端把它挂成
-   * 一条 user 消息（blocks=[{type:'goalRound',round}]、content=目标原文），于是同一批次在列表里是
+   * 一条 user 消息（blocks=[{type:'goalRound',round,objective}]），于是同一批次在列表里是
    * 交替的 [助手][横幅][助手][横幅]……。轮次一多，气泡与挂载的块都线性增长。
    *
-   * 归并规则（纯渲染层，不动存储）：
+   * 归并只认**结构化 goalRound 块**：用户输入什么都不参与判定，普通消息永远是普通气泡。
    *  - 一段连续的「助手 + 横幅 + 助手 + 横幅 + 助手」= 一个批次，**包含开头那条助手**（它是这批
    *    工作的第一轮，自动续跑都建立在它之上）；
    *  - 批次渲染成一行：一个横幅（显示 第 N/M 轮 + 目标 + 左右切换）+ **当前选中那一轮的助手消息**；
    *  - 其余轮次不挂载 —— 这正是「减少渲染」的来源；
    *  - 默认选中最后一轮（最新）；用户手动往前翻过后不再被新轮次抢走，翻回最后一轮则恢复跟随。
    */
-  const goalRoundOf = (m: Message | undefined): boolean =>
-    Boolean(m && m.role === 'user' && m.blocks.some((b) => b.type === 'goalRound'))
+  const goalRoundBlockOf = (m: Message | undefined): Message['blocks'][number] | undefined =>
+    m?.role === 'user' ? m.blocks.find((b) => b.type === 'goalRound') : undefined
 
   type RenderRow =
     | { kind: 'single'; index: number }
     | {
         kind: 'batch'
         key: string
-        /** note：该轮之前用户手补的「继续执行」（自动续跑断开后手动接续），渲染成低调的分隔行 */
-        rounds: { index: number; objective: string; note?: string }[]
+        rounds: { index: number; objective: string }[]
       }
 
   const renderRows = useMemo<RenderRow[]>(() => {
     const rows: RenderRow[] = []
     const total = visibleMessages.length
-    const isBanner = (m: Message | undefined): boolean => goalRoundOf(m)
-    const isCont = (m: Message | undefined): boolean =>
-      Boolean(m && m.role === 'user' && isContinuationPrompt(m.content))
-    /** 批次里首轮的目标原文：从后面第一条横幅取（可能隔着一条「继续执行」） */
-    const lookaheadObjective = (from: number): string => {
-      for (let j = from; j < Math.min(from + 2, total); j += 1) {
-        if (isBanner(visibleMessages[j])) return goalObjective(visibleMessages[j].content)
-      }
-      return ''
-    }
+    const isBanner = (m: Message | undefined): boolean => Boolean(goalRoundBlockOf(m))
+    /** 目标原文只从结构化 block 读取，不解析消息正文 */
+    const objectiveOf = (m: Message | undefined): string => goalRoundBlockOf(m)?.objective ?? ''
 
     for (let i = 0; i < total; i += 1) {
       const message = visibleMessages[i]
       const last = rows[rows.length - 1]
 
-      /**
-       * 横幅 →（可选的「继续执行」）→ 助手 = 一轮，接进上一批。
-       *
-       * 允许中间夹一条手补的「继续执行」：实测用例（用户 2026-09-19 贴的 DOM）就是
-       * 「…助手 → 横幅(第 3 轮) → 继续执行 → 助手」，旧规则要求横幅后面紧跟助手，
-       * 于是第 3 轮被漏成了独立一行。
-       */
+      // 横幅 → 助手 = 一轮，接进上一批
       if (isBanner(message)) {
-        const withNote = isCont(visibleMessages[i + 1])
-        const assistant = withNote ? visibleMessages[i + 2] : visibleMessages[i + 1]
-        if (last && last.kind === 'batch' && assistant?.role === 'assistant') {
-          last.rounds.push({
-            index: i + (withNote ? 2 : 1),
-            objective: goalObjective(message.content),
-            note: withNote ? visibleMessages[i + 1].content.trim() : undefined
-          })
-          i += withNote ? 2 : 1
-          continue
-        }
-        rows.push({ kind: 'single', index: i })
-        continue
-      }
-
-      /**
-       * 用户手补的「继续执行」（自动续跑断开后）：后面那条助手仍是这批工作的一轮。
-       * 只要上一行已经是批次，就吸收——不再要求「后面还得再有横幅」：用户手写继续指令
-       * 本身就是在续这批工作，旧规则会把它留成独立气泡 + 独立回复（页面断开）。
-       */
-      if (isCont(message)) {
         const assistant = visibleMessages[i + 1]
         if (last && last.kind === 'batch' && assistant?.role === 'assistant') {
-          last.rounds.push({
-            index: i + 1,
-            objective: last.rounds[last.rounds.length - 1].objective,
-            note: message.content.trim()
-          })
+          last.rounds.push({ index: i + 1, objective: objectiveOf(message) })
           i += 1
           continue
         }
@@ -439,15 +398,12 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
         continue
       }
 
-      // 助手 +（后面是横幅或「继续执行」）→ 开一个新批次
-      if (
-        message.role === 'assistant' &&
-        (isBanner(visibleMessages[i + 1]) || isCont(visibleMessages[i + 1]))
-      ) {
+      // 助手 + 后面是横幅 → 开一个新批次（这条助手是该批的第一轮）
+      if (message.role === 'assistant' && isBanner(visibleMessages[i + 1])) {
         rows.push({
           kind: 'batch',
           key: message.id,
-          rounds: [{ index: i, objective: lookaheadObjective(i + 1) }]
+          rounds: [{ index: i, objective: objectiveOf(visibleMessages[i + 1]) }]
         })
         continue
       }
@@ -596,14 +552,6 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                         onPrev={() => gotoRound(row.key, active - 1, last)}
                         onNext={() => gotoRound(row.key, active + 1, last)}
                       />
-                      {/* 该轮之前用户手补的「继续执行」：低调分隔行，紧贴这一轮内容 */}
-                      {round.note ? (
-                        <ContinuationNote
-                          text={round.note}
-                          colorTextSecondary={colorTextSecondary}
-                          colorBorderSecondary={colorBorderSecondary}
-                        />
-                      ) : null}
                       <AssistantMessage
                         message={visibleMessages[round.index]}
                         index={idx}

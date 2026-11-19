@@ -48,7 +48,15 @@ export const zhCN = {
     stepCompleted: '初始化完成'
   },
   window: {
-    mermaidPreview: 'Mermaid 预览'
+    mermaidPreview: {
+      title: 'Mermaid 预览',
+      minimize: '最小化',
+      maximize: '最大化',
+      restore: '还原',
+      close: '关闭',
+      fit: '居中画布',
+      hint: '拖拽平移 · 滚轮缩放 · 双击居中 · Esc 关闭'
+    }
   },
   graphProgress: zhCNGraphProgress,
   /** 经 IPC 抛给渲染进程、最终以提示条形式出现在界面上的错误文案 */
@@ -68,6 +76,10 @@ export const zhCN = {
       '未配置图谱构建模型：请先到「系统设置 → 图谱」中选择用于构建知识图谱的大模型。',
     memoryDirNotConfigured: '未配置记忆存储目录',
     invalidRequest: '请求参数无效',
+    modelNotSelected: '目标模型不存在：请先在聊天界面顶部选择一个可用的 AI 模型。',
+    providerNotFound: '目标模型不存在：未找到 ID 为 {{id}} 的供应商配置，或该供应商已被禁用。',
+    modelNameMissing: '目标模型不存在：供应商 "{{name}}" 未指定模型名称，请在设置中配置模型。',
+    noProviderConfigured: '未配置任何大模型供应商',
     /* 流式生成失败时直接写进助手消息的文案 */
     responseFailed: '获取响应失败：{{reason}}',
     emptyModelResponse: '模型未返回任何内容，请查看日志或重试。'
@@ -202,7 +214,15 @@ export const enUS: typeof zhCN = {
     stepCompleted: 'Initialization complete'
   },
   window: {
-    mermaidPreview: 'Mermaid preview'
+    mermaidPreview: {
+      title: 'Mermaid preview',
+      minimize: 'Minimize',
+      maximize: 'Maximize',
+      restore: 'Restore',
+      close: 'Close',
+      fit: 'Center canvas',
+      hint: 'Drag to pan · Scroll to zoom · Double-click to center · Esc to close'
+    }
   },
   graphProgress: enUSGraphProgress,
   error: {
@@ -222,6 +242,13 @@ export const enUS: typeof zhCN = {
       'No graph building model configured. Choose one under Settings → Graph first.',
     memoryDirNotConfigured: 'No memory storage folder configured',
     invalidRequest: 'Invalid request parameters',
+    modelNotSelected:
+      'Target model not found: choose an available AI model at the top of the chat first.',
+    providerNotFound:
+      'Target model not found: no provider config with ID {{id}}, or the provider is disabled.',
+    modelNameMissing:
+      'Target model not found: provider "{{name}}" has no model name configured. Configure it in settings first.',
+    noProviderConfigured: 'No LLM provider configured.',
     responseFailed: 'Failed to get response: {{reason}}',
     emptyModelResponse: 'The model returned no content. Check the logs or try again.'
   },

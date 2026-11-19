@@ -1,5 +1,6 @@
 import type { StructuredToolInterface } from '@langchain/core/tools'
 import logger from 'electron-log'
+import { mainToolMessages } from '../../../../../main/i18n'
 import { DocumentController } from './documents'
 import { RuntimeMemoryController } from './runtime-memory'
 import { MnemonService } from './service'
@@ -33,17 +34,16 @@ export function buildMnemon(storageRoot: string, workspaceName?: string): Mnemon
   let serviceRef: MnemonService | null = null
   const runtimeMemory = new RuntimeMemoryController(storageRoot, {
     archiveEntries: async (entries) => {
-      // 归档钩子：把条目沉淀进「热记忆归档」空间（自动创建）
+      // 归档钩子：把条目沉淀进 role='archive' 的空间（不存在则自动创建）
       if (!serviceRef) return { archivedIndexes: [], memoryBodyIds: [] }
       const targets = serviceRef.registry.active()
-      let body =
-        targets.find((b) => b.name === '热记忆归档') ??
-        targets.find((b) => b.name.startsWith('项目记忆')) ??
-        targets[0]
+      let body = targets.find((b) => b.role === 'archive')
       if (!body) {
+        const names = mainToolMessages().mnemon.defaultNames
         body = await serviceRef.createBody({
-          name: '热记忆归档',
-          description: 'MEMORY 热记忆溢出的自动归档目标；内容为项目长期事实与经验。'
+          name: names.archiveSpace,
+          description: names.archiveSpaceDescription,
+          role: 'archive'
         })
       }
       // 契约：archivedIndexes 为「传入 entries 子数组内的局部索引」，

@@ -1,5 +1,5 @@
 import logger from 'electron-log'
-import { goalStore } from './runtime/goal'
+import { goalStore, MIN_ROUNDS_FOR_BLOCK } from './runtime/goal'
 import type { TurnMeta } from './types'
 import { mainFormat } from '../../../main/i18n'
 import { getAgentToolTexts } from '../../../main/i18n/tool-results-agent'
@@ -85,7 +85,7 @@ export class GoalRoundDriver {
 Objective: ${updated.objective}
 (Automatic continuation round ${round}/${updated.maxGoalRounds}. Keep pushing the objective forward — do not ask the user for confirmation.)
 - If the objective is fully achieved: call update_goal(action: "complete").
-- If you hit a blocker you cannot resolve on your own and at least 3 rounds have passed: call update_goal(action: "blocked", blocked_reason: { code, message }).
+- If you hit a blocker you cannot resolve on your own and at least ${MIN_ROUNDS_FOR_BLOCK} rounds have passed: call update_goal(action: "blocked", blocked_reason: { code, message }).
 - Otherwise just keep working. When you finish, give a short summary of what this round accomplished.
 </goal_round>`
     const turnMeta: TurnMeta = {

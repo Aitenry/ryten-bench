@@ -22,6 +22,7 @@ export const zhCNSettings = {
     listDescription: '停用后对应功能会立即从应用移除，重新启用即时恢复',
     builtinBadge: '内置',
     externalBadge: '第三方',
+    loadFailed: '（加载失败）',
     switchFail: '插件状态切换失败',
     install: '安装第三方插件',
     reinstall: '安装',

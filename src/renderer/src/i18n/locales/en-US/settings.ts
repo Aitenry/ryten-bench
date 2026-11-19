@@ -24,6 +24,7 @@ export const enUSSettings: typeof zhCNSettings = {
       'Disabled features are removed from the app immediately and restored on re-enable',
     builtinBadge: 'Built-in',
     externalBadge: 'Third-party',
+    loadFailed: '(load failed)',
     switchFail: 'Failed to toggle plugin state',
     install: 'Install third-party plugin',
     reinstall: 'Install',

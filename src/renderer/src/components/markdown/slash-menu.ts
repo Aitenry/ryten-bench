@@ -70,13 +70,30 @@ type SlashItemDescKey =
   | 'markdown.slash.tableDescription'
   | 'markdown.slash.horizontalRuleDescription'
 
+type SlashItemKeywordKey =
+  | 'markdown.slash.keywords.paragraph'
+  | 'markdown.slash.keywords.heading1'
+  | 'markdown.slash.keywords.heading2'
+  | 'markdown.slash.keywords.heading3'
+  | 'markdown.slash.keywords.bulletList'
+  | 'markdown.slash.keywords.orderedList'
+  | 'markdown.slash.keywords.taskList'
+  | 'markdown.slash.keywords.blockquote'
+  | 'markdown.slash.keywords.codeBlock'
+  | 'markdown.slash.keywords.inlineMath'
+  | 'markdown.slash.keywords.blockMath'
+  | 'markdown.slash.keywords.mermaid'
+  | 'markdown.slash.keywords.table'
+  | 'markdown.slash.keywords.horizontalRule'
+
 export interface SlashMenuItemDef {
   key: string
   /** 词条键（由渲染层 t() 求值），不是可直接展示的文案 */
   title: SlashItemNameKey
   /** 词条键（由渲染层 t() 求值），不是可直接展示的文案 */
   description?: SlashItemDescKey
-  keywords?: string[]
+  /** 检索词词条键（空格分隔，由渲染层按当前语言解析） */
+  keywords?: SlashItemKeywordKey
   /** 文字图标（如 H1），优先于 Icon 渲染 */
   iconText?: string
   /** remixicon 图标组件（size 为 number|string，与 RemixiconProps 一致） */
@@ -85,14 +102,14 @@ export interface SlashMenuItemDef {
 }
 
 /* ──────────── 菜单项定义 ──────────── */
-/* keywords 保留原有中文检索词（输入 '/' 后按中文筛选），并补英文检索词 */
+/* 检索词也走词条：中文/英文关键词都随界面语言取，不在代码里写死 */
 
 export const SLASH_ITEMS: SlashMenuItemDef[] = [
   {
     key: 'paragraph',
     title: 'markdown.slash.paragraph',
     description: 'markdown.slash.paragraphDescription',
-    keywords: ['正文', '文本', 'text', 'paragraph'],
+    keywords: 'markdown.slash.keywords.paragraph',
     Icon: RiText,
     run: (editor) => editor.chain().focus().setParagraph().run()
   },
@@ -100,7 +117,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'h1',
     title: 'markdown.slash.heading1',
     description: 'markdown.slash.heading1Description',
-    keywords: ['标题1', '标题一', 'h1', 'heading', 'heading1', 'title'],
+    keywords: 'markdown.slash.keywords.heading1',
     iconText: 'H1',
     run: (editor) => editor.chain().focus().setHeading({ level: 1 }).run()
   },
@@ -108,7 +125,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'h2',
     title: 'markdown.slash.heading2',
     description: 'markdown.slash.heading2Description',
-    keywords: ['标题2', '标题二', 'h2', 'heading', 'heading2', 'title'],
+    keywords: 'markdown.slash.keywords.heading2',
     iconText: 'H2',
     run: (editor) => editor.chain().focus().setHeading({ level: 2 }).run()
   },
@@ -116,7 +133,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'h3',
     title: 'markdown.slash.heading3',
     description: 'markdown.slash.heading3Description',
-    keywords: ['标题3', '标题三', 'h3', 'heading', 'heading3', 'title'],
+    keywords: 'markdown.slash.keywords.heading3',
     iconText: 'H3',
     run: (editor) => editor.chain().focus().setHeading({ level: 3 }).run()
   },
@@ -124,7 +141,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'bulletList',
     title: 'markdown.slash.bulletList',
     description: 'markdown.slash.bulletListDescription',
-    keywords: ['列表', '无序', 'ul', 'bullet', 'list', 'unordered', 'point'],
+    keywords: 'markdown.slash.keywords.bulletList',
     Icon: RiListUnordered,
     run: (editor) => editor.chain().focus().toggleBulletList().run()
   },
@@ -132,7 +149,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'orderedList',
     title: 'markdown.slash.orderedList',
     description: 'markdown.slash.orderedListDescription',
-    keywords: ['列表', '有序', 'ol', 'ordered', 'list', 'numbered', 'number'],
+    keywords: 'markdown.slash.keywords.orderedList',
     Icon: RiListOrdered,
     run: (editor) => editor.chain().focus().toggleOrderedList().run()
   },
@@ -140,7 +157,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'taskList',
     title: 'markdown.slash.taskList',
     description: 'markdown.slash.taskListDescription',
-    keywords: ['任务', '待办', 'todo', 'task', 'check', 'checkbox', 'checklist'],
+    keywords: 'markdown.slash.keywords.taskList',
     Icon: RiCheckboxLine,
     run: (editor) => editor.chain().focus().toggleTaskList().run()
   },
@@ -148,7 +165,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'blockquote',
     title: 'markdown.slash.blockquote',
     description: 'markdown.slash.blockquoteDescription',
-    keywords: ['引用', 'quote', 'blockquote', 'quotation'],
+    keywords: 'markdown.slash.keywords.blockquote',
     Icon: RiDoubleQuotesL,
     run: (editor) => editor.chain().focus().toggleBlockquote().run()
   },
@@ -156,7 +173,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'codeBlock',
     title: 'markdown.slash.codeBlock',
     description: 'markdown.slash.codeBlockDescription',
-    keywords: ['代码', 'code', 'block', '代码块', 'snippet', 'fence'],
+    keywords: 'markdown.slash.keywords.codeBlock',
     Icon: RiCodeBoxLine,
     run: (editor) => editor.chain().focus().toggleCodeBlock().run()
   },
@@ -164,7 +181,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'inlineMath',
     title: 'markdown.slash.inlineMath',
     description: 'markdown.slash.inlineMathDescription',
-    keywords: ['公式', '数学', '行内', 'math', 'latex', 'katex', 'formula', 'inline'],
+    keywords: 'markdown.slash.keywords.inlineMath',
     Icon: RiFunctionLine,
     run: (editor) => editor.chain().focus().insertContent({ type: 'mathInline' }).run()
   },
@@ -172,7 +189,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'blockMath',
     title: 'markdown.slash.blockMath',
     description: 'markdown.slash.blockMathDescription',
-    keywords: ['公式', '数学', '块级', 'math', 'latex', 'katex', 'formula', 'equation'],
+    keywords: 'markdown.slash.keywords.blockMath',
     Icon: RiFunctionAddLine,
     run: (editor) => editor.chain().focus().insertContent({ type: 'mathBlock' }).run()
   },
@@ -180,7 +197,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'mermaid',
     title: 'markdown.slash.mermaid',
     description: 'markdown.slash.mermaidDescription',
-    keywords: ['图表', '图', '流程图', 'mermaid', 'diagram', 'flow', 'chart', 'sequence', 'gantt'],
+    keywords: 'markdown.slash.keywords.mermaid',
     Icon: RiFlowChart,
     run: (editor) =>
       editor
@@ -196,7 +213,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'table',
     title: 'markdown.slash.table',
     description: 'markdown.slash.tableDescription',
-    keywords: ['表格', 'table', 'grid', 'cell'],
+    keywords: 'markdown.slash.keywords.table',
     Icon: RiTable2,
     run: (editor) =>
       editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
@@ -205,7 +222,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
     key: 'hr',
     title: 'markdown.slash.horizontalRule',
     description: 'markdown.slash.horizontalRuleDescription',
-    keywords: ['分割线', '水平线', 'hr', 'divider', 'rule', 'separator'],
+    keywords: 'markdown.slash.keywords.horizontalRule',
     Icon: RiSeparator,
     run: (editor) => editor.chain().focus().setHorizontalRule().run()
   }
@@ -223,7 +240,7 @@ const filterItems = (query: string): SlashMenuItemDef[] => {
     const haystack = [
       i18n.t(item.title),
       item.description ? i18n.t(item.description) : '',
-      ...(item.keywords ?? [])
+      item.keywords ? i18n.t(item.keywords) : ''
     ]
       .map(normalize)
       .join(' ')

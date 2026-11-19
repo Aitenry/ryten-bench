@@ -312,6 +312,8 @@ export interface MessageBlock {
   compaction?: HistoryCompactionBlock
   /** 目标自动续跑轮次号（goalRound 类型使用） */
   round?: number
+  /** 该续跑轮对应的目标原文（goalRound 类型使用，随消息落库，渲染端直接展示） */
+  objective?: string
   /** 模型请求失败后自动重试进度（retrying 类型使用，过渡块不落库） */
   retrying?: RetryInfoBlock
   /** 智能体嵌套的子块（仅 subAgent 类型使用，用于流式构建智能体的 text/tool/reasoning） */

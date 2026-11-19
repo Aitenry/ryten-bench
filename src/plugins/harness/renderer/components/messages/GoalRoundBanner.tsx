@@ -15,8 +15,8 @@ import { useTranslation } from '@renderer/i18n'
 export interface GoalRoundBannerProps {
   /** 当前轮次（1 基，批次内位置） */
   current: number
-  /** 批次总轮次 */
-  total: number
+  /** 批次总轮次；不传表示这条横幅不属于多轮批次（无左右切换） */
+  total?: number
   /** 目标原文（可收缩、单行省略） */
   objective: string
   colorTextSecondary: string
@@ -87,7 +87,8 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
   onNext
 }) => {
   const { t } = useTranslation()
-  const navigable = total > 1 && Boolean(onPrev || onNext)
+  const totalRounds = total ?? 1
+  const navigable = totalRounds > 1 && Boolean(onPrev || onNext)
 
   return (
     <>
@@ -115,7 +116,7 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
               `text-overflow: ellipsis` 对 1px 溢出也会触发，让标签可缩会被目标原文挤掉一个字。 */}
           <span style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>
             {t('harness.userMessage.goalRound', {
-              round: navigable ? `${current}/${total}` : current
+              round: navigable ? `${current}/${totalRounds}` : current
             })}
           </span>
           {navigable ? (
@@ -128,7 +129,7 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
                 <RiArrowLeftSLine size={16} />
               </NavButton>
               <NavButton
-                disabled={current >= total}
+                disabled={current >= totalRounds}
                 title={t('harness.userMessage.goalNext')}
                 onClick={() => onNext?.()}
               >
@@ -136,10 +137,14 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
               </NavButton>
             </span>
           ) : null}
-          <span style={{ opacity: 0.75, flex: '0 0 auto' }}>—</span>
-          <span data-goal-objective style={objectiveStyle} title={objective}>
-            {objective}
-          </span>
+          {objective ? (
+            <>
+              <span style={{ opacity: 0.75, flex: '0 0 auto' }}>—</span>
+              <span data-goal-objective style={objectiveStyle} title={objective}>
+                {objective}
+              </span>
+            </>
+          ) : null}
         </div>
       </div>
     </>

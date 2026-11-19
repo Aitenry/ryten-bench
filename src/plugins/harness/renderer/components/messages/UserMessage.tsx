@@ -3,8 +3,6 @@ import { App, Image, Tag, Tooltip, theme } from 'antd'
 import { RiAttachment2, RiPencilLine, RiDeleteBin6Line } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import GoalRoundBanner from './GoalRoundBanner'
-import ContinuationNote from './ContinuationNote'
-import { isContinuationPrompt, goalObjective } from '../../utils/harnessHelpers'
 import type { Message } from '../../types'
 
 interface UserMessageProps {
@@ -103,22 +101,7 @@ const UserMessage: React.FC<UserMessageProps> = ({
     return (
       <GoalRoundBanner
         current={goalRoundBlock.round ?? 1}
-        total={1}
-        objective={goalObjective(message.content)}
-        colorTextSecondary={colorTextSecondary}
-        colorBorderSecondary={colorBorderSecondary}
-      />
-    )
-  }
-
-  /**
-   * 「继续执行」这类短指令：不是提问，渲染成低调的居中分隔行（否则就是一个独立气泡，
-   * 页面读起来是断的——用户 2026-09-19 反馈的原话见 ContinuationNote）。
-   */
-  if (isContinuationPrompt(message.content) && !editing) {
-    return (
-      <ContinuationNote
-        text={message.content.trim()}
+        objective={goalRoundBlock.objective ?? ''}
         colorTextSecondary={colorTextSecondary}
         colorBorderSecondary={colorBorderSecondary}
       />
@@ -159,7 +142,8 @@ const UserMessage: React.FC<UserMessageProps> = ({
 
   return (
     <div className="flex justify-end mb-6">
-      <div className="max-w-[80%]">
+      {/* min-w-0：flex 子项默认 min-width:auto，长哈希/URL 这类不可断词会把气泡顶出 80% 上限 */}
+      <div className="max-w-[80%] min-w-0">
         <div
           style={{
             background: isDarkMode ? '#1a3a5c' : '#edf3fe',
@@ -192,11 +176,18 @@ const UserMessage: React.FC<UserMessageProps> = ({
                 color: 'inherit',
                 font: 'inherit',
                 lineHeight: 'inherit',
-                caretColor: token.colorPrimary
+                caretColor: token.colorPrimary,
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word'
               }}
             />
           ) : (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p
+              className="whitespace-pre-wrap"
+              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+            >
+              {message.content}
+            </p>
           )}
         </div>
         {imageBlocks.length > 0 && (
@@ -218,9 +209,17 @@ const UserMessage: React.FC<UserMessageProps> = ({
         {documentBlocks.length > 0 && (
           <div className="flex gap-2 mt-2 justify-end flex-wrap">
             {documentBlocks.map((b, idx) => (
-              <Tag key={idx} color="blue" className="px-3 py-1 text-sm rounded-lg">
-                <div className="inline-flex items-center py-1 gap-1">
-                  <RiAttachment2 size={14} /> <span>{b.fileName}</span>
+              <Tag
+                key={idx}
+                color="blue"
+                className="px-3 py-1 text-sm rounded-lg"
+                style={{ maxWidth: '100%' }}
+              >
+                <div className="inline-flex items-center py-1 gap-1 min-w-0">
+                  <RiAttachment2 size={14} className="shrink-0" />
+                  <span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                    {b.fileName}
+                  </span>
                 </div>
               </Tag>
             ))}
