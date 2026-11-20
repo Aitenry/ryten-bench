@@ -9,7 +9,7 @@ import { listContributions } from '../../plugins/contributions'
 import { settingsStore } from '../../context'
 import {
   expandMcpServerGroups,
-  isPluginModeTool,
+  isSelectableMainAgentTool,
   type MainAgentConfig
 } from '../../../shared/harness/mcp'
 import { mergeToolSources, type ToolSource } from './registry'
@@ -169,13 +169,13 @@ function resolveToolBuilders(): Record<string, ToolFactory> {
  * 每次调用即时拉取，因此插件启停与 MCP 连接状态都会立刻反映在这份清单里。
  * 排序与去重规则与 `resolveToolBuilders` 同源（同一个 `mergeToolSources`），不会漂移。
  *
- * **模式工具（插件工坊 4 个）不在这份清单里**：它们由插件模式自动挂载（用户口径 2026-09-29
- * 「不要在这里面选择工具才注册这些工具」），下发给设置页的下拉里既不该有选项、用户也勾不到。
- * 注册表（`resolveToolBuilders`）里照旧保留它们——本轮工具名由 `effectiveMainAgentTools` 按模式追加。
+ * **只返回用户可勾选的真实工具**：模式工具（插件工坊 4 个）由插件模式自动挂载；MCP 工具
+ * （`mcp__…`）/ 分组项（`mcp@…`）/ 旧标记（`mcp`）由 MCP 页管理、运行时自动并入。
+ * 过滤在主进程完成，渲染层拿到什么就展示什么，不再二次过滤。
  */
 export function listAvailableTools(): ToolInfo[] {
-  return mergeToolSources(toolSources()).infos.filter(
-    (info) => !isPluginModeTool(info.name)
+  return mergeToolSources(toolSources()).infos.filter((info) =>
+    isSelectableMainAgentTool(info.name)
   ) as ToolInfo[]
 }
 

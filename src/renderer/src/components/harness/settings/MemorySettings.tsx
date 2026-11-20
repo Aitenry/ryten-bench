@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Button, Input, Tabs, Tag, Switch, Empty, Popconfirm, Modal, Tooltip, theme } from 'antd'
+import { Button, Input, Tabs, Switch, Empty, Popconfirm, Modal, Tooltip, theme } from 'antd'
 import {
   FolderOutlined,
   PlusOutlined,
@@ -17,6 +17,7 @@ import {
   SettingsSection,
   SettingRow
 } from '@renderer/components/system/settings/SettingsUI'
+import EntityCard, { EntityChip } from '@renderer/components/system/EntityCard'
 import { harnessApi } from '../../../api/harness'
 import { useMemoryScope, useMemoryScopeName } from '../../../utils/harness/memory-scope'
 
@@ -749,92 +750,68 @@ const MemorySettings: React.FC = () => {
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {bodies.map((body) => (
-            <div
-              key={body.id}
-              className="flex items-start gap-3 px-3.5 py-3"
-              style={{
-                border: `1px solid ${t.cardBorder}`,
-                borderRadius: 10,
-                background: t.cardBg
-              }}
-            >
-              <div
-                className="flex items-center justify-center shrink-0"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 8,
-                  background: body.active ? t.iconBg : t.trackBg
-                }}
-              >
-                <DatabaseOutlined
-                  style={{ fontSize: 17, color: body.active ? t.primary : t.textTertiary }}
-                />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{body.name}</span>
-                  {body.active ? (
-                    <Tag color="green" style={{ marginRight: 0, fontSize: 11, lineHeight: '18px' }}>
-                      {translate('memorySettings.bodies.active')}
-                    </Tag>
-                  ) : (
-                    <Tag style={{ marginRight: 0, fontSize: 11, lineHeight: '18px' }}>
-                      {translate('memorySettings.bodies.inactive')}
-                    </Tag>
-                  )}
-                  {!body.healthy && (
-                    <Tag color="red" style={{ marginRight: 0, fontSize: 11 }}>
-                      {translate('memorySettings.bodies.unhealthy')}
-                    </Tag>
-                  )}
-                </div>
-                {body.description && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: t.textSecondary,
-                      marginTop: 2,
-                      lineHeight: '17px'
-                    }}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(232px, 1fr))',
+              gap: 14
+            }}
+          >
+            {bodies.map((body) => (
+              <EntityCard
+                key={body.id}
+                id={`body-${body.id}`}
+                icon={<DatabaseOutlined />}
+                title={body.name}
+                meta={
+                  <>
+                    <EntityChip>
+                      {body.active
+                        ? translate('memorySettings.bodies.active')
+                        : translate('memorySettings.bodies.inactive')}
+                    </EntityChip>
+                    {!body.healthy && (
+                      <EntityChip>{translate('memorySettings.bodies.unhealthy')}</EntityChip>
+                    )}
+                    <EntityChip>
+                      {translate('memorySettings.bodies.stats', {
+                        insights: body.stats?.totalInsights ?? 0,
+                        edges: body.stats?.edgeCount ?? 0,
+                        deleted: body.stats?.deletedInsights ?? 0
+                      })}
+                    </EntityChip>
+                  </>
+                }
+                description={body.description || undefined}
+                footerStart={
+                  <Tooltip
+                    title={
+                      body.active
+                        ? translate('memorySettings.bodies.participatesInRecall')
+                        : translate('memorySettings.bodies.excludedFromRecall')
+                    }
                   >
-                    {body.description}
-                  </div>
-                )}
-                <div style={{ fontSize: 11, color: t.textTertiary, marginTop: 4 }}>
-                  {translate('memorySettings.bodies.stats', {
-                    insights: body.stats?.totalInsights ?? 0,
-                    edges: body.stats?.edgeCount ?? 0,
-                    deleted: body.stats?.deletedInsights ?? 0
-                  })}
-                </div>
-              </div>
-              <div className="flex items-center gap-1 shrink-0" style={{ marginTop: 2 }}>
-                <Button
-                  type="text"
-                  size="small"
-                  disabled={!body.healthy}
-                  onClick={() => handleBrowseBody({ id: body.id, name: body.name })}
-                >
-                  {translate('memorySettings.bodies.content')}
-                </Button>
-                <Tooltip
-                  title={
-                    body.active
-                      ? translate('memorySettings.bodies.participatesInRecall')
-                      : translate('memorySettings.bodies.excludedFromRecall')
-                  }
-                >
-                  <Switch
-                    checked={body.active}
+                    <Switch
+                      checked={body.active}
+                      size="small"
+                      onChange={(checked) => handleToggleBody(body.id, checked)}
+                    />
+                  </Tooltip>
+                }
+                footerEnd={
+                  <Button
+                    type="text"
                     size="small"
-                    onChange={(checked) => handleToggleBody(body.id, checked)}
-                  />
-                </Tooltip>
-              </div>
-            </div>
-          ))}
+                    style={{ marginLeft: 'auto' }}
+                    disabled={!body.healthy}
+                    onClick={() => handleBrowseBody({ id: body.id, name: body.name })}
+                  >
+                    {translate('memorySettings.bodies.content')}
+                  </Button>
+                }
+              />
+            ))}
+          </div>
         </div>
       )}
 
@@ -895,59 +872,31 @@ const MemorySettings: React.FC = () => {
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {documents.documents.map((doc) => (
-            <div
-              key={doc.id}
-              className="flex items-start gap-3 px-3.5 py-3"
-              style={{
-                border: `1px solid ${t.cardBorder}`,
-                borderRadius: 10,
-                background: t.cardBg
-              }}
-            >
-              <div
-                className="flex items-center justify-center shrink-0"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 8,
-                  background: t.iconBg
-                }}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(232px, 1fr))',
+              gap: 14
+            }}
+          >
+            {documents.documents.map((doc) => (
+              <EntityCard
+                key={doc.id}
+                id={`doc-${doc.id}`}
+                icon={<FileTextOutlined />}
+                title={doc.title}
+                meta={<EntityChip>{doc.status === 'active' ? 'active' : 'archived'}</EntityChip>}
+                description={doc.excerpt || undefined}
               >
-                <FileTextOutlined style={{ fontSize: 17, color: t.primary }} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{doc.title}</span>
-                  {doc.status === 'active' ? (
-                    <Tag color="blue" style={{ marginRight: 0, fontSize: 11, lineHeight: '18px' }}>
-                      active
-                    </Tag>
-                  ) : (
-                    <Tag style={{ marginRight: 0, fontSize: 11, lineHeight: '18px' }}>archived</Tag>
-                  )}
-                </div>
-                {doc.excerpt && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: t.textSecondary,
-                      marginTop: 2,
-                      lineHeight: '17px'
-                    }}
-                  >
-                    {doc.excerpt}
-                  </div>
-                )}
-                <div style={{ fontSize: 11, color: t.textTertiary, marginTop: 4 }}>
+                <div style={{ marginTop: 10, fontSize: 11, color: t.textTertiary }}>
                   {translate('memorySettings.documents.updatedAt', {
                     time: doc.updatedAt.slice(0, 16).replace('T', ' '),
                     revision: doc.revision
                   })}
                 </div>
-              </div>
-            </div>
-          ))}
+              </EntityCard>
+            ))}
+          </div>
         </div>
       )}
     </div>

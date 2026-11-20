@@ -17,6 +17,7 @@ import {
 } from '../../database/mapper/harness/agent'
 import { getAllWorkspaces } from '../../database/mapper/harness/harness'
 import type { MainAgentConfig } from '../../../shared/harness/mcp'
+import { isSelectableMainAgentTool } from '../../../shared/harness/mcp'
 
 /**
  * 智能体（子代理）配置 + 主智能体默认配置 IPC（harness 插件的第 5 个域）。
@@ -125,13 +126,19 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   // 主智能体配置（electron-store）。形状含 tools / skills / mcpTools，见 shared/mcp.ts
   handle('main-agent-get', () => {
-    return (
-      (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {
-        tools: [],
-        skills: [],
-        mcpTools: []
-      }
-    )
+    const config = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {
+      tools: [],
+      skills: [],
+      mcpTools: []
+    }
+    // 返回前在主进程收敛：工具清单只留可勾选的真实工具（MCP / 分组项 / 模式工具由各自的
+    // 通道管理），渲染层直接展示，不做二次过滤。
+    return {
+      ...config,
+      tools: (config.tools ?? []).filter(isSelectableMainAgentTool),
+      skills: config.skills ?? [],
+      mcpTools: config.mcpTools ?? []
+    }
   })
 
   /**
@@ -142,9 +149,12 @@ export function agentIpcHandlers(): IpcHandlerMap {
    */
   handle('main-agent-update', (config: { tools?: string[]; skills?: string[] }) => {
     const current = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {}
+    // 写入前在主进程收敛：MCP 工具/分组项、插件模式工具都不属于这份清单
+    // （MCP 走 mcp-tools-set，模式工具按插件模式自动挂载）。
+    const tools = (config?.tools ?? []).filter(isSelectableMainAgentTool)
     settingsStore.set('mainAgent', {
       ...current,
-      tools: config?.tools ?? [],
+      tools,
       skills: config?.skills ?? []
     })
     return true

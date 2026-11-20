@@ -1,17 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import {
-  theme,
-  Button,
-  Switch,
-  Modal,
-  Form,
-  Input,
-  Select,
-  Pagination,
-  Tag,
-  Badge,
-  App
-} from 'antd'
+﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { theme, Button, Switch, Modal, Form, Input, Select, Pagination, App } from 'antd'
 import {
   PlusOutlined,
   EditOutlined,
@@ -21,28 +9,24 @@ import {
   TeamOutlined
 } from '@ant-design/icons'
 import { SkeletonSettingRows } from '@renderer/components/system/Skeleton'
+import EntityCard, { EntityChip } from '@renderer/components/system/EntityCard'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 
 import type { ProviderOption } from '@renderer/types/components'
-import { toolIconMap } from '../HarnessConstants'
 import { isEmbeddingProvider, getProviderDisplayName } from '@renderer/utils/providerMeta'
 import {
   SettingsPageHeader,
-  SettingsSection,
-  SettingRow
+  SettingsSection
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../../api/harness'
 import type { HarnessToolInfo } from '../../../types/harness/types'
-import type { SandboxStatusView } from '../../../api/harness'
 import type {
   AgentConfigInput,
   AgentConfigRow,
-  McpServerView,
-  PermissionMode
+  McpServerView
 } from '../../../../../shared/harness/types'
 import {
-  isMcpServerGroup,
   isMcpToolName,
   isPluginModeTool,
   mcpNamespace,
@@ -54,34 +38,9 @@ const { TextArea } = Input
 
 const PAGE_SIZE = 5
 
-/** 沙箱后端显示名（i18n 键是字面量，动态拼键过不了 t() 的类型校验） */
-function sandboxBackendLabel(
-  backend: string | null,
-  t: (
-    key:
-      | 'harness.sandbox.backendWindows'
-      | 'harness.sandbox.backendBwrap'
-      | 'harness.sandbox.backendLandlock'
-      | 'harness.sandbox.backendSeatbelt'
-  ) => string
-): string {
-  switch (backend) {
-    case 'windows-restricted-token':
-      return t('harness.sandbox.backendWindows')
-    case 'linux-bwrap':
-      return t('harness.sandbox.backendBwrap')
-    case 'linux-landlock':
-      return t('harness.sandbox.backendLandlock')
-    case 'macos-seatbelt':
-      return t('harness.sandbox.backendSeatbelt')
-    default:
-      return backend ?? '—'
-  }
-}
-
 const AgentSettings: React.FC = () => {
   const {
-    token: { colorTextSecondary, colorTextTertiary, colorFillAlter, colorWarning, colorSuccess }
+    token: { colorTextSecondary }
   } = theme.useToken()
 
   const { viewMessage } = useMessage()
@@ -97,19 +56,6 @@ const AgentSettings: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
 
-  // 主智能体
-  const [mainAgent, setMainAgent] = useState<{
-    tools: string[]
-    skills: string[]
-  }>({ tools: [], skills: [] })
-  /**
-   * 主智能体配置的**同步快照**。
-   *
-   * 这一区没有保存按钮（用户 2026-09-26 要求「保存按钮不需要了，操作后即可保存」）：改一次
-   * 工具/技能就落一次库。快照存在的理由是连续两次改动可能落在同一批次里——那时 `setMainAgent`
-   * 还没生效，回调里读 state 会拿到旧值，后一次写入就把前一次抹掉。
-   */
-  const mainAgentRef = useRef<{ tools: string[]; skills: string[] }>({ tools: [], skills: [] })
   /**
    * MCP 页当前启用给模型的工具名（`mainAgent.mcpTools`）。
    *
@@ -118,10 +64,6 @@ const AgentSettings: React.FC = () => {
    * 具体哪几个工具仍然只由 MCP 页决定。见 shared/mcp.ts 的 MCP_SERVER_GROUP_PREFIX。
    */
   const [enabledMcpTools, setEnabledMcpTools] = useState<string[]>([])
-  /** 权限档位的「新会话默认值」（改当前会话用输入框左下角的选择器） */
-  const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode | null>(null)
-  /** 沙箱后端状态（拿不到内核级隔离时命令会被拒绝执行——界面必须说出来） */
-  const [sandbox, setSandbox] = useState<SandboxStatusView | null>(null)
   /** MCP 服务器清单（出分组项用：名字、命名空间、可用工具） */
   const [mcpServers, setMcpServers] = useState<McpServerView[]>([])
 
@@ -171,19 +113,10 @@ const AgentSettings: React.FC = () => {
         window.api.systemSettings.getAll(),
         harnessApi.mcp.list()
       ])
-      // 沙箱状态与权限档位是**附加信息**：单独取、各自吞错——它们失败（例如某平台探针
-      // 起不来、通道暂时不可用）绝不能让整页加载失败（这里曾经因为并进上面的 Promise.all
-      // 而整页空白，2026-09-27 被 verify-agent-mcp-tools.mjs 抓到）
-      const [permission, sandboxStatus] = await Promise.all([
-        harnessApi.harness.getPermission(null).catch(() => null),
-        harnessApi.harness.sandboxStatus().catch(() => null)
-      ])
       setProviders((providerList as ProviderOption[]).filter((p) => !isEmbeddingProvider(p)))
       setAvailableTools(tools)
       setSkills(skillList)
       setMcpServers(mcp)
-      if (permission) setDefaultPermissionMode(permission.defaultMode)
-      if (sandboxStatus) setSandbox(sandboxStatus)
       const rawMain = main as Record<string, unknown>
       const rawTools = (rawMain.tools as string[]) ?? []
       const rawMcpTools = (rawMain.mcpTools as string[]) ?? []
@@ -211,8 +144,6 @@ const AgentSettings: React.FC = () => {
         if (legacyMcp.length > 0) await harnessApi.mcp.setToolsEnabled(nextMcpTools)
         await harnessApi.mainAgent.update({ tools: nextTools, skills: rawSkills })
       }
-      mainAgentRef.current = { tools: nextTools, skills: rawSkills }
-      setMainAgent(mainAgentRef.current)
       setEnabledMcpTools(nextMcpTools)
       const wsId = (settings as unknown as Record<string, unknown>)?.harness
         ? ((((settings as unknown as Record<string, unknown>).harness as Record<string, unknown>)
@@ -324,97 +255,6 @@ const AgentSettings: React.FC = () => {
       }))
     ]
   }, [availableTools, mcpGroupOptions])
-
-  /** 该服务器此刻算不算勾上：属于它命名空间的工具至少有一个被启用 */
-  const groupChecked = (namespace: string): boolean =>
-    enabledMcpTools.some((name) => parseMcpToolName(name)?.server === namespace)
-
-  /** 主智能体工具下拉的受控值：普通工具 + 勾上的 MCP 服务器 */
-  const mainToolsValue = useMemo(
-    () => [
-      ...mainAgent.tools.filter((name) => !isMcpServerGroup(name) && !isMcpToolName(name)),
-      ...mcpGroupOptions.filter((group) => groupChecked(group.namespace)).map((g) => g.value)
-    ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mainAgent.tools, mcpGroupOptions, enabledMcpTools]
-  )
-
-  /**
-   * 落库主智能体配置（**没有保存按钮，改完即存**）并同步本地快照。
-   *
-   * 只写 `tools` / `skills`：`mcpTools` 由 MCP 页单独维护（见 main/ipc/agent.ts 的说明），
-   * 整对象覆盖会把「MCP 页刚勾好」的清单抹掉。失败弹错时快照仍是用户刚改的值——界面不会
-   * 假装回滚，用户再动一次即可重试。
-   */
-  const saveMainAgent = useCallback(
-    async (patch: Partial<{ tools: string[]; skills: string[] }>): Promise<void> => {
-      // tools 里只该有**用户可勾的**真实工具名：万一还留着 MCP 分组项或模式工具
-      // （旧配置/被复制过来的），落库前摘掉——模式工具由插件模式自动挂载，勾了也没有意义
-      const next = {
-        ...mainAgentRef.current,
-        ...patch
-      }
-      next.tools = next.tools.filter(
-        (name) => !isMcpServerGroup(name) && !isMcpToolName(name) && !isPluginModeTool(name)
-      )
-      mainAgentRef.current = next
-      setMainAgent(next)
-      try {
-        await harnessApi.mainAgent.update({ tools: next.tools, skills: next.skills })
-        viewMessage('main-save', 'success', t('agentSettings.main.saved'), 1)
-      } catch (error) {
-        viewMessage(
-          'main-save',
-          'error',
-          t('common.message.saveFailedWithReason', { reason: String(error) })
-        )
-      }
-    },
-    [viewMessage, t]
-  )
-
-  /**
-   * 按服务器整组勾选/取消。
-   *
-   * 勾上 = 把**这台服务器**当前可用的工具并进启用清单（并集，不影响别的服务器）；
-   * 取消 = 按命名空间把这台服务器的名字摘掉（连着旧数据里残留的幽灵名字一起清）。
-   * 想细调具体工具，仍然去 MCP 页逐项开关——那边是工具级的唯一入口。
-   *
-   * 普通工具与 MCP 分组项是两份存储（`tools` / `mcpTools`），所以一次改动要分别落：
-   * 分组项走 `mcp-tools-set`，普通工具走 `main-agent-update`。
-   */
-  const handleMainToolsChange = async (value: string[]): Promise<void> => {
-    const selected = value.filter(isMcpServerGroup)
-    const tools = value.filter((name) => !isMcpServerGroup(name) && !isMcpToolName(name))
-    let next = [...enabledMcpTools]
-    let changed = false
-    for (const group of mcpGroupOptions) {
-      const wants = selected.includes(group.value)
-      const has = groupChecked(group.namespace)
-      if (wants === has) continue
-      changed = true
-      if (wants) {
-        const view = mcpServers.find((s) => mcpNamespace(s.config.name) === group.namespace)
-        next = Array.from(new Set([...next, ...(view?.tools ?? []).map((tool) => tool.name)]))
-      } else {
-        next = next.filter((name) => parseMcpToolName(name)?.server !== group.namespace)
-      }
-    }
-    if (changed) {
-      try {
-        await harnessApi.mcp.setToolsEnabled(next)
-        setEnabledMcpTools(next)
-      } catch (error) {
-        // 失败时保持原状态（受控值由 enabledMcpTools 派生，界面不会停在「已勾选」的假象上）
-        viewMessage(
-          'main-mcp-tools',
-          'error',
-          t('common.message.saveFailedWithReason', { reason: String(error) })
-        )
-      }
-    }
-    await saveMainAgent({ tools })
-  }
 
   // ===== 子智能体 =====
 
@@ -754,173 +594,6 @@ const AgentSettings: React.FC = () => {
         description={t('agentSettings.pageDescription')}
       />
 
-      {/* ====== 主智能体（改完即存：这一区没有保存按钮） ====== */}
-      <SettingsSection
-        title={t('agentSettings.sections.mainAgent')}
-        icon={<RobotOutlined size={14} />}
-      >
-        <SettingRow
-          title={t('agentSettings.main.defaultTools')}
-          description={t('agentSettings.main.defaultToolsDescription')}
-          control={
-            <Select
-              mode="multiple"
-              size="small"
-              placeholder={t('agentSettings.main.defaultToolsPlaceholder')}
-              value={mainToolsValue}
-              onChange={(value) => void handleMainToolsChange(value)}
-              allowClear
-              maxTagCount="responsive"
-              style={{ minWidth: 280 }}
-              optionRender={(option) => {
-                const tool = toolOptions.find((t) => t.name === option.value)
-                if (!tool) return option.label as React.ReactNode
-                const group = mcpGroupOptions.find((g) => g.value === option.value)
-                return (
-                  <div className="flex items-center gap-2">
-                    <span style={{ color: tool.color }}>{toolIconMap[tool.icon]}</span>
-                    <span>{tool.label}</span>
-                    {group && group.total > 0 && (
-                      <span style={{ fontSize: 11, color: colorTextTertiary }}>
-                        {t('agentSettings.main.mcpToolsCount', {
-                          enabled: group.enabled,
-                          total: group.total
-                        })}
-                      </span>
-                    )}
-                  </div>
-                )
-              }}
-              tagRender={(props) => {
-                const tool = toolOptions.find((t) => t.name === props.value)
-                const { label, closable, onClose } = props
-                // MCP 服务器那一项带上这台服务器的「已启用/可用」计数（名字就是服务器名）
-                const group = mcpGroupOptions.find((g) => g.value === props.value)
-                const text =
-                  group && group.total > 0 ? `${label} ${group.enabled}/${group.total}` : label
-                return (
-                  <Tag
-                    closable={closable}
-                    onClose={onClose}
-                    style={{
-                      marginInlineEnd: 4,
-                      background: tool ? `${tool.color}12` : undefined,
-                      border: tool ? `1px solid ${tool.color}30` : undefined,
-                      color: tool?.color,
-                      borderRadius: 12,
-                      paddingInline: 8,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between'
-                    }}
-                  >
-                    <span style={{ marginRight: 4 }}>{tool ? toolIconMap[tool.icon] : null}</span>
-                    {text}
-                  </Tag>
-                )
-              }}
-              options={toolOptions.map((t) => ({
-                value: t.name,
-                label: t.label,
-                icon: t.icon,
-                color: t.color
-              }))}
-            />
-          }
-        />
-        <SettingRow
-          title={t('agentSettings.main.defaultSkills')}
-          description={t('agentSettings.main.defaultSkillsDescription')}
-          control={
-            <Select
-              mode="multiple"
-              size="small"
-              placeholder={t('agentSettings.main.defaultSkillsPlaceholder')}
-              value={mainAgent.skills}
-              onChange={(value) => void saveMainAgent({ skills: value })}
-              allowClear
-              disabled={skills.length === 0}
-              style={{ minWidth: 280 }}
-              notFoundContent={
-                skills.length === 0
-                  ? t('agentSettings.form.skillsNotConfigured')
-                  : t('agentSettings.form.skillsNoMatch')
-              }
-              maxTagCount="responsive"
-              options={skills.map((s) => ({
-                value: s.id,
-                label: `${s.name}${s.description ? ` — ${s.description}` : ''}`
-              }))}
-            />
-          }
-        />
-        {/* 权限档位：这一行只管「之后新建会话的默认值」，当前会话在输入框左下角切换 */}
-        <SettingRow
-          title={t('harness.permission.defaultLabel')}
-          description={t('harness.permission.defaultHint')}
-          control={
-            <Select
-              size="small"
-              style={{ minWidth: 160 }}
-              value={defaultPermissionMode ?? undefined}
-              loading={defaultPermissionMode == null}
-              options={[
-                { value: 'read-only', label: t('harness.permission.readOnly') },
-                { value: 'workspace-write', label: t('harness.permission.workspaceWrite') },
-                { value: 'danger-full-access', label: t('harness.permission.fullAccess') }
-              ]}
-              onChange={(value) => {
-                const mode = value as PermissionMode
-                setDefaultPermissionMode(mode)
-                void harnessApi.harness
-                  .setPermission({ mode, scope: 'default' })
-                  .then((state) => setDefaultPermissionMode(state.defaultMode))
-                  .catch(() => {
-                    viewMessage(
-                      'main-agent-permission',
-                      'error',
-                      t('harness.permission.switchFailed')
-                    )
-                  })
-              }}
-            />
-          }
-        />
-        {/* 沙箱后端：只读状态。拿不到内核级隔离时命令会被拒绝执行（绝不静默放行） */}
-        <SettingRow
-          title={t('harness.sandbox.label')}
-          description={
-            sandbox?.usable
-              ? sandbox.enforcement === 'partial'
-                ? t('harness.sandbox.partialHint')
-                : t('harness.sandbox.fullHint')
-              : t('harness.sandbox.unavailableHint', { reason: sandbox?.reason ?? '' })
-          }
-          control={
-            <span
-              style={{
-                fontSize: 12,
-                color: sandbox?.usable
-                  ? sandbox.enforcement === 'partial'
-                    ? colorTextTertiary
-                    : colorSuccess
-                  : colorWarning
-              }}
-            >
-              {sandbox == null
-                ? '—'
-                : sandbox.usable
-                  ? `${sandboxBackendLabel(sandbox.backend, t)} · ${
-                      sandbox.enforcement === 'partial'
-                        ? t('harness.sandbox.partial')
-                        : t('harness.sandbox.full')
-                    }`
-                  : t('harness.sandbox.unavailable')}
-            </span>
-          }
-        />
-      </SettingsSection>
-
       {/* ====== 子智能体列表 ====== */}
       <SettingsSection
         title={t('agentSettings.sections.subagents')}
@@ -958,88 +631,68 @@ const AgentSettings: React.FC = () => {
           </div>
         ) : agents.length > 0 ? (
           <>
-            {agents.map((agent) => (
-              <SettingRow
-                key={agent.id}
-                title={agent.rename || agent.name}
-                description={agent.description || undefined}
-                control={
-                  <div className="flex items-center" style={{ gap: 4 }}>
-                    <Switch
-                      // enable 库列为可空（DEFAULT TRUE），null 视作默认启用
-                      checked={agent.enable ?? true}
-                      onChange={(checked) => handleToggleEnable(agent, checked)}
-                      size="small"
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => openEditModal(agent)}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => handleDelete(agent)}
-                    />
-                  </div>
-                }
-              >
-                {agent.rename && (
-                  <span
-                    style={{
-                      display: 'block',
-                      fontSize: 12,
-                      color: colorTextTertiary,
-                      marginTop: 1
-                    }}
-                  >
-                    {agent.name}
-                  </span>
-                )}
-                <div
-                  className="flex items-center"
-                  style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}
-                >
-                  {agent.tools && (
-                    <Badge
-                      count={t('agentSettings.list.toolCount', {
-                        count: (JSON.parse(agent.tools) as string[]).length
-                      })}
-                      style={{
-                        background: colorFillAlter,
-                        color: colorTextTertiary,
-                        boxShadow: 'none'
-                      }}
-                    />
-                  )}
-                  {agent.model && (
-                    <Badge
-                      count={agent.model}
-                      style={{
-                        background: colorFillAlter,
-                        color: colorTextTertiary,
-                        boxShadow: 'none'
-                      }}
-                    />
-                  )}
-                  {agent.skills && JSON.parse(agent.skills).length > 0 && (
-                    <Badge
-                      count={t('agentSettings.list.skillCount', {
-                        count: (JSON.parse(agent.skills) as string[]).length
-                      })}
-                      style={{
-                        background: colorFillAlter,
-                        color: colorTextTertiary,
-                        boxShadow: 'none'
-                      }}
-                    />
-                  )}
-                </div>
-              </SettingRow>
-            ))}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(232px, 1fr))',
+                gap: 14,
+                padding: 16
+              }}
+            >
+              {agents.map((agent) => {
+                const toolCount = agent.tools ? (JSON.parse(agent.tools) as string[]).length : 0
+                const skillCount = agent.skills ? (JSON.parse(agent.skills) as string[]).length : 0
+                return (
+                  <EntityCard
+                    key={agent.id}
+                    id={String(agent.id)}
+                    icon={<RobotOutlined />}
+                    title={agent.rename || agent.name}
+                    meta={
+                      <>
+                        {agent.model && <EntityChip>{agent.model}</EntityChip>}
+                        {toolCount > 0 && (
+                          <EntityChip>
+                            {t('agentSettings.list.toolCount', { count: toolCount })}
+                          </EntityChip>
+                        )}
+                        {skillCount > 0 && (
+                          <EntityChip>
+                            {t('agentSettings.list.skillCount', { count: skillCount })}
+                          </EntityChip>
+                        )}
+                      </>
+                    }
+                    description={agent.description || undefined}
+                    footerStart={
+                      <Switch
+                        // enable 库列为可空（DEFAULT TRUE），null 视作默认启用
+                        checked={agent.enable ?? true}
+                        onChange={(checked) => handleToggleEnable(agent, checked)}
+                        size="small"
+                      />
+                    }
+                    footerEnd={
+                      <div className="flex items-center" style={{ gap: 2, marginLeft: 'auto' }}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={() => openEditModal(agent)}
+                        />
+                        <Button
+                          type="text"
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => handleDelete(agent)}
+                        />
+                      </div>
+                    }
+                  />
+                )
+              })}
+            </div>
             {total > PAGE_SIZE && (
               <div className="flex justify-center" style={{ padding: '10px 0' }}>
                 <Pagination

@@ -15,6 +15,7 @@ import type { RegisteredRoute } from '@renderer/plugin-host/types'
 /** 系统功能页面（模块级 lazy：不能在渲染期新建 lazy，否则 Suspense 会反复重试） */
 const HarnessView = lazy(() => import('@renderer/pages/Harness'))
 const NotesView = lazy(() => import('@renderer/pages/Notes'))
+const MoreView = lazy(() => import('@renderer/pages/More'))
 
 const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // lazy 实例必须来自模块级缓存（见 lazyViewCache.ts）：在渲染期新建 lazy 会让
@@ -71,6 +72,23 @@ const MainRoutes: React.FC = () => {
       {/* 系统级插件仓库 */}
       <Route path="/plugins" element={<PluginRepository />} />
       <Route path="/plugins/:pluginId" element={<PluginDetail />} />
+      {/* 更多内容（设置页）：侧栏入口在插件仓库下面，/more/:tab 直接落到某一页 */}
+      <Route
+        path="/more"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <MoreView />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/more/:tab"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <MoreView />
+          </Suspense>
+        }
+      />
       {/* 第三方插件路由（仍由插件宿主注册；不再进入左侧系统导航） */}
       {routes.map((r) => (
         <Route key={r.path} path={r.path} element={<PluginRouteView route={r} />} />

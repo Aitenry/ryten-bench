@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
+﻿import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { App, Button, Input, Modal, Popover, Tooltip, theme } from 'antd'
 import {
   RiArrowUpLine,
@@ -13,7 +13,9 @@ import {
   RiCheckLine,
   RiShieldCheckLine,
   RiShieldKeyholeLine,
-  RiShieldFlashLine
+  RiShieldFlashLine,
+  RiToolsLine,
+  RiFileAi2Line
 } from '@remixicon/react'
 import {
   OpenAIFilled,
@@ -38,6 +40,7 @@ import type { EditorView } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import FileRef from './FileRefNode'
 import { useTranslation } from '@renderer/i18n'
+import mascot from '@renderer/assets/mascot.png'
 
 import {
   defaultReasoningEffort,
@@ -45,7 +48,7 @@ import {
   reasoningEffortLabel
 } from '@renderer/utils/providerMeta'
 import ProviderMark from '@renderer/components/provider/provider-mark'
-import type { Attachment } from '../../types/harness/types'
+import type { Attachment, HarnessToolInfo } from '../../types/harness/types'
 import type { PermissionMode } from '../../../../shared/harness/types'
 import { harnessApi } from '../../api/harness'
 
@@ -220,6 +223,19 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const [confirmFullAccess, setConfirmFullAccess] = useState(false)
   const [savingPermission, setSavingPermission] = useState(false)
 
+  // ── 工具 / 技能：主智能体默认配置（设置页移除后放到输入框下方）──────────────
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [toolCatalog, setToolCatalog] = useState<HarnessToolInfo[]>([])
+  const [skillCatalog, setSkillCatalog] = useState<
+    { id: string; name: string; description: string }[]
+  >([])
+  const [selectedTools, setSelectedTools] = useState<string[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  /** mainAgent.skills（保存工具时要原样带回：main-agent-update 只覆盖传入的字段） */
+  const mainAgentSkillsRef = useRef<string[]>([])
+  /** harness 设置快照：技能启用集写回 systemSettings 时要用整份 harness 覆盖 */
+  const harnessSettingsRef = useRef<Record<string, unknown> | null>(null)
   const currentTopicIdRef = useRef(currentTopicId)
   currentTopicIdRef.current = currentTopicId
 
@@ -238,6 +254,39 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       cancelled = true
     }
   }, [currentTopicId])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const [main, tools, skills, settings] = await Promise.all([
+          harnessApi.mainAgent.get(),
+          harnessApi.harness.getTools(),
+          harnessApi.harness.listSkills(),
+          window.api.systemSettings.getAll()
+        ])
+        if (cancelled) return
+        mainAgentSkillsRef.current = main.skills ?? []
+        // 工具选择只管「系统内置 + 已加载插件」：MCP 工具由 MCP 页管理，
+        // 运行时按 mcpTools 自动并入本轮；分组项 / 旧标记 / 模式工具也不列
+        setSelectedTools(main.tools ?? [])
+        setToolCatalog(tools)
+        setSkillCatalog(skills)
+        const harness = ((settings as unknown as Record<string, unknown>).harness ?? {}) as Record<
+          string,
+          unknown
+        >
+        harnessSettingsRef.current = harness
+        const enabled = harness.enabledSkills as string[] | undefined
+        setSelectedSkills(enabled ?? skills.map((skill) => skill.id))
+      } catch (err) {
+        console.warn('[harness-input] 工具/技能加载失败:', err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // 档位变更广播（设置页改默认值、另一窗口切换）→ 同步当前显示
   useEffect(() => {
@@ -288,6 +337,30 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     },
     [permissionMode, applyPermissionMode]
   )
+
+  /** 改工具 = 改主智能体默认工具（主进程在每一轮发送时读取，下一轮即生效） */
+  const toggleTool = (name: string): void => {
+    const next = selectedTools.includes(name)
+      ? selectedTools.filter((item) => item !== name)
+      : [...selectedTools, name]
+    setSelectedTools(next)
+    void harnessApi.mainAgent
+      .update({ tools: next, skills: mainAgentSkillsRef.current })
+      .catch(() => message.error(t('harness.input.pickerSaveFailed')))
+  }
+
+  /** 改技能 = 改 harness.enabledSkills（与「更多 → 技能」页是同一个开关） */
+  const toggleSkill = (id: string): void => {
+    const next = selectedSkills.includes(id)
+      ? selectedSkills.filter((item) => item !== id)
+      : [...selectedSkills, id]
+    setSelectedSkills(next)
+    const harness = { ...(harnessSettingsRef.current ?? {}), enabledSkills: next }
+    harnessSettingsRef.current = harness
+    void window.api.systemSettings
+      .update({ harness } as Parameters<typeof window.api.systemSettings.update>[0])
+      .catch(() => message.error(t('harness.input.pickerSaveFailed')))
+  }
 
   /** 扁平化选项：查找当前模型、键盘导航、搜索结果共用一份 */
   const flatOptions = useMemo(
@@ -1176,44 +1249,221 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     </div>
   )
 
+  /** 工具 / 技能的多选面板：一行一项，右侧打勾表示已选（点完不收起，方便连续勾） */
+  const pickerMenu = (
+    items: { key: string; label: string; active: boolean; onToggle: () => void }[],
+    empty: string
+  ): React.ReactNode => (
+    <div className="harness-model-menu" style={{ ...menuVars, width: 260 }}>
+      <div className="hmm-list" style={{ maxHeight: 300, overflowY: 'auto' }}>
+        {items.length === 0 ? (
+          <div className="hmm-empty">{empty}</div>
+        ) : (
+          items.map((item) => (
+            <button key={item.key} type="button" className="hmm-item" onClick={item.onToggle}>
+              <span className="hmm-item-label">{item.label}</span>
+              {item.active ? <RiCheckLine size={14} className="hmm-item-check" /> : null}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  )
+
+  const toolMenu = pickerMenu(
+    toolCatalog.map((tool) => ({
+      key: tool.name,
+      label: tool.label || tool.name,
+      active: selectedTools.includes(tool.name),
+      onToggle: () => toggleTool(tool.name)
+    })),
+    t('harness.input.toolsEmpty')
+  )
+
+  const skillMenu = pickerMenu(
+    skillCatalog.map((skill) => ({
+      key: skill.id,
+      label: skill.name,
+      active: selectedSkills.includes(skill.id),
+      onToggle: () => toggleSkill(skill.id)
+    })),
+    t('harness.input.skillsEmpty')
+  )
+
+  /** 输入卡片下方的选择器：权限 / 工具 / 技能（用户口径：这些都放在输入框底部） */
+  /** 权限档位留在输入卡片内（用户口径：权限不要放到下面那排） */
+  const permissionSelector = (
+    <>
+      {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定）。
+              排在模型选择前面：先定「能动多大范围」，再看「用哪个模型」。 */}
+      <Popover
+        open={permissionOpen}
+        onOpenChange={setPermissionOpen}
+        trigger="click"
+        placement="topLeft"
+        arrow={false}
+        content={permissionMenu}
+        styles={{
+          container: { padding: 0 },
+          content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+        }}
+      >
+        <button
+          type="button"
+          className="harness-permission-trigger"
+          aria-label={t('harness.input.permissionAria')}
+          aria-expanded={permissionOpen}
+          disabled={savingPermission}
+        >
+          <ActivePermissionIcon
+            size={14}
+            style={{ color: permissionToneColor(activePermission.tone) }}
+          />
+          <span className="harness-permission-trigger-name">{t(activePermission.labelKey)}</span>
+          {permissionOpen ? (
+            <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+          ) : (
+            <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+          )}
+        </button>
+      </Popover>
+    </>
+  )
+
+  /** 输入卡片下方的选择器：工具 / 技能 */
+  const inputSelectors = (
+    <>
+      {/* 工具 / 技能：主智能体的默认选择（设置页移除后搬到这里，选完下一轮即生效） */}
+      <Popover
+        open={toolsOpen}
+        onOpenChange={setToolsOpen}
+        trigger="click"
+        placement="topLeft"
+        arrow={false}
+        content={toolMenu}
+        styles={{
+          container: { padding: 0 },
+          content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+        }}
+      >
+        <button
+          type="button"
+          className="harness-permission-trigger"
+          aria-label={t('harness.input.toolsAria')}
+          aria-expanded={toolsOpen}
+        >
+          <RiToolsLine size={14} style={{ color: token.colorTextTertiary }} />
+          <span className="harness-permission-trigger-name">{t('harness.input.toolsLabel')}</span>
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+            {selectedTools.length}
+          </span>
+          {toolsOpen ? (
+            <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+          ) : (
+            <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+          )}
+        </button>
+      </Popover>
+      <Popover
+        open={skillsOpen}
+        onOpenChange={setSkillsOpen}
+        trigger="click"
+        placement="topLeft"
+        arrow={false}
+        content={skillMenu}
+        styles={{
+          container: { padding: 0 },
+          content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+        }}
+      >
+        <button
+          type="button"
+          className="harness-permission-trigger"
+          aria-label={t('harness.input.skillsAria')}
+          aria-expanded={skillsOpen}
+        >
+          <RiFileAi2Line size={14} style={{ color: token.colorTextTertiary }} />
+          <span className="harness-permission-trigger-name">{t('harness.input.skillsLabel')}</span>
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+            {selectedSkills.length}
+          </span>
+          {skillsOpen ? (
+            <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+          ) : (
+            <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+          )}
+        </button>
+      </Popover>{' '}
+    </>
+  )
+
   return (
     <div
-      className="rounded-2xl input-scrollbar"
+      /* 外层托底：把输入卡片和下面那排选择器包成一块（参考形态：卡片浮在浅一档的底上） */
       style={{
+        ...menuVars,
+        position: 'relative',
         background: colorBgLayout,
-        border: `1px solid ${isDragOver ? '#4d6bfe' : colorBorder}`,
-        transition: 'border-color 0.2s',
-        ...chipCssVars,
-        // 触发条在容器内、面板在 portal 里，两边共用同一套 --hmm-* 主题变量
-        ...menuVars
+        borderRadius: 20,
+        padding: 6,
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)'
       }}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
     >
-      {/* overflow hidden：光标滚出编辑区可视范围时被裁切 */}
+      {/* 助手形象：趴在输入框右上角（不拦截鼠标，纯装饰） */}
+      <img
+        src={mascot}
+        alt=""
+        aria-hidden
+        draggable={false}
+        style={{
+          position: 'absolute',
+          right: 22,
+          top: -67,
+          height: 96,
+          width: 'auto',
+          zIndex: 1,
+          pointerEvents: 'none',
+          userSelect: 'none',
+          filter: 'drop-shadow(0 8px 16px rgba(0, 0, 0, 0.28))'
+        }}
+      />
       <div
-        className="p-4 relative overflow-hidden"
-        onClick={handleContainerClick}
-        ref={textareaRef}
+        className="rounded-2xl input-scrollbar"
+        style={{
+          background: token.colorBgContainer,
+          border: `1px solid ${isDragOver ? '#4d6bfe' : colorBorder}`,
+          transition: 'border-color 0.2s',
+          ...chipCssVars,
+          // 触发条在容器内、面板在 portal 里，两边共用同一套 --hmm-* 主题变量
+          ...menuVars
+        }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
-        <EditorContent editor={editor} className="harness-input-editor" />
-        {/* 自定义光标：固定高度、随光标位置移动、闪烁动画 */}
-        <span
-          ref={caretRef}
-          className="harness-input-caret"
-          style={{
-            position: 'absolute',
-            width: 2,
-            height: CARET_HEIGHT,
-            borderRadius: 1,
-            background: colorText,
-            pointerEvents: 'none',
-            display: 'none',
-            zIndex: 1
-          }}
-        />
-        <style>{`
+        {/* overflow hidden：光标滚出编辑区可视范围时被裁切 */}
+        <div
+          className="p-4 relative overflow-hidden"
+          onClick={handleContainerClick}
+          ref={textareaRef}
+        >
+          <EditorContent editor={editor} className="harness-input-editor" />
+          {/* 自定义光标：固定高度、随光标位置移动、闪烁动画 */}
+          <span
+            ref={caretRef}
+            className="harness-input-caret"
+            style={{
+              position: 'absolute',
+              width: 2,
+              height: CARET_HEIGHT,
+              borderRadius: 1,
+              background: colorText,
+              pointerEvents: 'none',
+              display: 'none',
+              zIndex: 1
+            }}
+          />
+          <style>{`
           .harness-input-editor .ProseMirror {
             outline: none;
             white-space: pre-wrap;
@@ -1465,178 +1715,160 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             50%, 95% { opacity: 0; }
           }
         `}</style>
-      </div>
-      {attachments.length > 0 && (
-        <div className="flex gap-2 px-4 pb-3 flex-wrap">
-          {attachments.map((att, idx) =>
-            att.isImage ? (
-              <div key={idx} className="relative group">
-                <img
-                  src={att.dataUrl}
-                  alt={`upload-${idx}`}
-                  className="w-16 h-16 object-cover rounded-lg"
-                  style={{ border: `1px solid ${colorBorderSecondary}` }}
-                />
-                <button
-                  onClick={() => onAttachmentsChange(attachments.filter((_, i) => i !== idx))}
-                  className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        </div>
+        {attachments.length > 0 && (
+          <div className="flex gap-2 px-4 pb-3 flex-wrap">
+            {attachments.map((att, idx) =>
+              att.isImage ? (
+                <div key={idx} className="relative group">
+                  <img
+                    src={att.dataUrl}
+                    alt={`upload-${idx}`}
+                    className="w-16 h-16 object-cover rounded-lg"
+                    style={{ border: `1px solid ${colorBorderSecondary}` }}
+                  />
+                  <button
+                    onClick={() => onAttachmentsChange(attachments.filter((_, i) => i !== idx))}
+                    className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <RiCloseLine size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={idx}
+                  className="relative group flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg"
+                  style={{
+                    background: isDarkMode ? '#1a2744' : '#eff6ff',
+                    color: isDarkMode ? '#93c5fd' : '#1d4ed8',
+                    border: isDarkMode ? '1px solid #1e3a5f' : '1px solid #bfdbfe'
+                  }}
                 >
-                  <RiCloseLine size={12} />
-                </button>
-              </div>
-            ) : (
-              <div
-                key={idx}
-                className="relative group flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg"
-                style={{
-                  background: isDarkMode ? '#1a2744' : '#eff6ff',
-                  color: isDarkMode ? '#93c5fd' : '#1d4ed8',
-                  border: isDarkMode ? '1px solid #1e3a5f' : '1px solid #bfdbfe'
+                  <span className="max-w-[120px] truncate">{att.fileName}</span>
+                  <button
+                    onClick={() => onAttachmentsChange(attachments.filter((_, i) => i !== idx))}
+                    className="ml-1 hover:text-red-500"
+                    style={{ color: isDarkMode ? '#60a5fa' : '#60a5fa' }}
+                  >
+                    <RiCloseLine size={14} />
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+        <div className="flex items-center justify-between px-4 pb-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Tooltip title={t('harness.input.attachTooltip')}>
+              <Button
+                type="dashed"
+                shape="circle"
+                icon={<RiAttachment2 size={16} />}
+                onClick={async () => {
+                  const result = await window.api.file.selectImageFile(modelSupportsVision)
+                  if (result) {
+                    onAttachmentsChange([
+                      ...attachments,
+                      {
+                        dataUrl: result.dataUrl,
+                        fileName: result.fileName,
+                        isImage: result.isImage
+                      }
+                    ])
+                  }
                 }}
-              >
-                <span className="max-w-[120px] truncate">{att.fileName}</span>
-                <button
-                  onClick={() => onAttachmentsChange(attachments.filter((_, i) => i !== idx))}
-                  className="ml-1 hover:text-red-500"
-                  style={{ color: isDarkMode ? '#60a5fa' : '#60a5fa' }}
-                >
-                  <RiCloseLine size={14} />
-                </button>
-              </div>
-            )
-          )}
-        </div>
-      )}
-      <div className="flex items-center justify-between px-4 pb-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Tooltip title={t('harness.input.attachTooltip')}>
-            <Button
-              type="dashed"
-              shape="circle"
-              icon={<RiAttachment2 size={16} />}
-              onClick={async () => {
-                const result = await window.api.file.selectImageFile(modelSupportsVision)
-                if (result) {
-                  onAttachmentsChange([
-                    ...attachments,
-                    {
-                      dataUrl: result.dataUrl,
-                      fileName: result.fileName,
-                      isImage: result.isImage
-                    }
-                  ])
-                }
-              }}
-            />
-          </Tooltip>
-          {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定）。
-              排在模型选择前面：先定「能动多大范围」，再看「用哪个模型」。 */}
-          <Popover
-            open={permissionOpen}
-            onOpenChange={setPermissionOpen}
-            trigger="click"
-            placement="topLeft"
-            arrow={false}
-            content={permissionMenu}
-            styles={{
-              container: { padding: 0 },
-              content: { padding: 0, background: 'transparent', boxShadow: 'none' }
-            }}
-          >
-            <button
-              type="button"
-              className="harness-permission-trigger"
-              aria-label={t('harness.input.permissionAria')}
-              aria-expanded={permissionOpen}
-              disabled={savingPermission}
-            >
-              <ActivePermissionIcon
-                size={14}
-                style={{ color: permissionToneColor(activePermission.tone) }}
               />
-              <span className="harness-permission-trigger-name">
-                {t(activePermission.labelKey)}
-              </span>
-              {permissionOpen ? (
-                <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
-              ) : (
-                <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
-              )}
-            </button>
-          </Popover>
-          {/* 模型选择：收起时一行（模型名 + 推理等级），点开是「模型 / 推理等级」两行入口。
+            </Tooltip>
+            {permissionSelector}
+            {/* 模型选择：收起时一行（模型名 + 推理等级），点开是「模型 / 推理等级」两行入口。
               推理等级直接写进该模型的配置列，下一轮请求即按协议族翻译成各家字段。 */}
-          <Popover
-            open={menuOpen}
-            onOpenChange={handleMenuOpenChange}
-            trigger="click"
-            placement="topLeft"
-            arrow={false}
-            content={modelMenu}
-            styles={{
-              container: { padding: 0 },
-              content: { padding: 0, background: 'transparent', boxShadow: 'none' }
-            }}
-          >
-            <button
-              type="button"
-              className="harness-model-trigger"
-              aria-label={t('harness.input.modelMenuAria')}
-              aria-expanded={menuOpen}
+            <Popover
+              open={menuOpen}
+              onOpenChange={handleMenuOpenChange}
+              trigger="click"
+              placement="topLeft"
+              arrow={false}
+              content={modelMenu}
+              styles={{
+                container: { padding: 0 },
+                content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+              }}
             >
-              {SelectedIcon ? (
-                <SelectedIcon style={{ fontSize: 14, color: selectedColor }} />
-              ) : selectedProviderType ? (
-                <ProviderMark providerType={selectedProviderType} size={14} color={selectedColor} />
-              ) : null}
-              <span className="harness-model-trigger-name">
-                {selectedOption?.label ?? t('harness.input.modelPlaceholder')}
-              </span>
-              {effortTriggerText ? (
-                <span className="harness-model-trigger-effort">{effortTriggerText}</span>
-              ) : null}
-              {menuOpen ? (
-                <RiArrowUpSLine size={14} className="harness-model-trigger-chev" />
-              ) : (
-                <RiArrowDownSLine size={14} className="harness-model-trigger-chev" />
-              )}
-            </button>
-          </Popover>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
+              <button
+                type="button"
+                className="harness-model-trigger"
+                aria-label={t('harness.input.modelMenuAria')}
+                aria-expanded={menuOpen}
+              >
+                {SelectedIcon ? (
+                  <SelectedIcon style={{ fontSize: 14, color: selectedColor }} />
+                ) : selectedProviderType ? (
+                  <ProviderMark
+                    providerType={selectedProviderType}
+                    size={14}
+                    color={selectedColor}
+                  />
+                ) : null}
+                <span className="harness-model-trigger-name">
+                  {selectedOption?.label ?? t('harness.input.modelPlaceholder')}
+                </span>
+                {effortTriggerText ? (
+                  <span className="harness-model-trigger-effort">{effortTriggerText}</span>
+                ) : null}
+                {menuOpen ? (
+                  <RiArrowUpSLine size={14} className="harness-model-trigger-chev" />
+                ) : (
+                  <RiArrowDownSLine size={14} className="harness-model-trigger-chev" />
+                )}
+              </button>
+            </Popover>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
               生成中且输入框为空 → 「停止」；生成中但已经打了字 → 「发送」（这条进插话队列）。
               这样生成中既能继续发消息，也不会丢掉随时叫停的能力。
               「停止」档不能禁用（见 primaryDisabled）：生成中清空输入框正是要叫停。 */}
-          <Tooltip title={primaryHint}>
-            <Button
-              type="primary"
-              danger={primaryStops}
-              shape="circle"
-              icon={primaryStops ? <RiStopFill size={16} /> : <RiArrowUpLine size={16} />}
-              onClick={onPrimary}
-              disabled={primaryDisabled}
-            />
-          </Tooltip>
+            <Tooltip title={primaryHint}>
+              <Button
+                type="primary"
+                danger={primaryStops}
+                shape="circle"
+                icon={primaryStops ? <RiStopFill size={16} /> : <RiArrowUpLine size={16} />}
+                onClick={onPrimary}
+                disabled={primaryDisabled}
+              />
+            </Tooltip>
+          </div>
         </div>
-      </div>
 
-      {/* 完全权限：档位本身没有拦截，切换前必须过一次显式风险确认（DSH 同款） */}
-      <Modal
-        open={confirmFullAccess}
-        title={t('harness.permission.confirmTitle')}
-        okText={t('harness.permission.confirmOk')}
-        cancelText={t('harness.permission.confirmCancel')}
-        okButtonProps={{ danger: true, loading: savingPermission }}
-        onOk={() => {
-          setConfirmFullAccess(false)
-          void applyPermissionMode('danger-full-access')
+        {/* 完全权限：档位本身没有拦截，切换前必须过一次显式风险确认（DSH 同款） */}
+        <Modal
+          open={confirmFullAccess}
+          title={t('harness.permission.confirmTitle')}
+          okText={t('harness.permission.confirmOk')}
+          cancelText={t('harness.permission.confirmCancel')}
+          okButtonProps={{ danger: true, loading: savingPermission }}
+          onOk={() => {
+            setConfirmFullAccess(false)
+            void applyPermissionMode('danger-full-access')
+          }}
+          onCancel={() => setConfirmFullAccess(false)}
+          width={440}
+        >
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>{t('harness.permission.confirmBody')}</div>
+        </Modal>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+          padding: '6px 6px 2px'
         }}
-        onCancel={() => setConfirmFullAccess(false)}
-        width={440}
       >
-        <div style={{ fontSize: 13, lineHeight: 1.6 }}>{t('harness.permission.confirmBody')}</div>
-      </Modal>
+        {inputSelectors}
+      </div>
     </div>
   )
 }

@@ -1827,41 +1827,99 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 列出技能目录中的所有技能
-  handle('harness-list-skills', async () => {
+  /**
+   * 技能目录扫描（主进程）：只 stat 确认 SKILL.md 可读，不读文件内容。
+   * 分页时只解析当前页的 SKILL.md，扫描成本不随「页内要展示多少」增长。
+   */
+  const listSkillDirNames = (skillsPath: string): string[] => {
     try {
-      const settings = settingsStore.store
-      const skillsPath = (settings.harness as HarnessSettings)?.skillsPath
-      if (!skillsPath) return []
-
-      const entries = fs.readdirSync(skillsPath, { withFileTypes: true })
-      const skills: { id: string; name: string; description: string }[] = []
-
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        const skillMdPath = join(skillsPath, entry.name, 'SKILL.md')
-        try {
-          fs.accessSync(skillMdPath, fs.constants.R_OK)
-          const content = fs.readFileSync(skillMdPath, 'utf-8')
-          const fm = content.match(/^---\s*\n([\s\S]*?)\n---/)
-          let name = entry.name
-          let description = ''
-          if (fm) {
-            const n = fm[1].match(/^name:\s*(.+)$/m)
-            const d = fm[1].match(/^description:\s*(.+)$/m)
-            if (n) name = n[1].trim()
-            if (d) description = d[1].trim()
+      return fs
+        .readdirSync(skillsPath, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .filter((entry) => {
+          try {
+            fs.accessSync(join(skillsPath, entry.name, 'SKILL.md'), fs.constants.R_OK)
+            return true
+          } catch {
+            return false
           }
-          skills.push({ id: entry.name, name, description })
-        } catch {
-          // 目录中没有 SKILL.md，跳过
-        }
-      }
-      return skills
+        })
+        .map((entry) => entry.name)
     } catch (error) {
-      logger.error('Error listing skills:', error)
+      logger.error('Error scanning skills dir:', error)
       return []
     }
+  }
+
+  /** 读单个技能的元信息（front matter 的 name / description） */
+  const readSkillMeta = (
+    skillsPath: string,
+    dirName: string
+  ): { id: string; name: string; description: string } => {
+    let name = dirName
+    let description = ''
+    try {
+      const content = fs.readFileSync(join(skillsPath, dirName, 'SKILL.md'), 'utf-8')
+      const fm = content.match(/^---\s*\n([\s\S]*?)\n---/)
+      if (fm) {
+        const n = fm[1].match(/^name:\s*(.+)$/m)
+        const d = fm[1].match(/^description:\s*(.+)$/m)
+        if (n) name = n[1].trim()
+        if (d) description = d[1].trim()
+      }
+    } catch {
+      // 读不到就当默认名
+    }
+    return { id: dirName, name, description }
+  }
+
+  // 列出技能目录中的所有技能（工具页 / 技能选择器用；小数据量）
+  handle('harness-list-skills', async () => {
+    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
+    if (!skillsPath) return []
+    return listSkillDirNames(skillsPath).map((dirName) => readSkillMeta(skillsPath, dirName))
+  })
+
+  /**
+   * 技能列表分页（主进程）：只返回当前页的元信息 + total。
+   * 渲染层不再「全量拉取 + 前端切片」。
+   */
+  handle('harness-list-skills-paginated', async (page = 0, pageSize = 5) => {
+    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
+    if (!skillsPath) return { items: [], total: 0 }
+    const dirs = listSkillDirNames(skillsPath)
+    const safeSize = Math.max(1, Math.min(100, Math.floor(pageSize)))
+    const safePage = Math.max(0, Math.floor(page))
+    const start = safePage * safeSize
+    return {
+      items: dirs
+        .slice(start, start + safeSize)
+        .map((dirName) => readSkillMeta(skillsPath, dirName)),
+      total: dirs.length
+    }
+  })
+
+  /**
+   * 技能启用/停用：判定在主进程完成。
+   *
+   * 「全部启用」在配置里用 `enabledSkills: undefined` 表示；停用某个技能时必须展开成完整清单，
+   * 而完整技能目录只有主进程知道——放在渲染层会依赖「前端刚好拉到了全部技能」，
+   * 分页后会漏掉其他页的技能。
+   */
+  handle('harness-set-skill-enabled', async (skillId: string, enabled: boolean) => {
+    const harness = (settingsStore.get('harness') as HarnessSettings | undefined) ?? {}
+    const skillsPath = harness.skillsPath
+    const current = harness.enabledSkills
+    let next: string[] | undefined
+    if (enabled) {
+      // 没有清单 = 全部启用，无需写
+      next = current ? (current.includes(skillId) ? current : [...current, skillId]) : undefined
+    } else {
+      const base = current ?? (skillsPath ? listSkillDirNames(skillsPath) : [])
+      next = base.filter((id) => id !== skillId)
+    }
+    settingsStore.set('harness', { ...harness, enabledSkills: next })
+    return next
   })
 
   return registerIpcHandlers(handlers)

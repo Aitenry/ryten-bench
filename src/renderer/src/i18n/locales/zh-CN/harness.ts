@@ -31,7 +31,6 @@ export const harnessZhCN = {
       searchTopicPlaceholder: '搜索会话',
       searchTooltip: '搜索工作区与会话',
       exitSearch: '退出搜索',
-      assistantSettings: '助手设置',
       newWorkspace: '新建工作区',
       mode: {
         work: '工作',
@@ -125,7 +124,14 @@ export const harnessZhCN = {
       filePathUnavailable: '无法获取「{{name}}」的本地路径，请通过拖拽或上传按钮添加',
       pasteImageFallbackName: 'paste-image.png',
       permissionAria: '选择权限模式',
-      permissionLabel: '权限'
+      permissionLabel: '权限',
+      toolsLabel: '工具',
+      toolsAria: '选择工具',
+      toolsEmpty: '没有可用工具',
+      skillsLabel: '技能',
+      skillsAria: '选择技能',
+      skillsEmpty: '没有可用技能',
+      pickerSaveFailed: '保存失败，请重试'
     },
     permission: {
       readOnly: '仅可查看',
@@ -497,7 +503,7 @@ export const harnessZhCN = {
      命名约定：t('agentSettings.<group>.<key>')，键名一律 camelCase，不写中文。 */
   agentSettings: {
     pageTitle: '智能体',
-    pageDescription: '配置主智能体的默认工具与技能，以及可委托任务的子智能体',
+    pageDescription: '管理可委托任务的子智能体；工具与技能改在对话输入框下方选择',
     sections: {
       mainAgent: '主智能体',
       subagents: '子智能体'

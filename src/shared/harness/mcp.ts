@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
  *
  * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
@@ -289,6 +289,24 @@ export const PLUGIN_MODE_TOOL_NAMES = [
 /** 这个名字是不是插件模式的模式工具（设置页过滤历史残留时用） */
 export function isPluginModeTool(name: string): boolean {
   return (PLUGIN_MODE_TOOL_NAMES as readonly string[]).includes(name)
+}
+/**
+ * 主智能体「工具」选择里可保存的真实工具名：系统内置 + 已加载插件贡献的工具。
+ *
+ * MCP 工具与分组项不在这份清单里——它们由 MCP 页按工具开关（mainAgent.mcpTools），
+ * 运行时由 effectiveMainAgentTools 自动并入本轮；插件模式工具由模式自动挂载。
+ * 主进程在 harness-get-tools / main-agent-get / main-agent-update 统一用这条判定，
+ * 渲染层不需要再做过滤。
+ */
+export function isSelectableMainAgentTool(name?: string): boolean {
+  return (
+    typeof name === 'string' &&
+    name.length > 0 &&
+    !isMcpToolName(name) &&
+    !isMcpServerGroup(name) &&
+    !isMcpToolGroup(name) &&
+    !isPluginModeTool(name)
+  )
 }
 
 /**

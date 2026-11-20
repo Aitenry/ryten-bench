@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { theme } from 'antd'
-import { NavLink, useLocation } from 'react-router-dom'
+import { Dropdown, theme } from 'antd'
+import type { MenuProps } from 'antd'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
+  RiAiAgentLine,
   RiApps2Line,
   RiBellLine,
   RiBook2Line,
+  RiBrain4Line,
+  RiFileAi2Line,
   RiMoonLine,
+  RiPlug2Line,
   RiSettings3Line,
   RiSunLine
 } from '@remixicon/react'
@@ -28,9 +33,9 @@ import type { Window } from '../../../../resource/types/window'
  * 结构上分三层：
  * - 自绘标题栏（Windows / macOS）：左侧应用菜单（应用 / 编辑），右侧是**系统绘制**的
  *   最小化/最大化/关闭（Window Controls Overlay，见 main-window.ts）；
- * - 系统侧栏：品牌 → 资料库 / 插件仓库 → harness 的胶囊侧栏（对话/工作/插件）
+ * - 系统侧栏：品牌 → 资料库 / 插件仓库 / 更多内容 → harness 的胶囊侧栏（对话/工作/插件）
  *   → 记忆（在 AssistantSidebar 内部）→ 用户区；
- * - 主内容区：当前系统页面（对话 / 资料库 / 插件仓库）。
+ * - 主内容区：当前系统页面（对话 / 资料库 / 插件仓库 / 更多内容）。
  *
  * Linux 没有 WCO：主进程回退系统原生边框，这里不渲染标题栏，避免出现两条标题条。
  * 所有颜色都从 antd 主题 token 派生，亮色/暗色设置切换时整个外壳一起变化。
@@ -46,7 +51,7 @@ const ShellUserArea: React.FC = () => {
   const dockRef = useRef<HTMLDivElement>(null)
   const handleSettings = useCallback(() => {
     setNotifOpen(false)
-    openSettingsModal(undefined, 'full')
+    openSettingsModal()
   }, [])
 
   /** 设置按钮右侧的明暗快捷切换：月亮 / 太阳一个按钮来回切（自动模式仍在设置里可选） */
@@ -145,6 +150,7 @@ const AppShell: React.FC = () => {
   const { token } = theme.useToken()
   const { t } = useTranslation()
   const location = useLocation()
+  const navigate = useNavigate()
   const pluginRoutes = usePluginRoutes()
   const plugins = usePlugins()
 
@@ -173,7 +179,7 @@ const AppShell: React.FC = () => {
   /**
    * 原生窗口标题：按当前页面/插件/模式算成 `xxx - RytenBench`。
    *
-   * - 资料库 / 插件仓库：固定页面名；
+   * - 资料库 / 插件仓库 / 更多内容：固定页面名；
    * - 对话页（/harness）：交给 harness 侧栏按「对话/工作/插件」模式写入；
    * - 第三方插件路由：用插件 manifest 里的名称。
    */
@@ -191,6 +197,17 @@ const AppShell: React.FC = () => {
       setWindowTitleSource('route', t('shell.windowTitle.pluginRepo'))
       return
     }
+    if (path === '/more' || path.startsWith('/more/')) {
+      // 「更多」是助手设置的容器：窗口标题用具体页名（智能体 / 技能 / …），
+      // 没有 tab 或 tab 不认识时退回容器名。
+      const tab = path.split('/')[2]
+      const label =
+        tab && ['agents', 'skills', 'memory', 'mcp'].includes(tab)
+          ? t(`settings.nav.${tab}` as never)
+          : t('shell.windowTitle.more')
+      setWindowTitleSource('route', label)
+      return
+    }
     const matched = pluginRoutes
       .filter((r) => path === r.path || path.startsWith(`${r.path}/`))
       .sort((a, b) => b.path.length - a.path.length)[0]
@@ -202,14 +219,32 @@ const AppShell: React.FC = () => {
     setWindowTitleSource('route', '')
   }, [location.pathname, pluginRoutes, plugins, t])
 
+  /**
+   * 全局「打开设置」事件：
+   * - `scope=assistant` 的助手设置走「更多」独立页面；
+   * - 其余（标题栏应用菜单、对话页「去配置模型」等）仍打开设置弹窗。
+   */
   useEffect(() => {
     const handler = (e: Event): void => {
       const detail = (e as CustomEvent).detail as { tab?: string; scope?: string } | undefined
-      openSettingsModal(detail?.tab, detail?.scope === 'assistant' ? 'assistant' : 'full')
+      if (detail?.scope === 'assistant') {
+        navigate(detail.tab ? `/more/${detail.tab}` : '/more')
+        return
+      }
+      openSettingsModal(detail?.tab)
     }
     window.addEventListener('open-system-settings', handler)
     return () => window.removeEventListener('open-system-settings', handler)
-  }, [])
+  }, [navigate])
+
+  /** 侧栏「更多」下拉：只放助手设置（用户 2026-11-20「只要助手的」） */
+  const assistantSettingsItems: MenuProps['items'] = [
+    { key: 'agents', icon: <RiAiAgentLine size={15} />, label: t('settings.nav.agents') },
+    { key: 'skills', icon: <RiFileAi2Line size={15} />, label: t('settings.nav.skills') },
+    { key: 'memory', icon: <RiBrain4Line size={15} />, label: t('settings.nav.memory') },
+    { key: 'mcp', icon: <RiPlug2Line size={15} />, label: t('settings.nav.mcp') }
+  ]
+  const isMoreActive = location.pathname === '/more' || location.pathname.startsWith('/more/')
 
   const shellVars = {
     '--shell-bg': token.colorBgLayout,
@@ -248,15 +283,29 @@ const AppShell: React.FC = () => {
               className={({ isActive }) => `shell-nav-item${isActive ? ' active' : ''}`}
             >
               <RiBook2Line size={16} />
-              资料库
+              {t('shell.nav.library')}
             </NavLink>
             <NavLink
               to="/plugins"
               className={({ isActive }) => `shell-nav-item${isActive ? ' active' : ''}`}
             >
               <RiApps2Line size={16} />
-              插件仓库
+              {t('shell.nav.pluginRepo')}
             </NavLink>
+            {/* 助手设置收在「更多」下拉里（插件仓库下面）：选一项 → 整页显示它的内容 */}
+            <Dropdown
+              menu={{
+                items: assistantSettingsItems,
+                onClick: ({ key }) => navigate(`/more/${key}`)
+              }}
+              trigger={['click']}
+              placement="rightTop"
+            >
+              <button type="button" className={`shell-nav-item${isMoreActive ? ' active' : ''}`}>
+                <RiSettings3Line size={16} />
+                {t('shell.nav.more')}
+              </button>
+            </Dropdown>
           </nav>
 
           <div className="shell-assistant">

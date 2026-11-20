@@ -9,6 +9,12 @@ export const zhCNShell = {
     notes: '笔记',
     harness: '助手'
   },
+  nav: {
+    library: '资料库',
+    pluginRepo: '插件仓库',
+    /** 设置从侧栏收起成一个入口（菜单 + 内容都在这一页里） */
+    more: '更多内容'
+  },
   titleBar: {
     minimize: '最小化',
     maximize: '最大化',
@@ -55,6 +61,7 @@ export const zhCNShell = {
   windowTitle: {
     library: '资料库',
     pluginRepo: '插件仓库',
+    more: '更多内容',
     chatMode: '对话模式',
     workMode: '工作模式',
     pluginMode: '插件模式'

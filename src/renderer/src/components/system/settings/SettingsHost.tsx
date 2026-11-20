@@ -24,7 +24,7 @@ import {
  */
 const SettingsHost: React.FC = () => {
   const state = useSyncExternalStore(subscribeSettingsModalState, getSettingsModalState)
-  return <SettingsModal open={state.open} onClose={closeSettingsModal} scope={state.scope} />
+  return <SettingsModal open={state.open} onClose={closeSettingsModal} />
 }
 
 export default SettingsHost

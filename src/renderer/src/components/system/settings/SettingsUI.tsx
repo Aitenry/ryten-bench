@@ -18,20 +18,37 @@ export const SettingsPageHeader: React.FC<{
   const { token } = theme.useToken()
   return (
     <div
+      className="sui-page-header"
       style={{
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
         gap: 16,
-        marginBottom: 18
+        marginBottom: 22
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: token.colorText }}>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 20,
+            lineHeight: 1.25,
+            fontWeight: 600,
+            letterSpacing: '-0.015em',
+            color: token.colorText
+          }}
+        >
           {title}
         </h2>
         {description && (
-          <p style={{ margin: '4px 0 0', fontSize: 13, color: token.colorTextSecondary }}>
+          <p
+            style={{
+              margin: '7px 0 0',
+              fontSize: 13,
+              lineHeight: 1.65,
+              color: token.colorTextSecondary
+            }}
+          >
             {description}
           </p>
         )}
@@ -58,10 +75,10 @@ export const SettingsSection: React.FC<{
       style={
         {
           border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: 12,
+          borderRadius: 14,
           background: token.colorBgContainer,
           overflow: 'hidden',
-          marginBottom: 16,
+          marginBottom: 14,
           '--sui-hairline': token.colorBorderSecondary,
           '--sui-bg': token.colorBgContainer
         } as React.CSSProperties
@@ -74,7 +91,7 @@ export const SettingsSection: React.FC<{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            padding: '11px 16px',
+            padding: '14px 18px',
             borderBottom: `1px solid ${token.colorBorderSecondary}`
           }}
         >
@@ -83,7 +100,16 @@ export const SettingsSection: React.FC<{
               {icon}
             </span>
           )}
-          <span style={{ fontSize: 13.5, fontWeight: 600, color: token.colorText }}>{title}</span>
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              letterSpacing: '-0.005em',
+              color: token.colorText
+            }}
+          >
+            {title}
+          </span>
           {description && (
             <span
               style={{ fontSize: 12, color: token.colorTextTertiary, marginLeft: 4, minWidth: 0 }}
@@ -118,8 +144,8 @@ export const SettingRow: React.FC<{
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 16,
-        padding: '13px 16px',
-        minHeight: 48
+        padding: '15px 18px',
+        minHeight: 52
       }}
     >
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -129,7 +155,7 @@ export const SettingRow: React.FC<{
             style={{
               fontSize: 12,
               color: token.colorTextTertiary,
-              marginTop: 2,
+              marginTop: 3,
               lineHeight: '17px'
             }}
           >

@@ -7,11 +7,12 @@ import {
   RiArrowDownSLine,
   RiArrowRightSLine,
   RiBrain4Line,
+  RiBriefcaseLine,
+  RiChat3Line,
   RiCloseLine,
   RiDatabase2Line,
   RiDeleteBin6Line,
   RiEditLine,
-  RiEqualizerLine,
   RiFileTextLine,
   RiFolder2Line,
   RiFolderOpenLine,
@@ -123,6 +124,19 @@ const WORKSHOP_FOCUS_EVENT = 'harness-workshop-focus'
 const SIDEBAR_MODES: SidebarMode[] = ['chat', 'work', 'plugin']
 
 /**
+ * 三档各自的图标（12px，跟文字同色）：
+ * 对话 = 气泡、工作 = 公文包、插件 = 拼图。
+ *
+ * 放在档位前面而不是只留文字：三档都是两字词，纯文字时一眼只能靠位置分辨；
+ * 加了图形后「聊 / 干 / 插件」的语义先于文字被认出来，切档时滑块移动也有了落点。
+ */
+const SIDEBAR_MODE_ICONS: Record<SidebarMode, React.ReactNode> = {
+  chat: <RiChat3Line size={12} />,
+  work: <RiBriefcaseLine size={12} />,
+  plugin: <RiPuzzleLine size={12} />
+}
+
+/**
  * 侧栏模式开关（胶囊 + 滑块，三档：对话 / 工作 / 插件）。
  *
  * 为什么不用「三个按钮各自换背景色」：那样切换是**瞬间跳变**，眼睛得重新找位置；
@@ -206,8 +220,12 @@ const SidebarModeSwitch: React.FC<{
           title={t(`harness.sidebar.mode.${item}Hint` as never)}
           style={{
             position: 'relative',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 3,
             height: 20,
-            padding: '0 9px',
+            padding: '0 6px',
             border: 'none',
             background: 'transparent',
             cursor: 'pointer',
@@ -219,6 +237,8 @@ const SidebarModeSwitch: React.FC<{
             transition: 'color 180ms ease'
           }}
         >
+          {/* 图标与文字同色：选中态/未选中态由按钮的 color 一起带过去，不用另配一套 */}
+          {SIDEBAR_MODE_ICONS[item]}
           {t(`harness.sidebar.mode.${item}` as never)}
         </button>
       ))}
@@ -1557,23 +1577,38 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const userEntries = memorySnap?.runtime?.entries.filter((e) => e.target === 'user') ?? []
   const memoryEntries = memorySnap?.runtime?.entries.filter((e) => e.target === 'memory') ?? []
 
-  /* 头部小图标按钮 */
+  /* 顶行右侧动作胶囊的配色：深色外壳用手写色（与模式开关同一套），浅色跟随 antd token */
+  const headerTrack = shellMode ? '#2a2a2d' : colorFillAlter
+  const headerHairline = shellMode ? '#3a3a40' : token.colorBorderSecondary
+  const headerHover = shellMode ? '#3a3a40' : token.colorFill
+
+  /**
+   * 头部小图标按钮。
+   *
+   * - `compact`：右侧动作胶囊里的一格（26×20，图标 14，圆角 5，贴合 24px 胶囊内高）；
+   * - 默认：搜索模式里的关闭键（26×26，圆角 7）。
+   *
+   * 悬停只换底色与图标色，不加边框/阴影：顶行已经有一枚白色滑块，动作按钮保持安静。
+   */
   const iconBtn = (
     title: string,
     onClick: () => void,
     icon: React.ReactNode,
     /** 禁用态（生成中不能重开当前会话：那会把正在跑的这一轮从界面上丢掉） */
-    disabled = false
+    disabled = false,
+    /** 紧凑样式：用于右侧动作胶囊 */
+    compact = false
   ): React.ReactNode => (
     <button
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className="flex items-center justify-center rounded transition-colors"
+      className="flex items-center justify-center transition-colors"
       style={{
         width: 26,
-        height: 26,
+        height: compact ? 20 : 26,
         border: 'none',
+        borderRadius: compact ? 5 : 7,
         background: 'transparent',
         color: colorTextSecondary,
         cursor: disabled ? 'not-allowed' : 'pointer',
@@ -1581,7 +1616,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       }}
       onMouseEnter={(e) => {
         if (disabled) return
-        e.currentTarget.style.background = colorFillAlter
+        e.currentTarget.style.background = headerHover
         e.currentTarget.style.color = colorText
       }}
       onMouseLeave={(e) => {
@@ -2220,11 +2255,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         borderRadius: borderRadiusLG
       }}
     >
-      {/* 头部：模式开关（对话 / 工作 / 插件）+ 搜索 / 设置 / 新建 */}
+      {/* 头部：模式开关（对话 / 工作 / 插件）+ 右侧动作胶囊（搜索 / 新建） */}
       <div
         data-harness-sidebar-header="1"
-        className="flex items-center px-2"
-        style={{ minHeight: 38 }}
+        className="flex items-center"
+        style={{ minHeight: 40, padding: '0 12px', gap: 4 }}
       >
         {searchMode ? (
           <div className="flex items-center gap-1 flex-1">
@@ -2274,66 +2309,69 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               t={t}
             />
             <span className="flex-1" />
-            {iconBtn(
-              t('harness.sidebar.searchTooltip'),
-              () => setSearchMode(true),
-              <RiSearchLine size={16} />
-            )}
-            {mode === 'plugin' ? (
-              /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器）。
-                 图标与工作模式的「新建工作区」用同一个（RiFoldersLine）——两个模式的头部同构，
-                 用户口径 2026-09-27「这个按键的 icon 要和工作的 icon 保持一致」 */
-              iconBtn(
-                t('harness.sidebar.newDraft'),
-                () => void handleNewDraft(),
-                <RiFoldersLine size={16} />
-              )
-            ) : mode === 'chat' ? (
-              /* 对话模式：设置 + **新建会话**（该模式没有工作区，所以没有「新建工作区」这个动作）。
-                 输出必须是**单个**节点（fragment）而不是数组：数组形式的子节点没有 key，
-                 React 会告警「Each child in a list should have a unique key」（用户 2026-11-19 报的）。 */
-              <>
-                {iconBtn(
-                  t('harness.sidebar.assistantSettings'),
-                  () =>
-                    window.dispatchEvent(
-                      new CustomEvent('open-system-settings', {
-                        detail: { tab: 'agents', scope: 'assistant' }
-                      })
-                    ),
-                  <RiEqualizerLine size={16} />
-                )}
-                {iconBtn(
-                  // 有会话正在生成时不给重开：`handleChatSession` 会 `onNewHarness()`，
-                  // 那会把正在跑的这一轮从界面上丢掉（后台还在推，但用户看不见了）
-                  anyTopicRunning
-                    ? t('harness.sidebar.newSessionRunning')
-                    : t('harness.sidebar.newSession'),
-                  () => void handleChatSession(),
-                  <RiAddLine size={16} />,
-                  anyTopicRunning
-                )}
-              </>
-            ) : (
-              <>
-                {iconBtn(
-                  t('harness.sidebar.assistantSettings'),
-                  // 聚焦模式：设置弹窗只显示助手相关页签（智能体 / 模型 / 技能 / 记忆）
-                  () =>
-                    window.dispatchEvent(
-                      new CustomEvent('open-system-settings', {
-                        detail: { tab: 'agents', scope: 'assistant' }
-                      })
-                    ),
-                  <RiEqualizerLine size={16} />
-                )}
-                {iconBtn(
-                  t('harness.sidebar.newWorkspace'),
-                  handleBrowseFolder,
-                  <RiFoldersLine size={16} />
-                )}
-              </>
-            )}
+            {/*
+              右侧动作：搜索 + 新建，收进一枚 24px 高的胶囊——与左侧三档开关同高、同圆角、
+              同一层底色，顶行两端形成呼应；中间用 1px 竖线把「查找」与「创建」分开。
+              「助手设置」不放在这里：入口在左下角用户区齿轮与「应用」菜单。
+            */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                height: 24,
+                padding: 2,
+                gap: 1,
+                borderRadius: 7,
+                background: headerTrack,
+                flexShrink: 0
+              }}
+            >
+              {iconBtn(
+                t('harness.sidebar.searchTooltip'),
+                () => setSearchMode(true),
+                <RiSearchLine size={14} />,
+                false,
+                true
+              )}
+              <span
+                aria-hidden
+                style={{
+                  width: 1,
+                  height: 12,
+                  margin: '0 1px',
+                  background: headerHairline,
+                  flexShrink: 0
+                }}
+              />
+              {mode === 'plugin'
+                ? /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器） */
+                  iconBtn(
+                    t('harness.sidebar.newDraft'),
+                    () => void handleNewDraft(),
+                    <RiFoldersLine size={14} />,
+                    false,
+                    true
+                  )
+                : mode === 'chat'
+                  ? /* 对话模式：新建会话（该模式没有工作区，所以没有「新建工作区」这个动作） */
+                    iconBtn(
+                      anyTopicRunning
+                        ? t('harness.sidebar.newSessionRunning')
+                        : t('harness.sidebar.newSession'),
+                      () => void handleChatSession(),
+                      <RiAddLine size={14} />,
+                      anyTopicRunning,
+                      true
+                    )
+                  : /* 工作模式：新建工作区 */
+                    iconBtn(
+                      t('harness.sidebar.newWorkspace'),
+                      handleBrowseFolder,
+                      <RiFoldersLine size={14} />,
+                      false,
+                      true
+                    )}
+            </div>
           </>
         )}
       </div>

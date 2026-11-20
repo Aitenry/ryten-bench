@@ -1,5 +1,3 @@
-import type { SettingsScope } from './SettingsModal'
-
 /**
  * 设置弹窗的状态（模块级可订阅快照）。
  *
@@ -10,17 +8,16 @@ import type { SettingsScope } from './SettingsModal'
  * - 更隐蔽的是**当前页签**也会被重置——齿轮打开时 `tab` 是 undefined，重挂后就会回落到
  *   首个可用页签（2026-09-26 用户实测：「点插件开关会刷新设置内容并跳回通用」）。
  *
- * 因此弹窗的「开着没 / 在哪一页 / 什么范围」三件事全部外置到这里：
+ * 因此弹窗的「开着没 / 在哪一页」两件事全部外置到这里：
  * `SettingsModal` 只按注册表把 `tab` 解析成实际可用的页签（页签随插件启停增删）。
  */
 export interface SettingsModalState {
   open: boolean
   /** 当前页签（undefined = 交给 SettingsModal 解析为首个可用页签） */
   tab: string | undefined
-  scope: SettingsScope
 }
 
-let state: SettingsModalState = { open: false, tab: undefined, scope: 'full' }
+let state: SettingsModalState = { open: false, tab: undefined }
 const listeners = new Set<() => void>()
 
 export function getSettingsModalState(): SettingsModalState {
@@ -45,9 +42,9 @@ function publish(patch: Partial<SettingsModalState>): void {
   }
 }
 
-/** 打开设置弹窗（tab 缺省 = 首个可用页签；scope='assistant' = 只显示助手相关页） */
-export function openSettingsModal(tab?: string, scope: SettingsScope = 'full'): void {
-  publish({ open: true, tab, scope })
+/** 打开设置弹窗（tab 缺省 = 首个可用页签） */
+export function openSettingsModal(tab?: string): void {
+  publish({ open: true, tab })
 }
 
 /**

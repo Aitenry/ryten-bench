@@ -8,6 +8,11 @@ export const enUSShell: typeof zhCNShell = {
     notes: 'Notes',
     harness: 'Assistant'
   },
+  nav: {
+    library: 'Library',
+    pluginRepo: 'Plugin repository',
+    more: 'More'
+  },
   titleBar: {
     minimize: 'Minimize',
     maximize: 'Maximize',
@@ -54,6 +59,7 @@ export const enUSShell: typeof zhCNShell = {
   windowTitle: {
     library: 'Library',
     pluginRepo: 'Plugin repository',
+    more: 'More',
     chatMode: 'Chat mode',
     workMode: 'Work mode',
     pluginMode: 'Plugin mode'

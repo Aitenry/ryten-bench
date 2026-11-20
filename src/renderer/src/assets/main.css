@@ -475,6 +475,22 @@ body.home-resizing * {
   text-decoration: none;
   transition: background 0.15s;
 }
+/* 「更多」里的助手设置独立页面：标题与描述由页面的 hero 渲染，
+   隐藏设置组件自带的页头（display:flex 是行内样式，必须 !important 才能盖住），
+   避免同一屏出现两个标题 */
+.more-detail .sui-page-header {
+  display: none !important;
+}
+
+/* 侧栏导航里的按钮项（例如「更多」下拉触发器）：外观与 NavLink 完全一致 */
+button.shell-nav-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .shell-nav-item svg {
   color: #8b8b92;
 }
@@ -681,7 +697,10 @@ body.home-resizing * {
   background: var(--shell-bg, #f5f5f5);
 }
 
-/* ======== 启动页（主窗口内，盖在界面之上；初始化完成后淡出） ======== */
+/* ======== 启动页（主窗口内，盖在界面之上；初始化完成后淡出） ========
+   前景只有 logo：淡入 → 缓慢浮动，表面周期性扫过一道高光（亮片），四周星芒闪烁。
+   背景是缓慢漂移的暖色柔光（金 / 品牌红 / 暖白）+ 点阵 + 浮尘。
+   吉祥物 GIF、标语、进度条都已按 2026-11-21 口径移除。 */
 .startup-splash {
   position: fixed;
   inset: 0;
@@ -689,8 +708,8 @@ body.home-resizing * {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   background: var(--startup-bg, #f7f6f1);
-  color: var(--startup-title, #1c1812);
   opacity: 1;
   transition: opacity 0.42s ease;
   -webkit-app-region: no-drag;
@@ -700,84 +719,397 @@ body.home-resizing * {
   opacity: 0;
   pointer-events: none;
 }
+
+/* ======== 背景层：暖金 / 品牌红 / 暖白三团柔光缓慢漂移，叠加点阵与浮尘 ======== */
+.startup-splash-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.startup-splash-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(40px);
+  will-change: transform;
+  pointer-events: none;
+}
+.startup-splash-orb-a {
+  width: 74vmin;
+  height: 74vmin;
+  left: -24vmin;
+  top: -28vmin;
+  background: radial-gradient(
+    circle at 42% 42%,
+    var(--startup-orb-a, rgba(246, 198, 118, 0.45)),
+    transparent 66%
+  );
+  animation: startup-orb-a 12s ease-in-out infinite;
+}
+.startup-splash-orb-b {
+  width: 66vmin;
+  height: 66vmin;
+  right: -26vmin;
+  bottom: -30vmin;
+  background: radial-gradient(
+    circle at 58% 48%,
+    var(--startup-orb-b, rgba(228, 124, 108, 0.3)),
+    transparent 68%
+  );
+  animation: startup-orb-b 15s ease-in-out -7s infinite;
+}
+.startup-splash-orb-c {
+  width: 46vmin;
+  height: 46vmin;
+  right: 4vmin;
+  top: 8vmin;
+  background: radial-gradient(
+    circle,
+    var(--startup-orb-c, rgba(255, 253, 247, 0.9)),
+    transparent 70%
+  );
+  animation: startup-orb-c 11s ease-in-out -4s infinite;
+}
+
+/* 点阵：中心清晰、四周淡出，随 transform 斜向漂移（位移正好一格，循环无缝） */
+.startup-splash-grid {
+  position: absolute;
+  inset: -20vmin;
+  background-image: radial-gradient(
+    circle,
+    var(--startup-dot, rgba(28, 24, 18, 0.055)) 1px,
+    transparent 1.6px
+  );
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 0%, #000 42%, transparent 78%);
+  mask-image: radial-gradient(ellipse at center, #000 0%, #000 42%, transparent 78%);
+  animation: startup-grid-drift 8s linear infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+
+/* 浮尘：几颗小光点慢慢上浮，错开相位，让背景一直有细微动态 */
+.startup-splash-mote {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--startup-mote, rgba(198, 140, 48, 0.6));
+  box-shadow: 0 0 10px var(--startup-mote-glow, rgba(198, 140, 48, 0.35));
+  opacity: 0;
+  animation: startup-mote 10s ease-in-out infinite;
+  pointer-events: none;
+}
+.startup-splash-mote-a {
+  left: 16%;
+  top: 68%;
+  animation-delay: -1s;
+  animation-duration: 7s;
+}
+.startup-splash-mote-b {
+  left: 27%;
+  top: 33%;
+  width: 3px;
+  height: 3px;
+  animation-delay: -5s;
+  animation-duration: 9s;
+}
+.startup-splash-mote-c {
+  right: 21%;
+  top: 25%;
+  animation-delay: -3s;
+  animation-duration: 8s;
+}
+.startup-splash-mote-d {
+  right: 11%;
+  top: 63%;
+  width: 6px;
+  height: 6px;
+  animation-delay: -7s;
+  animation-duration: 10s;
+}
+.startup-splash-mote-e {
+  left: 59%;
+  bottom: 16%;
+  width: 3px;
+  height: 3px;
+  animation-delay: -2s;
+  animation-duration: 9s;
+}
+
 .startup-splash-inner {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 24px;
 }
-.startup-splash-mascot {
-  width: 188px;
-  height: 188px;
+
+/* logo 舞台：光晕 / 星芒都相对它定位；尺寸随窗口轻微放大（1200×800 时约 224px） */
+.startup-splash-logo {
+  --startup-logo-size: clamp(200px, 28vmin, 280px);
+  position: relative;
+  width: var(--startup-logo-size);
+  height: var(--startup-logo-size);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 14px;
+  animation: startup-logo-in 0.72s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.startup-splash-mascot img {
+
+/* 背后的暖光：跟着 logo 一起呼吸，给亮片一个发光底座 */
+.startup-splash-logo-glow {
+  position: absolute;
+  inset: -46%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--startup-glow, rgba(214, 150, 40, 0.16)) 0%,
+    transparent 66%
+  );
+  filter: blur(8px);
+  animation: startup-glow 4.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 浮动单独一层，避免和外层淡入的 transform 互相覆盖 */
+.startup-splash-logo-float {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  animation: startup-logo-float 4.2s ease-in-out infinite;
+}
+
+/* 圆角与 logo 自带的徽章外形对齐（512px 图约 23% 圆角），高光被这里裁切 */
+.startup-splash-logo-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 23%;
+  /* 与 logo 自身底色一致：透明圆角不会漏出页面背景，亮片也不会跑到徽章外 */
+  background: #f8f7f3;
+  box-shadow:
+    0 18px 48px var(--startup-shadow, rgba(28, 24, 18, 0.22)),
+    0 0 0 1px var(--startup-logo-ring, rgba(28, 24, 18, 0.06));
+}
+.startup-splash-logo-frame.is-error {
+  filter: grayscale(0.4) saturate(0.8);
+}
+.startup-splash-logo-frame img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
-  animation: startup-bob 2.6s ease-in-out infinite;
-  filter: drop-shadow(0 12px 28px var(--startup-mascot-shadow, rgba(28, 24, 18, 0.16)));
+  -webkit-user-drag: none;
 }
-.startup-splash-mascot.is-error img {
-  animation: none;
-  filter: grayscale(0.35)
-    drop-shadow(0 12px 28px var(--startup-mascot-shadow, rgba(28, 24, 18, 0.12)));
+
+/* 亮片：一道斜向高光周期性地从左扫到右，screen 混合让它在深色毛发上更通透。
+   两侧用很宽的柔光过渡 + 中间一条窄亮芯，避免在深色毛发上出现生硬的白条。 */
+.startup-splash-logo-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.06) 38%,
+    rgba(255, 255, 255, 0.22) 45%,
+    rgba(255, 255, 255, 0.42) 50%,
+    rgba(255, 255, 255, 0.22) 55%,
+    rgba(255, 255, 255, 0.06) 62%,
+    transparent 70%
+  );
+  transform: translateX(-130%);
+  mix-blend-mode: screen;
+  animation: startup-sheen 4.2s cubic-bezier(0.3, 0, 0.2, 1) 0.55s infinite;
+  will-change: transform;
+  pointer-events: none;
 }
-@keyframes startup-bob {
-  0%,
-  100% {
+
+/* 星芒（亮片）：四角星形，出现时机跟着高光一起走。
+   形状放在伪元素上：clip-path 会把 drop-shadow 一起裁掉，光晕留在外层才不会丢。 */
+.startup-splash-spark {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  filter: drop-shadow(0 0 7px var(--startup-spark-glow, rgba(217, 160, 31, 0.5)));
+  opacity: 0;
+  animation: startup-sparkle 4.2s ease-in-out infinite;
+  pointer-events: none;
+}
+.startup-splash-spark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--startup-spark, #d9a01f);
+  clip-path: polygon(50% 0%, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0% 50%, 40% 40%);
+}
+.startup-splash-spark-a {
+  top: 2%;
+  right: -3%;
+  animation-delay: 1.25s;
+}
+.startup-splash-spark-b {
+  bottom: 5%;
+  left: -6%;
+  width: 13px;
+  height: 13px;
+  animation-delay: 0.45s;
+}
+.startup-splash-spark-c {
+  top: 38%;
+  left: -9%;
+  width: 10px;
+  height: 10px;
+  animation-delay: 0.75s;
+}
+
+@keyframes startup-logo-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.88);
+  }
+  to {
+    opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+@keyframes startup-logo-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
   50% {
-    transform: translateY(-7px) scale(1.02);
+    transform: translateY(-6px);
   }
 }
-.startup-splash-title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: var(--startup-title, #1c1812);
+@keyframes startup-orb-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(7vmin, 5vmin, 0) scale(1.1);
+  }
+  66% {
+    transform: translate3d(-3vmin, 9vmin, 0) scale(0.94);
+  }
 }
-.startup-splash-subtitle {
-  margin: 10px 0 0;
-  min-height: 20px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--startup-sub, rgba(28, 24, 18, 0.58));
+@keyframes startup-orb-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  40% {
+    transform: translate3d(-8vmin, -6vmin, 0) scale(1.12);
+  }
+  70% {
+    transform: translate3d(4vmin, -3vmin, 0) scale(0.92);
+  }
 }
-.startup-splash-subtitle.is-error {
-  color: var(--startup-error, #b42318);
+@keyframes startup-orb-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-5vmin, 7vmin, 0) scale(1.15);
+  }
 }
-.startup-splash-track {
-  margin-top: 22px;
-  width: 264px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--startup-track, rgba(28, 24, 18, 0.1));
-  overflow: hidden;
+@keyframes startup-grid-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(26px, 26px, 0);
+  }
 }
-.startup-splash-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--startup-fill, #1c1812);
-  transition: width 0.25s ease;
+@keyframes startup-mote {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) scale(0.6);
+  }
+  18% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(8px, -52px, 0) scale(1);
+  }
 }
-.startup-splash-percent {
-  margin-top: 10px;
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--startup-percent, rgba(28, 24, 18, 0.45));
+@keyframes startup-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
 }
+@keyframes startup-sheen {
+  0% {
+    transform: translateX(-130%);
+  }
+  32% {
+    transform: translateX(130%);
+  }
+  100% {
+    transform: translateX(130%);
+  }
+}
+@keyframes startup-sparkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+  8% {
+    opacity: 1;
+    transform: scale(1) rotate(25deg);
+  }
+  16% {
+    opacity: 0.7;
+    transform: scale(0.9) rotate(40deg);
+  }
+  26%,
+  100% {
+    opacity: 0;
+    transform: scale(0.4) rotate(55deg);
+  }
+}
+
+/* 只在初始化失败时出现（正常加载整页只有 logo） */
 .startup-splash-error {
-  margin-top: 18px;
+  margin-top: 24px;
   max-width: 520px;
   text-align: center;
   font-size: 12.5px;
   line-height: 1.6;
   white-space: pre-wrap;
   color: var(--startup-error, #b42318);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-splash-logo,
+  .startup-splash-logo-float,
+  .startup-splash-logo-glow,
+  .startup-splash-logo-sheen,
+  .startup-splash-spark,
+  .startup-splash-orb,
+  .startup-splash-grid,
+  .startup-splash-mote {
+    animation: none;
+  }
+  .startup-splash-logo-glow {
+    opacity: 0.7;
+  }
+  .startup-splash-logo-sheen,
+  .startup-splash-spark,
+  .startup-splash-mote {
+    opacity: 0;
+  }
 }

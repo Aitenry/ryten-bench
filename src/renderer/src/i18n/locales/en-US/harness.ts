@@ -22,7 +22,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       searchTopicPlaceholder: 'Search conversations',
       searchTooltip: 'Search workspaces and conversations',
       exitSearch: 'Exit search',
-      assistantSettings: 'Assistant settings',
       newWorkspace: 'New workspace',
       mode: {
         work: 'Work',
@@ -119,7 +118,14 @@ export const harnessEnUS: typeof harnessZhCN = {
         'Cannot get the local path of "{{name}}". Add it by drag-and-drop or the upload button',
       pasteImageFallbackName: 'paste-image.png',
       permissionAria: 'Choose the permission mode',
-      permissionLabel: 'Permission'
+      permissionLabel: 'Permission',
+      toolsLabel: 'Tools',
+      toolsAria: 'Choose tools',
+      toolsEmpty: 'No tools available',
+      skillsLabel: 'Skills',
+      skillsAria: 'Choose skills',
+      skillsEmpty: 'No skills available',
+      pickerSaveFailed: 'Failed to save, please retry'
     },
     permission: {
       readOnly: 'Read only',
@@ -495,7 +501,8 @@ export const harnessEnUS: typeof harnessZhCN = {
   /* Agent settings page strings. Keep keys identical to the zh-CN source of truth. */
   agentSettings: {
     pageTitle: 'Agents',
-    pageDescription: 'Configure main agent defaults, plus the subagents it can delegate tasks to',
+    pageDescription:
+      'Manage the subagents that can take delegated work; pick tools and skills below the chat input',
     sections: {
       mainAgent: 'Main agent',
       subagents: 'Subagents'

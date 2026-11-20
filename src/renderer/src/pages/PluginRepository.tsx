@@ -353,8 +353,8 @@ const PluginRepository: React.FC = () => {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: 12,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(232px, 1fr))',
+            gap: 14,
             marginTop: 10
           }}
         >
@@ -376,19 +376,19 @@ const PluginRepository: React.FC = () => {
                   onClick={() => navigate(`/plugins/${card.id}`)}
                   style={{
                     border: `1px solid ${token.colorBorderSecondary}`,
-                    borderRadius: 14,
-                    background: token.colorBgContainer,
+                    borderRadius: 16,
+                    background: token.colorBgElevated,
                     padding: 16,
-                    minHeight: 166,
+                    minHeight: 186,
                     display: 'flex',
                     flexDirection: 'column',
                     cursor: 'pointer',
-                    transition: 'border-color .16s, box-shadow .16s, transform .16s'
+                    transition: 'border-color .18s, box-shadow .18s, transform .18s'
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.borderColor = token.colorBorder
-                    e.currentTarget.style.boxShadow = '0 12px 28px rgba(17,24,39,.08)'
-                    e.currentTarget.style.transform = 'translateY(-1px)'
+                    e.currentTarget.style.boxShadow = token.boxShadowTertiary
+                    e.currentTarget.style.transform = 'translateY(-2px)'
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.borderColor = token.colorBorderSecondary
@@ -396,16 +396,17 @@ const PluginRepository: React.FC = () => {
                     e.currentTarget.style.transform = 'none'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <PluginIcon id={card.id} />
-                    <div style={{ minWidth: 0 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div
                         style={{
                           display: 'flex',
                           alignItems: 'center',
                           gap: 6,
-                          fontSize: 13.5,
+                          fontSize: 14.5,
                           fontWeight: 600,
+                          letterSpacing: '-0.005em',
                           color: token.colorText
                         }}
                       >
@@ -433,16 +434,39 @@ const PluginRepository: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      <div style={{ marginTop: 3, fontSize: 10, color: token.colorTextTertiary }}>
-                        v{card.version}
-                        {card.updateVersion ? ` → v${card.updateVersion}` : ''}
+                      <div
+                        style={{
+                          marginTop: 6,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          flexWrap: 'wrap'
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            height: 20,
+                            padding: '0 7px',
+                            borderRadius: 999,
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                            background: token.colorFillQuaternary,
+                            color: token.colorTextSecondary,
+                            fontSize: 10,
+                            lineHeight: 1
+                          }}
+                        >
+                          v{card.version}
+                          {card.updateVersion ? ` → v${card.updateVersion}` : ''}
+                        </span>
                       </div>
                     </div>
                   </div>
                   <div
                     style={{
                       marginTop: 12,
-                      fontSize: 11.5,
+                      fontSize: 12.5,
                       lineHeight: 1.65,
                       color: token.colorTextSecondary,
                       display: '-webkit-box',
@@ -456,37 +480,33 @@ const PluginRepository: React.FC = () => {
                   <div
                     style={{
                       marginTop: 'auto',
-                      paddingTop: 12,
+                      paddingTop: 14,
                       display: 'flex',
                       alignItems: 'center',
                       gap: 8
                     }}
                   >
-                    <span
-                      style={{
-                        fontSize: 10,
-                        padding: '2px 7px',
-                        borderRadius: 999,
-                        background: failed
-                          ? token.colorErrorBg
-                          : card.installed
-                            ? token.colorSuccessBg
-                            : token.colorFillTertiary,
-                        color: failed
-                          ? token.colorError
-                          : card.installed
-                            ? token.colorSuccess
-                            : token.colorTextTertiary
-                      }}
-                    >
-                      {failed
-                        ? t('settings.plugins.loadFailed')
-                        : card.installed
-                          ? card.enabled
+                    {(failed || card.installed) && (
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: failed
+                            ? token.colorError
+                            : card.enabled
+                              ? token.colorSuccess
+                              : token.colorTextTertiary
+                        }}
+                      >
+                        {failed
+                          ? t('settings.plugins.loadFailed')
+                          : card.enabled
                             ? t('harness.sidebar.pluginState.enabled')
-                            : t('settings.plugins.disabledBadge')
-                          : t('settings.plugins.repoInstall')}
-                    </span>
+                            : t('settings.plugins.disabledBadge')}
+                      </span>
+                    )}
                     {!card.installed && (
                       <Button
                         size="small"

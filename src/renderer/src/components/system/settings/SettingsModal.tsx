@@ -13,14 +13,17 @@ import {
 } from './settings-modal-state'
 
 /**
- * 设置弹窗 = shell 核心页（静态）+ 系统级功能页（systemSettingsSections）。
+ * 设置弹窗 = shell 核心页（静态）+ 资料库设置（graph）。
+ *
+ * 只放**非助手**的应用设置：助手相关的智能体 / 技能 / 记忆 / MCP 已经从弹窗搬到
+ * 「更多内容」独立页面（用户 2026-11-20 口径「只有助手的内容才需要独立页面」），
+ * 弹窗不再有 assistant 分组与聚焦模式。
  *
  * - 核心页：general / model / system，始终存在；
- * - 系统页：agents / skills / memory / mcp（助手）、graph（资料库）——随应用一起启动；
+ * - 系统页：graph（资料库）——随应用一起启动；
  * - **不含**插件相关页：插件工坊、第三方插件自己的设置页、以及原来的「插件」管理页，
  *   全部收进「插件仓库」页（用户 2026-11-19 口径「移除设置里面的这两个内容/插件」——
  *   插件相关的查看、安装、卸载、设置都在插件仓库里做，设置弹窗只放应用自己的配置）。
- * - 聚焦模式（assistant）：只显示 assistant 分组页 + model（智能体 → 模型 → 技能 → 记忆 → MCP）。
  */
 
 export type SettingsTab = string
@@ -50,19 +53,13 @@ const STATIC_ICONS: Record<string, React.ReactNode> = {
 }
 
 const GROUP_GENERAL = 'settings.nav.groupGeneral'
-const GROUP_ASSISTANT = 'settings.nav.groupAssistant'
-
-/** 设置弹窗的展示范围：full = 全部设置页；assistant = 聚焦模式 */
-export type SettingsScope = 'full' | 'assistant'
 
 interface SettingsModalProps {
   open: boolean
   onClose: () => void
-  /** 展示范围：assistant = 聚焦模式（只显示助手页 + 模型页）；默认 full = 全部设置页 */
-  scope?: SettingsScope
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'full' }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   const {
     token: {
       colorTextSecondary,
@@ -78,8 +75,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
 
   const { t } = useTranslation()
 
-  // 系统级设置页（AI 助手 / 资料库）。第三方插件的设置页不在这里，见插件仓库。
-  const allSections = systemSettingsSections
+  // 系统级设置页（资料库 graph）。助手页不在这里，见 pages/More.tsx。
+  const allSections = systemSettingsSections.filter((section) => section.group !== 'assistant')
 
   /** 全部页签元数据（图标常驻，文案随语言变化；系统页来自 systemSettingsSections） */
   const tabMeta = useMemo<Record<string, TabItem>>(() => {
@@ -103,44 +100,20 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
     return meta
   }, [allSections, t])
 
-  /** 分组结构：general（核心页 + 系统通用页）、assistant（助手页） */
+  /** 分组结构：只剩常规一组（核心页 + 资料库设置） */
   const navGroupDefs = useMemo<GroupDef[]>(() => {
-    const groups: GroupDef[] = []
     const generalItems = [
       ...Object.entries(STATIC_TABS).map(([key, d]) => ({ key, order: d.order })),
       ...allSections
         .filter((s) => s.group === 'general')
         .map((s) => ({ key: s.tabKey, order: s.order }))
     ].sort((a, b) => a.order - b.order)
-    if (generalItems.length > 0) groups.push({ labelKey: GROUP_GENERAL, items: generalItems })
-    const assistantItems = allSections
-      .filter((s) => s.group === 'assistant')
-      .map((s) => ({ key: s.tabKey, order: s.order }))
-      .sort((a, b) => a.order - b.order)
-    if (assistantItems.length > 0) groups.push({ labelKey: GROUP_ASSISTANT, items: assistantItems })
-    return groups
+    return generalItems.length > 0 ? [{ labelKey: GROUP_GENERAL, items: generalItems }] : []
   }, [allSections])
 
-  /** 聚焦模式页签：助手分组页 + model 页（模型排在首项之后，维持 智能体 → 模型 → … 惯例） */
-  const focusedTabs = useMemo<string[]>(() => {
-    const assistant = navGroupDefs.find((g) => g.labelKey === GROUP_ASSISTANT)?.items ?? []
-    const sorted = [...assistant].sort((a, b) => a.order - b.order).map((i) => i.key)
-    if (sorted.length === 0) return ['model']
-    return [sorted[0], 'model', ...sorted.slice(1)]
-  }, [navGroupDefs])
-
-  const onlyTabs = scope === 'assistant' ? focusedTabs : null
-
-  const firstTab = (): string => {
-    if (onlyTabs && onlyTabs.length > 0) return onlyTabs[0]
-    const firstGroup = navGroupDefs[0]?.items[0]
-    return firstGroup?.key ?? 'general'
-  }
+  const firstTab = (): string => navGroupDefs[0]?.items[0]?.key ?? 'general'
 
   const pickTab = (tab: SettingsTab | undefined): SettingsTab => {
-    if (onlyTabs && onlyTabs.length > 0) {
-      return tab && onlyTabs.includes(tab) ? tab : onlyTabs[0]
-    }
     if (tab && tabMeta[tab]) return tab
     return firstTab()
   }
@@ -165,18 +138,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
     if (open && storedTab !== activeTab) setSettingsModalTab(activeTab)
   }, [open, storedTab, activeTab])
 
-  /** 聚焦模式只渲染白名单内的分组，其余系统级页面整组隐藏 */
   const navGroups = useMemo(
     () =>
-      (onlyTabs ? navGroupDefs.filter((g) => g.labelKey === GROUP_ASSISTANT) : navGroupDefs).map(
-        (group) => ({
-          label: t(group.labelKey as never),
-          items: group.items
-            .filter((i) => !onlyTabs || onlyTabs.includes(i.key))
-            .map((i) => tabMeta[i.key])
-        })
-      ),
-    [onlyTabs, navGroupDefs, tabMeta, t]
+      navGroupDefs.map((group) => ({
+        label: t(group.labelKey as never),
+        items: group.items.map((item) => tabMeta[item.key])
+      })),
+    [navGroupDefs, tabMeta, t]
   )
 
   const renderContent = (): React.ReactNode => {

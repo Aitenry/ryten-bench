@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   AgentConfigInput,
   AgentConfigRow,
   AgentPaginatedResult,
@@ -303,6 +303,17 @@ export const harnessApi = {
     listSkills: () =>
       invoke('harness:harness-list-skills') as Promise<
         { id: string; name: string; description: string }[]
+      >,
+    /** 技能列表分页（主进程扫描 + 解析，渲染层只拿当前页） */
+    listSkillsPaginated: (page: number, pageSize: number) =>
+      invoke('harness:harness-list-skills-paginated', page, pageSize) as Promise<{
+        items: { id: string; name: string; description: string }[]
+        total: number
+      }>,
+    /** 技能启用/停用（完整目录判定在主进程） */
+    setSkillEnabled: (skillId: string, enabled: boolean) =>
+      invoke('harness:harness-set-skill-enabled', skillId, enabled) as Promise<
+        string[] | undefined
       >,
 
     // 记忆管理（Mnemon 三层记忆）

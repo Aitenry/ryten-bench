@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Form, Input, InputNumber, Modal, Select, Switch, theme } from 'antd'
 import { PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import {
@@ -9,12 +9,12 @@ import {
   RiRefreshLine
 } from '@remixicon/react'
 import { SkeletonSettingRows } from '@renderer/components/system/Skeleton'
+import EntityCard, { EntityChip } from '@renderer/components/system/EntityCard'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import {
   SettingsPageHeader,
-  SettingsSection,
-  SettingRow
+  SettingsSection
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi } from '../../../api/harness'
 import type {
@@ -480,91 +480,102 @@ const McpSettings: React.FC = () => {
             {t('mcpSettings.list.empty')}
           </div>
         ) : (
-          servers.map((view) => {
-            const enabledCount = serverEnabledCount(view)
-            const target = targetOf(view)
-            return (
-              <SettingRow
-                key={view.config.id}
-                title={view.config.name}
-                description={view.config.description || undefined}
-                control={
-                  <div className="flex items-center" style={{ gap: 8 }}>
-                    {statusNode(view)}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(232px, 1fr))',
+              gap: 14,
+              padding: 16
+            }}
+          >
+            {servers.map((view) => {
+              const enabledCount = serverEnabledCount(view)
+              const target = targetOf(view)
+              return (
+                <EntityCard
+                  key={view.config.id}
+                  id={view.config.id}
+                  icon={<RiPlug2Line size={19} />}
+                  title={view.config.name}
+                  meta={
+                    <>
+                      {statusNode(view)}
+                      {view.tools.length > 0 && (
+                        <span data-mcp-row-tools style={{ display: 'inline-flex' }}>
+                          <EntityChip>
+                            {t('mcpSettings.list.toolsEnabledCount', {
+                              enabled: enabledCount,
+                              total: view.tools.length
+                            })}
+                          </EntityChip>
+                        </span>
+                      )}
+                    </>
+                  }
+                  description={view.config.description || undefined}
+                  footerStart={
                     <Switch
                       size="small"
                       checked={view.config.enabled}
                       loading={togglingId === view.config.id}
                       onChange={(checked) => void handleToggle(view, checked)}
                     />
-                    {/*
-                      行内操作直接摆出来（用户 2026-09-26 要求：编辑/删除从「⋯」菜单里移出来，
-                      且只要图标、不带文字）。`aria-label` 只给读屏用，界面上不出现文字。
-                    */}
-                    <Button
-                      type="text"
-                      size="small"
-                      data-mcp-row-action="edit"
-                      aria-label={t('mcpSettings.list.edit')}
-                      icon={<RiEditLine size={14} />}
-                      onClick={() => openEdit(view)}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      data-mcp-row-action="remove"
-                      aria-label={t('mcpSettings.list.remove')}
-                      icon={<RiDeleteBin6Line size={14} />}
-                      onClick={() => handleRemove(view)}
-                    />
-                  </div>
-                }
-              >
-                {/* 连接目标：单行截断（整条命令可能很长，任它换行会把行高撑散） */}
-                {target && (
-                  <div
-                    style={{
-                      marginTop: 2,
-                      fontSize: 12,
-                      color: colorTextTertiary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
-                    }}
-                  >
-                    {target}
-                  </div>
-                )}
-                {view.tools.length > 0 && (
-                  <div
-                    data-mcp-row-tools
-                    style={{ marginTop: 2, fontSize: 12, color: colorTextTertiary }}
-                  >
-                    {t('mcpSettings.list.toolsEnabledCount', {
-                      enabled: enabledCount,
-                      total: view.tools.length
-                    })}
-                  </div>
-                )}
-                {view.status === 'error' && view.error && (
-                  <div
-                    style={{
-                      marginTop: 2,
-                      fontSize: 12,
-                      color: colorError,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    {view.error}
-                  </div>
-                )}
-              </SettingRow>
-            )
-          })
+                  }
+                  footerEnd={
+                    <div className="flex items-center" style={{ gap: 2, marginLeft: 'auto' }}>
+                      <Button
+                        type="text"
+                        size="small"
+                        data-mcp-row-action="edit"
+                        aria-label={t('mcpSettings.list.edit')}
+                        icon={<RiEditLine size={14} />}
+                        onClick={() => openEdit(view)}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        data-mcp-row-action="remove"
+                        aria-label={t('mcpSettings.list.remove')}
+                        icon={<RiDeleteBin6Line size={14} />}
+                        onClick={() => handleRemove(view)}
+                      />
+                    </div>
+                  }
+                >
+                  {target && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        fontSize: 11.5,
+                        color: colorTextTertiary,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {target}
+                    </div>
+                  )}
+                  {view.status === 'error' && view.error && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11.5,
+                        color: colorError,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {view.error}
+                    </div>
+                  )}
+                </EntityCard>
+              )
+            })}
+          </div>
         )}
       </SettingsSection>
 
