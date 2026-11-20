@@ -58,8 +58,8 @@ function stripApiKeys(list: LlmProviderConfig[]): LlmProviderConfig[] {
  * 归属变更（harness 轮）：原先混在本文件里的 8 个智能体通道
  * （agent-get-all / agent-get-paginated / agent-get-by-id / agent-create / agent-update /
  * agent-delete / main-agent-get / main-agent-update）已随 harness 插件搬进
- * `src/plugins/harness/main/ipc/agent.ts`（通道名 `plugin:harness:agent-*` /
- * `plugin:harness:main-agent-*`）——智能体配置挂在 harness 的 workspace 表下，属「AI 助手」。
+ * `src/plugins/harness/main/ipc/agent.ts`（通道名 `harness:agent-*` /
+ * `harness:main-agent-*`）——智能体配置挂在 harness 的 workspace 表下，属「AI 助手」。
  * 本文件只留模型 Provider；启动期供应商缓存仍归 core（见 src/main/provider/cache.ts）。
  */
 export function registerProviderIpc(): void {

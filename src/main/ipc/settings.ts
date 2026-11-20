@@ -109,8 +109,8 @@ export function registerSettingsIpc(): void {
         syncTrayState()
       }
       // 工作区切换（新建 / 选择 / 重建）后通知订阅方（事件总线）：工作区文件监听的
-      // 换根动作属 harness 插件，core 只负责在设置落盘后发事件——停用插件则无人订阅，
-      // 事件自然没有效果（core 不认识 harness，见 src/main/plugins/app-hooks.ts）
+      // 换根动作属于 AI 助手（`src/main/system/harness.ts`），core 只负责在设置落盘后发事件；
+      // 第三方插件也可以订阅同一个事件（见 src/main/plugins/app-hooks.ts）
       if ('harness' in updates) {
         emitAppEvent(APP_EVENT_WORKSPACE_CHANGED, workspaceChangedPayload())
       }

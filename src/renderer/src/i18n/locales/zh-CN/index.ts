@@ -4,8 +4,8 @@ import { zhCNModelSettings } from './modelSettings'
 import { zhCNSystemInfo } from './systemInfo'
 import { zhCNShell } from './shell'
 import { zhCNMarkdown } from './markdown'
-import { harnessZhCN } from '@features/harness/locales/zh-CN'
-import { notesZhCN } from '@features/notes/locales/zh-CN'
+import { harnessZhCN } from './harness'
+import { notesZhCN } from './notes'
 
 /**
  * 简体中文是**源语言**：词条结构与文案以这里为准。

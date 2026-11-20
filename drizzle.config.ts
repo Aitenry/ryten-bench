@@ -6,9 +6,10 @@ import { join } from 'path'
  * drizzle-kit 配置（仅开发期使用，不进打包产物）。
  *
  * - schema：TS schema 是结构的单一真源，改完执行 `pnpm drizzle-kit generate` 产出增量 SQL。
- *   数组里既列 core 的 schema 目录，也列**系统级功能**（harness / notes，位于 src/features）的
- *   schema 文件——drizzle-kit 不解析 tsconfig paths，它们的 schema 只能用相对路径被 core
- *   re-export（见 database/schema/index.ts），这里显式列出是为了让 drizzle-kit 的 TS 入口
+ *   数组里既列 core 的 schema 目录，也列**系统功能**（AI 助手 / 资料库，位于
+ *   `src/main/database/schema/{harness,notes}`）的 schema 文件——drizzle-kit 不解析
+ *   tsconfig paths，它们的 schema 只能用相对路径被 core re-export
+ *   （见 database/schema/index.ts），这里显式列出是为了让 drizzle-kit 的 TS 入口
  *   发现逻辑不依赖目录遍历顺序。
  *   **第三方插件（task-planner / music-player）不在这里**：它们的表由插件自己建（各自 ddl.ts），
  *   迁移链上只保证「不生成 DROP」（见 drizzle/ 里那条迁移的注释）。
@@ -30,13 +31,13 @@ export default defineConfig({
   driver: 'pglite',
   schema: [
     './src/main/database/schema',
-    './src/features/harness/main/db/schema/harness.ts',
-    './src/features/harness/main/db/schema/file-change.ts',
-    './src/features/harness/main/db/schema/agent.ts',
-    './src/features/notes/main/db/schema/todo.ts',
-    './src/features/notes/main/db/schema/wiki.ts',
-    './src/features/notes/main/db/schema/document.ts',
-    './src/features/notes/main/db/schema/graph.ts'
+    './src/main/database/schema/harness/harness.ts',
+    './src/main/database/schema/harness/file-change.ts',
+    './src/main/database/schema/harness/agent.ts',
+    './src/main/database/schema/notes/todo.ts',
+    './src/main/database/schema/notes/wiki.ts',
+    './src/main/database/schema/notes/document.ts',
+    './src/main/database/schema/notes/graph.ts'
   ],
   out: './drizzle',
   dbCredentials: {

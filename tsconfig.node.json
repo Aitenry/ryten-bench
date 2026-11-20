@@ -4,7 +4,6 @@
     "electron.vite.config.*",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/features/**/*",
     "src/plugins/**/*",
     "src/shared/**/*"
   ],
@@ -12,8 +11,6 @@
     "node_modules",
     "out",
     "dist",
-    "src/features/**/renderer/**",
-    "src/features/**/locales/**",
     "src/plugins/**/renderer/**",
     "src/plugins/**/locales/**"
   ],
@@ -22,7 +19,6 @@
     "types": ["electron-vite/node"],
     "baseUrl": ".",
     "paths": {
-      "@features/*": ["src/features/*"],
       "@plugins/*": ["src/plugins/*"],
       "@shared/*": ["src/shared/*"]
     }

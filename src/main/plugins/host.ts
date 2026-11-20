@@ -8,7 +8,7 @@ import { ensureBundledPluginsInstalled } from './installer'
 import { installHostRuntime } from './runtime'
 import { registerCoreIpc } from '../ipc'
 import { BUILTIN_PLUGIN_MANIFESTS } from '../../plugins/manifests'
-import { activeSystemChannels, initSystemServices, SYSTEM_MODULE_IDS } from '../system-services'
+import { startSystemModules, SYSTEM_MODULE_IDS_SET } from '../system'
 import { MainPluginContextImpl } from './context'
 import { installPluginProcessGuard, withPluginScope } from './plugin-guard'
 import { IPC_PLUGIN_CHANNELS_SYNC, IPC_PLUGIN_CHANNELS_UPDATED } from '../../shared/plugin/protocol'
@@ -66,21 +66,18 @@ export function initPluginHost(): void {
   installPluginProcessGuard()
   ensureBundledPluginsInstalled()
   registerCoreIpc()
-  // harness / notes 是系统级功能：直接复用插件上下文装配，但不走磁盘包/启用态。
-  // 必须在 preload 通道同步之前完成，否则渲染层首批订阅会被白名单拒绝。
-  initSystemServices()
+  // 系统级功能（AI 助手 / 资料库）是 core 的一部分：直接启动，不经过插件宿主。
+  // 必须在 preload 通道同步之前完成，否则渲染层首批订阅会撞上「主进程还没挂通道」。
+  startSystemModules()
   registerPluginChannelsSync()
   initExternalMains()
 }
 
 // ---------- 通道清单（preload 白名单 + 事件订阅门控） ----------
 
-/** 当前全部已启用插件占用的通道（含系统级 harness / notes） */
+/** 当前全部已启用插件占用的通道（系统级功能的通道不在其中：它们由 preload 系统桥直接放行） */
 export function activePluginChannels(): string[] {
-  return [
-    ...activeSystemChannels(),
-    ...[...externalMains.values()].flatMap((e) => e.ctx.channels)
-  ]
+  return [...externalMains.values()].flatMap((e) => e.ctx.channels)
 }
 
 /**
@@ -163,7 +160,7 @@ export function unloadExternalMain(id: string): void {
 /** 启动时装载所有已启用的外部插件主模块 */
 function initExternalMains(): void {
   for (const scanned of scanExternalPlugins()) {
-    if (SYSTEM_MODULE_IDS.has(scanned.id)) continue
+    if (SYSTEM_MODULE_IDS_SET.has(scanned.id)) continue
     if (isEnabledPlugin(scanned.id)) {
       try {
         loadExternalMain(scanned.id)

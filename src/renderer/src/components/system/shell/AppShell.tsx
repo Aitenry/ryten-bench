@@ -149,6 +149,28 @@ const AppShell: React.FC = () => {
   const plugins = usePlugins()
 
   /**
+   * 版本号取主进程的真实版本（`app-version` IPC），不再写死。
+   * 读到之前不渲染这段文字，避免先闪一个错的版本号。
+   */
+  const [appVersion, setAppVersion] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    const loading = (window as unknown as Window).loading
+    if (!loading) return
+    void loading
+      .getAppVersion()
+      .then((version) => {
+        if (!cancelled) setAppVersion(version)
+      })
+      .catch(() => {
+        // 读不到就不显示版本号：宁缺勿错
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /**
    * 原生窗口标题：按当前页面/插件/模式算成 `xxx - RytenBench`。
    *
    * - 资料库 / 插件仓库：固定页面名；
@@ -214,8 +236,10 @@ const AppShell: React.FC = () => {
         <aside className="shell-sidebar">
           <div className="shell-brand">
             <img className="shell-brand-logo" src={logo} alt="RytenBench" />
-            <span className="shell-brand-name">RytenBench</span>
-            <span className="shell-brand-ver">0.1.0</span>
+            <span className="shell-brand-text">
+              <span className="shell-brand-name">RytenBench</span>
+              {appVersion && <span className="shell-brand-ver">{appVersion}</span>}
+            </span>
           </div>
 
           <nav className="shell-nav">

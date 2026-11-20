@@ -5,10 +5,13 @@
 > core 只保留外壳（窗口/托盘/主题/i18n 内核）、插件宿主、DB 引擎（PGlite + drizzle 迁移器）、
 > 模型 Provider 与 preload 通用桥。
 >
-> **2026-11 起 harness / notes 已移出插件系统**，作为系统级功能放在 `src/features/<id>/` 并由
-> `src/main/system-services.ts` 装配。它们仍然复用本文的 `MainPluginContext` 契约（通道名、
-> 可逆 effect、贡献点），但不再经过插件安装器 / 磁盘包 / 启用态开关，也不会出现在插件面板里。
+> **2026-11 起 harness / notes 已解散进系统本身**：AI 助手与资料库是 core 的一部分，主进程代码在
+> `src/main/**`（装配入口 `src/main/system/`，通道 `harness:*` / `notes:*`），渲染层代码在
+> `src/renderer/src/**`，词条并入 `src/renderer/src/i18n/locales/**`。它们**不再**复用本文的
+> `MainPluginContext`、不经过插件安装器 / 磁盘包 / 启用态开关，也不会出现在插件面板里；
+> 渲染层通过 preload 的 `window.api.system` 调它们，而不是 `window.api.plugin`。
 > 本目录下的 `src/plugins/<id>/` 形态只用于**随包分发的内置插件**（当前没有）与第三方插件源码。
+> 本文其余章节描述的是这些**可装卸插件**的契约——系统功能不再遵循它。
 
 ## 目录形态
 
@@ -137,10 +140,10 @@ P1~P4 期间 core 还持有两张**静态注册表**（`src/main/plugins/builtin
 
 ## 结构与契约入口
 
-内置插件（`notes` / `harness`）与独立插件（`task-planner` / `music-player`，源码在
-`github.com/Aitenry/ryten-plugins`）都已自包含在各自的
-`src/plugins/<id>/{manifest,main,renderer,shared,locales}` 或插件仓库的 `plugins/<id>/**`，**迁移全部完成**。
-core 只剩「外壳 + 插件宿主 + DB 引擎 + 模型 Provider + 通用 preload 桥」。
+内置插件已不存在：`src/plugins/manifests.ts` 是空清单，第三方插件（`task-planner` /
+`music-player`，源码在 `github.com/Aitenry/ryten-plugins`）按
+`plugins/<id>/{manifest,main,renderer,shared,locales}` 自包含。AI 助手与资料库是 core 的一部分
+（`src/main/**` + `src/renderer/src/**`），不再出现在本目录的形态里。
 
 看代码时的入口（按需要选一处，不要从别处猜）：
 
@@ -153,18 +156,14 @@ core 只剩「外壳 + 插件宿主 + DB 引擎 + 模型 Provider + 通用 prelo
 | 宿主装载/卸载与 preload 白名单推送                  | `src/main/plugins/host.ts`                                             |
 | 插件清单唯一定义                                | `src/plugins/manifests.ts`                                             |
 | 各插件的通道名                                 | `src/plugins/<id>/main/ipc/**`、渲染层的 `src/plugins/<id>/renderer/api.ts` |
-| **用对话让助手做插件（工坊：构建/自动验收/发布）**             | `src/features/harness/main/workshop/README.md`                         |
+| **系统功能（AI 助手 / 资料库）的装配**                | `src/main/system/`、`src/renderer/src/pages/{Harness,Notes}.tsx`       |
+| **用对话让助手做插件（工坊：构建/自动验收/发布）**             | `src/main/workshop/README.md`                                          |
 | 迁移历史、踩过的坑、跨插件耦合清单                       | `src/plugins/MIGRATION.md`、`test/plugin-coupling-notes.md`             |
 
-core 的边界（本轮收尾后）：
+core 的边界（系统功能并入后）：
 
-- `src/main/**` 不 import 任何插件模块，**唯一例外**是 `src/main/database/schema/index.ts`
-  的 schema re-export（drizzle-kit 不解析 tsconfig paths，单一 schema 入口是既有约定）；
-  渲染层同样零插件 import（`src/renderer/src/i18n/i18next.d.ts` 只做**类型**汇聚）；
-- core 不认识任何插件通道名（`plugin:notes:graph-build-*` 已随 `BuildProgressProvider`
-  整体收进 notes 插件）；
-- **插件的唯一来源就是磁盘包**：`resources/plugins/<id>/`（随应用分发）→ 首次启动铺到
-  `userData/plugins/<id>/` → 与第三方插件同一条装载链路；`pnpm dev` 下若产物缺失或落后于源码，
-  `installer.ts` 会自动用 `scripts/build-plugins.mjs --dev` 补打（见 `PACKAGING.md`）；
-- 插件参与宿主时机的唯一方式是贡献点 + 事件订阅，贡献随 `ctx.dispose()` 摘除
+- `src/main/**` 不 import 任何**插件**模块：插件只从 `userData/plugins/<id>/` 的磁盘包装载；
+- 系统功能（`harness:*` / `notes:*`）是 core 自己的代码，直接 import，不经过插件宿主、
+  没有启用态、也没有 `ctx.dispose()` 这一次回滚——它们随应用启动、随应用退出；
+- 第三方插件参与宿主时机的唯一方式是贡献点 + 事件订阅，贡献随 `ctx.dispose()` 摘除
   ⇒ **停用插件即不再执行它的任何钩子**。

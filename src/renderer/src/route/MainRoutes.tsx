@@ -1,18 +1,20 @@
-import React, { Suspense } from 'react'
+import React, { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import RouteSkeleton from './RouteSkeleton'
 import { lazyViewFor } from './lazyViewCache'
 import { usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
-import { systemRouteViews } from '@renderer/system'
 import PluginRepository from '@renderer/pages/PluginRepository'
 import PluginDetail from '@renderer/pages/PluginDetail'
 import type { RegisteredRoute } from '@renderer/plugin-host/types'
 
-// 路由级代码分割：Harness（含代码编辑器、差异视图等重型依赖）等页面按需加载，
-// 首屏只加载首页所需模块，显著缩短主窗口 ready-to-show 时间。
-// 各 chunk 会在启动空闲期由 viewPreload 提前加载，切页无需等待。
-// 路由表由插件注册表驱动（插件停用 = 路由即时消失），插件的 lazy/Component 二选一。
+// 路由级代码分割：AI 助手（含代码编辑器、差异视图等重型依赖）与资料库按需加载，
+// 首屏只加载当前页所需模块，显著缩短主窗口 ready-to-show 时间。
+// 系统功能的路由是静态的（不随插件启停变化）；第三方插件路由仍由插件注册表驱动。
+
+/** 系统功能页面（模块级 lazy：不能在渲染期新建 lazy，否则 Suspense 会反复重试） */
+const HarnessView = lazy(() => import('@renderer/pages/Harness'))
+const NotesView = lazy(() => import('@renderer/pages/Notes'))
 
 const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // lazy 实例必须来自模块级缓存（见 lazyViewCache.ts）：在渲染期新建 lazy 会让
@@ -48,19 +50,24 @@ const MainRoutes: React.FC = () => {
 
   return (
     <Routes>
-      {/* 系统级页面：对话（默认）/ 资料库。harness/notes 已移出插件系统 */}
+      {/* 系统功能页面：对话（默认）/ 资料库。随应用编译，不参与插件启停 */}
       <Route path="/" element={<Navigate to="/harness" replace />} />
-      {systemRouteViews.map((r) => (
-        <Route
-          key={r.path}
-          path={r.path}
-          element={
-            <Suspense fallback={<RouteSkeleton variant="generic" />}>
-              <r.Component />
-            </Suspense>
-          }
-        />
-      ))}
+      <Route
+        path="/harness"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <HarnessView />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/notes"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <NotesView />
+          </Suspense>
+        }
+      />
       {/* 系统级插件仓库 */}
       <Route path="/plugins" element={<PluginRepository />} />
       <Route path="/plugins/:pluginId" element={<PluginDetail />} />

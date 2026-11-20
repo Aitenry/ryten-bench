@@ -9,6 +9,7 @@ import { isCloseToTrayEnabled, isTrayAvailable, syncTrayState } from '../tray'
 import { isQuittingNow, markQuitting } from '../lifecycle'
 import { listContributions } from '../plugins/contributions'
 import { APP_RENDERER_MEMORY_DUMP, type AppHook } from '../plugins/app-hooks'
+import { dumpHarnessMemory } from '../system/harness'
 import { syncWindowBorderColor } from './dwm-border'
 
 /** 各窗口的最大化状态（主窗口与 mermaid 预览窗口共用；随窗口销毁清理） */
@@ -42,8 +43,14 @@ function watchWindowCleanup(win: Electron.BrowserWindow): void {
 
 let windowControlIpcRegistered = false
 
-/** 执行插件贡献的渲染进程内存快照（贡献点 `app.renderer-memory-dump`） */
+/** 渲染进程异常退出时的内存快照：系统功能（AI 助手）直接调用 + 第三方插件贡献的钩子 */
 function runRendererMemoryDumpHooks(reason: string, exitCode: number): void {
+  try {
+    // 快照是诊断旁路：不阻塞崩溃恢复流程
+    dumpHarnessMemory(reason, exitCode)
+  } catch (err) {
+    logger.warn('[Memory] AI 助手内存快照失败:', err)
+  }
   for (const hook of listContributions<AppHook>(APP_RENDERER_MEMORY_DUMP)) {
     try {
       // 快照是诊断旁路：不阻塞崩溃恢复流程，异步失败也只记日志

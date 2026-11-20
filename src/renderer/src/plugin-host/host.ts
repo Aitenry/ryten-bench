@@ -34,12 +34,7 @@ type FiberState = PluginState
  * 插件注册这些键会与内核页签撞名（`tabMeta` 是「后写覆盖」），界面表现为「通用设置
  * 变成了某个插件页」——不允许，直接让插件的 enable 失败。
  */
-const CORE_SETTINGS_TABS: ReadonlySet<string> = new Set([
-  'general',
-  'model',
-  'system',
-  'plugins'
-])
+const CORE_SETTINGS_TABS: ReadonlySet<string> = new Set(['general', 'model', 'system', 'plugins'])
 
 /** 包一层 pluginId 的注册表：register 返回注销函数；宿主可整组清空 */
 class ScopedRegistry<T extends { pluginId: string }> {
@@ -277,7 +272,13 @@ export class PluginHost {
                 `插件 '${pluginId}' 的路由 '${String(item.path)}' 不合法：必须以 / 开头，且不能含 * 或 :（占位与参数会抢别的插件的路由）`
               )
             }
-            this.claimSlot(this.routeRegistry, pluginId, '路由', item.path, (x) => x.path === item.path)
+            this.claimSlot(
+              this.routeRegistry,
+              pluginId,
+              '路由',
+              item.path,
+              (x) => x.path === item.path
+            )
             return this.routeRegistry.register(pluginId, item, () => this.bump())
           }
         } as HostServices[K]
@@ -285,7 +286,13 @@ export class PluginHost {
         return {
           register: (m) => {
             const item = m as Omit<RegisteredMenuItem, 'pluginId'>
-            this.claimSlot(this.menuRegistry, pluginId, '菜单键', item.key, (x) => x.key === item.key)
+            this.claimSlot(
+              this.menuRegistry,
+              pluginId,
+              '菜单键',
+              item.key,
+              (x) => x.key === item.key
+            )
             return this.menuRegistry.register(pluginId, item, () => this.bump())
           }
         } as HostServices[K]

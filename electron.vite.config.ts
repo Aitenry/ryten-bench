@@ -7,8 +7,6 @@ export default defineConfig({
   main: {
     resolve: {
       alias: {
-        // 系统级功能目录（harness / notes 已移出插件）
-        '@features': resolve('src/features'),
         // 自包含插件目录（主进程侧：src/plugins/<id>/main、shared）
         '@plugins': resolve('src/plugins'),
         '@shared': resolve('src/shared')
@@ -28,8 +26,6 @@ export default defineConfig({
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
-        // 系统级功能目录（harness / notes 已移出插件）
-        '@features': resolve('src/features'),
         // 自包含插件目录（渲染层侧：src/plugins/<id>/renderer、shared、locales）。
         '@plugins': resolve('src/plugins'),
         '@shared': resolve('src/shared')

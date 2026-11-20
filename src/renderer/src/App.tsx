@@ -16,7 +16,9 @@ import type { PluginListEntry } from '@shared/plugin/types'
 import { vendorModules } from '@renderer/plugin-host/host-ui'
 import { loadExternalPlugin } from '@renderer/plugin-host/external-loader'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
-import { SystemEffects, systemProviders } from '@renderer/system'
+import { HarnessProvider } from '@renderer/contexts/harness/HarnessContext'
+import BuildProgressProvider from '@renderer/providers/notes/BuildProgressProvider'
+import SystemEffects from '@renderer/components/system/SystemEffects'
 
 // shell 常驻 Provider（插件系统之外的应用骨架层）。
 // 插件自己的 Provider（如音乐播放器的 AudioProvider、首页的图谱构建进度）随插件注册，
@@ -62,19 +64,17 @@ const PluginProvidersShell: React.FC<{ children: React.ReactNode }> = ({ childre
 }
 
 /**
- * 系统级 Provider 层（harness / notes）。
+ * 系统功能 Provider 层（AI 助手 / 资料库）。
  *
- * 它们不再随插件启停，必须常驻包裹外壳与页面；顺序按 order 升序嵌套，
- * 保证 HarnessProvider（order 0）在 BuildProgressProvider（order 10）外层。
+ * 它们不是插件、没有启用态，必须常驻包裹外壳与页面：
+ * HarnessProvider 在外层（会话/话题状态），BuildProgressProvider 在内层（图谱构建进度）。
+ * 顺序写死在这里，因为这是壳的装配顺序，不再是可注册的运行时表。
  */
-const SystemProvidersShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const sorted = [...systemProviders].sort((a, b) => a.order - b.order)
-  const nested = sorted.reduceRight(
-    (acc, p) => <p.Provider key={p.Provider.name}>{acc}</p.Provider>,
-    children
-  )
-  return <>{nested}</>
-}
+const SystemProvidersShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <HarnessProvider>
+    <BuildProgressProvider>{children}</BuildProgressProvider>
+  </HarnessProvider>
+)
 
 // 启用态同步桥：主进程 plugins-list 是持久化真源；
 // 桥负责三件事：移除已消失/停用的插件（含「被物理卸载」）→ 加载已启用的插件渲染模块 →

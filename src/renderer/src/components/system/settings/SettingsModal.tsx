@@ -5,7 +5,7 @@ import GeneralSettings from './GeneralSettings'
 import SystemInfo from './SystemInfo'
 import ModelSettings from './ModelSettings'
 import { useTranslation } from '@renderer/i18n'
-import { systemSettingsSections } from '@renderer/system'
+import { systemSettingsSections } from './sections'
 import {
   getSettingsModalState,
   setSettingsModalTab,
@@ -78,11 +78,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, scope = 'f
 
   const { t } = useTranslation()
 
-  // 系统级设置页（harness / notes）。第三方插件的设置页不在这里，见插件仓库。
-  const allSections = useMemo(
-    () => systemSettingsSections.map((section) => ({ ...section, pluginId: 'system' })),
-    []
-  )
+  // 系统级设置页（AI 助手 / 资料库）。第三方插件的设置页不在这里，见插件仓库。
+  const allSections = systemSettingsSections
 
   /** 全部页签元数据（图标常驻，文案随语言变化；系统页来自 systemSettingsSections） */
   const tabMeta = useMemo<Record<string, TabItem>>(() => {

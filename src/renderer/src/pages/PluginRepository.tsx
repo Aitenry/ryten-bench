@@ -14,7 +14,7 @@ import {
 import { useTranslation } from '@renderer/i18n'
 import { usePlugins, usePluginSettingsSections } from '@renderer/plugin-host/PluginHostContext'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
-import WorkshopSettings from '@features/harness/renderer/components/settings/WorkshopSettings'
+import WorkshopSettings from '../components/harness/settings/WorkshopSettings'
 import type { PluginListEntry } from '@shared/plugin/types'
 
 /** 插件仓库索引里可安装的一条（与主进程 plugin:available 返回同口径） */
@@ -238,38 +238,25 @@ const PluginRepository: React.FC = () => {
   const discoverCount = cards.filter((c) => !c.installed).length
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', background: token.colorBgContainer }}>
-      <div style={{ maxWidth: 1120, margin: '0 auto', padding: '24px 36px 40px' }}>
-        <div style={{ marginBottom: 2 }}>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 24,
-              fontWeight: 700,
-              letterSpacing: '-0.03em',
-              color: token.colorText
-            }}
-          >
-            插件仓库
-          </h1>
-          <p style={{ margin: '7px 0 0', fontSize: 12, color: token.colorTextTertiary }}>
-            安装、启用与管理 RytenBench 的扩展能力
-          </p>
-        </div>
-
-        <div
-          style={{
-            marginTop: 20,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            flexWrap: 'wrap'
-          }}
-        >
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        /* 顶部不留白：首行仍与侧栏品牌区同线；左右下留 12px，与资料库一致 */
+        padding: '6px 9px',
+        background: token.colorBgContainer,
+        borderTopLeftRadius: token.borderRadiusLG
+      }}
+    >
+      {/* 内容排满页面；首行仍是与品牌区同高的工具条 */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div className="shell-topbar" style={{ gap: 10, flexWrap: 'wrap' }}>
           <div
             style={{
               width: 280,
-              height: 34,
+              height: 28,
               display: 'flex',
               alignItems: 'center',
               gap: 8,

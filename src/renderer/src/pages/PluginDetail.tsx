@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Modal, theme } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -262,24 +262,27 @@ const PluginDetail: React.FC = () => {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: token.colorBgContainer }}>
-      <div style={{ maxWidth: 1120, margin: '0 auto', padding: '16px 36px 36px' }}>
-        <button
-          onClick={() => navigate('/plugins')}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            border: 'none',
-            background: 'transparent',
-            color: token.colorTextTertiary,
-            fontSize: 11,
-            cursor: 'pointer',
-            padding: 0
-          }}
-        >
-          <RiArrowLeftLine size={13} />
-          {t('settings.plugins.backToRepo')}
-        </button>
+      <div style={{ maxWidth: 1120, margin: '0 auto', padding: '0 36px 36px' }}>
+        {/* 顶行：与侧栏品牌区同高（33px），返回按钮垂直居中 */}
+        <div className="shell-topbar">
+          <button
+            onClick={() => navigate('/plugins')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              border: 'none',
+              background: 'transparent',
+              color: token.colorTextTertiary,
+              fontSize: 11,
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <RiArrowLeftLine size={13} />
+            {t('settings.plugins.backToRepo')}
+          </button>
+        </div>
 
         <div
           style={{

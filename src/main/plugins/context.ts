@@ -44,7 +44,7 @@ function releaseNamespace(id: string, namespace: string): void {
 }
 
 /** IPC 处理器表：通道名 → 处理函数（参数由渲染层经通用桥传入） */
-export type MainIpcHandlers = Record<string, (...args: never[]) => unknown>
+export type IpcHandlerMap = Record<string, (...args: never[]) => unknown>
 
 export interface MainPluginContext {
   /** 插件 id（manifest.id） */
@@ -53,7 +53,7 @@ export interface MainPluginContext {
   readonly namespace: string
 
   /** 注册 IPC 处理器；返回只注销本次注册通道的逆操作 */
-  registerIpc(handlers: MainIpcHandlers): () => void
+  registerIpc(handlers: IpcHandlerMap): () => void
 
   /**
    * 声明本插件「主进程 → 渲染层」的事件通道（没有 ipcMain 处理器，只有发送方）。
@@ -114,7 +114,7 @@ export class MainPluginContextImpl implements MainPluginContext {
     }
   }
 
-  registerIpc(handlers: MainIpcHandlers): () => void {
+  registerIpc(handlers: IpcHandlerMap): () => void {
     const prefix = `plugin:${this.namespace}:`
     const registered: string[] = []
     try {
@@ -129,17 +129,14 @@ export class MainPluginContextImpl implements MainPluginContext {
           // 每次调用都进插件上下文：① 让插件的 `process.exit` 之类被归因并拦住；
           // ② handler 里的异常带上插件 id 记日志（否则只剩一句没有上下文的
           //    "Error invoking remote method"）。
-          return await withPluginScope(
-            { id: this.id, surface: 'ipc', channel },
-            async () => {
-              try {
-                return await handler(...(args as never[]))
-              } catch (err) {
-                logger.error(`[Plugins] ${this.id} 通道 ${channel} 处理失败:`, err)
-                throw err
-              }
+          return await withPluginScope({ id: this.id, surface: 'ipc', channel }, async () => {
+            try {
+              return await handler(...(args as never[]))
+            } catch (err) {
+              logger.error(`[Plugins] ${this.id} 通道 ${channel} 处理失败:`, err)
+              throw err
             }
-          )
+          })
         })
         this.ownedChannels.add(channel)
         registered.push(channel)

@@ -135,3 +135,42 @@ listContributions<PluginToolContribution>(HARNESS_TOOL_CONTRIBUTION)
 - 插件停用 ⇒ 贡献随 `ctx.dispose()` 移除 ⇒ 下一次组装模型就看不到该工具（有 CDP 断言覆盖）。
 - 契约类型（`PluginToolContribution`、`ToolInfo`、`HARNESS_TOOL_CONTRIBUTION`）放 `src/main/plugins/tool-contract.ts`，
   插件**不得** import harness 的任何东西。
+
+## 2026-11-20：AI 助手 / 资料库解散进 core（撤销「系统功能复用插件形态」）
+
+`src/features/{harness,notes}` 不再存在。两块功能按层并入 core，且**完全脱离插件机制**：
+不再有 `MainPluginContext`、`plugin:<id>:` 通道、`ctx.dispose()` 生命周期、独立
+`locales/` 目录，渲染层也不再走 `window.api.plugin`。
+
+| 原位置                                             | 现位置                                                        |
+|-------------------------------------------------|------------------------------------------------------------|
+| `features/harness/main/ipc/**`                  | `src/main/ipc/harness/**`（通道 `harness:*`）                   |
+| `features/notes/main/ipc/**`                    | `src/main/ipc/notes/**`（通道 `notes:*`）                       |
+| `features/*/main/db/{schema,mapper}/**`         | `src/main/database/{schema,mapper}/{harness,notes}/**`      |
+| `features/harness/main/runtime/**`              | `src/main/runtime/harness/**`                               |
+| `features/harness/main/{service,chat}/*.ts`     | `src/main/services/harness/**`                              |
+| `features/harness/main/{tools,sandbox,workshop,workspace}/**` | `src/main/{tools/harness,sandbox,workshop,workspace}/**` |
+| `features/notes/main/{graph,tools}/**`          | `src/main/{graph,tools/notes}/**`                           |
+| `features/*/main/index.ts`                      | `src/main/system/{harness,notes}.ts`（`start/stop` 导出）        |
+| `src/main/system-services.ts`                   | `src/main/system/index.ts`（`startSystemModules`）             |
+| `features/harness/renderer/**`                  | `src/renderer/src/{api,components/harness,contexts/harness,hooks/harness,utils/harness,types/harness}/**`，页面为 `pages/Harness.tsx`；工坊探针在 `workshop/probe.ts` |
+| `features/notes/renderer/**`                    | `src/renderer/src/{api,components/notes,providers/notes,types}/**`，页面为 `pages/Notes.tsx`；文档改写事件总线在 `events/doc-changed.ts` |
+| `features/*/shared/**`                          | `src/shared/{harness,notes}/**`                              |
+| `features/*/locales/*`                          | `src/renderer/src/i18n/locales/{zh-CN,en-US}/{harness,notes}.ts` |
+
+契约变化：
+
+- **IPC**：`registerIpcHandlers()` / `EffectScope`（`src/main/ipc/register.ts`）取代
+  `ctx.registerIpc/effect`；`main/system/*` 在启动时注册、退出时注销。
+- **通道**：`plugin:harness:*` → `harness:*`，`plugin:notes:*` → `notes:*`；preload 新增
+  `window.api.system.invoke/on`（仅放行这两个前缀），插件白名单不再包含系统通道。
+- **生命周期**：`app.preload` / `app.before-quit` / `app.renderer-memory-dump` 不再经贡献点，
+  由 `startup.ts` / `lifecycle.ts` / `main-window.ts` 直接调用 `system/harness.ts` 导出的函数。
+- **AI 工具**：资料库的 4 个工具用 `registerBuiltinHarnessTools()` 注册；
+  `HARNESS_TOOL_CONTRIBUTION` 只留给第三方插件。
+- **前端装配**：`src/renderer/src/system/index.tsx` 删除——路由写进 `route/MainRoutes.tsx`，
+  Provider 写进 `App.tsx`，设置页签写进 `components/system/settings/sections.tsx`，
+  跨功能副作用写进 `components/system/SystemEffects.tsx`。
+- **配置**：`@features` 别名从 tsconfig 与 electron.vite 中移除；drizzle 的 schema 列表
+  改指 `src/main/database/schema/{harness,notes}`。
+

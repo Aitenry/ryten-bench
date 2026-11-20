@@ -110,6 +110,11 @@ export interface Window {
       getCurrent: (force?: boolean) => Promise<WeatherData>
       onUpdate: (callback: (data: WeatherData) => void) => () => void
     }
+    /** 系统级功能（AI 助手 / 资料库）通道桥：`harness:*` / `notes:*`，不经插件宿主 */
+    system: {
+      invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+      on: (channel: string, callback: (data: unknown) => void) => () => void
+    }
     plugin: {
       list: () => Promise<unknown[]>
       /** 同步取一次插件清单（含启用态/安装态）；宿主首帧靠它决定只装载哪些静态内置插件 */

@@ -23,10 +23,9 @@ interface LocalPluginInstallResult {
 /**
  * preload 暴露给渲染层的 core 能力（`window.api`）。
  *
- * 各插件的命名空间（music / planner / notes 的六个键 / harness 的
- * harness·agents·mainAgent·workspace）已全部删除——插件渲染层经自己目录下的
- * `renderer/api.ts` 走**通用桥** `window.api.plugin.invoke/on`（通道 `plugin:<ns>:*`），
- * 类型由插件自己的 `shared/types.ts` 提供。这里只声明 core 的外壳能力。
+ * - `api.system`：系统功能（AI 助手 / 资料库）的通道桥，普通 `harness:*` / `notes:*`；
+ * - `api.plugin`：第三方插件的通用桥（`plugin:<命名空间>:*` + 通道白名单），
+ *   类型由插件自己的 `shared/types.ts` 提供。
  */
 interface Api {
   file: {
@@ -78,6 +77,16 @@ interface Api {
   weather: {
     getCurrent: (force?: boolean) => Promise<WeatherData>
     onUpdate: (callback: (data: WeatherData) => void) => () => void
+  }
+  /**
+   * 系统级功能（AI 助手 / 资料库）的通道桥。
+   *
+   * 通道名是普通 `harness:*` / `notes:*`：它们是随应用编译进来的功能，不是插件，
+   * 因此不经过插件宿主的启用态与通道白名单；preload 只对前缀做一次校验。
+   */
+  system: {
+    invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+    on: (channel: string, callback: (data: unknown) => void) => () => void
   }
   plugin: {
     /** 已安装插件与启用态（内置铺包 + 第三方扫描合并；未安装的内置插件也在列） */

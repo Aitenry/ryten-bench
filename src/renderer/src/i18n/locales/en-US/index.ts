@@ -5,8 +5,8 @@ import { enUSModelSettings } from './modelSettings'
 import { enUSSystemInfo } from './systemInfo'
 import { enUSShell } from './shell'
 import { enUSMarkdown } from './markdown'
-import { harnessEnUS } from '@features/harness/locales/en-US'
-import { notesEnUS } from '@features/notes/locales/en-US'
+import { harnessEnUS } from './harness'
+import { notesEnUS } from './notes'
 
 /**
  * `typeof zhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错。

@@ -4,6 +4,7 @@ packages:
 allowBuilds:
   electron-winstaller: true
   esbuild: true
+  koffi: set this to true or false
 
 onlyBuiltDependencies:
   - electron

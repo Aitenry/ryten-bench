@@ -14,6 +14,7 @@ import { getIp } from '../address'
 import { startWeatherAutoRefresh } from '../weather'
 import { listContributions } from '../plugins/contributions'
 import { APP_PRELOAD, type AppHook } from '../plugins/app-hooks'
+import { preloadHarness } from '../system/harness'
 import { getMainWindow, markInitComplete } from './window-manager'
 
 /** 初始化进度快照：后挂载的启动页（主窗口渲染层）通过 `init-state` 先取一次当前状态 */
@@ -220,12 +221,17 @@ async function offerDatabaseReset(
 }
 
 /**
- * 执行各插件贡献的「加载页预取」钩子（贡献点 `app.preload`）。
+ * 执行「加载页预取」：系统功能（AI 助手）的预取 + 第三方插件贡献的钩子（`app.preload`）。
  *
- * 逐个 try/catch：某个插件预取失败只记日志——预取是加速用的旁路，
- * 不该把一个还能用的启动流程拦在加载页上。钩子随插件停用摘除，停用的插件不执行。
+ * 逐个 try/catch：预取失败只记日志——预取是加速用的旁路，
+ * 不该把一个还能用的启动流程拦在加载页上。
  */
 async function runPreloadHooks(): Promise<void> {
+  try {
+    await preloadHarness()
+  } catch (err) {
+    logger.warn('[Init] AI 助手预取失败:', err)
+  }
   for (const hook of listContributions<AppHook>(APP_PRELOAD)) {
     try {
       await hook.run()
@@ -354,8 +360,8 @@ export function runStartupInitialization(): Promise<void> {
   const initPromise = performInitializationTasks()
     .then(async () => {
       logger.info('All initialization tasks completed.')
-      // 预取插件数据（启动页阶段完成）：core 只负责时机，具体预取什么由插件的
-      // `app.preload` 贡献决定——停用插件即不再预取。
+      // 预取数据（启动页阶段完成）：AI 助手的预取直接调用，第三方插件的预取由它们
+      // 贡献的 `app.preload` 钩子提供——停用插件即不再预取。
       await runPreloadHooks()
       initSnapshot.complete = true
       initSnapshot.progress = 100

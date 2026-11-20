@@ -28,12 +28,14 @@ RytenBench is a cross-platform Electron desktop application that puts two things
   command execution and a three-layer memory system.
 
 The two flagship views — **Notes** and the **AI assistant** — are **system features**, not plugins:
-their code lives in this repository under `src/features/` and is compiled into the application by
-the shell itself. They never enter the plugin registry and have no install, enable or uninstall
-step. The core process owns the window / tray / theme / i18n shell, the system-feature wiring, the
-PGlite database engine, the model provider factory and the generic preload bridge. Everything else
-is a **plugin** — third-party extensions loaded from on-disk packages (`userData/plugins/<id>/`)
-through the plugin host, which can be enabled, disabled or uninstalled at any time.
+their code is part of the main and renderer trees themselves (`src/main/**`, `src/renderer/src/**`)
+and is compiled into the application. They never enter the plugin registry and have no install,
+enable or uninstall step; their IPC channels are the ordinary `harness:*` / `notes:*` namespaces,
+registered by `src/main/system/` at startup and reached through `window.api.system`. The core
+process owns the window / tray / theme / i18n shell, the system-feature wiring, the PGlite database
+engine, the model provider factory and the generic preload bridge. Everything else is a **plugin** —
+third-party extensions loaded from on-disk packages (`userData/plugins/<id>/`) through the plugin
+host, which can be enabled, disabled or uninstalled at any time.
 
 ---
 
@@ -420,52 +422,54 @@ never counts as a change; rerunning a workflow for an already published commit i
 ```
 RytenBench/
 ├── src/
-│   ├── main/                         # Electron main process — shell only
+│   ├── main/                         # Electron main process
 │   │   ├── index.ts                  # Single instance, protocol, startup, windows, tray, host init
 │   │   ├── lifecycle.ts  context.ts  safe-send.ts
 │   │   ├── weather.ts                # Open-Meteo + IP geolocation, cached and pushed
-│   │   ├── address/                  # IP geolocation lookup
-│   │   ├── crypto/provider-key.ts    # AES-256-GCM API key encryption (machine-bound)
+│   │   ├── address/  crypto/  resource/  tray/  windows/
 │   │   ├── database/                 # PGlite + Drizzle engine
 │   │   │   ├── loading.ts  instance.ts  orm.ts
-│   │   │   ├── schema/               # Core tables (shared images, providers)
-│   │   │   ├── mapper/               # Core row types and queries
+│   │   │   ├── schema/               # Core tables (+ harness/ and notes/ tables)
+│   │   │   ├── mapper/               # Core row types (+ harness/ and notes/ queries)
 │   │   │   ├── workspace-context.ts  # Active workspace for tools and IPC
 │   │   │   └── workspace-migration.ts
 │   │   ├── i18n/                     # Main-process copy (tool results, graph progress)
-│   │   ├── ipc/                      # Core IPC: dialog, misc, provider, settings, plugins
-│   │   ├── plugins/                  # Plugin host: contexts, loader, installer, protocol
-│   │   ├── system-services.ts        # Mounts harness / notes as system features
+│   │   ├── ipc/                      # Core IPC + ipc/harness/** and ipc/notes/**
+│   │   ├── system/                   # System-feature wiring (the two non-plugin features)
+│   │   │   ├── index.ts              # startSystemModules / stopSystemModules
+│   │   │   ├── harness.ts            # AI assistant: channels, workshop/MCP/workspace wiring
+│   │   │   └── notes.ts              # Library: channels + built-in AI tools
+│   │   ├── runtime/harness/          # Agent runtime: LangGraph loop, mnemon, permissions, jobs
+│   │   ├── services/harness/         # Stream handling, queues, caches, snapshot, purge
+│   │   ├── services/notes/           # Library data cleanup
+│   │   ├── tools/harness/  tools/notes/   # Tool registry and implementations
+│   │   ├── sandbox/                  # OS-level sandbox backends (Windows / Linux)
+│   │   ├── workshop/                 # Plugin workshop: build / verify / publish
+│   │   ├── workspace/                # File history, workspace watcher, line diff
+│   │   ├── graph/                    # Knowledge-graph extraction pipeline
 │   │   ├── provider/                 # Multi-protocol chat model factory, cache, model tags
-│   │   ├── resource/                 # Mermaid preview page, tray menu page
-│   │   ├── tray/  windows/           # Tray, startup orchestration, main window, DWM border
+│   │   ├── plugins/                  # Plugin host: contexts, loader, installer, protocol
 │   │   └── shared/  types/
-│   ├── preload/                      # contextBridge: core APIs + generic plugin bridge
+│   ├── preload/                      # contextBridge: core APIs + system bridge + plugin bridge
 │   ├── renderer/
 │   │   ├── resource/                 # index.html + window type declarations
 │   │   └── src/
+│   │       ├── api/                  # harness.ts / notes.ts channel wrappers (window.api.system)
 │   │       ├── components/
 │   │       │   ├── markdown/         # TipTap editor, Markdown view, Mermaid, math, MDX
-│   │       │   ├── system/           # AppContent, shell/, settings/, lock screen, splash, boundary
-│   │       │   └── provider/
-│   │       ├── contexts/  hooks/     # Theme, language, notifications, messages
-│   │       ├── i18n/                 # i18next setup + zh-CN / en-US shell copy
-│   │       ├── pages/                # Plugin repository and plugin detail pages
+│   │       │   ├── harness/          # Assistant UI: messages, panels, settings, workshop
+│   │       │   ├── notes/            # Library UI: tree, editor, graph, todo, wiki
+│   │       │   └── system/           # Shell: AppContent, shell/, settings/, lock screen, splash
+│   │       ├── contexts/harness/     # HarnessProvider and workspace bridge
+│   │       ├── events/               # doc-changed bus (assistant → library editor)
+│   │       ├── hooks/harness/  utils/harness/
+│   │       ├── i18n/                 # i18next setup + shell / harness / notes copy
+│   │       ├── pages/                # Harness, Notes, plugin repository, plugin detail
 │   │       ├── plugin-host/          # Renderer plugin host: slots, declarations, UI bridge
-│   │       ├── system/               # System-feature assembly: routes, providers, settings pages
-│   │       ├── providers/  route/  types/  utils/
+│   │       ├── providers/notes/      # Knowledge-graph build progress provider
+│   │       ├── route/  types/  workshop/  # route table; workshop/ = renderer side of the plugin workshop
 │   │       └── Root.tsx  App.tsx  main.tsx  window-title.ts
-│   ├── features/                     # System features compiled into the app
-│   │   ├── harness/                  # AI assistant workbench (route /harness)
-│   │   │   ├── main/                 # ipc/, db/, service/, runtime/ (agent, tools, mnemon), sandbox/, workspace/, workshop/
-│   │   │   ├── shared/               # main/renderer DTOs
-│   │   │   ├── renderer/             # api.ts, components/, contexts/, hooks/, utils/
-│   │   │   └── locales/              # harness / agentSettings / memorySettings / skillsSettings copy
-│   │   └── notes/                    # Documents, knowledge bases, todos, graph (route /notes)
-│   │       ├── main/                 # ipc/, db/{schema,mapper}, graph/, tools/
-│   │       ├── shared/
-│   │       ├── renderer/             # components/, providers/, settings/
-│   │       └── locales/
+│   ├── shared/                       # Cross-process DTOs (plugin/, harness/, notes/)
 │   └── plugins/                      # Plugin host docs + bundled-plugin registry
 │       ├── manifests.ts              # Bundled-plugin registry (currently empty)
 │       └── README.md  PACKAGING.md  MIGRATION.md
@@ -492,19 +496,20 @@ RytenBench/
 
 - **Main process** (`src/main/`) — application lifecycle, windows, tray, weather, the PGlite /
   Drizzle database engine, the model provider factory, the plugin host, the startup sequence
-  (`windows/startup.ts`) and the system-feature wiring (`system-services.ts`). `system-services.ts`
-  mounts the notes workspace and the AI assistant with the same reversible context contract the
-  plugin host exposes, so their `plugin:<id>:*` channels and renderer APIs stay unchanged. Core IPC
-  covers window, settings, dialog and provider management; plugin and system-feature channel
-  namespaces are declared through that same contract.
-- **Preload** (`src/preload/`) — a context-bridged API surface: core capabilities plus a generic
-  bridge (`window.api.plugin.invoke` / `on`) that only allows channels declared by an enabled
-  plugin or a system feature, gated by an authoritative channel list pushed from the main process.
+  (`windows/startup.ts`) and the system-feature wiring (`system/`). `system/` starts the notes
+  workspace and the AI assistant as plain core modules: their channels are the ordinary
+  `harness:*` / `notes:*` namespaces, registered with `registerIpcHandlers` and torn down with
+  them on quit. Core IPC covers window, settings, dialog and provider management; only third-party
+  plugins go through the reversible `MainPluginContext` contract.
+- **Preload** (`src/preload/`) — a context-bridged API surface: core capabilities, a **system
+  bridge** (`window.api.system.invoke` / `on`, prefix-checked to `harness:` / `notes:`) for the two
+  system features, and a generic **plugin bridge** (`window.api.plugin.invoke` / `on`) for
+  third-party plugins, gated by an authoritative channel list pushed from the main process.
 - **Renderer** (`src/renderer/`) — a React 19 single-page app with hash routing, mounted under
   `Root.tsx` (the startup splash wraps `App.tsx`). The shell renders the sidebar, the system pages
   (assistant, Library, Plugin repository), the settings modal and the notifications, and macOS
-  additionally renders the self-drawn title strip. Third-party plugin routes arrive through plugin
-  registrations, while the native window title is derived per page in `window-title.ts`.
+  additionally renders the self-drawn title strip. The two system pages are plain lazy routes
+  (`pages/Harness`, `pages/Notes`); third-party plugin routes arrive through plugin registrations.
 
 ### Plugin host
 

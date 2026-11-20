@@ -8,10 +8,13 @@
 import type { StructuredToolInterface } from '@langchain/core/tools'
 
 /**
- * 贡献点键：AI 工具。
+ * 贡献点键：AI 工具（**第三方插件**用）。
  *
- * 各插件在 `install(ctx)` 里 `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, 工具项)`，
+ * 插件在 `install(ctx)` 里 `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, 工具项)`，
  * harness 组装工具集时 `listContributions<PluginToolContribution>(HARNESS_TOOL_CONTRIBUTION)`。
+ *
+ * 内置功能的工具（资料库的 4 个）不走这里：它们由 `src/main/system/notes.ts` 直接调
+ * `registerBuiltinHarnessTools()` 注册，随应用编译、随应用退出。
  */
 export const HARNESS_TOOL_CONTRIBUTION = 'harness.tool'
 
@@ -29,7 +32,7 @@ export interface ToolInfo {
   color: string
 }
 
-/** 一个插件贡献给 harness 的 AI 工具 */
+/** 一个贡献给 harness 的 AI 工具（第三方插件贡献，或内置功能注册） */
 export interface PluginToolContribution {
   /** 工具名（= 设置页与提示词索引所用的名字，例如 `manage_planner`） */
   name: string

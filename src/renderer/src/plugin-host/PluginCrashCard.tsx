@@ -91,9 +91,7 @@ const PluginCrashCard: React.FC<PluginCrashCardProps> = ({ pluginId, surface, er
           {t('shell.pluginBoundary.disable')}
         </Button>
       </div>
-      {failure ? (
-        <div style={{ fontSize: 11.5, color: token.colorError }}>{failure}</div>
-      ) : null}
+      {failure ? <div style={{ fontSize: 11.5, color: token.colorError }}>{failure}</div> : null}
     </div>
   )
 }

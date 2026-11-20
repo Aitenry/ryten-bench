@@ -6,6 +6,14 @@ import type { PluginListEntry } from '../shared/plugin/types'
 import { PLUGIN_CHANNEL_RE } from '../shared/plugin/protocol'
 
 /**
+ * 系统级功能通道的允许前缀。
+ *
+ * 这些通道属于随应用编译进来的功能，不是可装卸代码，因此不需要“已启用通道白名单”；
+ * 但仍然在 preload 侧卡前缀，保证第三方插件（只有 `window.api.plugin`）够不到它们。
+ */
+const SYSTEM_CHANNEL_RE = /^(harness|notes):[a-z0-9-]+$/
+
+/**
  * 已启用插件通道白名单缓存（主进程权威注册表 + plugin-channels-updated 推送刷新）。
  * 仅作 preload 侧快速门控：真正权威校验在主进程（通道归属插件且插件已启用）。
  */
@@ -52,9 +60,9 @@ interface WeatherData {
 }
 
 // Custom APIs for renderer
-// 各插件的命名空间（music / planner / notes 六个键 / harness 的 harness·agents·mainAgent·workspace）
-// 已全部删除：改由插件自己的 src/plugins/<id>/renderer/api.ts 走通用桥
-// window.api.plugin.invoke/on（通道 plugin:<命名空间>:*）。这里只剩 core 的外壳能力 + 通用桥。
+// 系统功能（AI 助手 / 资料库）走 `api.system`（普通 harness:* / notes:* 通道）；
+// 第三方插件走通用桥 `api.plugin.invoke/on`（通道 plugin:<命名空间>:*，
+// 白名单由主进程推送）。这里只放 core 的外壳能力。
 const api = {
   file: {
     selectImageFile: (allowImages?: boolean) =>
@@ -170,6 +178,27 @@ const api = {
       ipcRenderer.on('weather-update', handler)
       return () => {
         ipcRenderer.off('weather-update', handler)
+      }
+    }
+  },
+  /** 系统级功能（AI 助手 / 资料库）的通道桥：普通 `harness:*` / `notes:*`，不经插件宿主 */
+  system: {
+    /** 调用系统功能通道；前缀不符直接拒绝（第三方插件拿不到这条桥） */
+    invoke: (channel: string, ...args: unknown[]) => {
+      if (typeof channel !== 'string' || !SYSTEM_CHANNEL_RE.test(channel)) {
+        throw new Error(`非法系统通道名: ${String(channel)}`)
+      }
+      return ipcRenderer.invoke(channel, ...args) as Promise<unknown>
+    },
+    /** 订阅系统功能事件通道（返回取消订阅函数） */
+    on: (channel: string, callback: (data: unknown) => void) => {
+      if (typeof channel !== 'string' || !SYSTEM_CHANNEL_RE.test(channel)) {
+        throw new Error(`非法系统通道名: ${String(channel)}`)
+      }
+      const handler = (_event: Electron.IpcRendererEvent, data: unknown): void => callback(data)
+      ipcRenderer.on(channel, handler)
+      return () => {
+        ipcRenderer.off(channel, handler)
       }
     }
   },

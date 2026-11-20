@@ -4,6 +4,8 @@ import { activeHarnessStreams, streamAbortControllers } from './context'
 import { getDatabaseRef } from './database/instance'
 import { listContributions } from './plugins/contributions'
 import { APP_BEFORE_QUIT, type AppHook } from './plugins/app-hooks'
+import { closeHarnessResources, stopHarness } from './system/harness'
+import { stopNotes } from './system/notes'
 
 let isQuitting = false
 /** 资源清理是否已完成（完成后放行最终退出） */
@@ -19,14 +21,26 @@ export function markQuitting(): void {
   isQuitting = true
 }
 
-/** 执行插件贡献的退出前清理（贡献点 `app.before-quit`；支持异步） */
+/** 退出前清理：系统功能（AI 助手 / 资料库）+ 第三方插件贡献的钩子（`app.before-quit`） */
 async function runBeforeQuitHooks(): Promise<void> {
+  try {
+    closeHarnessResources()
+  } catch (err) {
+    logger.warn('[Lifecycle] AI 助手资源释放失败:', err)
+  }
   for (const hook of listContributions<AppHook>(APP_BEFORE_QUIT)) {
     try {
       await hook.run()
     } catch (err) {
       logger.warn(`[Lifecycle] 退出前钩子失败（${hook.label}）:`, err)
     }
+  }
+  // 落盘/关闭数据库之后再摘通道与订阅，避免退出过程中还有处理器在跑
+  try {
+    stopNotes()
+    stopHarness()
+  } catch (err) {
+    logger.warn('[Lifecycle] 系统功能退出装配失败:', err)
   }
 }
 

@@ -43,6 +43,32 @@ registerLifecycleHooks()
 // plugin:// 自定义协议（外部插件文件服务）：scheme 特权声明必须在 app ready 之前
 registerPluginScheme()
 
+/**
+ * 开发态的 DevTools 快捷键：Ctrl+Shift+I / ⌘+⌥+I 开关。
+ *
+ * 为什么需要单独接一条：`@electron-toolkit/utils` 的 `watchWindowShortcuts` 在未打包时
+ * **只处理 F12**（而且开发态下它不会拦截 Ctrl+Shift+I）；而 Windows 上主窗口用原生标题栏，
+ * `win.setMenu(null)` 把默认菜单一起删了——菜单里的 “Toggle Developer Tools” 也就没了。
+ * 结果就是：F12 之外没有任何入口，习惯 Ctrl+Shift+I 的人会觉得“打不开开发者工具”。
+ *
+ * 这里只补 Ctrl+Shift+I（F12 仍由上面的 helper 处理，避免同一事件被切换两次）。
+ * 打包产物不接这条快捷键：DevTools 在发布版里按设计不可用。
+ */
+function installDevToolsAccelerator(win: BrowserWindow): void {
+  if (app.isPackaged) return
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const key = input.key.toLowerCase()
+    const toggle =
+      (input.control && input.shift && key === 'i') || (input.meta && input.alt && key === 'i')
+    if (!toggle) return
+    event.preventDefault()
+    const contents = win.webContents
+    if (contents.isDevToolsOpened()) contents.closeDevTools()
+    else contents.openDevTools({ mode: 'undocked' })
+  })
+}
+
 app
   .whenReady()
   .then(async () => {
@@ -51,13 +77,14 @@ app
     // plugin:// 协议处理器（外部插件静态文件；需在 ready 后注册）
     registerPluginProtocolHandler()
 
-    // 注意：文件改动快照目录（userData/file-history）、工具结果详情目录（userData/tool-output）
-    // 与工作区文件监听原先都在这里启动，现随「AI 助手」插件搬进
-    // `src/plugins/harness/main/index.ts` 的 install(ctx)：停用该插件就不再配置这些目录、
-    // 也不再监听工作区（core 启动流程不再 import 任何插件模块）。
+    // 文件改动快照目录（userData/file-history）、工具结果详情目录（userData/tool-output）
+    // 与工作区文件监听随「AI 助手」一起装配（`src/main/system/harness.ts`），
+    // 由 `initPluginHost()` 里的 `startSystemModules()` 在窗口创建前启动。
 
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)
+      // 开发态补 Ctrl+Shift+I（F12 由上面的 helper 处理；Windows 删了菜单后没有别的入口）
+      installDevToolsAccelerator(window)
       // 插件通道白名单：启动期推送早于窗口创建（必然丢包），窗口加载完成后补推一次
       window.webContents.on('did-finish-load', () => pushPluginChannels())
     })

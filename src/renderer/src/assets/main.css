@@ -222,6 +222,28 @@ body {
   z-index: 5;
 }
 
+/**
+ * 资料库三栏之间的拖拽条：页面底色统一成容器色后，栏与栏只能靠一条 1px 分隔线区分。
+ * 6px 宽是拖拽热区，线画在正中（不参与布局）。
+ */
+.notes-col-resizer {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+}
+
+.notes-col-resizer::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--shell-border, #2b2b2f);
+}
+
 .home-col-resizer::after {
   content: '';
   position: absolute;
@@ -379,40 +401,63 @@ body.home-resizing * {
   display: flex;
   flex-direction: column;
   background: #1b1b1d;
-  border-right: 1px solid #2b2b2f;
   color: #f0f0f2;
 }
 
 /* 侧栏品牌区（logo / 名称 / 版本号） */
 .shell-brand {
-  /* 高度与右侧内容区顶部头栏（33px）齐平：品牌区与对话记录顶部对齐居中 */
-  height: 33px;
+  /* 高度与右侧内容区顶部头栏（44px）齐平：品牌区与各页面顶栏对齐居中 */
+  height: 40px;
   flex-shrink: 0;
-  padding: 0 13px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+}
+
+/**
+ * 内容区顶部条：与侧栏品牌区同高（33px），左右两栏的顶行共用一条水平中线。
+ *
+ * 所有页面（对话 / 资料库 / 插件仓库 / 插件详情）顶部的第一行都用它，
+ * 不再各自写 padding-top —— 那正是“侧栏 logo 和右边顶栏对不齐”的来源。
+ */
+.shell-topbar {
+  min-height: 33px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 .shell-brand-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  /* 20px：与右侧顶栏里 24~28px 的控件落在同一条视觉中线上，不再显得比顶栏“重” */
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
   display: block;
 }
+/* 名称与版本号按**基线**对齐：两个字号并排时不会一个偏高一个偏低 */
+.shell-brand-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
 .shell-brand-name {
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1;
   font-weight: 600;
   letter-spacing: -0.01em;
+  white-space: nowrap;
   color: #f0f0f2;
 }
 .shell-brand-ver {
   font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
   color: #6f6f76;
-  margin-top: 1px;
 }
 
 .shell-nav {
-  padding: 2px 8px 4px;
+  padding: 2px 11px 4px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -424,7 +469,7 @@ body.home-resizing * {
   padding: 0 6px;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 11px;
   font-size: 12px;
   color: #b0b0b8;
   text-decoration: none;

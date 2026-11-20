@@ -2,8 +2,8 @@ import React from 'react'
 import { theme } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '@renderer/hooks/useTheme'
-import { useHarness } from '@features/harness/renderer/contexts/HarnessContextCore'
-import HarnessSidebar from '@features/harness/renderer/components/HarnessSidebar'
+import { useHarness } from '../../../contexts/harness/HarnessContextCore'
+import HarnessSidebar from '../../harness/HarnessSidebar'
 
 /**
  * 系统外壳里的对话侧栏。
