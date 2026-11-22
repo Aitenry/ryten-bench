@@ -92,7 +92,7 @@ export function resolveProbeResult(payload: unknown): boolean {
   const probeId = typeof data?.probeId === 'string' ? data.probeId : ''
   const resolve = probeId ? pending.get(probeId) : undefined
   if (!resolve) {
-    logger.warn(`[Workshop] 收到无主的探针结果（超时或重复）：${probeId || '(缺 probeId)'}`)
+    logger.warn(`[Workshop] Received orphaned probe result (timed out or duplicated): ${probeId || '(missing probeId)'}`)
     return false
   }
   pending.delete(probeId)

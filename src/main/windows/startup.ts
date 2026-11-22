@@ -195,7 +195,7 @@ async function offerDatabaseReset(
   if (!looksLikeDatabaseStartupFailure(err)) return 'not-applicable'
 
   const m = mainMessages().dialog
-  logger.error(`[Init] 数据库无法启动，可能是数据目录损坏：${text}`)
+  logger.error(`[Init] Database failed to start, data directory may be corrupted: ${text}`)
   const { response } = await dialog.showMessageBox({
     type: 'error',
     noLink: true,
@@ -212,9 +212,9 @@ async function offerDatabaseReset(
   const backupDir = `${getDatabaseDir()}.corrupt-${stamp}`
   try {
     await rename(getDatabaseDir(), backupDir)
-    logger.warn(`[Init] 损坏的数据库目录已留档：${backupDir}`)
+    logger.warn(`[Init] Corrupt database directory archived: ${backupDir}`)
   } catch (renameErr) {
-    logger.error('[Init] 留档损坏目录失败（可能被其他进程占用）:', renameErr)
+    logger.error('[Init] Failed to archive corrupt directory (may be in use by another process):', renameErr)
     return 'declined'
   }
   return 'recovered'
@@ -230,13 +230,13 @@ async function runPreloadHooks(): Promise<void> {
   try {
     await preloadHarness()
   } catch (err) {
-    logger.warn('[Init] AI 助手预取失败:', err)
+    logger.warn('[Init] AI assistant preload failed:', err)
   }
   for (const hook of listContributions<AppHook>(APP_PRELOAD)) {
     try {
       await hook.run()
     } catch (err) {
-      logger.warn(`[Init] 预取钩子执行失败（${hook.label}）:`, err)
+      logger.warn(`[Init] Preload hook failed (${hook.label}):`, err)
     }
   }
 }
@@ -317,7 +317,7 @@ async function performInitializationTasks(): Promise<void> {
   } catch (err) {
     // 数据库起不来：先关掉失败的实例（Windows 上句柄未释放会导致目录改名失败），
     // 再给用户一条可执行的出路；其余错误照原样抛出（加载页会显示失败提示）
-    logger.error(`[Init] 初始化失败（cause 链）：${describeErrorChain(err)}`)
+    logger.error(`[Init] Initialization failed (cause chain): ${describeErrorChain(err)}`)
     try {
       // 显式断言一次：database 只在 steps 回调里赋值，TS 的控制流分析会把它窄化成 null
       const failedDb = database as Database | null
@@ -326,7 +326,7 @@ async function performInitializationTasks(): Promise<void> {
         new Promise((resolve) => setTimeout(resolve, 2000))
       ])
     } catch (closeErr) {
-      logger.warn('[Init] 关闭失败的数据库实例时出错:', closeErr)
+      logger.warn('[Init] Error while closing failed database instance:', closeErr)
     }
     const outcome = await offerDatabaseReset(err)
     if (outcome !== 'recovered') {

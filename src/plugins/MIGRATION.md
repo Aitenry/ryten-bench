@@ -9,7 +9,7 @@
 > 本文与 `PACKAGING.md` 里的 `home`
 > 均指今天的 `notes`，历史记录按当时的名字保留。表名与 AI 工具名一律未变。
 > 另外 `music` / `planner` 已移出应用，成为独立插件 `music-player` / `task-planner`
-> （源码与发布在 `Aitenry/ryten-plugins`）。
+> （发布在 Lattice 插件中心）。
 
 ## 现状盘点（2026-09-26 迁移前实测）
 

@@ -203,7 +203,7 @@ export class MemoryBodyRegistry {
     await db.close()
     this.bodies.push(body)
     this.save()
-    logger.info(`[Mnemon] 创建记忆空间 ${body.name}（${id}）`)
+    logger.info(`[Mnemon] Created memory space ${body.name} (${id})`)
     return body
   }
 
@@ -254,7 +254,7 @@ export class MemoryBodyRegistry {
       for (const sourceId of sourceBodyIds) {
         const source = this.get(sourceId)
         if (!source) {
-          logger.warn(`[Mnemon] 合并跳过：源空间不存在 ${sourceId}`)
+          logger.warn(`[Mnemon] Merge skipped: source space not found ${sourceId}`)
           continue
         }
         if (source.id === target.id) continue
@@ -323,7 +323,7 @@ export class MemoryBodyRegistry {
         }
       }
     } catch (err) {
-      logger.warn('[Mnemon] 读取 .memory-bodies.json 失败，使用空注册表:', err)
+      logger.warn('[Mnemon] Failed to read .memory-bodies.json, using empty registry:', err)
     }
     // 磁盘发现对账：既有空间目录自动登记（不移动数据库）
     try {
@@ -353,7 +353,7 @@ export class MemoryBodyRegistry {
         this.save()
       }
     } catch (err) {
-      logger.warn('[Mnemon] 记忆空间磁盘发现失败:', err)
+      logger.warn('[Mnemon] Memory space disk discovery failed:', err)
     }
   }
 

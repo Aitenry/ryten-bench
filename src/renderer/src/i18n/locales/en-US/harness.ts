@@ -47,6 +47,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       needWorkspace: 'Set up a workspace first - conversations live under it',
       noDraft: 'No plugin drafts yet. Ask the assistant for one, or create it from the top right.',
       needPluginsPath: 'No plugins folder yet',
+      pickPluginsPath: 'Choose plugins folder',
       draftActions: 'Draft actions',
       pluginState: {
         draft: 'Draft',

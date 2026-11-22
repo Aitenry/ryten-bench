@@ -69,7 +69,7 @@ async function act<T>(
     return { ok: true, data: await run() }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    logger.warn('[Workshop] 动作失败:', message)
+    logger.warn('[Workshop] Action failed:', message)
     return { ok: false, error: message }
   }
 }
@@ -289,7 +289,7 @@ export function workshopIpcHandlers(): IpcHandlerMap {
   handle('workshop-probe-result', (payload: unknown) => {
     const accepted = resolveProbeResult(payload as WorkshopRendererProbe & { probeId?: string })
     if (!accepted) {
-      logger.warn('[Workshop] 探针结果被丢弃（对应请求已超时）')
+      logger.warn('[Workshop] Probe result discarded (request timed out)')
     }
     return accepted
   })

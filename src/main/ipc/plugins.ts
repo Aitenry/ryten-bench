@@ -23,8 +23,6 @@ import {
   IPC_PLUGIN_HOST_UI_EXPORTS,
   IPC_PLUGIN_STATE_CHANGED,
   IPC_PLUGINS_INSTALL,
-  IPC_PLUGINS_AVAILABLE,
-  IPC_PLUGINS_INSTALL_GITHUB,
   IPC_PLUGINS_INSTALL_LOCAL,
   IPC_PLUGINS_LIST,
   IPC_PLUGINS_LIST_SYNC,
@@ -35,7 +33,6 @@ import {
 } from '../../shared/plugin/protocol'
 import type { PluginListEntry } from '../../shared/plugin/types'
 import { setHostUiExports } from '../plugins/host-ui-bridge'
-import { fetchPluginIndex, installPluginFromGithub, pluginsRepoUrl } from '../plugins/github'
 import { installPluginFromLocalPath, pickLocalPluginSource } from '../plugins/local-install'
 
 /**
@@ -177,13 +174,38 @@ function bundledManifest(id: string): {
       menu: raw.menu
     }
   } catch (err) {
-    logger.warn(`[Plugins] 读取内置插件包清单失败: ${id}`, err)
+    logger.warn(`[Plugins] Failed to read bundled plugin manifest: ${id}`, err)
     return null
+  }
+}
+
+/**
+ * 插件状态变化的**内部旁听者**（不暴露给渲染层，也不改变 `plugin-state-changed` 通道契约）。
+ *
+ * 用途：插件中心的数据同步要在「安装/卸载/启停」后做 5s 防抖 push（契约 §4），
+ * 而广播发生在这里——用一个小钩子比让同步模块去轮询插件清单可靠。
+ * 与 `webContents.send` 一样同步调用，异常只记日志（一个旁听者失败不该影响别的）。
+ */
+type PluginStateListener = () => void
+const pluginStateListeners = new Set<PluginStateListener>()
+
+/** 订阅插件状态变化（返回取消订阅函数） */
+export function onPluginStateChanged(listener: PluginStateListener): () => void {
+  pluginStateListeners.add(listener)
+  return () => {
+    pluginStateListeners.delete(listener)
   }
 }
 
 /** 广播插件启用态变化（含安装/卸载后的重扫通知） */
 export function broadcastPluginStateChanged(): void {
+  for (const listener of pluginStateListeners) {
+    try {
+      listener()
+    } catch (err) {
+      logger.warn('[Plugins] Error in plugin-state-changed listener:', err)
+    }
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(IPC_PLUGIN_STATE_CHANGED)
@@ -225,19 +247,19 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
   // ① 清数据（插件自己实现；没贡献 purge 的插件跳过）。不清时留一句日志，
   //    免得日后看到「卸载了但库里还有行」时怀疑是 purge 没跑
   if (!purgeData) {
-    logger.info(`[Plugins] ${id} 保留数据卸载：只删插件代码，表内记录与托管文件原样保留`)
+    logger.info(`[Plugins] Uninstalling ${id} with data preserved: plugin code only; table records and managed files kept intact`)
   } else {
     const purge = pluginPurge(id)
     if (purge) {
       try {
         await purge.run()
-        logger.info(`[Plugins] ${id} 数据已清除（${purge.label}）`)
+        logger.info(`[Plugins] ${id} data purged (${purge.label})`)
       } catch (err) {
         // 清数据失败不阻断卸载：目录/通道该摘的仍要摘，否则会留下「装不了也卸不掉」的死状态
-        logger.error(`[Plugins] ${id} 清除数据失败（继续卸载）:`, err)
+        logger.error(`[Plugins] Failed to purge ${id} data (continuing uninstall):`, err)
       }
     } else {
-      logger.warn(`[Plugins] ${id} 没有 plugin.purge 贡献，数据未被清除（只删目录）`)
+      logger.warn(`[Plugins] ${id} has no plugin.purge contribution; data not purged (directory only)`)
     }
   }
 
@@ -257,7 +279,7 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
     uninstallExternalPlugin(id)
   }
 
-  logger.info(`[Plugins] 插件已卸载: ${id}`)
+  logger.info(`[Plugins] Plugin uninstalled: ${id}`)
   broadcastPluginStateChanged()
   return listEntries()
 }
@@ -283,13 +305,13 @@ function installPlugin(id: string): PluginListEntry[] {
     try {
       loadExternalMain(id)
     } catch (err) {
-      logger.error(`[Plugins] 插件 '${id}' 重装后装载失败:`, err)
+      logger.error(`[Plugins] Plugin '${id}' failed to load after reinstall:`, err)
       throw new Error(
         `插件 '${id}' 已安装，但装载失败：${err instanceof Error ? err.message : err}`
       )
     }
   }
-  logger.info(`[Plugins] 插件已安装: ${id}`)
+  logger.info(`[Plugins] Plugin installed: ${id}`)
   broadcastPluginStateChanged()
   return listEntries()
 }
@@ -298,14 +320,14 @@ function installPlugin(id: string): PluginListEntry[] {
  * 装好之后的统一收尾：「用户主动装的」→ 启用 + 装载主模块。
  *
  * 装载失败不掩盖「已经装上了」这个事实：抛出的错误里写明目录已就位，避免用户以为
- * 什么都没发生（与从插件仓库安装同一口径）。
+ * 什么都没发生（与插件中心的安装同一口径）。
  */
 function enableInstalled(id: string): void {
   setEnabledOverride(id, true)
   try {
     loadExternalMain(id)
   } catch (err) {
-    logger.error(`[Plugins] 装好的 '${id}' 装载失败:`, err)
+    logger.error(`[Plugins] Installed plugin '${id}' failed to load:`, err)
     throw new Error(
       `插件 '${id}' 已安装，但装载失败：${err instanceof Error ? err.message : String(err)}`
     )
@@ -335,7 +357,7 @@ async function installLocalAndEnable(source: string): Promise<{
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    logger.warn(`[Plugins] 本地安装失败（${source}）:`, msg)
+    logger.warn(`[Plugins] Local install failed (${source}):`, msg)
     return { ok: false, error: msg }
   }
 }
@@ -350,7 +372,7 @@ export function registerPluginsIpc(): void {
     try {
       event.returnValue = listEntries()
     } catch (err) {
-      logger.warn('[Plugins] 同步插件清单失败:', err)
+      logger.warn('[Plugins] Failed to sync plugin list:', err)
       event.returnValue = []
     }
   })
@@ -359,7 +381,7 @@ export function registerPluginsIpc(): void {
   ipcMain.on(IPC_PLUGIN_HOST_UI_EXPORTS, (_event, names: unknown) => {
     setHostUiExports(names)
     logger.info(
-      `[Plugins] 宿主 UI 表已上报：${Object.keys((names ?? {}) as object).length} 个模块键`
+      `[Plugins] Host UI exports reported: ${Object.keys((names ?? {}) as object).length} module keys`
     )
   })
 
@@ -375,7 +397,7 @@ export function registerPluginsIpc(): void {
       throw new Error(`插件 '${id}' 不存在`)
     }
     setEnabledOverride(id, enabled)
-    logger.info(`[Plugins] ${id} → ${enabled ? '启用' : '停用'}`)
+    logger.info(`[Plugins] ${id} -> ${enabled ? 'enabled' : 'disabled'}`)
     applyEnabled(id, enabled)
     broadcastPluginStateChanged()
     return listEntries()
@@ -389,7 +411,7 @@ export function registerPluginsIpc(): void {
         return { ok: true, id: installed }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        logger.warn('[Plugins] 安装失败:', msg)
+        logger.warn('[Plugins] Install failed:', msg)
         return { ok: false, error: msg }
       }
     }
@@ -401,7 +423,7 @@ export function registerPluginsIpc(): void {
       return { ok: true, id }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      logger.warn(`[Plugins] 安装内置插件 '${id}' 失败:`, msg)
+      logger.warn(`[Plugins] Failed to install bundled plugin '${id}':`, msg)
       return { ok: false, error: msg }
     }
   })
@@ -415,48 +437,9 @@ export function registerPluginsIpc(): void {
   })
 
   /**
-   * 插件仓库（GitHub）里**可安装**的插件清单。
-   *
-   * 失败的语义与「空列表」不同：网络不通/仓库 404 要如实报错（面板据此提示「检查网络」），
-   * 而不是伪装成「没有插件可装」。
-   */
-  ipcMain.handle(IPC_PLUGINS_AVAILABLE, async () => {
-    const index = await fetchPluginIndex()
-    const installed = new Set(listEntries().map((e) => e.id))
-    return {
-      repo: pluginsRepoUrl(),
-      tag: index.tag,
-      plugins: index.plugins.map((p) => ({
-        ...p,
-        builtin: false,
-        installed: installed.has(p.id)
-      }))
-    }
-  })
-
-  /**
-   * 从插件仓库安装（或升级）某个插件
-   */
-  ipcMain.handle(IPC_PLUGINS_INSTALL_GITHUB, async (_event, id: unknown) => {
-    if (typeof id !== 'string' || id === '') throw new Error('plugins-install-github 参数非法')
-    try {
-      const result = await installPluginFromGithub(id)
-      // 用户是**主动点了「安装」**的：装完直接启用并装载主模块（与内置插件重装同一口径），
-      // 渲染层收到广播后会从 plugin://<id>/renderer.mjs 加载界面。
-      enableInstalled(id)
-      broadcastPluginStateChanged()
-      return result
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      logger.warn(`[Plugins] 从插件仓库安装 '${id}' 失败:`, msg)
-      return { ok: false, id, error: msg }
-    }
-  })
-
-  /**
    * 从**本地路径**安装插件（`.zip` 或插件包目录）。
    *
-   * 与「从插件仓库安装」共用同一套落地与校验（`package-install.ts`），因此这里的
+   * 与插件中心的安装共用同一套落地与校验（`package-install.ts`），因此这里的
    * 语义完全一致：装完即启用 + 装载 + 广播；失败返回 `{ ok: false, error }` 而不是抛错，
    * 面板据此提示（路径不存在、包里没有 plugin.json、id 撞内置插件等都走这条）。
    */

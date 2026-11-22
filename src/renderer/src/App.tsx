@@ -19,6 +19,7 @@ import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import { HarnessProvider } from '@renderer/contexts/harness/HarnessContext'
 import BuildProgressProvider from '@renderer/providers/notes/BuildProgressProvider'
 import SystemEffects from '@renderer/components/system/SystemEffects'
+import { LatticeProvider } from '@renderer/lattice/LatticeContext'
 
 // shell 常驻 Provider（插件系统之外的应用骨架层）。
 // 插件自己的 Provider（如音乐播放器的 AudioProvider、首页的图谱构建进度）随插件注册，
@@ -115,7 +116,7 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
           if (!liveIds.has(id) || !entry || entry.installed === false) {
             await host
               .forgetPlugin(id)
-              .catch((err) => console.error(`[plugins] 插件移除失败: ${id}`, err))
+              .catch((err) => console.error(`[plugins] Failed to remove plugin: ${id}`, err))
             continue
           }
           // ③ 包换了（升级 / 重装 / 面板里的「重新安装」）：内容戳或版本与登记里的不一致
@@ -130,13 +131,13 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
             loadedStamps.current.delete(id)
             await host
               .forgetPlugin(id)
-              .catch((err) => console.error(`[plugins] 插件重新装载失败: ${id}`, err))
+              .catch((err) => console.error(`[plugins] Failed to reload plugin: ${id}`, err))
             continue
           }
           if (!entry.enabled) {
             await host
               .disable(id)
-              .catch((err) => console.error(`[plugins] 插件停用失败: ${id}`, err))
+              .catch((err) => console.error(`[plugins] Failed to disable plugin: ${id}`, err))
           }
         }
 
@@ -160,7 +161,7 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
             if (!disposed) host.addExternal(plugin)
             if (!disposed) loadedStamps.current.set(e.id, e.stamp ?? '')
           } catch (err) {
-            console.error(`[plugins] 插件 '${e.id}' 渲染模块加载失败:`, err)
+            console.error(`[plugins] Plugin '${e.id}' failed to load renderer module:`, err)
           }
         }
 
@@ -169,7 +170,7 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
         for (const entry of list) map[entry.id] = entry.enabled
         await host.applyEnabled(map)
       } catch (err) {
-        console.error('[plugins] 启用态同步失败:', err)
+        console.error('[plugins] Failed to sync enabled state:', err)
       }
     }
     void sync()
@@ -201,7 +202,7 @@ const App: React.FC = () => {
       const list = window.api.plugin.listSync()
       return Array.isArray(list) ? list : null
     } catch (err) {
-      console.warn('[plugins] 同步插件清单失败，按默认启用态装载:', err)
+      console.warn('[plugins] Failed to sync plugin manifest, loading with default enabled state:', err)
       return null
     }
   }, [])
@@ -230,26 +231,33 @@ const App: React.FC = () => {
     <HashRouter>
       {/* 全局错误边界：渲染错误不再让整个应用白屏死掉，而是给出可恢复的提示卡 */}
       <AppErrorBoundary>
-        {/* 插件宿主根：插件按启用态装载，路由/菜单/设置页/Provider 全部注册表驱动 */}
-        <PluginHostProvider
-          plugins={initialPlugins}
-          entries={syncEntries ?? undefined}
-          vendorModules={vendorModules}
-          enabledOverride={initialEnabled}
-        >
-          <PluginStateBridge>
-            <CoreProviders>
-              <SystemProvidersShell>
-                <SystemEffects />
-                <PluginProvidersShell>
-                  <AppContent />
-                </PluginProvidersShell>
-                {/* 设置弹窗挂在插件 Provider 链之外：插件启停不会重建它（详见 SettingsHost.tsx） */}
-                <SettingsHost />
-              </SystemProvidersShell>
-            </CoreProviders>
-          </PluginStateBridge>
-        </PluginHostProvider>
+        {/*
+          插件中心（Lattice）状态挂在外壳之上：侧栏账号区、登录页、插件仓库页与插件详情页
+          共享同一份 status / 同步状态 / 上传进度。主进程通道缺失时 Provider 自身安全降级，
+          不会阻塞应用其余部分。
+        */}
+        <LatticeProvider>
+          {/* 插件宿主根：插件按启用态装载，路由/菜单/设置页/Provider 全部注册表驱动 */}
+          <PluginHostProvider
+            plugins={initialPlugins}
+            entries={syncEntries ?? undefined}
+            vendorModules={vendorModules}
+            enabledOverride={initialEnabled}
+          >
+            <PluginStateBridge>
+              <CoreProviders>
+                <SystemProvidersShell>
+                  <SystemEffects />
+                  <PluginProvidersShell>
+                    <AppContent />
+                  </PluginProvidersShell>
+                  {/* 设置弹窗挂在插件 Provider 链之外：插件启停不会重建它（详见 SettingsHost.tsx） */}
+                  <SettingsHost />
+                </SystemProvidersShell>
+              </CoreProviders>
+            </PluginStateBridge>
+          </PluginHostProvider>
+        </LatticeProvider>
       </AppErrorBoundary>
     </HashRouter>
   )

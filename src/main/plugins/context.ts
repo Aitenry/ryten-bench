@@ -133,7 +133,7 @@ export class MainPluginContextImpl implements MainPluginContext {
             try {
               return await handler(...(args as never[]))
             } catch (err) {
-              logger.error(`[Plugins] ${this.id} 通道 ${channel} 处理失败:`, err)
+              logger.error(`[Plugins] ${this.id} failed to handle channel ${channel}:`, err)
               throw err
             }
           })
@@ -173,7 +173,7 @@ export class MainPluginContextImpl implements MainPluginContext {
       // 这里也套一层，让「停用时的清理代码」同样不能 process.exit 把应用带走。
       undo = withPluginScope({ id: this.id, surface: 'effect' }, register)
     } catch (err) {
-      logger.warn(`[Plugins] ${this.id} effect 注册失败:`, err)
+      logger.warn(`[Plugins] ${this.id} failed to register effect:`, err)
       return
     }
     if (typeof undo === 'function') {
@@ -205,7 +205,7 @@ export class MainPluginContextImpl implements MainPluginContext {
       try {
         undo()
       } catch (err) {
-        logger.warn(`[Plugins] ${this.id} effect 回滚失败:`, err)
+        logger.warn(`[Plugins] ${this.id} failed to roll back effect:`, err)
       }
     }
     for (const channel of [...this.ownedChannels]) {

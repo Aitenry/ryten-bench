@@ -244,7 +244,7 @@ props），只能靠这个单例对齐。两个读取方都按它调记忆通道
   plugin.json / WORKSHOP.md / main/** / renderer/** / plugin.css / workshop.smoke.mjs
 
 <userData>/plugin-workshop/      工坊内部（界面上不展示）
-  dist/<id>/                     构建产物（= 可安装插件包，与插件仓库 dist/<id> 同构）
+  dist/<id>/                     构建产物（= 可安装插件包，与插件中心里发布的包同构）
   reports/<id>.json              最近一次验收报告
   exports/<id>-<v>.zip           导出的可分发压缩包
   drafts/<id>/                   旧版源码目录（只在首次配置时用于迁移）
@@ -284,8 +284,8 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 
 ### 草稿模板：默认就是「全部内容」
 
-`full` 是**默认模板**（用户口径「不需要选择这些内容，默认是全部内容都要」），而且**按真实插件仓库
-（ryten-plugins 的 music-player / task-planner）的分层来铺**——用户 2026-09-28 拿生成的草稿和那边比，
+`full` 是**默认模板**（用户口径「不需要选择这些内容，默认是全部内容都要」），而且**按插件中心里
+真实插件（music-player / task-planner）的分层来铺**——用户 2026-09-28 拿生成的草稿和那两个比，
 指出「缺失了好多内容」，于是补齐了表、词条、通道封装、工具文案与组件拆分：
 
 | 面         | full 里对应的东西                                                                             |
@@ -384,7 +384,7 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 ## 发布与回滚
 
 - 发布走**宿主既有的安装链路**（`installPackageDir` → `setEnabledOverride` → `loadExternalMain`
-  → `broadcastPluginStateChanged`），与设置页里的「从本地安装」「从插件仓库安装」是同一批函数；
+  → `broadcastPluginStateChanged`），与设置页里的「从本地安装」「从插件中心安装」是同一批函数；
   工坊不另造一条，否则升级清理、卸载记账、渲染层重载迟早分叉。
 - **装完立刻复验**：安装后自动跑一次渲染层探针；失败就**自动卸载回滚**并报原因——
   用户机器上不会留下「点了就白屏」的插件。
@@ -435,4 +435,4 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 | `node test/probe-plugin-load-db-race.mjs`                       | 真机 9 条：插件主模块在**数据库初始化之前**被装载（`initPluginHost` 早于 `createLoadingWindow`）时，装载期建表不能失败——装一份「装载即建表」的插件 → 重启应用 → 断言启动日志有「表结构已就绪」、没有 `Database has not been initialized yet`、插件表通道可读。改前 6/9（复现用户的报错），改后 9/9 |
 | `node --experimental-strip-types test/verify-topic-pending.mjs` | 离线 19 条（jsdom + 真实 antd Modal）：**挂起类弹窗按会话隔离**——提问/审批/换模型三个弹窗只显示当前这条会话挂起的那一条，切走收起、点回来按话题重拉（harness-question-get / harness-approval-get）；别的会话的广播不弹、别的会话的流结束不误关；提交/拒绝回写的是本会话的 requestId。改前 11/19（提问永远收不到 = 一直卡住、空白会话弹出别人的审批），改后 19/19 |
 | `node test/audit-plugin-host-contract.mjs`                        | 构建产物里的 `@host/**` 说明符与宿主表一致（工坊新增的 7 个键在这里兜底）                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `node --experimental-strip-types test/verify-plugin-isolation.mjs` | 离线 86 条：**插件不能影响宿主运转**的每一层——`plugin.css` 全局规则过滤（html/body/#root/*/宿主外壳类名/antd 全局类/:root 真声明/@import 全丢；真实 ryten-plugins 四个插件的 plugin.css **一条不误伤**；幂等、无命中时逐字节不变）、主进程进程保护（exit/abort 被拦成带插件 id 的可读错误，异步派生任务仍带上下文）、模板安全约束（第 8 节红线、cleanup + `$result:` 还原、设置页无解释段落、按 id 散列图标）、草稿重建（先备份、原子 rename、无 staging 残留、createdAt 保留、备份只留 3 份、Windows 设备名被拒）、渲染层隔离（真实 React：路由崩溃宿主仍在 + 卡片带重试/停用、Provider 崩溃只跳过自己、重试恢复；注册表拒绝跨插件路由/菜单/设置页占位、内核页签与 `*` 兜底路由） |
+| `node --experimental-strip-types test/verify-plugin-isolation.mjs` | 离线 86 条：**插件不能影响宿主运转**的每一层——`plugin.css` 全局规则过滤（html/body/#root/*/宿主外壳类名/antd 全局类/:root 真声明/@import 全丢；真实插件中心里四个插件的 plugin.css **一条不误伤**；幂等、无命中时逐字节不变）、主进程进程保护（exit/abort 被拦成带插件 id 的可读错误，异步派生任务仍带上下文）、模板安全约束（第 8 节红线、cleanup + `$result:` 还原、设置页无解释段落、按 id 散列图标）、草稿重建（先备份、原子 rename、无 staging 残留、createdAt 保留、备份只留 3 份、Windows 设备名被拒）、渲染层隔离（真实 React：路由崩溃宿主仍在 + 卡片带重试/停用、Provider 崩溃只跳过自己、重试恢复；注册表拒绝跨插件路由/菜单/设置页占位、内核页签与 `*` 兜底路由） |

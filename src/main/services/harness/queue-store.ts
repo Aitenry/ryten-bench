@@ -127,7 +127,7 @@ class HarnessQueueStore {
     }
     this.listOf(params.topicId).push(item)
     logger.info(
-      `[HarnessQueue] 入队话题 ${params.topicId}：${item.text.slice(0, 40)}（队列 ${this.listOf(params.topicId).length} 条）`
+      `[HarnessQueue] Enqueued for topic ${params.topicId}: ${item.text.slice(0, 40)} (queue length ${this.listOf(params.topicId).length})`
     )
     this.emitChanged(params.topicId)
     return item
@@ -195,7 +195,7 @@ class HarnessQueueStore {
       this.holds.set(topicId, holds)
     }
     holds.push(item)
-    logger.info(`[HarnessQueue] 标记插话话题 ${topicId}：${item.text.slice(0, 40)}`)
+    logger.info(`[HarnessQueue] Steer marked for topic ${topicId}: ${item.text.slice(0, 40)}`)
     this.emitChanged(topicId)
     return item
   }
@@ -244,7 +244,7 @@ class HarnessQueueStore {
         }
       }
       logger.info(
-        `[HarnessQueue] 话题 ${topicId} 有 ${holds.length} 条插话未等到注入边界，已放回队列`
+        `[HarnessQueue] Topic ${topicId} has ${holds.length} queued messages that never reached an injection boundary, put back in queue`
       )
       this.emitChanged(topicId)
     }
@@ -265,7 +265,7 @@ class HarnessQueueStore {
   clear(topicId: number): void {
     this.injections.delete(topicId)
     this.holds.delete(topicId)
-    if (this.pending.delete(topicId)) logger.info(`[HarnessQueue] 话题 ${topicId} 队列已清空`)
+    if (this.pending.delete(topicId)) logger.info(`[HarnessQueue] Topic ${topicId} queue cleared`)
   }
 
   /**
@@ -278,7 +278,7 @@ class HarnessQueueStore {
     this.injections.delete(topicId)
     this.holds.delete(topicId)
     if (dropped > 0) {
-      logger.info(`[HarnessQueue] 话题 ${topicId} 的 ${dropped} 条插话已随本轮取消作废`)
+      logger.info(`[HarnessQueue] Topic ${topicId}: ${dropped} queued messages discarded with this round's cancellation`)
     }
   }
 

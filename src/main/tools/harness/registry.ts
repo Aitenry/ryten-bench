@@ -35,7 +35,7 @@ const warnedConflicts = new Set<string>()
 export function warnConflict(name: string, onWarn?: (message: string) => void): void {
   if (warnedConflicts.has(name)) return
   warnedConflicts.add(name)
-  const message = `[Harness] 工具名冲突：'${name}' 已被更早注册的同名工具占用（本地工具优先），忽略后续贡献`
+  const message = `[Harness] Tool name conflict: '${name}' is already taken by an earlier tool with the same name (local tools take priority), ignoring later contributions`
   if (onWarn) onWarn(message)
   else console.warn(message)
 }

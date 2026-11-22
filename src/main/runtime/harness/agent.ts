@@ -117,7 +117,7 @@ function createInterjectionHandler(
   return async () => {
     const injected = await drain()
     if (!injected || injected.length === 0) return null
-    logger.info(`[Agent] 插话已并入模型上下文（${injected.length} 条）`)
+    logger.info(`[Agent] Interjections merged into model context (${injected.length} items)`)
     return {
       messages: injected.map(
         (item) =>
@@ -136,7 +136,7 @@ function bindToolsSafely(model: BaseChatModel, tools: StructuredToolInterface[])
     const bound = model.bindTools?.(tools)
     return bound ? (bound as BaseChatModel) : model
   } catch (err) {
-    logger.warn('[Agent] 模型不支持工具调用，退化为纯对话模式:', err)
+    logger.warn('[Agent] Model does not support tool calls, falling back to plain chat mode:', err)
     return model
   }
 }
@@ -311,7 +311,7 @@ function createToolRunner(
           return spill && !SPILL_EXEMPT_TOOLS.has(name) ? spill.trySpill(formatted) : formatted
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
-          logger.warn(`[Agent] 工具 ${name} 执行失败:`, err)
+          logger.warn(`[Agent] Tool ${name} failed:`, err)
           return mainFormat(getAgentToolTexts().agent.toolFailed, { message })
         }
       })()

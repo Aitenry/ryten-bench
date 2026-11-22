@@ -304,7 +304,7 @@ export async function runWorkflow(
     } catch (err) {
       if (cancelled) throw new Error('CANCELLED')
       // 子代理失败 → null（DSH：子失败/未完成 → null，调用方 .filter(Boolean)）
-      logger.warn('[Workflow] agent 执行失败（返回 null）:', err)
+      logger.warn('[Workflow] agent failed to run (returning null):', err)
       return null
     } finally {
       release()

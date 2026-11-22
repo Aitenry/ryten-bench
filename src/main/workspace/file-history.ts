@@ -211,7 +211,7 @@ async function writeSnapshot(id: number, content: FileChangeContent): Promise<bo
     await fs.promises.writeFile(snapshotFile(id), JSON.stringify(content), 'utf-8')
     return true
   } catch (err) {
-    logger.warn('[FileHistory] 快照写入失败:', err)
+    logger.warn('[FileHistory] Failed to write snapshot:', err)
     return false
   }
 }
@@ -239,11 +239,11 @@ async function pruneSnapshots(): Promise<void> {
       if (Number.isFinite(id)) droppedIds.push(id)
     }
     if (droppedIds.length > 0) {
-      logger.info(`[FileHistory] 清理过期快照 ${droppedIds.length} 份`)
+      logger.info(`[FileHistory] Pruned ${droppedIds.length} expired snapshot(s)`)
       await clearSnapshotFlags(droppedIds)
     }
   } catch (err) {
-    logger.warn('[FileHistory] 快照清理失败:', err)
+    logger.warn('[FileHistory] Failed to prune snapshots:', err)
   }
 }
 
@@ -258,7 +258,7 @@ async function clearSnapshotFlags(ids: number[]): Promise<void> {
         .where(inArray(file_change.id, ids))
     })
   } catch (err) {
-    logger.warn('[FileHistory] 快照标记清理失败:', err)
+    logger.warn('[FileHistory] Failed to clear snapshot flags:', err)
   }
 }
 
@@ -318,7 +318,7 @@ export async function recordFileChange(
       note: input.note ?? null
     })
   } catch (err) {
-    logger.error('[FileHistory] 改动记录写入失败:', err)
+    logger.error('[FileHistory] Failed to write change record:', err)
     return null
   }
 
@@ -339,7 +339,7 @@ export async function recordFileChange(
       })
       view = { ...view, hasBefore: wantBefore, hasAfter: wantAfter }
     } catch (err) {
-      logger.warn('[FileHistory] 快照标记写入失败:', err)
+      logger.warn('[FileHistory] Failed to write snapshot flags:', err)
     }
   }
 
@@ -415,7 +415,7 @@ export async function revertFileChange(
       markPathWritten(row.path)
     }
   } catch (err) {
-    logger.error('[FileHistory] 撤销失败:', err)
+    logger.error('[FileHistory] Failed to revert:', err)
     return { error: (err as Error).message }
   }
 
@@ -427,7 +427,7 @@ export async function revertFileChange(
     path: row.path,
     obsolete
   })
-  logger.info(`[FileHistory] 撤销改动 #${id}（${row.rel_path}），作废后续 ${obsolete} 条`)
+  logger.info(`[FileHistory] Reverted change #${id} (${row.rel_path}), invalidated ${obsolete} later change(s)`)
   return { path: row.path, content: row.kind === 'create' ? null : (content.before ?? '') }
 }
 

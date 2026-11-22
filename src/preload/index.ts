@@ -4,6 +4,36 @@ import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mappe
 import type { SystemSettings } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
 import { PLUGIN_CHANNEL_RE } from '../shared/plugin/protocol'
+import { LATTICE_IPC } from '../main/lattice/types'
+import type {
+  HubDetail,
+  HubListResult,
+  LatticeAutoInstallSettingResult,
+  LatticeDownloadAssetKind,
+  LatticeDownloadAssetResult,
+  LatticeImportLocalDirResult,
+  LatticeInstallResult,
+  LatticeInstallSummary,
+  LatticeListQuery,
+  LatticeLocalSourcePathResult,
+  LatticeLoginInput,
+  LatticeLoginResult,
+  LatticeMeResult,
+  LatticeOpenSourceResult,
+  LatticeRepublishInput,
+  LatticeRepublishResult,
+  LatticeSetBaseUrlResult,
+  LatticeSetPluginRootResult,
+  LatticeSourcePathResult,
+  LatticeStatus,
+  LatticeSyncDetails,
+  LatticeSyncInput,
+  LatticeSyncResult,
+  LatticeSyncConflict,
+  LatticeResolveConflictResult,
+  LatticeUploadProgress,
+  LatticeUploadResult
+} from '../main/lattice/types'
 
 /**
  * 系统级功能通道的允许前缀。
@@ -260,36 +290,9 @@ const api = {
         error?: string
       }>,
     /**
-     * 插件仓库（GitHub）里**可安装**的插件清单（索引 + 是否已安装）。
-     * 失败会抛错（网络不通 / 仓库不可达），面板据此提示，而不是显示成「没有插件」。
-     */
-    available: () =>
-      ipcRenderer.invoke('plugins-available') as Promise<{
-        repo: string
-        tag?: string
-        plugins: {
-          id: string
-          name: string
-          version: string
-          description?: string
-          asset: string
-          size?: number
-          installed: boolean
-        }[]
-      }>,
-    /**
-     * 从插件仓库安装（或升级）某个插件：下载资产 → sha256 校验 → 解压 → 装进 userData/plugins
-     */
-    installFromGithub: (id: string) =>
-      ipcRenderer.invoke('plugins-install-github', id) as Promise<{
-        ok: boolean
-        id?: string
-        error?: string
-      }>,
-    /**
      * 从**本地路径**安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json`。
      *
-     * 与从仓库安装同一套校验与落地语义：装完自动启用并装载。失败不抛错，
+     * 与插件中心的安装同一套校验与落地语义：装完自动启用并装载。失败不抛错，
      * 返回 `{ ok: false, error }`（路径不存在、包里没有 plugin.json、id 撞内置插件……）。
      */
     installLocal: (source: string) =>
@@ -361,13 +364,146 @@ const api = {
       }
       if (!enabledPluginChannels.has(channel)) {
         console.warn(
-          `[plugin] 订阅的通道当前未启用（主进程为准，插件未装载时不会收到事件）: ${channel}`
+          `[plugin] Subscribed channel is not enabled (the main process is authoritative; no events until the plugin loads): ${channel}`
         )
       }
       const handler = (_event: Electron.IpcRendererEvent, data: unknown): void => callback(data)
       ipcRenderer.on(channel, handler)
       return () => {
         ipcRenderer.off(channel, handler)
+      }
+    }
+  },
+  /**
+   * Lattice 插件中心（core 通道：登录 / 目录 / 上传 / 下载安装 / 数据同步）。
+   *
+   * 与插件桥不同，这些通道**不经过**插件白名单：它们属于应用外壳能力，
+   * 由 `src/main/ipc/lattice.ts` 常驻注册。事件订阅统一返回 unsubscribe。
+   */
+  lattice: {
+    status: () => ipcRenderer.invoke(LATTICE_IPC.status) as Promise<LatticeStatus>,
+    login: (input: LatticeLoginInput) =>
+      ipcRenderer.invoke(LATTICE_IPC.login, input) as Promise<LatticeLoginResult>,
+    logout: () => ipcRenderer.invoke(LATTICE_IPC.logout) as Promise<{ ok: boolean }>,
+    me: () => ipcRenderer.invoke(LATTICE_IPC.me) as Promise<LatticeMeResult>,
+    setBaseUrl: (url: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.setBaseUrl, url) as Promise<LatticeSetBaseUrlResult>,
+    /** 插件目录（分页/搜索/分类） */
+    list: (query?: LatticeListQuery) =>
+      ipcRenderer.invoke(LATTICE_IPC.hubList, query ?? {}) as Promise<HubListResult>,
+    /** 插件详情（含 readme / 版本清单 / 我的安装记录） */
+    detail: (pluginId: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.hubDetail, pluginId) as Promise<HubDetail>,
+    /** 弹系统目录选择框并发布（取消返回 `{ok:true,canceled:true}`） */
+    pickAndUpload: () =>
+      ipcRenderer.invoke(LATTICE_IPC.hubPickUpload) as Promise<LatticeUploadResult>,
+    /** 选 .zip 安装包发布（目录上传的补充入口） */
+    pickAndUploadZip: () =>
+      ipcRenderer.invoke(LATTICE_IPC.hubPickUploadZip) as Promise<LatticeUploadResult>,
+    /** 按显式路径（插件包目录或 .zip）发布 */
+    uploadSource: (source: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.hubUpload, { source }) as Promise<LatticeUploadResult>,
+    /** 下载并安装（或升级）插件；失败返回 `{ok:false,error}`，不抛错 */
+    install: (pluginId: string, version?: string) =>
+      ipcRenderer.invoke(
+        LATTICE_IPC.hubInstall,
+        pluginId,
+        version
+      ) as Promise<LatticeInstallResult>,
+    /** 本机已安装插件视图（本地口径，不联网） */
+    listInstalls: () =>
+      ipcRenderer.invoke(LATTICE_IPC.hubInstalls) as Promise<{
+        items: LatticeInstallSummary[]
+      }>,
+    /**
+     * 当前源码目录（v2）：安装时自动下载的源码解压位置。
+     * `managed='pluginsPath'` = 用户配置的插件存放路径（= workshop 草稿目录，插件模式可开对话）；
+     * `managed='userData'` = 应用数据目录回退；`path=null` = 本机没有该插件源码。
+     */
+    sourcePath: (pluginId: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.sourcePath, pluginId) as Promise<LatticeSourcePathResult>,
+    /** 本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+    localSource: (pluginId: string) =>
+      ipcRenderer.invoke(
+        LATTICE_IPC.localSourcePath,
+        pluginId
+      ) as Promise<LatticeLocalSourcePathResult>,
+    /**
+     * 「在对话中修改」：为源码目录建/复用插件工作区并开一条插件会话。
+     * 成功开对话返回 `{ok:true,workspaceId,topicId}`；做不到时回退文件管理器并返回
+     * `{ok:true,opened:'folder'}`（不会假装开了对话）。
+     */
+    openSource: (pluginId: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.openSource, pluginId) as Promise<LatticeOpenSourceResult>,
+    /** 「发布新版本」：源码目录整包 zip 同时作为安装包与源码包上传；失败返回 `{ok:false,error}` */
+    republish: (input: LatticeRepublishInput) =>
+      ipcRenderer.invoke(LATTICE_IPC.republish, input) as Promise<LatticeRepublishResult>,
+    /** 下载安装包 / 源码包到本机（主进程弹保存框 + sha256 校验；用户取消不是失败） */
+    downloadAsset: (pluginId: string, version: string, kind: LatticeDownloadAssetKind) =>
+      ipcRenderer.invoke(
+        LATTICE_IPC.downloadAsset,
+        pluginId,
+        version,
+        kind
+      ) as Promise<LatticeDownloadAssetResult>,
+    /**
+     * 「从本地导入」：弹目录选择框，把所选目录下带 plugin.json 的插件逐个发布到平台
+     * （安装包 + 源码包都是这个目录的整包 zip）。
+     */
+    importLocalDir: (dir?: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.importLocalDir, dir) as Promise<LatticeImportLocalDirResult>,
+    /**
+     * 显式设置「插件存放路径」并立即生效（导入本地插件目录后，让这些源码出现在「插件」模式）。
+     * 只接受非空路径；清除路径请走设置页。
+     */
+    setPluginRoot: (dir: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.setPluginRoot, dir) as Promise<LatticeSetPluginRootResult>,
+    /** 手动同步：`{direction, installMissing?}` 或裸字符串（installMissing 缺省跟随设置项，默认开启） */
+    sync: (input?: LatticeSyncInput) =>
+      ipcRenderer.invoke(
+        LATTICE_IPC.sync,
+        input ?? { direction: 'both' }
+      ) as Promise<LatticeSyncResult>,
+    /** 同步详情：最近一次同步的自动补齐成功/失败明细与孤儿记录（失败原因可查看） */
+    syncDetails: () =>
+      ipcRenderer.invoke(LATTICE_IPC.syncDetails) as Promise<LatticeSyncDetails>,
+    /** 「缺失插件自动补齐」开关（持久化；默认开启） */
+    setAutoInstallMissing: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        LATTICE_IPC.setAutoInstallMissing,
+        enabled
+      ) as Promise<LatticeAutoInstallSettingResult>,
+    /** 未解决的插件数据冲突（含补拉的云端数据快照） */
+    syncConflicts: () =>
+      ipcRenderer.invoke(LATTICE_IPC.syncConflicts) as Promise<LatticeSyncConflict[]>,
+    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
+    resolveConflict: (pluginId: string, strategy: 'local' | 'cloud') =>
+      ipcRenderer.invoke(LATTICE_IPC.resolveConflict, pluginId, strategy) as Promise<LatticeResolveConflictResult>,
+    /** 登录态/基址/同步摘要变化推送 */
+    onStateChanged: (callback: (status: LatticeStatus) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: LatticeStatus): void =>
+        callback(status)
+      ipcRenderer.on(LATTICE_IPC.stateChanged, handler)
+      return () => {
+        ipcRenderer.off(LATTICE_IPC.stateChanged, handler)
+      }
+    },
+    /** 发布阶段进度（zip / meta / upload） */
+    onUploadProgress: (callback: (progress: LatticeUploadProgress) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, progress: LatticeUploadProgress): void =>
+        callback(progress)
+      ipcRenderer.on(LATTICE_IPC.uploadProgress, handler)
+      return () => {
+        ipcRenderer.off(LATTICE_IPC.uploadProgress, handler)
+      }
+    },
+    /** 同步结果推送（手动同步与后台防抖同步都会发） */
+    onSyncState: (callback: (result: LatticeSyncResult) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, result: LatticeSyncResult): void =>
+        callback(result)
+      ipcRenderer.on(LATTICE_IPC.syncState, handler)
+      return () => {
+        ipcRenderer.off(LATTICE_IPC.syncState, handler)
       }
     }
   }

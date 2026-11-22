@@ -1,6 +1,6 @@
 import React from 'react'
 import { theme } from 'antd'
-import { useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import { useTranslation } from '@renderer/i18n'
 import { systemSettingsSections } from '@renderer/components/system/settings/sections'
 
@@ -26,9 +26,17 @@ const More: React.FC = () => {
   const { t } = useTranslation()
   const { tab } = useParams()
 
-  /** 路由里的 tab 不存在（旧链接 / 手改地址）时回落到第一项，不白屏 */
-  const active =
-    ASSISTANT_SECTIONS.find((section) => section.tabKey === tab) ?? ASSISTANT_SECTIONS[0]
+  /**
+   * 路由里的 tab 不存在（旧链接 / 手改地址）时**重定向**到第一个可用页签，不白屏、也不
+   * 让地址栏停在一个不存在的路径上——旧实现只做内容回落，用户看到的是「智能体」页而
+   * 地址栏仍是 /more/workshop，侧栏再点同一条也只会重复导航同一个地址（表现为卡住）。
+   */
+  const known = ASSISTANT_SECTIONS.find((section) => section.tabKey === tab)
+  if (!known) {
+    return <Navigate to={`/more/${ASSISTANT_SECTIONS[0]?.tabKey ?? 'agents'}`} replace />
+  }
+
+  const active = known
   const ActiveView = active.Component
 
   /** 页头图标：注册表里是 16px 的导航图标，hero 里放大到 22px */

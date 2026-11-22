@@ -138,11 +138,11 @@ function getMenuWindow(): Promise<BrowserWindow> {
   menuReadyPromise = new Promise((resolve, reject) => {
     const win = menuWindow!
     win.webContents.once('did-finish-load', () => {
-      logger.info('[Tray] 托盘菜单窗口就绪')
+      logger.info('[Tray] Tray menu window ready')
       resolve(win)
     })
     win.webContents.once('did-fail-load', (_event, code, desc) => {
-      logger.error(`[Tray] 托盘菜单加载失败 (${code}): ${desc}`)
+      logger.error(`[Tray] Failed to load tray menu (${code}): ${desc}`)
       // 复位并销毁窗口，允许下次右键重建重试（修复：此前只 reject，窗口仍存活，
       // getMenuWindow 短路返回同一个已 reject 的 promise，托盘菜单本会话永久失效）
       const failed = menuWindow
@@ -152,7 +152,7 @@ function getMenuWindow(): Promise<BrowserWindow> {
       reject(new Error(`菜单加载失败: ${desc}`))
     })
     win.loadFile(trayMenuHtml).catch((err) => {
-      logger.error('[Tray] 托盘菜单 loadFile 失败:', (err as Error)?.message)
+      logger.error('[Tray] Failed to load tray menu file:', (err as Error)?.message)
       const failed = menuWindow
       menuWindow = null
       menuReadyPromise = null
@@ -225,7 +225,7 @@ export async function showTrayMenu(): Promise<void> {
       safeSend(win.webContents, 'tray-menu-open')
     }
   } catch (error) {
-    logger.error('[Tray] 弹出托盘菜单失败:', error)
+    logger.error('[Tray] Failed to open tray menu:', error)
   } finally {
     menuOpening = false
   }
@@ -258,7 +258,7 @@ function handleMenuClick(id: string): void {
       break
     default:
       hideTrayMenu()
-      logger.warn(`[Tray] 未知菜单项: ${id}`)
+      logger.warn(`[Tray] Unknown menu item: ${id}`)
   }
 }
 
@@ -292,9 +292,9 @@ export function createTray(): void {
     tray.on('right-click', () => void showTrayMenu())
 
     ipcMain.on('tray-menu-click', (_event, id: string) => handleMenuClick(id))
-    logger.info('[Tray] 系统托盘已创建')
+    logger.info('[Tray] System tray created')
   } catch (error) {
-    logger.error('[Tray] 创建系统托盘失败:', error)
+    logger.error('[Tray] Failed to create system tray:', error)
     tray = null
   }
 }

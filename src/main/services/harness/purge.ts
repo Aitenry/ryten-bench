@@ -88,7 +88,7 @@ export async function purgeHarnessData(): Promise<void> {
         }
       }
     } catch (err) {
-      logger.warn(`[harness] 读取记忆目录失败（跳过目录清理）: ${memoryPath}`, err)
+      logger.warn(`[harness] Failed to read memory directory (skipping directory cleanup): ${memoryPath}`, err)
     }
   }
 
@@ -101,14 +101,14 @@ export async function purgeHarnessData(): Promise<void> {
       }
     } catch (err) {
       // 目录被占用/权限不足：只告警，不阻塞卸载（行已经删干净了）
-      logger.warn(`[harness] 清理托管目录失败: ${dir}`, err)
+      logger.warn(`[harness] Failed to clean up managed directory: ${dir}`, err)
     }
   }
 
   logger.info(
-    `[harness] 已清除插件数据：会话 ${counts.topics}、对话 ${counts.dialogues}、` +
-      `目标 ${counts.goals}、压缩检查点 ${counts.compactions}、用量 ${counts.usage}、` +
-      `子代理配置 ${counts.agents}、文件改动记录 ${counts.changes}、托管目录 ${removedDirs} 个` +
-      `（表结构、工作区表与 harness 设置键未动）`
+    `[harness] Purged plugin data: sessions ${counts.topics}, conversations ${counts.dialogues}, ` +
+      `goals ${counts.goals}, compaction checkpoints ${counts.compactions}, usage ${counts.usage}, ` +
+      `subagent configs ${counts.agents}, file change records ${counts.changes}, ` +
+      `managed directories ${removedDirs} (table schema, workspace table and harness settings keys untouched)`
   )
 }

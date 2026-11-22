@@ -222,7 +222,7 @@ export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Pro
         attempt += 1
         req.onRetry?.(attempt, info.retryLimit)
         logger.error(
-          `${req.label} 模型请求失败（第 ${attempt}/${info.retryLimit} 次重试，仅重试本次调用，不重跑工具）:`,
+          `${req.label} Model request failed (retry ${attempt}/${info.retryLimit}, retrying this call only, not re-running tools):`,
           raw
         )
         await sleep(retryDelayMs)
@@ -236,12 +236,12 @@ export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Pro
 
       if (!info.transient) {
         logger.error(
-          `${req.label} 模型请求失败且不可重试（${info.kind}${info.status != null ? ` / HTTP ${info.status}` : ''}），直接报错:`,
+          `${req.label} Model request failed and is not retryable (${info.kind}${info.status != null ? ` / HTTP ${info.status}` : ''}), failing immediately:`,
           raw
         )
       } else {
         logger.error(
-          `${req.label} 模型请求重试耗尽（${info.kind}，重试 ${attempt} 次仍失败），向上抛错:`,
+          `${req.label} Model request retries exhausted (${info.kind}, still failing after ${attempt} retries), propagating the error:`,
           raw
         )
       }
@@ -259,10 +259,10 @@ export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Pro
         if (newModel) {
           req.onSwitch?.(newModel)
           attempt = 0
-          logger.info(`${req.label} 已切换用户选择的新模型，重置重试计数，在原位置继续执行`)
+          logger.info(`${req.label} Switched to the user-selected model, retry count reset, continuing in place`)
           continue
         }
-        logger.warn(`${req.label} 用户放弃切换模型，按原错误结束本轮:`, raw.message)
+        logger.warn(`${req.label} User abandoned model switch, ending this turn with the original error:`, raw.message)
       }
       throw new ModelRequestError(info, attempt)
     }
@@ -334,12 +334,12 @@ export async function askUserToSwitchModel(
   }
   if (providerId == null) {
     logger.warn(
-      `[ModelRecovery] 用户提交的模型选择无法匹配任何供应商（selected=${selected}），按放弃处理`
+      `[ModelRecovery] User-submitted model choice matched no provider (selected=${selected}), treating as abandoned`
     )
     return null
   }
   const { getProviderService } = await import('../../provider/service')
   const newModel = await getProviderService().createModel(providerId)
-  logger.info(`[ModelRecovery] 用户已选择切换模型（providerId=${providerId}），在原位置继续执行`)
+  logger.info(`[ModelRecovery] User chose to switch models (providerId=${providerId}), continuing in place`)
   return newModel
 }

@@ -59,7 +59,7 @@ export function buildMnemon(storageRoot: string, workspaceName?: string): Mnemon
             memoryBodyId: body.id
           })
         } catch (err) {
-          logger.warn(`[Mnemon] 归档条目失败（可能重复）:`, err)
+          logger.warn(`[Mnemon] Failed to archive entry (possibly duplicate):`, err)
           // 重复内容视为已归档（查重失败仍移除热记忆条目，避免热层被同一内容占满）
         }
         archivedIndexes.push(entries.indexOf(entry))
@@ -82,7 +82,7 @@ export function buildMnemon(storageRoot: string, workspaceName?: string): Mnemon
   const promptSections = [buildRoutingSection(), buildRuntimeMemorySection(runtimeMemory)]
 
   logger.info(
-    `[Mnemon] 已初始化：storageRoot=${storageRoot}，热记忆 ${runtimeMemory.snapshot().entries.length} 条，档案 ${documents.snapshot().total} 份，空间 ${service.registry.list().length} 个`
+    `[Mnemon] Initialized: storageRoot=${storageRoot}, hot memories ${runtimeMemory.snapshot().entries.length}, documents ${documents.snapshot().total}, spaces ${service.registry.list().length}`
   )
 
   return {

@@ -143,7 +143,7 @@ function ensureDevPackagesBuilt(): void {
   if (targets.length === 0) return
 
   logger.info(
-    `[Plugins] dev：重新打包插件（缺产物：${missing.join('/') || '无'}；产物落后于源码：${stale.join('/') || '无'}）`
+    `[Plugins] dev: rebuilding plugins (missing artifacts: ${missing.join('/') || 'none'}; artifacts older than source: ${stale.join('/') || 'none'})`
   )
   for (const id of targets) {
     const result = spawnSync(process.execPath, [script, '--plugin', id, '--dev'], {
@@ -156,7 +156,7 @@ function ensureDevPackagesBuilt(): void {
       windowsHide: true
     })
     if (result.status !== 0) {
-      logger.error(`[Plugins] dev 打包 '${id}' 失败（status=${result.status}），该插件本轮不可用`)
+      logger.error(`[Plugins] dev build of '${id}' failed (status=${result.status}), plugin unavailable this round`)
     }
   }
 }
@@ -170,7 +170,7 @@ function ensureDevPackagesBuilt(): void {
 export function installBundledPlugin(id: string, force = false): boolean {
   const src = bundledPluginDir(id)
   if (!src) {
-    logger.warn(`[Plugins] 应用包内没有插件包 '${id}'（${bundledPluginsRoot()}）`)
+    logger.warn(`[Plugins] No plugin package '${id}' in app bundle (${bundledPluginsRoot()})`)
     return false
   }
   if (findExternalPlugin(id) && !force) return true
@@ -195,11 +195,11 @@ export function installBundledPlugin(id: string, force = false): boolean {
     setPluginSeeded(id, app.getVersion())
     invalidateInstalledPluginIds()
     logger.info(
-      `[Plugins] 插件包已${force ? '重' : '首次'}安装: ${id} → ${dest}（产物 ${artifacts.length} 个）`
+      `[Plugins] Plugin package ${force ? 'reinstalled' : 'installed'}: ${id} -> ${dest} (${artifacts.length} artifacts)`
     )
     return true
   } catch (err) {
-    logger.error(`[Plugins] 插件包 '${id}' 安装失败:`, err)
+    logger.error(`[Plugins] Failed to install plugin package '${id}':`, err)
     return false
   }
 }
@@ -225,8 +225,8 @@ export function ensureBundledPluginsInstalled(): void {
   const ids = listBundledPluginIds()
   if (ids.length === 0) {
     logger.warn(
-      `[Plugins] 应用包内没有插件目录（${bundledPluginsRoot()}）：` +
-        `dev 下请先跑 node scripts/build-plugins.mjs，构建机请确认 resources/plugins 已随包分发`
+      `[Plugins] No plugin directory in app bundle (${bundledPluginsRoot()}):` +
+        `in dev, run node scripts/build-plugins.mjs first; on build machines, verify resources/plugins is shipped with the package`
     )
     return
   }
@@ -256,16 +256,16 @@ export function ensureBundledPluginsInstalled(): void {
     const drift = detectPackageDrift(src, installed.dir)
     if (!drift.drifted) continue
     logger.info(
-      `[Plugins] ${id} 已安装副本与应用包不一致（${drift.reason}${
+      `[Plugins] Installed copy of ${id} differs from app bundle (${drift.reason}${
         drift.summary ? `: ${drift.summary}` : ''
-      }）→ 自动更新`
+      }) -> auto-update`
     )
     installBundledPlugin(id, true)
     refreshed.push(id)
   }
 
   if (refreshed.length > 0) {
-    logger.info(`[Plugins] 内置插件自动更新完成：${refreshed.join(', ')}`)
+    logger.info(`[Plugins] Built-in plugin auto-update complete: ${refreshed.join(', ')}`)
   }
 }
 
@@ -293,9 +293,9 @@ function removeRetiredBundledPlugins(): void {
       try {
         fs.rmSync(found.dir, { recursive: true, force: true })
         removed += 1
-        logger.info(`[Plugins] 已清理不再是内置插件的旧铺包: ${id} → ${found.dir}`)
+        logger.info(`[Plugins] Removed old seeded package that is no longer a built-in plugin: ${id} -> ${found.dir}`)
       } catch (err) {
-        logger.warn(`[Plugins] 清理旧铺包失败（忽略）: ${id}`, err)
+        logger.warn(`[Plugins] Failed to remove old seeded package (ignored): ${id}`, err)
       }
     }
     clearPluginSeeded(id)
@@ -313,7 +313,7 @@ export function removeBundledPlugin(id: string): void {
   if (found) fs.rmSync(found.dir, { recursive: true, force: true })
   invalidateInstalledPluginIds()
   markUninstalled(id)
-  logger.info(`[Plugins] 插件包已卸载: ${id}`)
+  logger.info(`[Plugins] Plugin package uninstalled: ${id}`)
 }
 
 /** 重装内置插件：铺回目录 + 清掉 `uninstalled` 记录 */

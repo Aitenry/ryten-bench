@@ -48,7 +48,7 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
   } catch (err) {
-    logger.warn('[Plugins] 扫描插件目录失败:', err)
+    logger.warn('[Plugins] Failed to scan plugin directory:', err)
     return out
   }
   for (const entry of entries) {
@@ -58,13 +58,13 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
     try {
       const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
       if (!isValidManifest(raw)) {
-        logger.warn(`[Plugins] ${entry.name}: plugin.json 字段非法，跳过`)
+        logger.warn(`[Plugins] ${entry.name}: invalid plugin.json fields, skipping`)
         continue
       }
       const manifest = raw as unknown as PluginManifest
       // 目录名与 manifest.id 一致性（协议路由按 manifest.id 寻址）
       if (manifest.id !== entry.name) {
-        logger.warn(`[Plugins] ${entry.name}: manifest.id(${manifest.id}) 与目录名不一致，跳过`)
+        logger.warn(`[Plugins] ${entry.name}: manifest.id(${manifest.id}) does not match directory name, skipping`)
         continue
       }
       // 保留 id（host 是宿主 UI 桥地址段；harness/notes 是系统级功能）：合法清单也不装载
@@ -72,15 +72,15 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
         if (!warnedReservedIds.has(entry.name)) {
           warnedReservedIds.add(entry.name)
           logger.warn(
-            `[Plugins] ${entry.name}: 保留 id（宿主 UI 桥 / 系统级功能），不再作为插件装载，跳过；` +
-              `旧版本残留的插件目录可以手动删除：${dir}`
+            `[Plugins] ${entry.name}: reserved id (host UI bridge / system-level feature), no longer loaded as a plugin, skipping; ` +
+              `leftover plugin directories from older versions can be deleted manually: ${dir}`
           )
         }
         continue
       }
       out.push({ id: entry.name, dir, manifest })
     } catch (err) {
-      logger.warn(`[Plugins] ${entry.name}: plugin.json 读取失败，跳过:`, err)
+      logger.warn(`[Plugins] ${entry.name}: failed to read plugin.json, skipping:`, err)
     }
   }
   return out

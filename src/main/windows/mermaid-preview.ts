@@ -32,7 +32,7 @@ export function registerMermaidPreviewIpc(): void {
       // 快速连续预览时上一次导航会被下一次取代并以 ERR_ABORTED 拒绝——吞掉
       // 避免主进程 unhandled rejection（修复）
       mermaidPreviewWin.loadURL(dataUrl).catch((err) => {
-        logger.warn('[Mermaid] 预览加载失败:', (err as Error)?.message)
+        logger.warn('[Mermaid] Failed to load preview:', (err as Error)?.message)
       })
       mermaidPreviewWin.focus()
       return
@@ -62,7 +62,7 @@ export function registerMermaidPreviewIpc(): void {
       mermaidPreviewWin?.show()
     })
     mermaidPreviewWin.loadURL(dataUrl).catch((err) => {
-      logger.warn('[Mermaid] 预览加载失败:', (err as Error)?.message)
+      logger.warn('[Mermaid] Failed to load preview:', (err as Error)?.message)
     })
   })
 }

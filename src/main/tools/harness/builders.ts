@@ -98,7 +98,7 @@ function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[
   try {
     return mcpToolProvider()
   } catch (err) {
-    console.warn('[Harness] 读取 MCP 工具失败:', err)
+    console.warn('[Harness] Failed to read MCP tools:', err)
     return { tools: [], infos: [] }
   }
 }
@@ -207,7 +207,7 @@ function enabledMcpToolNames(): string[] {
     const config = settingsStore.get('mainAgent') as MainAgentConfig | undefined
     return Array.isArray(config?.mcpTools) ? config.mcpTools : []
   } catch (err) {
-    console.warn('[Harness] 读取已启用的 MCP 工具失败:', err)
+    console.warn('[Harness] Failed to read enabled MCP tools:', err)
     return []
   }
 }

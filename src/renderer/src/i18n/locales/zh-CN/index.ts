@@ -6,6 +6,7 @@ import { zhCNShell } from './shell'
 import { zhCNMarkdown } from './markdown'
 import { harnessZhCN } from './harness'
 import { notesZhCN } from './notes'
+import { zhCNLattice } from './lattice'
 
 /**
  * 简体中文是**源语言**：词条结构与文案以这里为准。
@@ -21,5 +22,7 @@ export const zhCN = {
   shell: zhCNShell,
   markdown: zhCNMarkdown,
   ...harnessZhCN,
-  ...notesZhCN
+  ...notesZhCN,
+  /* 登录 / 账号 / Lattice 插件中心 / 同步（login.*、lattice.*、plugins.hub.*、sync.*） */
+  ...zhCNLattice
 }

@@ -32,7 +32,7 @@ export function registerIpcHandlers(handlers: IpcHandlerMap): () => void {
         try {
           return await handler(...(args as never[]))
         } catch (err) {
-          logger.error(`[IPC] ${channel} 处理失败:`, err)
+          logger.error(`[IPC] Error in ${channel}:`, err)
           throw err
         }
       })
@@ -84,7 +84,7 @@ export class EffectScope {
       try {
         undo()
       } catch (err) {
-        logger.warn('[IPC] 效果回滚失败:', err)
+        logger.warn('[IPC] Failed to roll back effect:', err)
       }
     }
   }

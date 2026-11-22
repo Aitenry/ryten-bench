@@ -145,7 +145,7 @@ class HarnessService {
         // 文件名净化：renderer 传入的 fileName 可能含路径分隔符/..，直接拼接会写出 uploads 目录
         const safeName = path.basename(doc.fileName)
         if (!safeName) {
-          logger.warn(`[Harness] 忽略非法上传文件名: ${doc.fileName}`)
+          logger.warn(`[Harness] Ignoring invalid upload file name: ${doc.fileName}`)
           continue
         }
         const destPath = path.join(uploadsDir, safeName)

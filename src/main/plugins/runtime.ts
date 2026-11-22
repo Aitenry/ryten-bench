@@ -190,7 +190,7 @@ export function installHostRuntime(): void {
   }
   target.__RB_HOST_RESOLVE__ = resolveHostModule
   logger.info(
-    `[Plugins] 宿主运行时已挂载（@host/main ${Object.keys(HOST_MAIN).length} 个 + @host/shared ${Object.keys(HOST_SHARED).length} 个）`
+    `[Plugins] Host runtime mounted (@host/main ${Object.keys(HOST_MAIN).length} modules + @host/shared ${Object.keys(HOST_SHARED).length} modules)`
   )
 }
 

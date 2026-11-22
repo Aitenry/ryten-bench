@@ -100,9 +100,9 @@ export function registerPluginProtocolHandler(): void {
       // 诊断日志只在真正值得查的分支留声：目录穿越照旧 warn（安全事件），
       // 缺失文件（可选资源）降级到 debug——它每次装包都会发生，不该刷主日志。
       if (decision.reason === 'forbidden') {
-        logger.warn(`[Plugins] plugin:// 目录穿越被拦截: ${request.url}`)
+        logger.warn(`[Plugins] plugin:// path traversal blocked: ${request.url}`)
       } else if (decision.reason === 'not-a-file') {
-        logger.debug(`[Plugins] plugin:// 文件不存在: ${request.url}`)
+        logger.debug(`[Plugins] plugin:// file not found: ${request.url}`)
       }
       return new Response(decisionText(decision.reason), { status: decision.status })
     }
@@ -112,7 +112,7 @@ export function registerPluginProtocolHandler(): void {
       const mime = MIME[extname(decision.abs).toLowerCase()] ?? 'application/octet-stream'
       return new Response(res.body, { status: res.status, headers: { 'content-type': mime } })
     } catch (err) {
-      logger.warn(`[Plugins] plugin:// 读取失败: ${decision.abs}`, err)
+      logger.warn(`[Plugins] plugin:// read failed: ${decision.abs}`, err)
       return new Response('read failed', { status: 500 })
     }
   })

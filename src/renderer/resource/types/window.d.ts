@@ -128,22 +128,6 @@ export interface Window {
       setEnabled: (id: string, enabled: boolean) => Promise<unknown[]>
       /** 无参 = 第三方插件选目录安装；带 id = 从应用包重装某个内置插件 */
       install: (id?: string) => Promise<{ ok: boolean; id?: string; error?: string }>
-      /** 插件仓库（GitHub）里可安装的插件清单（网络失败会抛错） */
-      available: () => Promise<{
-        repo: string
-        tag?: string
-        plugins: {
-          id: string
-          name: string
-          version: string
-          description?: string
-          asset: string
-          size?: number
-          installed: boolean
-        }[]
-      }>
-      /** 从插件仓库安装（或升级）某个插件 */
-      installFromGithub: (id: string) => Promise<{ ok: boolean; id?: string; error?: string }>
       /** 从本地路径安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json` */
       installLocal: (source: string) => Promise<{
         ok: boolean

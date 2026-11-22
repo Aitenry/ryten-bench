@@ -70,7 +70,7 @@ function rehypeSkipHugeHighlight(): (tree: unknown) => void {
     // "Cannot use 'in' operator to search for 'children' in undefined"，整棵 markdown
     // 渲染树会被 ErrorBoundary 兜住，界面直接白掉。这里直接退出，退化成「不做降级」。
     if (!tree || typeof tree !== 'object') {
-      console.warn('[MarkdownLoad] rehypeSkipHugeHighlight 应以 attacher 形式传入（不要加括号）')
+      console.warn('[MarkdownLoad] rehypeSkipHugeHighlight must be passed as an attacher (no parentheses)')
       return
     }
     visit(tree as never, 'element', (node: never, _index: never, parent: never) => {

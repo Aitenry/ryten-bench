@@ -41,12 +41,12 @@ function loadDwmSetter(): DwmSetWindowAttribute | null {
     ) as unknown as DwmSetWindowAttribute
     if (!notifiedReady) {
       notifiedReady = true
-      logger.info('[Window] DWM 窗口边框颜色接口已就绪（koffi → dwmapi.dll）')
+      logger.info('[Window] DWM window border color API ready (koffi -> dwmapi.dll)')
     }
     return setWindowAttribute
   } catch (err) {
     koffiLoadFailed = true
-    logger.warn('[Window] 加载 dwmapi.dll 失败，窗口边框颜色保持系统默认:', err)
+    logger.warn('[Window] Failed to load dwmapi.dll, keeping system default window border color:', err)
     return null
   }
 }
@@ -77,8 +77,8 @@ export function syncWindowBorderColor(win: BrowserWindow, cssColor: string): voi
     const value = Buffer.alloc(4)
     value.writeUInt32LE(colorRef, 0)
     const hr = setter(hwnd, DWMWA_BORDER_COLOR, value, 4)
-    if (hr !== 0) logger.debug('[Window] DwmSetWindowAttribute(DWMWA_BORDER_COLOR) 返回', hr)
+    if (hr !== 0) logger.debug('[Window] DwmSetWindowAttribute(DWMWA_BORDER_COLOR) returned', hr)
   } catch (err) {
-    logger.debug('[Window] 设置 DWM 窗口边框颜色失败:', err)
+    logger.debug('[Window] Failed to set DWM window border color:', err)
   }
 }

@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // harness / notes 已是系统级功能，不再打包为插件。
-// 目前没有随应用分发的内置插件；第三方插件由 ryten-plugins 仓库自行构建。
+// 目前没有随应用分发的内置插件；第三方插件在自己的库里构建后发布到插件中心。
 const PLUGIN_IDS = []
 
 const args = process.argv.slice(2)

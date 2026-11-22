@@ -6,47 +6,21 @@
 >
 > 本文是分轮实施的方案书。P1~P5 已完成（见文末表格）。
 
-## 独立插件仓库（P5 之后，2026-09-26 用户选定）
+## 独立分发的插件（P5 之后，2026-09-26 选定）
 
-planner 与音乐**不再随应用分发**：它们搬到了独立仓库
-[`Aitenry/ryten-plugins`](https://github.com/Aitenry/ryten-plugins)（公开），当作第三方插件安装。
+planner 与音乐**不再随应用分发**：它们变成第三方插件 `task-planner` / `music-player`，
+由用户从**插件中心**（Lattice 平台）安装，或从本机压缩包 / 目录安装。
 
-```
-插件仓库                                   应用侧
-plugins/<id>/manifest.ts …（源码）         设置 → 插件 →「从插件仓库安装」
-  │  CI：node scripts/build.mjs --tag v…      │  读 <repo>/plugins.json（索引，含 sha256）
-  ▼                                            │  下载 <repo>/releases/download/<tag>/<id>-<v>.zip
-dist/<id>/{plugin.json,main.cjs,             │  校验 sha256 → 解压 → 校验 plugin.json
-           renderer.mjs,chunk-*.mjs}          ▼  装进 userData/plugins/<id>/ → 启用并装载
-dist/<id>-<version>.zip  →  GitHub Release
-plugins.json（索引，提交回 main）
-```
+> **分发链路变更（2026-11-22）**：早期这两个插件放在一个独立的插件仓库里，用「仓库根
+> `plugins.json` 静态索引 + Release 资产 zip」分发，应用按索引下载、校验 sha256、解压安装
+> （URL 规则另有一个纯函数模块，加两条离线 / 在线工装）。这条链路已整体移除：索引与 URL 规则模块、
+> 主进程的静态索引安装通道、对应工装全部删掉。插件统一由 Lattice 插件中心分发（安装包与源码一起
+> 上传 / 下载，客户端按 sha256 校验），落地内核仍只有一份：`src/main/plugins/package-install.ts`
+> （插件中心安装 / 本地 zip / 本地目录共用）。
 
-- **安装实现**：`src/main/plugins/github.ts`（索引 → 下载 → sha256 → 解压（拒绝目录穿越/子目录）→ 安装/升级）。
-  地址可用 `RB_PLUGINS_REPO` 覆盖（离线工装用插件仓库自带的 fixture 服务器指向本机 HTTP）。
-- **URL 规则单独锁住**：索引/资产地址由纯函数 `src/shared/plugin/index-url.ts` 生成，
-  `node --experimental-strip-types test/verify-plugin-asset-url.mjs` 逐分支断言（18 条）——
-  重点是「索引里没有 tag 时走 `releases/latest/download/<asset>`」而不是 404 的
-  `releases/download/latest/<asset>`。fixture 只覆盖「索引与资产同源」那条分支
-  （`verify-github-plugin-install` 19 条），其余分支由这份离线断言兜住。
-- **索引可能比 Release 晚几分钟**：`raw.githubusercontent.com` 的 CDN 会缓存索引。
-  2026-09-26 实测：CI 发完 v0.1.1、资产已可下载，应用读到的索引仍是 `tag=v0.1.0` 约 1~2 分钟；
-  试过在 URL 上加 `?t=<随机>` 做 cache-buster，**仍然吃到 `x-cache: HIT` 的旧内容**（加了没用，
-  反而多一次未命中），所以最终保持干净 URL、把这条写进文档：面板的「刷新」会重新读，
-  但同样受 CDN 限制；发布后立刻验证时先确认索引里的 `tag` 已经是新版本。
-- **仓库已发布并实测（2026-09-26）**：`Aitenry/ryten-plugins` 已建（public，MIT，README 英文），
-  推 tag `v0.1.0` 后 CI 成功（run #1，约 30s）——Release 里两个 zip 的 `digest` 与 CI 提交回 `main`
-  的 `plugins.json`（`tag: v0.1.0`）里的 `size`/`sha256` **逐字节一致**。
-  真机链路由新增的在线工装 `test/verify-plugin-github-live.mjs` 实测（10 条断言全绿）：
-  应用默认索引地址（`raw.githubusercontent.com`）0.3~1.1s 读回 `tag=v0.1.0`；`installFromGithub('music-player')`
-  真实下载 Release 资产（22KB，资产主机在本地网络上时快时慢：1.4s / 20.4s）+ sha256 校验通过 → 装进
-  `userData/plugins/music-player` → 菜单/通道/自带 DDL 建出 `music_folders` 全部可用 → 卸载含 purge 清干净。
-  ⚠️ 同一台机器上 PowerShell 的 `Invoke-WebRequest` 打 `raw.githubusercontent.com` 会 6/6 超时而 Electron 的
-  `net.fetch` 正常——**判据以应用自身为准**，不要用 PowerShell 的连通性否定这条链路。
-- **构建不可字节复现**：zip 内嵌条目时间戳，同源码两次构建**大小相同、sha256 不同**，因此索引必须与
-  上传的资产出自同一次构建（CI 就是这么做的；本地 `npm run build` 改写 `plugins.json` 后**不要提交**，
-  除非发布的正是那批本地 zip）。插件仓库的 fixture 服务器已改为**按本机 dist 现算** `size`/`sha256`
-  并去掉 `tag`，所以本地跑离线工装与仓库里那份 CI 索引可以并存。
+- **构建不可字节复现**：zip 内嵌条目时间戳，同源码两次构建**大小相同、sha256 不同**，因此上传到插件中心
+  的包必须与**一次真实构建**对应（CI 就是这么做的；本地 `npm run build` 产出的 zip 别当成已发布版本）。
+  发布工装里的 fixture 服务器按本机 dist 现算 `size`/`sha256`。
 - **命名**：独立插件的目录名与 id 一致（`task-planner` / `music-player`），IPC 命名空间随之成为
   `plugin:task-planner:*` / `plugin:music-player:*`；**数据库表名不变**（`planner_tasks` / `music_folders`），
   所以老用户的数据在「内置 → 独立」这次搬家前后是同一批行。
@@ -73,7 +47,7 @@ resources/plugins/<id>/      ──▶   userData/plugins/<id>/
 - **运行时不再有「内置插件」**：应用里没有对插件代码的静态 import，所有插件都从
   `userData/plugins/<id>/` 按同一条外部插件链路加载（`loadExternalMain` + `plugin://` 渲染模块）。
 - 「内置」只表示**随应用分发、可随时重装**（现在只有 `notes` / `harness`）；「第三方」是用户装的
-  （含从插件仓库安装的 `task-planner` / `music-player`）。二者在列表里区分，卸载行为一致
+  （含从插件中心安装的 `task-planner` / `music-player`）。二者在列表里区分，卸载行为一致
   （删目录），区别是内置的可以从应用包重新安装。
 - 插件的数据**不在插件目录里**（表在 core 的 schema、行在同一个 PGlite 库），所以「卸载」与「清数据」是两件事，
   分开询问（见下）。
@@ -86,8 +60,8 @@ resources/plugins/<id>/      ──▶   userData/plugins/<id>/
 
 - **应用内的内置插件**（`notes` / `harness`）：源码照常写相对路径，构建时自动改写，**源码一行不用改**
   （仍按真实 core 类型做 typecheck）。
-- **独立仓库里的插件**（`task-planner` / `music-player`）：源码直接写 `@host/main/**`、`@host/renderer/**`
-  （仓库里没有 core 源码可指），宿主 API 的类型由仓库自己的 `host.d.ts` 声明。
+- **独立分发的插件**（`task-planner` / `music-player`）：源码直接写 `@host/main/**`、`@host/renderer/**`
+  （插件包里没有 core 源码可指），宿主 API 的类型由插件自带的 `host.d.ts` 声明。
 
 打包后统计出的接口面（去重，2026-09-26 实测；契约以 `src/main/plugins/runtime.ts` 与
 `src/renderer/src/plugin-host/host-ui.ts` 的表为准，`node test/audit-plugin-host-contract.mjs` 会核对）：
@@ -262,8 +236,8 @@ Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），结果是**每次启用�
     + 删一个 chunk + 塞一个残留 chunk）→ 重启后**无人点过任何按钮**即逐字节恢复、残留 chunk 被清掉、
       菜单照常且渲染包真的能装载 → 再重启一次产物 mtime 全不变（无 churn）→ 改**应用包**那份（模拟重打包）
       → 重启跟着更新）。
-- **安装（独立插件）**：设置 → 插件 →「从插件仓库安装」→ 读索引、下载 zip、校验 sha256、解压装进
-  `userData/plugins/<id>/`，随后自动启用并装载（见上文「独立插件仓库」）。
+- **安装（独立插件）**：设置 → 插件 → 插件中心 → 选一个版本安装 → 下载 zip、校验 sha256、解压装进
+  `userData/plugins/<id>/`，随后自动启用并装载（见上文「独立分发的插件」）。
 - **安装（本地：压缩包 / 文件夹，2026-09-26 新增）**：设置 → 插件 →「从本地安装」（**一个**入口）。
   - 为什么只有一个按钮：Windows / Linux 的系统选择框**不能同时**是文件选择器与目录选择器
     （Electron 文档明说：两个属性同时给时只显示目录选择器），所以单个对话框只能表达一种形态。
@@ -272,9 +246,9 @@ Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），结果是**每次启用�
     （对话框标题与筛选器名字把这件事写清楚，安装时按 `dirname` 取父目录）。
   - 压缩包解压允许子目录与「右键压缩整个文件夹」多出来的那层顶层目录（自动剥掉），
     **拒绝**绝对路径与 `..` 目录穿越，噪音条目（`__MACOSX` / `.DS_Store` / `Thumbs.db`）忽略；
-  - 文件夹必须是插件**构建产物**目录（含 `plugin.json`，例如插件仓库里的 `dist/<id>`）；
+  - 文件夹必须是插件**构建产物**目录（含 `plugin.json`，例如构建产物 `dist/<id>`）；
     选它的上一级且里面只有一个包时自动下钻，有多个包则报错要求选其中一个；
-  - 两种来源与「从插件仓库安装」共用同一个落地内核 `src/main/plugins/package-install.ts`：
+  - 两种来源与插件中心的安装共用同一个落地内核 `src/main/plugins/package-install.ts`：
     同一套校验（字段齐备 / 拒绝 `builtin:true` / 拒绝覆盖内置 id / 入口文件必须存在）、
     同一套升级清理（旧版本多出来的文件删掉）、同样装完即启用并装载；
   - 装的是**拷贝**，不是就地启用：卸载删的永远是 `userData/plugins/<id>/`，不会碰到你选的目录；
@@ -287,8 +261,8 @@ Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），结果是**每次启用�
   现在每行右侧只有一个「⋯」，菜单三档：**更新 / 重新安装**（同名动作：用来源里的那份代码覆盖当前安装）、
   **启用 / 禁用**（原开关）、**卸载**（危险色，仍弹「代码与数据分开」的确认框）。
   - 更新来源：内置插件看**应用包里的同名副本**版本（`PluginListEntry.bundledVersion`，主进程随列表下发），
-    第三方插件看**插件仓库索引**版本（面板静默拉一次 `plugin.available()`，失败就当作没有更新来源，
-    不阻断列表；主进程侧索引有 60s 缓存）。没有来源（本地自己装的、又不在仓库里）→ 菜单不显示该项。
+    第三方插件看**插件中心目录**里的版本（面板静默拉一次 `lattice.list`，失败就当作没有更新来源，
+    不阻断列表）。没有来源（本地自己装的、又没发布到平台）→ 菜单不显示该项。
   - 菜单项文案照实说：来源版本与被装版本**不同** → 「更新到 vX」；**相同** → 「重新安装」。
   - 开关取消后，行内用「已停用」这几个字表达停用态（结构只在携带信息时才出现）。
   - 覆盖见 `test/verify-plugin-row-menu.mjs`（11 条：行内只有一个按钮/无开关、菜单三档、
@@ -337,7 +311,7 @@ Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），结果是**每次启用�
 | P3 ✅ | home 同款（含 GraphView 懒加载 chunk 仍在）+ **渲染层改成多文件产物**（入口 + `chunk-<hash>.mjs`，见上节）+ home 自己的 `plugin.purge`（文档/正文/目录/知识库/图谱/待办/画布坐标/图片 + 设置键 `graph`）                                                                                                                                                                                                                    | home 从 `userData/plugins/home` 装载；入口 118.0KB（**不含 echarts**）+ 懒加载 `chunk-IZPBTTMD.mjs` 1134KB，首屏只取入口与入口静态共享的 chunk，打开图谱才取懒加载那个（CDP Network 域实测）；7 类数据经磁盘包 handler 落库；卸载（不保留数据）后目录/菜单/路由/通道/harness 工具清单与 8 张表行数全清（images 也归 0）、不碰 music 的行、默认落地页从 `#/home` 退到 `#/planner`，重启不会自动铺回来，重装后原样回来（数据仍为空）；`verify-plugin-home-package` 57 条全绿                                                                                                                                                                                                                                                   |
 | P4 ✅ | harness 同款 + harness 自己的 `plugin.purge`（7 张表 + 三处托管目录：`userData/file-history`、`userData/tool-output`、`<memoryPath>/workspace-<id>` 与 `spill`）；**新增离线契约审计** `test/audit-plugin-host-contract.mjs`                                                                                                                                                                     | 四个插件全部从 `userData/plugins/<id>/` 装载（`loadedFrom().*.source === 'package'`）；harness 入口 111KB + 32 个 chunk（1712KB），打开助手只取 5/32 个 chunk；工作区/话题/子代理经磁盘包 handler 落库；卸载（不保留数据）后目录/菜单/路由/63 个通道/三个宿主钩子（preload·beforeQuit·memoryDump）与 7 张表行数全清，`<memoryPath>/workspace-<id>`、`spill`、`file-history`、`tool-output` 被删而 **`memoryPath` 本身、core 的 `workspace` 表、设置键 `harness` 保留**；重启不会自动铺回来，重装后原样回来（话题为空）；`verify-plugin-host` 61 条 / `verify-plugin-install-uninstall` 47 条 / `verify-plugin-planner-package` 46 条 / `verify-plugin-home-package` 57 条 / `verify-plugin-harness-package` 50 条全绿 |
 | P5 ✅ | 删掉三处过渡物：应用内静态注册表（`main/plugins/builtin.ts`、`plugin-host/builtin.ts`）与白名单 `packaged.ts`；`stateSyncHook` / `syncBuiltinPluginIpcs` / `isPackageReady` 判断全部移除；`electron-builder.yml` 加 `resources/plugins` → `extraResources`；`build:win/mac/linux/unpack` 前置 `build:plugins`；**dev 下自动补打产物**（缺产物或产物落后于源码 → `--plugin <id> --dev`）；面板去掉「过渡期只有开关」的分支；README/MIGRATION 收尾 | `node test/verify-plugin-restructure.mjs` 断言「应用内零插件实现 import」+ 三处过渡物已删；`App.tsx` 的初始插件集合恒为空数组，四个插件的路由/菜单/设置页/provider 全靠清单元数据声明 + 磁盘包异步注册；`test/probe-dev-package-fallback.mjs` 实测「移走 `resources/plugins` → 启动即自动补打四个包并全部装上；只改一个插件的源码 mtime → 只重打那一个」；**打包产物实测**（`pnpm build:unpack` + `test/probe-packaged-app-plugins.mjs`：把仓库的 `resources/plugins` 临时移走，打包应用仍从自己的 `resources/plugins` 铺出四个包，证明走的是 `app.isPackaged` 分支且没有误走 dev 补打）；全套 CDP 工装（61/47/46/57/50 条断言 + 6 个探针，含 `probe-uninstall-keep-data.mjs`：不勾 = 只删插件代码、数据留在库里且重装后原样回来；勾上 = 连数据一起清）在**删掉静态注册表之后**仍全绿                    |
-| P6 ✅ | **planner 与音乐移出应用、改成独立插件**：源码进 `Aitenry/ryten-plugins`（目录名与 id = `task-planner` / `music-player`，源码直接写 `@host/**`，自带 `host.d.ts` 与构建/发布 CI），应用侧新增「从插件仓库安装」（索引 + Release 资产 + sha256 校验 + 解压安装）                                                                                                                                                                       | 应用不再分发这两个插件（首启只有 笔记/AI 助手）；从 fixture 服务器走完整链路安装：索引 → 下载 zip → sha256 → 解压 → 装入 `userData/plugins` → 自动启用 → 菜单/界面可用；插件自带 DDL 在宿主库建出 `planner_tasks` / `music_folders`；两者在清单里是第三方（builtin/bundled=false）；卸载（含 purge）后它建的表行归 0；`verify-github-plugin-install` 19 条全绿；老 profile 升级时旧 `planner`/`music` 铺包被清理（`probe-retired-builtins-cleanup`）                                                                                                                                                                                                                                               |
+| P6 ✅ | **planner 与音乐移出应用、改成独立插件**：源码移出应用（目录名与 id = `task-planner` / `music-player`，源码直接写 `@host/**`，自带 `host.d.ts` 与构建/发布 CI），应用侧改为从**插件中心**安装（平台目录 + 预签名下载 + sha256 校验 + 解压安装）                                                                                                                                                                       | 应用不再分发这两个插件（首启只有 笔记/AI 助手）；从 fixture 服务器走完整链路安装：索引 → 下载 zip → sha256 → 解压 → 装入 `userData/plugins` → 自动启用 → 菜单/界面可用；插件自带 DDL 在宿主库建出 `planner_tasks` / `music_folders`；两者在清单里是第三方（builtin/bundled=false）；卸载（含 purge）后它建的表行归 0；安装链路工装全绿；老 profile 升级时旧 `planner`/`music` 铺包被清理（`probe-retired-builtins-cleanup`）                                                                                                                                                                                                                                               |
 
 ## 契约漂移的离线审计（P4 落地）
 
@@ -381,7 +355,7 @@ Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），结果是**每次启用�
 `main/plugins/builtin.ts`、`plugin-host/builtin.ts` 与 `packaged.ts` 白名单）。
 `test/probe-first-frame-menu.mjs` 断言的就是这条：首帧侧栏即含「笔记/助手」，
 而两个磁盘包此时一个都还没加载完（独立插件装上后的首帧同样靠声明式预注册，
-由 `test/verify-github-plugin-install.mjs` 覆盖）。
+由插件中心的安装工装覆盖）。
 
 ### 卸载的边界（P1 实测踩到，P2~P4 同样适用；P5 后第 2 条随静态回退一起作废）
 

@@ -39,7 +39,7 @@ export function chatIpcHandlers(): IpcHandlerMap {
       return { ok: true, data: activation }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('[Chat] 初始化对话工作目录失败:', message)
+      logger.warn('[Chat] Failed to initialize chat working directory:', message)
       return { ok: false, error: message }
     }
   })
@@ -57,7 +57,7 @@ export function chatIpcHandlers(): IpcHandlerMap {
       return { ok: true, data: activation }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('[Chat] 切换会话工作目录失败:', message)
+      logger.warn('[Chat] Failed to switch session working directory:', message)
       return { ok: false, error: message }
     }
   })
@@ -75,7 +75,7 @@ export function chatIpcHandlers(): IpcHandlerMap {
       return { ok: true, data: { ids, rootWorkspaceId: workspace?.id ?? null } }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('[Chat] 读取对话工作区失败:', message)
+      logger.warn('[Chat] Failed to read chat workspaces:', message)
       return { ok: false, error: message }
     }
   })
@@ -94,7 +94,7 @@ export function chatIpcHandlers(): IpcHandlerMap {
       return { ok: true, data: removeChatTopicDir(Number(topicId)) }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('[Chat] 清理会话目录失败:', message)
+      logger.warn('[Chat] Failed to clean up session directory:', message)
       return { ok: false, error: message }
     }
   })

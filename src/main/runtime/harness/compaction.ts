@@ -235,5 +235,5 @@ export function pruneToolOutput(text: string, budget = TOOL_RESULT_PRUNE_CHARS):
 
 /** 供日志使用的安全错误格式化 */
 export function compactionError(err: unknown): void {
-  logger.warn('[Compaction] 摘要压缩失败，回退字符预算截断:', err)
+  logger.warn('[Compaction] Summary compaction failed, falling back to character-budget truncation:', err)
 }

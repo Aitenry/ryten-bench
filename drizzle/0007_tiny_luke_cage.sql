@@ -1,5 +1,5 @@
 -- 0007：把 task-planner / music-player 两组表从**本仓库的 schema** 里摘出去
--- （它们已改成独立插件，源码与发布在 github.com/Aitenry/ryten-plugins，建表由插件自带
+-- （它们已改成独立插件，发布在 Lattice 插件中心，建表由插件自带
 -- 的 `main/db/ddl.ts` 幂等完成）。
 --
 -- 为什么这条迁移是空的：
@@ -11,7 +11,7 @@
 --   （drizzle/meta/0007_snapshot.json 已不含这四张表），下一次 generate 就不会再想删它们。
 --
 -- 落到两种库上的效果：
---   老库：四张表与数据原样保留；把插件装回来（设置 → 插件 → 从 GitHub 安装）立刻可用。
+--   老库：四张表与数据原样保留；把插件装回来（设置 → 插件 → 插件中心安装）立刻可用。
 --   新库：0000_baseline.sql 仍会建这四张空表（历史迁移不可修改），插件自带的
 --         `CREATE TABLE IF NOT EXISTS` 命中即 no-op，功能与「插件自己建表」等价。
 --   —— 等以后做一次 schema 收敛（新 baseline）时再把这几张表彻底移出迁移链。

@@ -305,6 +305,6 @@ export async function handleProbeRequest(payload: {
       durationMs: Date.now() - startedAt
     })
   } catch (err) {
-    console.warn('[workshop] 探针结果回话失败:', err)
+    console.warn('[workshop] Failed to report probe result:', err)
   }
 }

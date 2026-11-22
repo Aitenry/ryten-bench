@@ -43,7 +43,7 @@ function publish(patch: Partial<LockScreenState>): void {
     try {
       onChange()
     } catch (err) {
-      console.error('[lock-screen] 快照订阅回调异常:', err)
+      console.error('[lock-screen] Error in snapshot subscription callback:', err)
     }
   }
 }

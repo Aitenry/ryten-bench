@@ -9,7 +9,7 @@ import { hasBuild, isBuildStale, workshopHost } from './host'
  *
  * **发布 = 走宿主既有的安装链路**（`installPackageDir` → `setEnabledOverride` →
  * `loadExternalMain` → `broadcastPluginStateChanged`），与设置页里的「从本地安装」、
- * 「从插件仓库安装」是同一条路径的同一批函数。工坊不另造一条：否则「工坊装的插件」
+ * 「从插件中心安装」是同一条路径的同一批函数。工坊不另造一条：否则「工坊装的插件」
  * 与「用户装的插件」迟早会在升级清理、卸载记账、渲染层重载这些细节上分叉。
  */
 
@@ -105,7 +105,7 @@ export function unpublishDraft(id: string): void {
 /**
  * 导出成可分发的 zip（`<root>/exports/<id>-<version>.zip`）。
  *
- * 用途是「把我做的插件发给别人 / 传到插件仓库」：zip 内容与 `dist/<id>` 逐文件一致，
+ * 用途是「把我做的插件发给别人 / 传到插件中心」：zip 内容与 `dist/<id>` 逐文件一致，
  * 对方可以用设置页的「从本地安装 → 选 zip」装进来（那条链路本来就有）。
  */
 export async function exportDraft(

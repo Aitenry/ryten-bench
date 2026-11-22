@@ -13,7 +13,7 @@ import { unloadExternalMain } from './host'
  * 插件目录的安装/卸载流程（内置铺包与第三方共用同一套目录语义）：
  * - 安装（第三方）：选路径（压缩包 / 文件夹）→ 校验 plugin.json → 复制到
  *   `userData/plugins/<id>/` → 广播刷新。真正的实现在 `local-install.ts` /
- *   `package-install.ts`（与「从插件仓库安装」共用同一套校验与升级清理）；
+ *   `package-install.ts`（与插件中心的安装共用同一套校验与升级清理）；
  * - 卸载：若启用先停用（主进程注销 IPC + 广播渲染层卸载）→ 删除目录 → 广播。
  *
  * 内置插件（`bundled: true`）的卸载走 `ipc/plugins.ts` 的 `uninstallPlugin()`：它在删目录
@@ -58,6 +58,6 @@ export function uninstallExternalPlugin(id: string): void {
   unloadExternalMain(id)
   fs.rmSync(found.dir, { recursive: true, force: true })
   invalidateInstalledPluginIds()
-  logger.info(`[Plugins] 外部插件卸载: ${id}`)
+  logger.info(`[Plugins] External plugin uninstalled: ${id}`)
   broadcastPluginStateChanged()
 }

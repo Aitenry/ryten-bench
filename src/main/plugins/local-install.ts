@@ -14,7 +14,7 @@ import {
  *
  * - `.zip` 压缩包：解压到临时目录再按插件包安装（拒绝目录穿越；「压缩整个文件夹」
  *   多出来的那层顶层目录会自动剥掉，见 `extractZipToTemp`）；
- * - 插件**文件夹**（构建产物目录，例如插件仓库里的 `dist/<id>`）。
+ * - 插件**文件夹**（构建产物目录，例如 `dist/<id>`）。
  *
  * 为什么入口只有**一个**按钮：Windows / Linux 的系统选择框**不能同时**是文件选择器与
  * 目录选择器（Electron 文档明说：两个属性同时给时只显示目录选择器）。所以单个对话框
@@ -89,7 +89,7 @@ export async function installPluginFromLocalPath(source: string): Promise<Instal
     const extracted = await extractZipToTemp(source)
     try {
       const info = installPackageDir(extracted)
-      logger.info(`[Plugins] 本地压缩包安装完成：${source} → ${info.dest}`)
+      logger.info(`[Plugins] Local zip package installed: ${source} -> ${info.dest}`)
       return info
     } finally {
       fs.rmSync(extracted, { recursive: true, force: true })

@@ -147,7 +147,7 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
           try {
             await activateChatTopic(topicId)
           } catch (err) {
-            logger.warn('[Chat] 新话题的会话目录切换失败（不影响建话题）:', err)
+            logger.warn('[Chat] Failed to switch session directory for new topic (topic creation unaffected):', err)
           }
         }
         return topicId

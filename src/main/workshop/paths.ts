@@ -7,7 +7,7 @@ import * as path from 'path'
  * ```
  * <userData>/plugin-workshop/
  *   drafts/<id>/        草稿源码（助手唯一编辑面）
- *   dist/<id>/          构建产物（= 可安装插件包，与插件仓库 dist/<id> 同构）
+ *   dist/<id>/          构建产物（= 可安装插件包，与插件中心里发布的包同构）
  *   reports/<id>.json   最近一次验收报告（面板与工具都读它）
  *   exports/<id>-<v>.zip 导出的可分发压缩包
  * ```

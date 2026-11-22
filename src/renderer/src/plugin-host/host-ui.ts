@@ -210,12 +210,12 @@ export function assertHostUiShape(): void {
     if (typeof entry.module !== 'object' || entry.module === null) continue
     const shape = entry.module as Record<string, unknown>
     for (const name of entry.names) {
-      if (!(name in shape)) problems.push(`${key} 缺导出 '${name}'`)
+      if (!(name in shape)) problems.push(`${key} missing export '${name}'`)
     }
   }
   if (problems.length > 0) {
     console.warn(
-      `[plugin-host] 宿主 UI 表声明与实际模块不一致（${problems.length} 处，插件会加载失败）：\n  ` +
+      `[plugin-host] Host UI table declarations do not match actual modules (${problems.length} mismatches, plugins will fail to load):\n  ` +
         problems.join('\n  ')
     )
   }
@@ -234,6 +234,6 @@ export function installHostUi(): void {
     window.api.plugin.reportHostUi(names)
   } catch (err) {
     // 不抛：宿主 UI 表本身已经可用（vendor 桥仍能工作），只是 host 桥会报可读错误
-    console.warn('[plugin-host] 上报宿主 UI 导出名失败（host 桥可能不可用）:', err)
+    console.warn('[plugin-host] Failed to report host UI export names (host bridge may be unavailable):', err)
   }
 }

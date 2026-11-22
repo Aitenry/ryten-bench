@@ -175,7 +175,7 @@ export function listMcpServers(): McpServerConfig[] {
   try {
     raw = readServersFromStore() ?? []
   } catch (err) {
-    logger.warn('[MCP] 读取服务器配置失败:', err)
+    logger.warn('[MCP] Failed to read server configuration:', err)
     return []
   }
   const out: McpServerConfig[] = []
@@ -183,7 +183,7 @@ export function listMcpServers(): McpServerConfig[] {
     try {
       out.push(normalizeMcpServer(item))
     } catch (err) {
-      logger.warn(`[MCP] 忽略无法解析的服务器配置 "${item?.name ?? item?.id ?? '?'}":`, err)
+      logger.warn(`[MCP] Ignoring unparsable server configuration "${item?.name ?? item?.id ?? '?'}":`, err)
     }
   }
   return out
@@ -339,7 +339,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
         for (const item of listed) {
           const fullName = mcpToolName(namespace, item.rawName)
           if (byFullName.has(fullName)) {
-            logger.warn(`[MCP] 工具名冲突：${fullName}（同机重名，已忽略后一个）`)
+            logger.warn(`[MCP] Tool name conflict: ${fullName} (duplicate name on the same server, ignoring the latter)`)
             continue
           }
           const info: ToolInfo = {
@@ -371,7 +371,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
         entries.push({ config, status: 'ok', tools })
         loggedErrors.delete(config.id)
         logger.info(
-          `[MCP] 已连接 ${config.name}（${config.transport}）：${tools.length} 个工具` +
+          `[MCP] Connected ${config.name} (${config.transport}): ${tools.length} tools` +
             ` env=${JSON.stringify(maskMap(config.env))} headers=${JSON.stringify(maskMap(config.headers))}`
         )
       } catch (err) {
@@ -380,7 +380,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
         entries.push({ config, status: 'error', error: message, tools: [] })
         if (!loggedErrors.has(config.id)) {
           loggedErrors.add(config.id)
-          logger.warn(`[MCP] 连接失败 ${config.name}（${config.transport}）：${message}`)
+          logger.warn(`[MCP] Failed to connect to ${config.name} (${config.transport}): ${message}`)
         }
       }
     }
@@ -399,7 +399,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
       entries
     }
   })()
-    .catch((err) => logger.error('[MCP] 刷新服务器目录失败:', err))
+    .catch((err) => logger.error('[MCP] Failed to refresh server catalog:', err))
     .finally(() => {
       loading = null
     })
@@ -539,5 +539,5 @@ export async function closeAllMcp(): Promise<void> {
   snapshot = emptySnapshot()
   loggedErrors.clear()
   await Promise.all(clients.map((client) => client.close().catch(() => undefined)))
-  if (clients.length > 0) logger.info(`[MCP] 已关闭 ${clients.length} 个服务器连接`)
+  if (clients.length > 0) logger.info(`[MCP] Closed ${clients.length} server connections`)
 }

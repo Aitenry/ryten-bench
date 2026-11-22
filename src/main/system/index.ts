@@ -25,7 +25,7 @@ export function startSystemModules(): void {
   startHarness()
   startNotes()
 
-  logger.info('[System] AI 助手 / 资料库已作为系统功能启动')
+  logger.info('[System] AI assistant / library started as system features')
 }
 
 /** 退出装配（应用退出时调用；顺序与启动相反） */

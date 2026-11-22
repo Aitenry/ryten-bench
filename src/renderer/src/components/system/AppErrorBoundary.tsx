@@ -18,7 +18,7 @@ export class AppErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('[AppErrorBoundary] 捕获未处理渲染错误:', error, info.componentStack)
+    console.error('[AppErrorBoundary] Caught unhandled render error:', error, info.componentStack)
   }
 
   private handleReload = (): void => {

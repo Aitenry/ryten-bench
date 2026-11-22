@@ -7,6 +7,7 @@ import { enUSShell } from './shell'
 import { enUSMarkdown } from './markdown'
 import { harnessEnUS } from './harness'
 import { notesEnUS } from './notes'
+import { enUSLattice } from './lattice'
 
 /**
  * `typeof zhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错。
@@ -20,5 +21,7 @@ export const enUS: typeof zhCN = {
   shell: enUSShell,
   markdown: enUSMarkdown,
   ...harnessEnUS,
-  ...notesEnUS
+  ...notesEnUS,
+  /* Login / account / Lattice plugin hub / sync */
+  ...enUSLattice
 }

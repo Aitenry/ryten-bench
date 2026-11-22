@@ -63,7 +63,7 @@ export class PluginBoundary extends React.Component<PluginBoundaryProps, PluginB
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
     console.error(
-      `[plugin:${this.props.pluginId}] ${this.props.surface} 渲染失败（已隔离，宿主继续运行）:`,
+      `[plugin:${this.props.pluginId}] ${this.props.surface} failed to render (isolated, host continues running):`,
       error,
       info.componentStack
     )

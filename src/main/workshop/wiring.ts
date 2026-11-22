@@ -93,7 +93,21 @@ function configuredPluginsRoot(): string {
 function persistPluginsRoot(dir: string): void {
   const current = (settingsStore.get('harness') as HarnessSettings | undefined) ?? {}
   settingsStore.set('harness', { ...current, pluginsPath: dir || undefined })
-  logger.info(`[Workshop] 插件存放路径已更新：${dir || '（清除）'}`)
+  logger.info(`[Workshop] Plugins path updated: ${dir || '(cleared)'}`)
+}
+
+/**
+ * 显式设置「插件存放路径」并**立即生效**（不重启）。
+ *
+ * 插件中心的「导入本地插件目录」需要它：用户选了自己放插件源码的仓库根，
+ * 导入后希望这些目录马上出现在「插件」模式里（可对话修改）。只写 settings 不够——
+ * `configurePluginsRoot` 是启动时注入的模块状态，不重新注入的话本进程内一直是旧路径。
+ * 由 `ipc/lattice.ts` 调用；持久化 + 运行时注入两件事都在这里，避免两处各写一半。
+ */
+export function applyPluginsRoot(dir: string): void {
+  const resolved = path.resolve(dir)
+  persistPluginsRoot(resolved)
+  configurePluginsRoot(resolved)
 }
 
 /**
@@ -151,8 +165,8 @@ export function installWorkshopHost(): void {
     }
   })
   logger.info(
-    `[Workshop] 插件工坊已接线：内部目录 ${root}；插件存放路径 ${configuredPluginsRoot() || '（未配置）'}` +
-      `（加载器基准 ${loaderBases().join(' / ')}）`
+    `[Workshop] Plugin workshop wired: internal directory ${root}; plugins path ${configuredPluginsRoot() || '(not configured)'} ` +
+      `(loader bases ${loaderBases().join(' / ')})`
   )
 }
 

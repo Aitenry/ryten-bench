@@ -88,9 +88,9 @@ export function loadModelProfiles(): Map<string, ModelProfileEntry> {
         map.set(entry.id, entry)
       }
     }
-    logger.info(`[ModelProfile] 已加载 ${map.size} 条模型元数据档案: ${profilePath()}`)
+    logger.info(`[ModelProfile] Loaded ${map.size} model metadata profiles: ${profilePath()}`)
   } catch (error) {
-    logger.warn(`[ModelProfile] 模型元数据档案加载失败（${profilePath()}）:`, error)
+    logger.warn(`[ModelProfile] Failed to load model metadata profiles (${profilePath()}):`, error)
   }
   profileCache = map
   return profileCache

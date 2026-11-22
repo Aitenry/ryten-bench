@@ -183,7 +183,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
         last != null && (titleRef.current !== last.title || contentRef.current !== last.content)
       if (dirty) {
         // 本地有未保存修改：不覆盖本地,仅提示（用户保存会覆盖工具写入,属已知取舍）
-        console.warn(`文档 [${data.docId}] 被聊天工具修改,本地存在未保存编辑,保留本地内容`)
+        console.warn(`Document [${data.docId}] was modified by a chat tool, keeping local content with unsaved edits`)
         return
       }
       // 未修改：直接重载工具写入的最新内容

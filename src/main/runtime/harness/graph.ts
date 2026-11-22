@@ -191,19 +191,19 @@ export function startGraphStream(
       queue.close()
     } catch (err) {
       if (options.signal?.aborted) {
-        logger.info('[Graph] 流已中止（用户取消或渲染进程失效）')
+        logger.info('[Graph] Stream aborted (user cancelled or renderer process failed)')
         queue.close()
         return
       }
       const error = err instanceof Error ? err : new Error(String(err))
       // 工具调用轮次耗尽：优雅收尾而非报错（保留已生成的部分内容，前端正常结束）
       if (isRecursionError(error)) {
-        logger.warn('[Graph] 工具调用轮次已达上限，自动停止:', error.message)
+        logger.warn('[Graph] Tool call limit reached, stopping automatically:', error.message)
         queue.push({ kind: 'text', text: RECURSION_STOP_NOTE })
         queue.close()
         return
       }
-      logger.error('[Graph] 流式执行失败:', error)
+      logger.error('[Graph] Streaming execution failed:', error)
       streamResult.error = error
       queue.close(error)
     }
@@ -232,7 +232,7 @@ export async function invokeGraph(
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err))
     if (isRecursionError(error)) {
-      logger.warn('[Graph] 工具调用轮次已达上限（非流式），返回收尾提示:', error.message)
+      logger.warn('[Graph] Tool call limit reached (non-streaming), returning close-out hint:', error.message)
       return [new AIMessage({ content: RECURSION_STOP_NOTE.trim() })]
     }
     throw err

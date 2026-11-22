@@ -11,8 +11,8 @@ import { isWorkshopConfigured, workshopHostOrNull } from './host'
 /**
  * 草稿 → 可安装插件包。
  *
- * 产物与插件仓库里的 `dist/<id>` **逐字节同构**（这才让「工坊装出来的插件」和
- * 「用户从仓库装的插件」走完全相同的装载/卸载/升级链路）：
+ * 产物与插件中心里发布的包 **逐字节同构**（这才让「工坊装出来的插件」和
+ * 「从插件中心装的插件」走完全相同的装载/卸载/升级链路）：
  *
  * ```
  * dist/<id>/plugin.json     清单（entry 由这里写入，builtin 强制 false）
@@ -225,7 +225,7 @@ function bridgeUrlFor(spec: string): string | null {
  * 宿主的 `external-loader.ts` 只在装载入口时改一次说明符，而懒加载 chunk 是浏览器按
  * `plugin://<id>/chunk-x.mjs` **自己取回来**的——那条路径没有任何改写机会，chunk 里残留的
  * `from "react"` 会直接报 `Failed to resolve module specifier "react"`。
- * 独立插件仓库（ryten-plugins）的构建也是这么做的：产物里只有 `plugin://host/ui.js?m=<键>`。
+ * 独立分发的插件包也是这么构建的：产物里只有 `plugin://host/ui.js?m=<键>`。
  */
 export function rewriteHostSpecifiersInBundle(outDir: string): number {
   const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|(?:^|[;}\n])\s*import\s*)(['"])([^'"]+)\2/gm

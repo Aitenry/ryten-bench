@@ -47,7 +47,7 @@ export async function installPluginCss(id: string): Promise<boolean> {
   try {
     const res = await fetch(pluginUrl(id, 'plugin.css'))
     if (!res.ok) {
-      console.debug(`[plugin:${id}] 没有 plugin.css（HTTP ${res.status}），跳过样式注入`)
+      console.debug(`[plugin:${id}] No plugin.css (HTTP ${res.status}), skipping style injection`)
       return false
     }
     const css = await res.text()
@@ -57,19 +57,19 @@ export async function installPluginCss(id: string): Promise<boolean> {
       audit = sanitizePluginCss(css)
     } catch (err) {
       // 清洗器自身异常时**宁可不注入**也不要把未清洗的全局 CSS 放进宿主文档
-      console.warn(`[plugin:${id}] plugin.css 安全清洗失败，已跳过样式注入:`, err)
+      console.warn(`[plugin:${id}] plugin.css sanitization failed, skipping style injection:`, err)
       return false
     }
     if (audit.dropped.length > 0 || audit.imports.length > 0) {
       const dropped = audit.dropped.slice(0, 6).join(' | ')
       console.warn(
-        `[plugin:${id}] plugin.css 里有 ${audit.dropped.length} 条会波及宿主的全局规则已被丢弃` +
-          (audit.imports.length > 0 ? `，另有 ${audit.imports.length} 条 @import 被移除` : '') +
-          (dropped ? `：${dropped}${audit.dropped.length > 6 ? ' …' : ''}` : '')
+        `[plugin:${id}] Dropped ${audit.dropped.length} global rules in plugin.css that would affect the host` +
+          (audit.imports.length > 0 ? `, plus ${audit.imports.length} @import rules removed` : '') +
+          (dropped ? `: ${dropped}${audit.dropped.length > 6 ? ' ...' : ''}` : '')
       )
     }
     if (audit.css.trim() === '') {
-      console.warn(`[plugin:${id}] plugin.css 清洗后为空（全部是全局规则），未注入样式`)
+      console.warn(`[plugin:${id}] plugin.css is empty after sanitization (all global rules), no styles injected`)
       return false
     }
     const style = document.createElement('style')
@@ -77,11 +77,11 @@ export async function installPluginCss(id: string): Promise<boolean> {
     style.textContent = audit.css
     document.head.appendChild(style)
     console.info(
-      `[plugin:${id}] 已注入插件样式 plugin.css（${(audit.css.length / 1024).toFixed(1)}KB）`
+      `[plugin:${id}] Injected plugin styles plugin.css (${(audit.css.length / 1024).toFixed(1)}KB)`
     )
     return true
   } catch (err) {
-    console.warn(`[plugin:${id}] 注入 plugin.css 失败（忽略，不影响插件功能）:`, err)
+    console.warn(`[plugin:${id}] Failed to inject plugin.css (ignored, does not affect plugin functionality):`, err)
     return false
   }
 }

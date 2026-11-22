@@ -45,7 +45,7 @@ export function emitAppEvent(name: string, payload?: unknown): void {
     try {
       handler(payload)
     } catch (err) {
-      logger.warn(`[AppEvents] 事件 '${name}' 的订阅者异常:`, err)
+      logger.warn(`[AppEvents] Subscriber for event '${name}' failed:`, err)
     }
   }
 }

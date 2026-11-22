@@ -155,7 +155,7 @@ const McpSettings: React.FC = () => {
         void load()
       })
     } catch (err) {
-      console.warn('[mcp-settings] 目录订阅失败:', err)
+      console.warn('[mcp-settings] Failed to subscribe to MCP catalog:', err)
       return
     }
   }, [load])

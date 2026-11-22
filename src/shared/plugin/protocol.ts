@@ -47,12 +47,6 @@ export const IPC_PLUGINS_LIST = 'plugins-list'
 export const IPC_PLUGINS_SET_ENABLED = 'plugins-set-enabled'
 export const IPC_PLUGINS_INSTALL = 'plugins-install'
 
-/** 插件仓库（GitHub）里可安装的插件清单（面板的「从插件仓库安装」） */
-export const IPC_PLUGINS_AVAILABLE = 'plugins-available'
-
-/** 从插件仓库安装某个插件（按索引下载资产 + sha256 校验 + 解压安装） */
-export const IPC_PLUGINS_INSTALL_GITHUB = 'plugins-install-github'
-
 /** 从**本地路径**安装插件（`.zip` 压缩包或插件包目录；工装与拖入路径走它） */
 export const IPC_PLUGINS_INSTALL_LOCAL = 'plugins-install-local'
 

@@ -191,11 +191,11 @@ export function startWorkspaceWatcher(root: string, workspaceId: number): void {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => void flush(), DEBOUNCE_MS)
     })
-    watcher.on('error', (err) => logger.warn('[WorkspaceWatcher] 监听异常:', err))
-    logger.info(`[WorkspaceWatcher] 开始监听 ${root}`)
+    watcher.on('error', (err) => logger.warn('[WorkspaceWatcher] Watch error:', err))
+    logger.info(`[WorkspaceWatcher] Started watching ${root}`)
   } catch (err) {
     // Linux 上 fs.watch 不支持 recursive：退化为只监听根目录（不致命，刷新按钮仍可用）
-    logger.warn('[WorkspaceWatcher] recursive 监听不可用，退化为根目录监听:', err)
+    logger.warn('[WorkspaceWatcher] Recursive watch unavailable, falling back to root-only watch:', err)
     try {
       watcher = fs.watch(root, (_event, filename) => {
         if (!filename) return
@@ -204,7 +204,7 @@ export function startWorkspaceWatcher(root: string, workspaceId: number): void {
         debounceTimer = setTimeout(() => void flush(), DEBOUNCE_MS)
       })
     } catch (inner) {
-      logger.error('[WorkspaceWatcher] 监听启动失败:', inner)
+      logger.error('[WorkspaceWatcher] Failed to start watcher:', inner)
       watcher = null
     }
   }

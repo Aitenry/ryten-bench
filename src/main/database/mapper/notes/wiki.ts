@@ -208,7 +208,7 @@ async function deleteWiki(id: number): Promise<boolean> {
           await db.delete(images).where(eq(images.id, wikiImageId))
         } catch (err) {
           // 仍被别的插件（如音乐的封面）引用：外键拒绝删除，留这条图片行即可
-          logger.info(`[notes] 封面 ${wikiImageId} 仍被其它插件引用，保留（不删除）`, err)
+          logger.info(`[notes] Cover ${wikiImageId} still referenced by other plugins, kept (not deleted)`, err)
         }
       }
     }

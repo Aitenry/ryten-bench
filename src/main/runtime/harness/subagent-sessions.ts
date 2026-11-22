@@ -346,7 +346,7 @@ export class SubagentSessionRegistry {
         : err instanceof Error
           ? err.message
           : String(err)
-      logger.warn(`[SubagentSession] ${record.id} 运行失败:`, err)
+      logger.warn(`[SubagentSession] ${record.id} failed to run:`, err)
       const partial = fullText.trim()
       record.messages.push(new HumanMessage(message))
       if (partial) record.messages.push(new AIMessage({ content: partial }))

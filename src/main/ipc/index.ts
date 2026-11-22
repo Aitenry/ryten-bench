@@ -3,9 +3,11 @@ import { registerSettingsIpc } from './settings'
 import { registerProviderIpc } from './provider'
 import { registerDialogIpc } from './dialog'
 import { registerPluginsIpc } from './plugins'
+import { registerLatticeIpc } from './lattice'
 
 /**
- * core（外壳）IPC：窗口杂项 / 系统设置与锁屏 / 模型 Provider / 对话框 / 插件管理。
+ * core（外壳）IPC：窗口杂项 / 系统设置与锁屏 / 模型 Provider / 对话框 / 插件管理 /
+ * Lattice 插件中心（登录、目录、上传、下载安装、数据同步）。
  *
  * 归属边界：
  * - 这里**只**放外壳自身的能力；
@@ -26,4 +28,6 @@ export function registerCoreIpc(): void {
   registerDialogIpc()
   registerProviderIpc()
   registerPluginsIpc()
+  // 插件中心：通道注册 + 启动时恢复登录态/拉取云端安装记录（内部会初始化 lattice/index.ts）
+  registerLatticeIpc()
 }

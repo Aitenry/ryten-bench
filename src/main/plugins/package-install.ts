@@ -11,7 +11,7 @@ import { isBundledPluginId } from './host'
  * **插件包安装内核**：一个已经落盘的「包目录」→ `userData/plugins/<id>/`。
  *
  * 三条安装来源共用它，保证校验、覆盖、清理的语义只有一份：
- * - 从插件仓库（GitHub Release 资产 zip，见 `github.ts`）；
+ * - 从插件中心下载的包（见 `../lattice/hub.ts`）；
  * - 从本地压缩包（用户自己打的 zip，见 `local-install.ts`）；
  * - 从本地文件夹（构建产物目录 `dist/<id>`，同上）。
  *
@@ -144,8 +144,8 @@ export function resolvePackageRoot(dir: string): string {
     )
   }
   throw new Error(
-    '选中的目录里没有 plugin.json：请选择插件**构建产物**目录（例如插件仓库里的 dist/<id>）；' +
-      '如果是源码目录，请先在插件仓库里跑一次构建'
+    '选中的目录里没有 plugin.json：请选择插件**构建产物**目录（例如 dist/<id>）；' +
+      '如果是源码目录，请先在插件源码里跑一次构建'
   )
 }
 
@@ -199,7 +199,7 @@ export function installPackageDir(
   }
   invalidateInstalledPluginIds()
   logger.info(
-    `[Plugins] 已${upgraded ? '升级' : '安装'} '${manifest.id}' v${manifest.version}（${files.length} 个文件）→ ${dest}`
+    `[Plugins] ${upgraded ? 'Upgraded' : 'Installed'} '${manifest.id}' v${manifest.version} (${files.length} files) -> ${dest}`
   )
   return {
     id: manifest.id,

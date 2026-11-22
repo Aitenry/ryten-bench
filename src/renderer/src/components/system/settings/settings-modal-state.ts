@@ -37,7 +37,7 @@ function publish(patch: Partial<SettingsModalState>): void {
     try {
       onChange()
     } catch (err) {
-      console.error('[settings] 弹窗状态订阅回调异常:', err)
+      console.error('[settings] Error in modal state subscription callback:', err)
     }
   }
 }

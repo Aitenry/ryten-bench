@@ -103,9 +103,9 @@ export async function purgeHomeData(): Promise<void> {
   settingsStore.delete('graph')
 
   logger.info(
-    `[notes] 已清除插件数据：文档 ${counts.docs}、正文 ${counts.contents}、知识库 ${counts.wikis}、` +
-      `目录 ${counts.directories}、目录关联 ${counts.links}、图谱实体 ${counts.entities}、` +
-      `图谱关系 ${counts.relations}、构建任务 ${counts.jobs}、待办 ${counts.todos}、` +
-      `待办依赖 ${counts.deps}、画布坐标 ${counts.positions}、图片 ${counts.images}（表结构未动）`
+    `[notes] Purged plugin data: docs ${counts.docs}, contents ${counts.contents}, wikis ${counts.wikis}, ` +
+      `directories ${counts.directories}, directory links ${counts.links}, graph entities ${counts.entities}, ` +
+      `graph relations ${counts.relations}, build jobs ${counts.jobs}, todos ${counts.todos}, ` +
+      `todo dependencies ${counts.deps}, canvas positions ${counts.positions}, images ${counts.images} (table schema untouched)`
   )
 }

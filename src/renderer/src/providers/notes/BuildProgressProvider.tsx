@@ -246,7 +246,7 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
           handlersRef.current.handleProgress(payload)
         )
       } catch (error) {
-        console.warn('[BuildProgress] 订阅 graph-build-progress 失败，已降级为空闲：', error)
+        console.warn('[BuildProgress] Failed to subscribe to graph-build-progress, degraded to idle:', error)
         return () => {}
       }
     }
@@ -256,7 +256,7 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
           handlersRef.current.handleComplete(payload)
         )
       } catch (error) {
-        console.warn('[BuildProgress] 订阅 graph-build-complete 失败，已降级为空闲：', error)
+        console.warn('[BuildProgress] Failed to subscribe to graph-build-complete, degraded to idle:', error)
         return () => {}
       }
     }
@@ -264,7 +264,7 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
       try {
         return notesApi.graph.onBuildError((payload) => handlersRef.current.handleError(payload))
       } catch (error) {
-        console.warn('[BuildProgress] 订阅 graph-build-error 失败，已降级为空闲：', error)
+        console.warn('[BuildProgress] Failed to subscribe to graph-build-error, degraded to idle:', error)
         return () => {}
       }
     }

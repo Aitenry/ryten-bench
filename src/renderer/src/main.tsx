@@ -36,7 +36,7 @@ function reportUncaught(kind: string, error: unknown, fallback: string): void {
   if (reportedUncaught.has(key)) return
   if (reportedUncaught.size >= UNCAUGHT_REPORT_LIMIT) return
   reportedUncaught.add(key)
-  console.error(`[Uncaught:${kind}] ${err?.message ?? fallback}\n${err?.stack ?? '(无栈)'}`)
+  console.error(`[Uncaught:${kind}] ${err?.message ?? fallback}\n${err?.stack ?? '(no stack)'}`)
 }
 
 window.addEventListener('error', (event) => {

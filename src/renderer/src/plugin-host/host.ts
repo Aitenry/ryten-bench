@@ -375,7 +375,7 @@ export class PluginHost {
               try {
                 cb(data)
               } catch (err) {
-                console.error(`[plugin-host] 事件 ${channel} 处理器异常:`, err)
+                console.error(`[plugin-host] Error in handler for event ${channel}:`, err)
               }
             }
           }
@@ -732,11 +732,11 @@ export class PluginHost {
     // 先停用（依赖者先卸载），后启用
     for (const [id, on] of want) {
       if (!on)
-        await this.disable(id).catch((err) => console.error(`[plugin-host] 停用 ${id} 失败:`, err))
+        await this.disable(id).catch((err) => console.error(`[plugin-host] Failed to disable ${id}:`, err))
     }
     for (const [id, on] of want) {
       if (on)
-        await this.enable(id).catch((err) => console.error(`[plugin-host] 启用 ${id} 失败:`, err))
+        await this.enable(id).catch((err) => console.error(`[plugin-host] Failed to enable ${id}:`, err))
     }
   }
 

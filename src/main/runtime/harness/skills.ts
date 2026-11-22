@@ -73,7 +73,7 @@ export function loadSkills(options: SkillLoaderOptions): SkillInfo[] {
       }
     }
   } catch (err) {
-    logger.warn('[Skills] 扫描技能目录失败:', err)
+    logger.warn('[Skills] Failed to scan skills directory:', err)
   }
   return skills
 }

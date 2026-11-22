@@ -23,7 +23,7 @@ export const publishDocChanged = (payload: DocChangedPayload): void => {
     try {
       listener(payload)
     } catch (err) {
-      console.error('[plugin:notes] doc:changed 处理异常:', err)
+      console.error('[plugin:notes] Error in doc:changed handler:', err)
     }
   }
 }

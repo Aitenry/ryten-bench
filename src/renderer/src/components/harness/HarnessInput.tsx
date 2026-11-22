@@ -280,7 +280,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         const enabled = harness.enabledSkills as string[] | undefined
         setSelectedSkills(enabled ?? skills.map((skill) => skill.id))
       } catch (err) {
-        console.warn('[harness-input] 工具/技能加载失败:', err)
+        console.warn('[harness-input] Failed to load tools/skills:', err)
       }
     })()
     return () => {
@@ -296,7 +296,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       })
     } catch (err) {
       // 订阅失败（插件停用 / preload 白名单未放行）不能让异常从 effect 逃逸：会卸载整棵渲染树
-      console.warn('[harness-input] 权限档位订阅失败:', err)
+      console.warn('[harness-input] Failed to subscribe to permission mode:', err)
       return
     }
   }, [])

@@ -683,8 +683,8 @@ export function install(ctx: MainPluginContext): void {
 // full：一份就含全部内容（默认模板，2026-09-27 用户要求「默认是全部内容都要」）
 // ============================================================================
 //
-// 布局与**真实插件仓库**（ryten-plugins 的 music-player / task-planner）对齐——
-// 用户 2026-09-28 拿生成的草稿和那边比，指出「缺失了好多内容」。对齐后每个文件都有明确职责：
+// 布局与**插件中心里的真实插件**（music-player / task-planner）对齐——
+// 用户 2026-09-28 拿生成的草稿和那两个比，指出「缺失了好多内容」。对齐后每个文件都有明确职责：
 //
 //   plugin.json            清单（宿主据此装载；entry 由构建写入）
 //   WORKSHOP.md            给助手的契约单（宿主模块白名单 + 各种写法）
@@ -809,9 +809,9 @@ export const schemaReady: Promise<void> = (async () => {
   await withOrm('${vars.id}.ensureSchema', async (db) => {
     for (const statement of DDL) await db.execute(sql.raw(statement))
   })
-  logger.info('[${vars.id}] 表结构已就绪（${sql}_items）')
+  logger.info('[${vars.id}] Schema ready (${sql}_items)')
 })().catch((err) => {
-  logger.error('[${vars.id}] 建表失败，插件将无法读写数据:', err)
+  logger.error('[${vars.id}] Failed to create tables, plugin cannot read or write data:', err)
   throw err
 })
 `
@@ -1202,10 +1202,10 @@ export async function purgePluginData(): Promise<void> {
     }
   } catch (err) {
     // 文件被占用：只告警，不阻塞卸载（表行已经删干净了）
-    logger.warn('[${vars.id}] 清理设置文件失败:', err)
+    logger.warn('[${vars.id}] Failed to clean up settings file:', err)
   }
   logger.info(
-    '[${vars.id}] 已清除插件数据：记录 ' + removed + ' 条、设置文件 ' + (removedFile ? '已删' : '不存在')
+    '[${vars.id}] Purged plugin data: ' + removed + ' records, settings file ' + (removedFile ? 'deleted' : 'not found')
   )
 }
 `
@@ -2540,7 +2540,7 @@ export function renderTemplate(
     case 'full':
     default:
       // 默认模板 = 全部内容（用户口径「默认是全部内容都要」）：页面 + 设置页 + AI 工具 + 事件推送，
-      // 并且**按真实插件仓库的分层来铺**（用户 2026-09-28：「和 ryten-plugins 比缺失了好多内容」）：
+      // 并且**按插件中心里真实插件的分层来铺**（用户 2026-09-28：「和插件中心里的真插件比缺失了好多内容」）：
       // 自己的表（db/ddl + db/schema + db/mapper）、自己的词条（locales/）、通道封装（renderer/api）、
       // 工具文案（main/tool-texts）、组件拆分（renderer/components/）。
       files['plugin.json'] = manifestFile(resolved, {
@@ -2601,7 +2601,7 @@ function workshopDoc(template: WorkshopTemplate, vars: TemplateVars): string {
 
 ## 2. 文件职责
 
-布局与真实插件仓库（ryten-plugins）一致——每个文件一个职责，助手改哪块就只看哪块：
+布局与插件中心里的真实插件一致——每个文件一个职责，助手改哪块就只看哪块：
 
 | 文件 | 作用 |
 |------|------|
@@ -2714,7 +2714,7 @@ export async function listItems() {
 - **表结构只做加法**：升级用 \`ALTER TABLE … ADD COLUMN IF NOT EXISTS\` / \`CREATE INDEX IF NOT EXISTS\`；
   不删列、不改列类型、不改主键（旧数据会丢，卸载重装后的库还会和迁移记录分叉）。
   数据迁移写成**幂等 UPDATE**（带 \`WHERE\` 保护、目标键已存在时跳过）——真实插件
-  （ryten-plugins 的 douyin-link）就是这么把旧画像键补上角色后缀的，升级不丢用户已经花过钱的数据；
+  （比如 douyin-link）就是这么把旧画像键补上角色后缀的，升级不丢用户已经花过钱的数据；
 - \`@host/main/database/orm\` 的 \`withOrm(op, fn)\` 给 drizzle 实例并统一记异常（务必用它，别自己拿连接）；
 - \`schemaReady\` 是承诺：装载即建表，但**不保证建表先于第一次查询**，mapper / purge 都要 await 它；
 - **插件是在数据库初始化之前被装载的**（宿主 \`initPluginHost()\` 早于 \`createLoadingWindow()\`）：

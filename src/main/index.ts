@@ -34,7 +34,7 @@ logger.transports.file.fileName = 'main.log'
 try {
   crashReporter.start({ uploadToServer: false })
 } catch (err) {
-  logger.warn('[Main] crashReporter 启动失败:', err)
+  logger.warn('[Main] Failed to start crashReporter:', err)
 }
 
 // 退出前保存流式数据 / 全窗口关闭退出
@@ -120,5 +120,5 @@ app
     })
   })
   .catch((err) => {
-    logger.error('[Main] 主流程初始化失败:', err)
+    logger.error('[Main] Failed to initialize main flow:', err)
   })

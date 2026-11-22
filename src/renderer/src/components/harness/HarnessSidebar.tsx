@@ -25,8 +25,10 @@ import {
   RiShieldCheckLine,
   RiUploadCloud2Line
 } from '@remixicon/react'
+import { useNavigate } from 'react-router-dom'
 import ChaseDots from './ChaseDots'
 import NewDraftModal from './workshop/NewDraftModal'
+import { requestWorkshopModal } from './workshop/workshop-modal-request'
 import { useDraftActions } from './workshop/useDraftActions'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
@@ -62,6 +64,19 @@ interface HarnessSidebarProps {
   onLoadMoreTopics: () => void
   /** 在当前工作区新建会话 */
   onNewHarness: () => void
+  /**
+   * 「用户刚刚操作了对话内容」→ 外壳把主内容区带回对话页（`/harness`）。
+   *
+   * 侧栏在外壳里**常驻**：人可能正停在资料库 / 插件仓库 / 更多（智能体…）。点一条会话、
+   * 点「＋ 新建会话」之后，内容在对话页里，路由必须跟过去；否则界面看起来「没反应」
+   * （用户口径 2026-11-21「打开其他界面……然后点击新建会话，都没有反应，页面不会回到
+   * 新建会话这个页面」）。
+   *
+   * **只由用户动作调用**：启动恢复（restoreLastContent）走的是同一批回调，但恢复不该把
+   * 从登录页 / 深链进来的人拽回对话页——那正是此前那个路由守卫要防的事，所以这里
+   * 用「显式点击才通知」替代「非对话页一律不导航」。
+   */
+  onOpenHarness: () => void
   /** 系统外壳模式：使用深色侧栏与参考图里的浅色胶囊滑块 */
   shellMode?: boolean
 }
@@ -308,12 +323,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   onDeleteTopic,
   onLoadMoreTopics,
   onNewHarness,
+  onOpenHarness,
   shellMode = false
 }) => {
   const { token } = theme.useToken()
   const { viewMessage } = useMessage()
   const { modal, message } = App.useApp()
   const { t } = useTranslation()
+  const navigate = useNavigate()
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -330,7 +347,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [draftsLoading, setDraftsLoading] = useState(false)
   /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
   const [newDraftOpen, setNewDraftOpen] = useState(false)
-  /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示一行灰字，配置入口是右上角 ＋） */
+  /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示灰字 + 「选择插件存放路径」按钮，右上角 ＋ 同样可配） */
   const [pluginsPath, setPluginsPath] = useState('')
   /** 插件工作区清单（插件 id → 它的工作区行；主进程按 kind 判定，见 workshop/workspace.ts） */
   const [pluginWorkspaces, setPluginWorkspaces] = useState<
@@ -488,38 +505,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return () => window.removeEventListener(WORKSHOP_FOCUS_EVENT, handler)
   }, [])
 
-  /** 选一个插件存放路径（只有 ＋ 这一个入口：没配路径时它先走这里） */
-  const pickPluginsRoot = useCallback(async (): Promise<boolean> => {
-    try {
-      const result = await harnessApi.workshop.pickRoot()
-      if (!result.ok) {
-        viewMessage('workshop-root', 'error', result.error ?? '')
-        return false
-      }
-      const data = result.data
-      if (!data || data.canceled) return false
-      setPluginsPath(data.dir ?? '')
-      await loadDrafts()
-      return true
-    } catch (error) {
-      viewMessage('workshop-root', 'error', String(error))
-      return false
-    }
-  }, [loadDrafts, viewMessage])
-
-  /** ＋：没配存放路径时**先**让用户选文件夹，选好再弹新建框（弹窗里不再放选择器） */
-  const handleNewDraft = useCallback(async (): Promise<void> => {
-    if (!pluginsPath) {
-      const picked = await pickPluginsRoot()
-      if (!picked) return
-    }
-    setNewDraftOpen(true)
-  }, [pickPluginsRoot, pluginsPath])
-
   /**
    * 插件行上的动作（构建 / 验收 / 安装）走与设置页同一个 hook——提示与忙碌态口径一致。
    * 行内还能重命名与删除（对齐工作区行的「⋯ + ＋」，用户口径 2026-09-27）。
    */
+
   const {
     busyId: draftBusyId,
     build: buildDraft,
@@ -595,6 +585,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           : t('workshopSettings.action.publish')
       },
       { type: 'divider' },
+      { key: 'detail', icon: <RiSettings4Line size={14} />, label: t('settings.plugins.viewWorkshop') },
       { key: 'rename', icon: <RiEditLine size={14} />, label: t('harness.sidebar.pluginRename') },
       { type: 'divider' },
       {
@@ -605,6 +596,23 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       }
     ],
     [t]
+  )
+
+  /**
+   * 打开工坊里某份插件的详情（插件仓库页的「插件工坊」弹窗 → 该插件抽屉）。
+   *
+   * 工坊 UI 在 `/plugins` 路由的弹窗里，侧栏在 `/harness`：**先写跨路由请求，再导航**。
+   * 旧实现把「打开设置弹窗」和「展开抽屉」两个 CustomEvent 在导航前派发，目标页还没挂载
+   * 收不到；带 `scope:'assistant'` 时还会把用户导到 `/more/workshop`（不存在的页签）→
+   * 回落到智能体页且地址栏卡住（用户 2026-11-21 实测）。
+   */
+  const openDraft = useCallback(
+    (id: string): void => {
+      window.dispatchEvent(new CustomEvent(WORKSHOP_FOCUS_EVENT))
+      requestWorkshopModal(id)
+      navigate('/plugins')
+    },
+    [navigate]
   )
 
   const onDraftMenuClick = useCallback(
@@ -621,6 +629,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             void message.success(t('workshopSettings.publish.done'))
           })
           break
+        case 'detail':
+          openDraft(draft.id)
+          break
         case 'rename':
           openDraftRename(draft)
           break
@@ -631,23 +642,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           break
       }
     },
-    [buildDraft, verifyDraft, publishDraft, openDraftRename, handleRemoveDraft, message, t]
+    [buildDraft, verifyDraft, publishDraft, openDraftRename, handleRemoveDraft, message, t, openDraft]
   )
-
-  /** 打开工坊里某份插件的详情（设置弹窗 → 插件工坊 → 该插件抽屉） */
-  const openDraft = useCallback((id: string): void => {
-    // 点插件 = 当前内容切到插件这一侧（开关跟着内容走）
-    window.dispatchEvent(new CustomEvent(WORKSHOP_FOCUS_EVENT))
-    window.dispatchEvent(
-      new CustomEvent('open-system-settings', {
-        detail: { tab: 'workshop', scope: 'assistant' }
-      })
-    )
-    // 抽屉要等设置弹窗与工坊页挂载后再展开，因此下一个宏任务里再派发
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('workshop-open-draft', { detail: { id } }))
-    }, 0)
-  }, [])
 
   /* ── 工作区状态 ── */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
@@ -790,6 +786,48 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [])
 
+  /**
+   * 选一个插件存放路径（空态里的「选择插件存放路径」按钮与右上角 ＋ 共用这一条路）。
+   *
+   * 为什么放在 loadWorkspaces 之后：选完路径插件工坊会把已有插件搬过去（工作区行跟着变），
+   * 成功后要同时刷新草稿清单与工作区清单，两个 loader 都必须已经声明（否则依赖数组会撞 TDZ）。
+   */
+  const pickPluginsRoot = useCallback(async (): Promise<boolean> => {
+    try {
+      const result = await harnessApi.workshop.pickRoot()
+      if (!result.ok) {
+        viewMessage('workshop-root', 'error', result.error ?? '')
+        return false
+      }
+      const data = result.data
+      if (!data || data.canceled) return false
+      setPluginsPath(data.dir ?? '')
+      await Promise.all([loadDrafts(), loadWorkspaces()])
+      return true
+    } catch (error) {
+      viewMessage('workshop-root', 'error', String(error))
+      return false
+    }
+  }, [loadDrafts, loadWorkspaces, viewMessage])
+
+  /** ＋：没配存放路径时**先**让用户选文件夹，选好再弹新建框（弹窗里不再放选择器） */
+  const handleNewDraft = useCallback(async (): Promise<void> => {
+    if (!pluginsPath) {
+      const picked = await pickPluginsRoot()
+      if (!picked) return
+    }
+    setNewDraftOpen(true)
+  }, [pickPluginsRoot, pluginsPath])
+
+  /**
+   * 会话列表**拉取失败过**的工作区。
+   *
+   * 只影响一件事：渲染层不能再把「从没加载成功」当成「还在加载」——否则一次失败的 IPC 就能让
+   * 那一行永远停在骨架屏（没有请求在跑，也没有数据会来）。失败时退回空态，用户收起再展开
+   * 即可重试（`handleToggleWorkspace`）。
+   */
+  const topicFetchFailedRef = useRef<Set<number>>(new Set())
+
   /** 非当前工作区的会话按需拉取；取第一页（与 useHarness 的分页口径一致，切换时列表长度不跳变） */
   const loadWorkspaceTopics = useCallback(async (workspaceId: number): Promise<void> => {
     setWorkspaceTopicsLoading((prev) => ({ ...prev, [workspaceId]: true }))
@@ -800,12 +838,58 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         TOPICS_PAGE_SIZE
       )
       setWorkspaceTopics((prev) => ({ ...prev, [workspaceId]: result.items }))
+      topicFetchFailedRef.current.delete(workspaceId)
     } catch (err) {
       console.error('Failed to load workspace topics:', err)
+      topicFetchFailedRef.current.add(workspaceId)
     } finally {
       setWorkspaceTopicsLoading((prev) => ({ ...prev, [workspaceId]: false }))
     }
   }, [])
+
+  /**
+   * 这个工作区的会话列表要不要**自己去拉**。
+   *
+   * 活动工作区那一份正常情况下由 `topics` 属性提供（见下面那个 effect 与 `renderTopicList`），
+   * 所以本地已经有过缓存、或者 `topics` 正属于它时都不用再拉。反过来，两个条件都不成立时
+   * 列表就**没有任何数据来源**：没有请求在跑、也不会有数据来 —— 那正是「骨架屏一直不动」。
+   */
+  const needsTopicFetch = useCallback(
+    (workspaceId: number): boolean =>
+      !Object.prototype.hasOwnProperty.call(workspaceTopics, workspaceId) &&
+      topicsWorkspaceId !== workspaceId,
+    [workspaceTopics, topicsWorkspaceId]
+  )
+
+  /** 已经自动补拉过的工作区（失败不自动重试，免得 IPC 出问题时每一帧都发一次请求） */
+  const autoLoadedTopicWorkspacesRef = useRef<Set<number>>(new Set())
+
+  /**
+   * 「已展开、但会话列表还没加载过」→ 立刻补一次拉取。
+   *
+   * 为什么需要这条兜底：展开的如果是**活动工作区**，`handleToggleWorkspace` 原本会跳过请求
+   * （活动工作区的列表由 `topics` 属性负责）。这条前提一旦不成立（比如切工作区的动作发生在
+   * 对话页之外、`topics` 压根没轮到过这个工作区，或者展开态是启动恢复/点插件行直接设上的，
+   * 根本没走 toggle），列表就会永远停在加载骨架——用户 2026-11-22 截图里插件行下面那 5 行
+   * 灰条就是它。宁可多打一次本地库（几十微秒），也不能让界面挂在一个永远不结束的加载态上。
+   */
+  useEffect(() => {
+    const workspaceId = expandedWorkspaceId
+    if (workspaceId == null) return
+    if (!needsTopicFetch(workspaceId)) return
+    // Provider 正在整表刷新（换工作区那一下）：等它这一趟回来，别抢着再打一次同样的查询
+    if (isRefreshingTopics) return
+    if (workspaceTopicsLoading[workspaceId] === true) return
+    if (autoLoadedTopicWorkspacesRef.current.has(workspaceId)) return
+    autoLoadedTopicWorkspacesRef.current.add(workspaceId)
+    void loadWorkspaceTopics(workspaceId)
+  }, [
+    expandedWorkspaceId,
+    needsTopicFetch,
+    isRefreshingTopics,
+    workspaceTopicsLoading,
+    loadWorkspaceTopics
+  ])
 
   /**
    * 单一数据源：列表一律渲染 workspaceTopics 缓存。
@@ -960,11 +1044,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     (workspaceId: number): void => {
       const next = expandedWorkspaceId === workspaceId ? null : workspaceId
       setExpandedWorkspaceId(next)
-      if (next != null && next !== activeWorkspaceId) {
-        loadWorkspaceTopics(next).then()
+      // 活动工作区那一份通常由 `topics` 属性提供（`needsTopicFetch` 会挡住重复请求）；
+      // 用户手动再展开一次也走这里 ⇒ 上一次失败时这里就是重试入口
+      if (next != null && needsTopicFetch(next)) {
+        autoLoadedTopicWorkspacesRef.current.add(next)
+        void loadWorkspaceTopics(next)
       }
     },
-    [expandedWorkspaceId, activeWorkspaceId, loadWorkspaceTopics]
+    [expandedWorkspaceId, needsTopicFetch, loadWorkspaceTopics]
   )
 
   /**
@@ -1008,6 +1095,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
   const handleOpenTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+      // 用户点的这条会话长在对话页上：人可能正停在资料库 / 插件仓库，先把路由带过去
+      onOpenHarness()
       const isPluginSession = pluginWorkspaceIds.has(workspaceId)
       const isChatSession = !isPluginSession && chatWorkspaceIds.has(workspaceId)
       setMode(isPluginSession ? 'plugin' : isChatSession ? 'chat' : 'work')
@@ -1045,6 +1134,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       activateChatTopic,
       switchWorkspace,
       onSelectTopic,
+      onOpenHarness,
       pluginWorkspaceIds,
       pluginWorkspaces,
       chatWorkspaceIds,
@@ -1057,6 +1147,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
   const handleCreateSession = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
+      // 工作区行的「＋ 新建会话」是用户动作：主内容区要跟着回到对话页
+      onOpenHarness()
       setExpandedWorkspaceId(ws.id)
       // 该工作区会话尚未加载过时先补一次，避免切换瞬间出现空列表
       if (!Object.prototype.hasOwnProperty.call(workspaceTopics, ws.id)) {
@@ -1076,6 +1168,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       loadWorkspaceTopics,
       switchWorkspace,
       onNewHarness,
+      onOpenHarness,
       rememberWork,
       mode
     ]
@@ -1205,6 +1298,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     try {
       const dir = await harnessApi.harness.selectWorkspace()
       if (!dir) return
+      // 选了目录 = 用户要开工作区（新工作区落一条空白会话）：路由回到对话页
+      onOpenHarness()
       const name =
         dir
           .replace(/[/\\]$/, '')
@@ -1228,7 +1323,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     } catch (err) {
       console.error('Failed to create workspace:', err)
     }
-  }, [loadWorkspaces, onNewHarness, t, rememberWork, mode])
+  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode])
 
   const handleDeleteWorkspace = useCallback(
     (ws: WorkspaceRow): void => {
@@ -1449,7 +1544,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             color: colorText,
             background: expanded ? token.colorFillTertiary : 'transparent'
           }}
-          onClick={() => openDraft(draft.id)}
+          onClick={() => {
+            // 点插件行 = 针对这份插件开（或切到）一条会话：内容在对话页上
+            onOpenHarness()
+            void handlePluginSession(draft)
+          }}
+          title={t('harness.sidebar.pluginNewSession')}
           onMouseEnter={(e) => {
             if (!expanded) e.currentTarget.style.background = colorFillAlter
           }}
@@ -1548,6 +1648,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation()
+                  onOpenHarness()
                   void handlePluginSession(draft)
                 }}
                 title={t('harness.sidebar.pluginNewSession')}
@@ -1900,9 +2001,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
   const renderTopicList = (workspaceId: number): React.ReactNode => {
     const list = visibleTopicsOf(workspaceId)
-    // 只有「该工作区会话从未加载过」才算加载中：缓存已有内容时直接无缝渲染
+    // 只有「该工作区会话从未加载过」才算加载中：缓存已有内容时直接无缝渲染。
+    // 拉取失败过的不再算加载中（否则那一行会永远停在骨架屏，见 topicFetchFailedRef）
     const loading =
       !hasTopicsLoaded(workspaceId) &&
+      !topicFetchFailedRef.current.has(workspaceId) &&
       (workspaceId === activeWorkspaceId || workspaceTopicsLoading[workspaceId] === true)
     return (
       <div className="pb-1">
@@ -2004,6 +2107,32 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       return null
     }
   }, [])
+
+  /**
+   * 插件中心「在对话中修改」（`lattice.openSource`）成功后的交接事件。
+   *
+   * 主进程已经建/复用了插件工作区、开好一条插件会话，并把 `activeMode:'plugin'` +
+   * `pluginContent` 写进设置——但它只广播 `harness:workshop-changed`，侧栏不会因此
+   * 重新挂载，也不会重新读设置。所以渲染层在 openSource 成功后再派发这个事件，
+   * 侧栏按 pluginId + topicId **直接切过去**（与点插件行里的会话同一条链：
+   * ensureWorkspace → 写活动工作区 → workspace-changed → 选中话题）。
+   */
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const detail = (e as CustomEvent<{ pluginId?: string; topicId?: number }>).detail
+      if (!detail?.pluginId) return
+      const pluginId = detail.pluginId
+      // 插件中心 →「在对话中修改」：这是用户动作，主内容区要跟到对话页
+      onOpenHarness()
+      setMode('plugin')
+      void (async () => {
+        const topic = detail.topicId != null ? await fetchTopicRow(detail.topicId) : undefined
+        await handlePluginSession({ id: pluginId }, { topic: topic ?? undefined, focus: true })
+      })()
+    }
+    window.addEventListener('lattice-open-source', handler)
+    return () => window.removeEventListener('lattice-open-source', handler)
+  }, [fetchTopicRow, handlePluginSession, onOpenHarness])
 
   /** 切到「工作」那一侧的内容：上次那条工作会话；没有就回到用户工作区的空白会话 */
   const enterWorkModeContent = useCallback(async (): Promise<void> => {
@@ -2358,7 +2487,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                       anyTopicRunning
                         ? t('harness.sidebar.newSessionRunning')
                         : t('harness.sidebar.newSession'),
-                      () => void handleChatSession(),
+                      () => {
+                        onOpenHarness()
+                        void handleChatSession()
+                      },
                       <RiAddLine size={14} />,
                       anyTopicRunning,
                       true
@@ -2396,14 +2528,31 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               </p>
             ) : (
               /*
-               * 还没配插件存放路径：**与「尚未配置工作区」逐字同一副样子**——一行居中的灰字，
-               * 不写说明段落（用户口径 2026-09-27「不要这种描述…要像没有设置任何工作区时
-               * 显示的样式保持一致」）。选文件夹的入口就是右上角的 ＋（没配路径时它先弹
-               * 文件夹选择，见 handleNewDraft）。
+               * 还没配插件存放路径：灰字空态保持与「尚未配置工作区」一致的观感，
+               * 但下面**明确给一个「选择插件存放路径」按钮**（用户 2026-11-21 口径：
+               * 空态要能直接选路径；原先只能靠右上角 ＋ 猜）。右上角 ＋ 的原行为保留：
+               * 没配路径时它仍先弹文件夹选择，再弹新建草稿框。
                */
-              <p className="text-xs text-center py-8" style={{ color: colorTextTertiary }}>
-                {t('harness.sidebar.needPluginsPath')}
-              </p>
+              <div className="flex flex-col items-center gap-2.5 px-3 py-8">
+                <p className="text-xs text-center" style={{ color: colorTextTertiary }}>
+                  {t('harness.sidebar.needPluginsPath')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void pickPluginsRoot()}
+                  className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md transition-colors"
+                  style={{ color: token.colorPrimary, background: colorFillAlter }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = token.colorPrimaryBg
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = colorFillAlter
+                  }}
+                >
+                  <RiFolderOpenLine size={13} />
+                  {t('harness.sidebar.pickPluginsPath')}
+                </button>
+              </div>
             )
           ) : (
             visibleDrafts.map((draft) => renderDraft(draft))

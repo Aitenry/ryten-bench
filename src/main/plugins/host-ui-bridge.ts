@@ -130,7 +130,7 @@ export function hostUiBridgeSource(key: string): string {
   ]
   for (const name of names) {
     if (!IDENT_RE.test(name) || RESERVED.has(name)) {
-      logger.warn(`[Plugins] 宿主 UI 桥跳过非法导出名 '${key}.${name}'`)
+      logger.warn(`[Plugins] Host UI bridge skipped invalid export name '${key}.${name}'`)
       continue
     }
     lines.push(`export const ${name} = m[${JSON.stringify(name)}];`)

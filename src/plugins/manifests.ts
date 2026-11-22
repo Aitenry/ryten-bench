@@ -8,9 +8,9 @@ import type { PluginManifest } from '../shared/plugin/types'
  * 不进入插件清单、安装器或插件仓库。
  *
  * **不在这里的插件 = 第三方插件**：不随应用分发、不自动安装、默认停用，
- * 由用户从 GitHub（见应用侧的「从 GitHub 安装」）或本地目录装进来。
- * `task-planner` / `music-player` 就是这样的独立插件——源码与发布在
- * `github.com/Aitenry/ryten-plugins`。
+ * 由用户从插件中心（Lattice 平台）或本地压缩包/目录装进来。
+ * `task-planner` / `music-player` 就是这样的独立插件——发布在插件中心，
+ * 安装包与源码一起下发。
  */
 export const BUILTIN_PLUGIN_MANIFESTS: PluginManifest[] = []
 

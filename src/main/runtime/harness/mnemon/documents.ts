@@ -264,7 +264,7 @@ export class DocumentController {
       }
       this.persistIndex(index)
       logger.info(
-        `[Mnemon.Documents] 归档文档 ${record.title}（${details.summary}，冷引用 ${details.memoryBodyIds?.join(',') ?? '无'}）`
+        `[Mnemon.Documents] Archived document ${record.title} (${details.summary}, cold references ${details.memoryBodyIds?.join(',') ?? 'none'})`
       )
       return { success: true, action: 'archived', document: this.view(record) }
     }
@@ -286,7 +286,7 @@ export class DocumentController {
     for (const record of index.documents) {
       const filePath = this.pathFor(record)
       if (!fs.existsSync(filePath)) {
-        logger.warn(`[Mnemon.Documents] 托管副本缺失，重建: ${record.relativePath}`)
+        logger.warn(`[Mnemon.Documents] Managed copy missing, recreating: ${record.relativePath}`)
         fs.writeFileSync(filePath, this.renderMarkdown(record, ''), 'utf-8')
       }
     }
@@ -303,7 +303,7 @@ export class DocumentController {
         }
       }
     } catch (err) {
-      logger.warn('[Mnemon.Documents] 读取 index.json 失败，使用空索引:', err)
+      logger.warn('[Mnemon.Documents] Failed to read index.json, using empty index:', err)
     }
     const fresh: DocumentIndexFile = { version: DOCUMENTS_VERSION, documents: [] }
     this.cached = fresh
@@ -354,7 +354,7 @@ export class DocumentController {
         content = raw.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '')
       }
     } catch (err) {
-      logger.warn(`[Mnemon.Documents] 读取文档失败 ${record.id}:`, err)
+      logger.warn(`[Mnemon.Documents] Failed to read document ${record.id}:`, err)
     }
     return { ...record, content }
   }

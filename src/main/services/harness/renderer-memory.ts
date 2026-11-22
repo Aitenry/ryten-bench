@@ -61,7 +61,7 @@ function collect(label?: string): MemorySnapshot | null {
   try {
     metrics = app.getAppMetrics()
   } catch (err) {
-    logger.debug('[Memory] getAppMetrics 失败:', err)
+    logger.debug('[Memory] getAppMetrics failed:', err)
     return null
   }
   const renderers = metrics.filter((m) => m.type === 'Tab')
@@ -97,7 +97,7 @@ function formatTrend(): string {
   if (spanS <= 0) return ''
   const deltaMb = (last.workingSetKb - first.workingSetKb) / 1024
   const perTenS = (deltaMb / spanS) * 10
-  return `；最近 ${Math.round(spanS)}s 变化 ${deltaMb >= 0 ? '+' : ''}${deltaMb.toFixed(1)}MB（约 ${perTenS >= 0 ? '+' : ''}${perTenS.toFixed(1)}MB/10s）`
+  return `; last ${Math.round(spanS)}s delta ${deltaMb >= 0 ? '+' : ''}${deltaMb.toFixed(1)}MB (about ${perTenS >= 0 ? '+' : ''}${perTenS.toFixed(1)}MB/10s)`
 }
 
 function sample(label?: string): void {
@@ -111,8 +111,8 @@ function sample(label?: string): void {
   if (!due) return
   firstSampleLogged = true
   lastLogAt = snap.at
-  const warn = heavy ? ` ⚠ 内存水位偏高（>${RENDERER_MEM_WARN_MB}MB）` : ''
-  logger.info(`[Memory] 渲染进程 ${formatSnapshot(snap)}${formatTrend()}${warn}`)
+  const warn = heavy ? ` ⚠ memory level high (>${RENDERER_MEM_WARN_MB}MB)` : ''
+  logger.info(`[Memory] Renderer ${formatSnapshot(snap)}${formatTrend()}${warn}`)
 }
 
 /** 开始采样（引用计数，可并发调用） */
@@ -142,15 +142,15 @@ export function stopRendererMemorySampling(): void {
  * 渲染进程已经没了，这里只能用最后一次成功采样（通常距今不超过一个采样间隔）。
  */
 export function dumpRendererMemory(reason: string, exitCode: number): void {
-  const head = `[Memory] 渲染进程退出 reason=${reason} exitCode=${exitCode}`
+  const head = `[Memory] Renderer process exited reason=${reason} exitCode=${exitCode}`
   const last = trend[trend.length - 1]
   if (!last) {
-    logger.error(`${head}，崩溃前无内存采样记录`)
+    logger.error(`${head}, no memory samples before crash`)
     return
   }
   const ageS = Math.round((Date.now() - last.at) / 1000)
-  const stale = Date.now() - last.at > RENDERER_MEM_STALE_MS ? '（陈旧）' : ''
+  const stale = Date.now() - last.at > RENDERER_MEM_STALE_MS ? ' (stale)' : ''
   logger.error(
-    `${head}；崩溃前最后一次采样${stale}（${ageS}s 前）：${formatSnapshot(last)}${formatTrend()}`
+    `${head}; last sample before crash${stale} (${ageS}s ago): ${formatSnapshot(last)}${formatTrend()}`
   )
 }

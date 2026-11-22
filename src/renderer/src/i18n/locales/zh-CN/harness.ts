@@ -55,6 +55,7 @@ export const harnessZhCN = {
       needWorkspace: '先配置一个工作区：会话都挂在它下面',
       noDraft: '还没有插件草稿。在助手对话里说「帮我做一个…插件」，或点右上角新建。',
       needPluginsPath: '尚未选择插件存放路径',
+      pickPluginsPath: '选择插件存放路径',
       draftActions: '草稿操作',
       pluginState: {
         draft: '草稿',

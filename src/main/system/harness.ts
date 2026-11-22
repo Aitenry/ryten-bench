@@ -99,11 +99,11 @@ export function startHarness(): void {
       try {
         syncWorkspaceWatcher()
       } catch (err) {
-        logger.warn('[Harness] 工作区文件监听启动失败:', err)
+        logger.warn('[Harness] Failed to start workspace file watcher:', err)
       }
       // MCP 服务器预热：连接与工具发现都在后台跑（起子进程/联网可能要几秒），
       // 不阻塞启动；连不上的那台只在设置页与日志里体现，不影响其余工具。
-      void refreshCatalog().catch((err) => logger.warn('[Harness] MCP 预热失败:', err))
+      void refreshCatalog().catch((err) => logger.warn('[Harness] MCP warm-up failed:', err))
     })
 
     // 系统设置里切换/重建工作区（core 发 `app.workspace-changed`）→ 监听换根目录
@@ -111,7 +111,7 @@ export function startHarness(): void {
       try {
         syncWorkspaceWatcher()
       } catch (err) {
-        logger.warn('[Harness] 工作区切换后重启监听失败:', err)
+        logger.warn('[Harness] Failed to restart watcher after workspace switch:', err)
       }
     })
 
@@ -138,7 +138,7 @@ export function stopHarness(): void {
     try {
       dispose()
     } catch (err) {
-      logger.warn('[Harness] 通道注销失败:', err)
+      logger.warn('[Harness] Failed to unregister channel:', err)
     }
   }
   disposers = []

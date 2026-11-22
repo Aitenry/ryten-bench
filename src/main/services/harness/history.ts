@@ -291,7 +291,7 @@ async function compactWithSummarizer(
     const messages: BaseMessage[] = [buildCheckpointMessage(summary)]
     appendDialogueMessages(messages, recent)
     logger.info(
-      `[History] 摘要压缩完成 topicId=${topicId}（压缩 ${old.length} 条 → checkpoint，保留最近 ${recent.length} 条，边界 ${boundaryId}）`
+      `[History] Summary compaction done topicId=${topicId} (compacted ${old.length} messages -> checkpoint, kept latest ${recent.length} messages, boundary ${boundaryId})`
     )
     return {
       messages,
@@ -309,7 +309,7 @@ async function compactWithSummarizer(
   // 未压缩对话（即使远超保留预算）整体进上下文，直到总量再次超预算才压缩。
   if (prior.summary.length + pendingChars <= maxChars) {
     logger.info(
-      `[History] 复用既有压缩摘要 topicId=${topicId}（边界 ${prior.boundaryId}，未压缩 ${pending.length} 条 / ${pendingChars} 字符，摘要+未压缩 ${prior.summary.length + pendingChars} ≤ ${maxChars}）`
+      `[History] Reusing existing compaction summary topicId=${topicId} (boundary ${prior.boundaryId}, uncompacted ${pending.length} messages / ${pendingChars} chars, summary + uncompacted ${prior.summary.length + pendingChars} <= ${maxChars})`
     )
     const messages: BaseMessage[] = [buildCheckpointMessage(prior.summary)]
     appendDialogueMessages(messages, pending)
@@ -334,7 +334,7 @@ async function compactWithSummarizer(
   const messages: BaseMessage[] = [buildCheckpointMessage(summary)]
   appendDialogueMessages(messages, recent)
   logger.info(
-    `[History] 摘要压缩完成 topicId=${topicId}（增量合并 ${old.length} 条 → checkpoint，保留最近 ${recent.length} 条，边界 ${boundaryId}）`
+    `[History] Summary compaction done topicId=${topicId} (incrementally merged ${old.length} messages -> checkpoint, kept latest ${recent.length} messages, boundary ${boundaryId})`
   )
   return {
     messages,
@@ -354,7 +354,7 @@ async function saveCheckpointSafe(
   try {
     await options.saveCheckpoint(topicId, checkpoint)
   } catch (err) {
-    logger.warn('[History] 压缩 checkpoint 落库失败（不影响本轮）:', err)
+    logger.warn('[History] Failed to persist compaction checkpoint (does not affect this round):', err)
   }
 }
 

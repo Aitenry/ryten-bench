@@ -54,7 +54,7 @@ function createSilenceWatchdog(tag: string): { reset: () => void; dispose: () =>
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       logger.info(
-        `[Stream] 静默提醒（${tag}）：${((Date.now() - lastResetAt) / 1000).toFixed(0)}s 无新记录，模型仍在生成中（流内无事件）`
+        `[Stream] Silence warning (${tag}): no new records for ${((Date.now() - lastResetAt) / 1000).toFixed(0)}s, model is still generating (no events in stream)`
       )
     }, STREAM_SILENCE_LOG_MS)
   }
@@ -234,7 +234,7 @@ export async function produceMessages(
   /** 是否出现过工具活动（含 `task` 派遣）：出现后，模型进入「工具轮之后」的回合 */
   let sawToolActivity = false
   let lastProgressAt = 0
-  const silenceWatchdog = createSilenceWatchdog('消息流')
+  const silenceWatchdog = createSilenceWatchdog('message stream')
   const drainInjectionsInto = createInjectionDrainer(toolsStarted, drainInjections)
   try {
     for await (const rec of run.messages as AsyncIterable<MessageRecord>) {
@@ -439,7 +439,7 @@ export async function produceSubAgents(
   answerMark?: { value: boolean }
 ): Promise<void> {
   const groups = new Map<string, SubAgentGroupState>()
-  const silenceWatchdog = createSilenceWatchdog('子代理流')
+  const silenceWatchdog = createSilenceWatchdog('subagent stream')
   try {
     for await (const rec of run.subagents as AsyncIterable<SubAgentRecord>) {
       if (signal?.aborted) break

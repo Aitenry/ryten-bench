@@ -201,16 +201,16 @@ export async function* runStream(
     // - 已有输出：下发 streamError 标记，由 IPC 层转发错误事件并跳过落库
     if (run.error && !signal?.aborted) {
       if (emittedCount === 0) {
-        logger.error('[Harness] 运行时执行失败，无任何输出:', run.error)
+        logger.error('[Harness] Runtime failed with no output:', run.error)
         yield {
           content: mainFormat(mainMessages().error.responseFailed, { reason: run.error.message })
         }
       } else {
-        logger.error('[Harness] 运行时部分输出后失败:', run.error)
+        logger.error('[Harness] Runtime failed after partial output:', run.error)
         yield { streamError: { message: run.error.message } }
       }
     } else if (emittedCount === 0 && !signal?.aborted) {
-      logger.warn('[Harness] 运行时未产生任何输出（无错误信息）')
+      logger.warn('[Harness] Runtime produced no output (no error info)')
       const m = mainMessages().error
       yield { content: mainFormat(m.responseFailed, { reason: m.emptyModelResponse }) }
     }

@@ -553,5 +553,5 @@ export function buildMnemonTools(ctx: MnemonToolContext): StructuredToolInterfac
 
 /** 工具错误统一记录（供调用方诊断） */
 export function logToolError(name: string, err: unknown): void {
-  logger.warn(`[Mnemon] 工具 ${name} 失败:`, err)
+  logger.warn(`[Mnemon] Tool ${name} failed:`, err)
 }

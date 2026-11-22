@@ -69,7 +69,7 @@ export class SpillStore {
     try {
       return this.saveAndPreview(text)
     } catch (err) {
-      logger.warn('[Spill] 溢出保存失败，回退为原文可见:', err)
+      logger.warn('[Spill] Failed to save spill file, falling back to raw text:', err)
       return text
     }
   }
@@ -143,7 +143,7 @@ export class SpillStore {
       try {
         fs.rmSync(dir, { recursive: true, force: true })
       } catch (err) {
-        logger.warn('[Spill] 清理溢出目录失败:', err)
+        logger.warn('[Spill] Failed to purge spill directory:', err)
       }
     }
   }

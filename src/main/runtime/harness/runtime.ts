@@ -210,7 +210,7 @@ export class Runtime {
       const { getProviderService } = await import('../../provider/service')
       return await getProviderService().createModel(match.id)
     } catch (err) {
-      logger.warn(`[Runtime] 子代理模型解析失败 "${spec}"，回退主模型:`, err)
+      logger.warn(`[Runtime] Failed to resolve subagent model "${spec}", falling back to the main model:`, err)
       return undefined
     }
   }

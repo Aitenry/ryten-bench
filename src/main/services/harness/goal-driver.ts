@@ -54,7 +54,7 @@ export class GoalRoundDriver {
     const goal = await goalStore.load(topicId)
     if (!goal || goal.phase !== 'active' || !goalStore.isArmed(topicId)) {
       if (goal && goal.phase === 'active' && !goalStore.isArmed(topicId)) {
-        logger.info(`[GoalDriver] topicId=${topicId} 目标 active 但未武装，不自动续跑`)
+        logger.info(`[GoalDriver] topicId=${topicId} goal is active but not armed, not continuing automatically`)
       }
       return false
     }
@@ -71,7 +71,7 @@ export class GoalRoundDriver {
           }
         })
       } catch (err) {
-        logger.warn('[GoalDriver] 标记 round-limit 失败:', err)
+        logger.warn('[GoalDriver] Failed to mark round-limit:', err)
       }
       return false
     }
@@ -97,18 +97,18 @@ Objective: ${updated.objective}
     }
 
     logger.info(
-      `[GoalDriver] 派发自动轮 topicId=${topicId} round=${round}/${updated.maxGoalRounds} goalId=${updated.id}`
+      `[GoalDriver] Dispatching auto round topicId=${topicId} round=${round}/${updated.maxGoalRounds} goalId=${updated.id}`
     )
     try {
       const result = await drive({ topicId, question, turnMeta })
       if (result.cancelled) {
         // 用户取消自动轮：停止自动续跑（armed → disarmed），目标保持 active
-        logger.info('[GoalDriver] 自动轮被用户取消，目标 disarm')
+        logger.info('[GoalDriver] Auto round cancelled by user, goal disarmed')
         goalStore.disarm(topicId)
         return false
       }
     } catch (err) {
-      logger.warn('[GoalDriver] 自动轮执行失败，目标 disarm:', err)
+      logger.warn('[GoalDriver] Auto round failed, goal disarmed:', err)
       goalStore.disarm(topicId)
       return false
     }

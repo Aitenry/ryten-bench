@@ -92,7 +92,7 @@ export function registerSettingsIpc(): void {
       for (const [key, value] of Object.entries(updates)) {
         if (value === undefined) continue
         if (!ALLOWED_KEYS.includes(key as keyof SystemSettings)) {
-          logger.warn(`[Settings] 拒绝未知设置键: ${key}`)
+          logger.warn(`[Settings] Rejected unknown setting key: ${key}`)
           continue
         }
         // 对于对象类型的设置（如 harness），与现有值合并而非替换

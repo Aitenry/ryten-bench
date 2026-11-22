@@ -195,7 +195,7 @@ const AgentSettings: React.FC = () => {
         void refreshTools()
       })
     } catch (err) {
-      console.warn('[agent-settings] MCP 目录订阅失败:', err)
+      console.warn('[agent-settings] Failed to subscribe to MCP catalog:', err)
       return
     }
   }, [refreshTools])

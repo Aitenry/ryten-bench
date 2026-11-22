@@ -145,7 +145,7 @@ export async function startMemoryAgent(
     const fallbackId = await resolveProviderId(undefined).catch(() => undefined)
     if (fallbackId != null && fallbackId !== providerId) {
       logger.warn(
-        `[MemoryAgent] 供应商 ${providerId} 不可用，回退到 ${fallbackId}: ${(err as Error)?.message}`
+        `[MemoryAgent] Provider ${providerId} unavailable, falling back to ${fallbackId}: ${(err as Error)?.message}`
       )
       try {
         model = await providerService.createModel(fallbackId)

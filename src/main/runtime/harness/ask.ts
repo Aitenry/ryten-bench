@@ -109,7 +109,7 @@ export class QuestionService {
         reject(err instanceof Error ? err : new Error(String(err)))
         return
       }
-      logger.info(`[Ask] 挂起提问 requestId=${requestId}（${questions.length} 个问题）`)
+      logger.info(`[Ask] Pending question requestId=${requestId} (${questions.length} questions)`)
     })
   }
 
@@ -127,7 +127,7 @@ export class QuestionService {
     this.pending.delete(requestId)
     this.detach(record)
     record.resolve({ answers })
-    logger.info(`[Ask] 提问 ${requestId} 已回答（${answers.length} 项）`)
+    logger.info(`[Ask] Question ${requestId} answered (${answers.length} items)`)
     return true
   }
 

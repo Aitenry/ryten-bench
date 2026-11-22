@@ -118,7 +118,7 @@ export class MnemonService {
         )
         all.push(...results)
       } catch (err) {
-        logger.warn(`[Mnemon] 召回失败（空间 ${body.name}）:`, err)
+        logger.warn(`[Mnemon] Recall failed (space ${body.name}):`, err)
       }
     }
     // 合并排序：按 score 降序，截断到 limit（默认 10）
@@ -148,7 +148,7 @@ export class MnemonService {
         const results = await relatedInsights(db, id, depth, edge, body.id, body.name)
         all.push(...results)
       } catch (err) {
-        logger.warn(`[Mnemon] 关系遍历失败（空间 ${body.name}）:`, err)
+        logger.warn(`[Mnemon] Relation traversal failed (space ${body.name}):`, err)
       }
     }
     return all.slice(0, 12)
@@ -163,7 +163,7 @@ export class MnemonService {
         const db = await this.openDb(body.id)
         all.push(...(await listInsights(db, body.id, body.name, limit)))
       } catch (err) {
-        logger.warn(`[Mnemon] 内容浏览失败（空间 ${body.name}）:`, err)
+        logger.warn(`[Mnemon] Content listing failed (space ${body.name}):`, err)
       }
     }
     return all.slice(0, limit)
@@ -188,7 +188,7 @@ export class MnemonService {
     }
     const db = await this.openDb(target.id)
     const insight = await rememberInsight(db, request, target.id, target.name)
-    logger.info(`[Mnemon] 沉淀记忆到 ${target.name}: ${insight.content.slice(0, 60)}…`)
+    logger.info(`[Mnemon] Persisted memory to ${target.name}: ${insight.content.slice(0, 60)}...`)
     return insight
   }
 
@@ -329,7 +329,7 @@ export class MnemonService {
       try {
         await db.close()
       } catch (err) {
-        logger.warn(`[Mnemon] 关闭空间 ${id} 失败:`, err)
+        logger.warn(`[Mnemon] Failed to close space ${id}:`, err)
       }
     }
     this.openDbs.clear()

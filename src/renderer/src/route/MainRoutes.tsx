@@ -6,6 +6,7 @@ import { usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import PluginRepository from '@renderer/pages/PluginRepository'
 import PluginDetail from '@renderer/pages/PluginDetail'
+import Login from '@renderer/pages/Login'
 import type { RegisteredRoute } from '@renderer/plugin-host/types'
 
 // 路由级代码分割：AI 助手（含代码编辑器、差异视图等重型依赖）与资料库按需加载，
@@ -69,6 +70,8 @@ const MainRoutes: React.FC = () => {
           </Suspense>
         }
       />
+      {/* 登录页：整窗独立布局（外壳在 AppShell 里对 /login 单独渲染，不显示侧栏） */}
+      <Route path="/login" element={<Login />} />
       {/* 系统级插件仓库 */}
       <Route path="/plugins" element={<PluginRepository />} />
       <Route path="/plugins/:pluginId" element={<PluginDetail />} />

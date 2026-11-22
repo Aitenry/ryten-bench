@@ -47,7 +47,7 @@ export class ToolOutputStore {
       this.prune(topicId)
       return true
     } catch (err) {
-      logger.warn('[ToolOutput] 保存工具结果详情失败:', err)
+      logger.warn('[ToolOutput] Failed to save tool result detail:', err)
       return false
     }
   }
@@ -101,7 +101,7 @@ export class ToolOutputStore {
     try {
       fs.rmSync(path.join(this.baseDir, String(topicId)), { recursive: true, force: true })
     } catch (err) {
-      logger.warn('[ToolOutput] 清理工具结果详情失败:', err)
+      logger.warn('[ToolOutput] Failed to purge tool result detail:', err)
     }
   }
 

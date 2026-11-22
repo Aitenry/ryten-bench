@@ -49,16 +49,16 @@ function runRendererMemoryDumpHooks(reason: string, exitCode: number): void {
     // 快照是诊断旁路：不阻塞崩溃恢复流程
     dumpHarnessMemory(reason, exitCode)
   } catch (err) {
-    logger.warn('[Memory] AI 助手内存快照失败:', err)
+    logger.warn('[Memory] AI assistant memory snapshot failed:', err)
   }
   for (const hook of listContributions<AppHook>(APP_RENDERER_MEMORY_DUMP)) {
     try {
       // 快照是诊断旁路：不阻塞崩溃恢复流程，异步失败也只记日志
       void Promise.resolve(hook.run(reason, exitCode)).catch((err) => {
-        logger.warn(`[Memory] 内存快照钩子执行失败（${hook.label}）:`, err)
+        logger.warn(`[Memory] Memory snapshot hook failed (${hook.label}):`, err)
       })
     } catch (err) {
-      logger.warn(`[Memory] 内存快照钩子执行失败（${hook.label}）:`, err)
+      logger.warn(`[Memory] Memory snapshot hook failed (${hook.label}):`, err)
     }
   }
 }
@@ -160,7 +160,7 @@ function registerWindowControlIpcOnce(): void {
         win.setTitleBarOverlay(overlay)
       } catch (err) {
         // 平台不支持 WCO（macOS / 老 Electron）时静默降级；标题栏仍能正常显示
-        logger.debug('[Window] setTitleBarOverlay 不可用:', err)
+        logger.debug('[Window] setTitleBarOverlay unavailable:', err)
       }
       // 系统窗口边框（DWM 画的那 1~2px）颜色跟随标题栏底色，避免亮色主题下顶部残留深色边
       if (color) syncWindowBorderColor(win, color)
@@ -317,7 +317,7 @@ export function createMainWindow(): void {
   // 直接销毁并重建主窗口恢复可用（新 webContents 不在 safeSend 死名单中）。
   win.webContents.on('render-process-gone', (_event, details) => {
     const abnormal = details.reason !== 'clean-exit' && details.reason !== 'killed'
-    const msg = `[Window] 渲染进程退出 reason=${details.reason} exitCode=${details.exitCode}`
+    const msg = `[Window] Renderer process exited reason=${details.reason} exitCode=${details.exitCode}`
     if (abnormal) logger.error(msg)
     else logger.info(msg)
     // 崩溃/OOM 时补一份内存快照（渲染进程已消失，只能靠流式期间的采样缓存）：
@@ -329,7 +329,7 @@ export function createMainWindow(): void {
       details.reason === 'launch-failed' ||
       details.reason === 'integrity-failure'
     ) {
-      logger.warn('[Window] 渲染进程异常退出，300ms 后重建主窗口恢复可用...')
+      logger.warn('[Window] Renderer process exited abnormally, recreating main window in 300ms to recover...')
       setTimeout(() => {
         // 应用正在退出时不再自愈（退出清理会关闭数据库，重建的窗口加载必失败）
         if (isQuittingNow()) return
@@ -342,7 +342,7 @@ export function createMainWindow(): void {
           try {
             createMainWindow()
           } catch (err) {
-            logger.error('[Window] 自愈重建主窗口失败:', err)
+            logger.error('[Window] Failed to recreate main window for self-heal:', err)
           }
           if (getMainWindow() === win && !win.isDestroyed()) {
             // 重建失败（构造抛错）时销毁旧窗口走正常退出收尾，避免留下不可用的死窗口
@@ -391,7 +391,7 @@ export function createMainWindow(): void {
       seen.count += 1
       if (seen.count === CONSOLE_WARN_REPEAT_SUMMARY_AT) {
         logger.warn(
-          `[Renderer:warning] ${msg}（同条消息已重复 ${seen.count}+ 次，10 秒内不再转发）`
+          `[Renderer:warning] ${msg} (same message repeated ${seen.count}+ times, not forwarding again within 10s)`
         )
       }
       return
@@ -414,17 +414,17 @@ export function createMainWindow(): void {
     const allowed = devOrigin ? url.startsWith(devOrigin) : url.startsWith('file://')
     if (!allowed) {
       event.preventDefault()
-      shell.openExternal(url).catch((err) => logger.warn('[Window] 外部链接打开失败:', err))
+      shell.openExternal(url).catch((err) => logger.warn('[Window] Failed to open external link:', err))
     }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/resource/index.html`).catch((err) => {
-      logger.error('[Window] 主窗口加载失败:', err)
+      logger.error('[Window] Failed to load main window:', err)
     })
   } else {
     win.loadFile(join(__dirname, '../renderer/resource/index.html')).catch((err) => {
-      logger.error('[Window] 主窗口加载失败:', err)
+      logger.error('[Window] Failed to load main window:', err)
     })
   }
   logger.info('[Window] Main window created, renderer loading started')

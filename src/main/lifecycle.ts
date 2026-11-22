@@ -26,13 +26,13 @@ async function runBeforeQuitHooks(): Promise<void> {
   try {
     closeHarnessResources()
   } catch (err) {
-    logger.warn('[Lifecycle] AI 助手资源释放失败:', err)
+    logger.warn('[Lifecycle] Failed to release AI assistant resources:', err)
   }
   for (const hook of listContributions<AppHook>(APP_BEFORE_QUIT)) {
     try {
       await hook.run()
     } catch (err) {
-      logger.warn(`[Lifecycle] 退出前钩子失败（${hook.label}）:`, err)
+      logger.warn(`[Lifecycle] Before-quit hook failed (${hook.label}):`, err)
     }
   }
   // 落盘/关闭数据库之后再摘通道与订阅，避免退出过程中还有处理器在跑
@@ -40,7 +40,7 @@ async function runBeforeQuitHooks(): Promise<void> {
     stopNotes()
     stopHarness()
   } catch (err) {
-    logger.warn('[Lifecycle] 系统功能退出装配失败:', err)
+    logger.warn('[Lifecycle] Failed to tear down system features:', err)
   }
 }
 
@@ -87,7 +87,7 @@ export function registerLifecycleHooks(): void {
             // 贡献随插件停用摘除，因此停用的插件不会被调用（core 不认识任何插件模块）。
             await runBeforeQuitHooks()
           } catch (err) {
-            logger.warn('[Lifecycle] 退出前钩子执行失败:', err)
+            logger.warn('[Lifecycle] Failed to run before-quit hooks:', err)
           }
           cleanupDone = true
           app.quit()

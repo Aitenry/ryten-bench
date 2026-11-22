@@ -158,7 +158,7 @@ async function recordWorkspaceWrite(args: {
       stats: args.stats
     })
   } catch (err) {
-    logger.warn('[FsBackend] 文件改动记录失败:', err)
+    logger.warn('[FsBackend] Failed to record file change:', err)
   }
 }
 

@@ -27,7 +27,7 @@ export function preloadView(key: string, load: LazyModule): Promise<void> {
     .then(() => undefined)
     .catch((err) => {
       // 预加载失败不阻塞使用：Suspense 仍会按需加载并显示骨架屏
-      console.warn(`[preload] "${key}" 视图预加载失败`, err)
+      console.warn(`[preload] Failed to preload view "${key}"`, err)
     })
   inflight.set(key, task)
   return task

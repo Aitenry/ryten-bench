@@ -90,7 +90,6 @@ const Harness: React.FC = () => {
     handleKeyDown,
     handleStop,
     handleLoadMoreMessages,
-    refreshTopics,
     queuedMessages,
     steeredNotice,
     handleRemoveQueued,
@@ -152,19 +151,26 @@ const Harness: React.FC = () => {
       setWorkspacePath(dir)
       setHasWorkspace(true)
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: id } }))
-      refreshTopics().then()
+      // 会话列表由 Provider 的 `workspace-changed` 订阅统一重拉（见 useHarnessHandlers），
+      // 这里再拉一次只会多打一次库
     } catch (err) {
       console.error('Failed to setup workspace:', err)
     }
-  }, [refreshTopics, t])
+  }, [t])
 
-  // 工作区切换后刷新工作区路径与话题列表
+  /**
+   * 工作区切换后刷新工作区路径（资源管理器根 / 虚拟路径映射）。
+   *
+   * 会话列表**不在这里**拉：那条订阅已经挪到 Provider（`useHarnessHandlers`），因为切工作区的
+   * 入口大多在 `/plugins` 与常驻侧栏上——本页没挂载时收不到事件，列表就会停在上一个工作区，
+   * 侧栏一直显示加载骨架。
+   */
   const handleWorkspaceChange = useCallback(async () => {
     await checkWorkspace()
-    refreshTopics().then()
-  }, [checkWorkspace, refreshTopics])
+  }, [checkWorkspace])
 
-  // 全局工作区切换：只刷新路径与话题列表。
+  // 全局工作区切换：本页只重读工作区路径（资源管理器根 / 虚拟路径映射）；
+  // 会话列表由 Provider 的同名订阅负责，见 useHarnessHandlers。
   // 不再顺带 handleNewHarness()——「点开其他工作区下的会话」时那一步会把刚选中的会话清空再重设，
   // 造成列表与选中高亮闪动；需要回到空白欢迎态的入口（新建会话/新建工作区/删除工作区）
   // 由侧边栏显式调用 onNewHarness()。

@@ -63,7 +63,7 @@ function loadSubAgentMemory(memoryPath: string | undefined, name: string): strin
       return content || ''
     }
   } catch (err) {
-    logger.warn(`[SubAgent] 读取记忆文件失败 ${memoryFile}:`, err)
+    logger.warn(`[SubAgent] Failed to read memory file ${memoryFile}:`, err)
   }
   return ''
 }
@@ -233,7 +233,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           const isRecursion =
             err instanceof GraphRecursionError || (err as Error)?.name === 'GraphRecursionError'
           if (isRecursion) {
-            logger.warn(`[SubAgent] ${sa.name} 工具调用轮次已达上限，自动停止`)
+            logger.warn(`[SubAgent] ${sa.name} reached the tool call round limit, stopping automatically`)
             const output = fullText.trim()
               ? `${fullText.trim()}${m.subagent.roundLimitNote}`
               : m.subagent.roundLimitIncomplete
@@ -241,7 +241,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
             return output
           }
           const message = err instanceof Error ? err.message : String(err)
-          logger.warn(`[SubAgent] ${sa.name} 执行失败:`, err)
+          logger.warn(`[SubAgent] ${sa.name} failed to run:`, err)
           const output = mainFormat(m.subagent.failed, { message })
           push({ kind: 'sub_end', name: sa.name, causeId, output } satisfies SubAgentRecord)
           return output
@@ -249,7 +249,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
       } catch (err) {
         // 模型解析 / 建图等前置步骤失败（流式执行阶段的错误已由内层 catch 处理）
         const message = err instanceof Error ? err.message : String(err)
-        logger.warn(`[SubAgent] ${sa.name} 初始化失败:`, err)
+        logger.warn(`[SubAgent] ${sa.name} failed to initialize:`, err)
         const output = mainFormat(m.subagent.failed, { message })
         push({ kind: 'sub_end', name: sa.name, causeId, output } satisfies SubAgentRecord)
         return output

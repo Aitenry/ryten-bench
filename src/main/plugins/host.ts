@@ -40,7 +40,7 @@ function runTeardown(id: string, dispose: void | (() => void), ctx: MainPluginCo
       // 停用时的清理同样是插件代码：同一条进程保护要覆盖到
       withPluginScope({ id, surface: 'install:dispose' }, dispose)
     } catch (err) {
-      logger.warn(`[Plugins] ${id} install dispose 异常:`, err)
+      logger.warn(`[Plugins] ${id} install dispose failed:`, err)
     }
   }
   ctx.dispose()
@@ -143,7 +143,7 @@ export function loadExternalMain(id: string): void {
   }
 
   externalMains.set(id, { ctx, teardown: () => runTeardown(id, dispose, ctx) })
-  logger.info(`[Plugins] 外部插件主模块装载: ${id}（通道 ${ctx.channels.length} 个）`)
+  logger.info(`[Plugins] Loaded external plugin main module: ${id} (${ctx.channels.length} channels)`)
   pushPluginChannels()
 }
 
@@ -153,7 +153,7 @@ export function unloadExternalMain(id: string): void {
   if (!record) return
   record.teardown()
   externalMains.delete(id)
-  logger.info(`[Plugins] 外部插件主模块卸载: ${id}`)
+  logger.info(`[Plugins] Unloaded external plugin main module: ${id}`)
   pushPluginChannels()
 }
 
@@ -165,7 +165,7 @@ function initExternalMains(): void {
       try {
         loadExternalMain(scanned.id)
       } catch (err) {
-        logger.warn(`[Plugins] 外部插件 '${scanned.id}' 主模块启动装载失败:`, err)
+        logger.warn(`[Plugins] External plugin '${scanned.id}' failed to load main module at startup:`, err)
       }
     }
   }

@@ -86,11 +86,11 @@ export function installPluginProcessGuard(): void {
     const scope = storage.getStore()
     if (scope) {
       logger.error(
-        `[Plugins] ${scope.id} 在 ${scope.surface}${scope.channel ? `（${scope.channel}）` : ''} 抛出未捕获异常:`,
+        `[Plugins] ${scope.id} threw an uncaught error in ${scope.surface}${scope.channel ? ` (${scope.channel})` : ''}:`,
         err
       )
     }
   })
 
-  logger.info('[Plugins] 进程保护已启用（插件上下文中的 exit / abort / kill-self 会被拦截）')
+  logger.info('[Plugins] Process guard enabled (exit / abort / kill-self in plugin contexts will be blocked)')
 }

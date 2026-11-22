@@ -275,6 +275,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [messagesPage, setMessagesPage] = useState(0)
   const [messagesHasMore, setMessagesHasMore] = useState(true)
   const [messagesLoadingMore, setMessagesLoadingMore] = useState(false)
+  /**
+   * 会话列表刷新用的序号：只有**最后发起**的那次请求能把结果写回 `topics`。
+   *
+   * 启动恢复 / 快速连点工作区时会有多个「换工作区」几乎同时发生（每次都要重拉列表），
+   * 它们的 IPC 往返顺序没有任何保证：先发的那次后回来，就会把 `topicsWorkspaceId` 写回
+   * **上一个**工作区。侧栏随后按「活动工作区」渲染时，那个工作区的会话列表永远等不到数据，
+   * 一直停在加载骨架（用户 2026-11-22 截图里插件行下面那 5 行就是它）。
+   */
+  const topicsRefreshSeqRef = useRef(0)
 
   // ── 多会话支持 ──
   const sessionsRef = useRef<Map<number, SessionState>>(new Map())
@@ -374,6 +383,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   const refreshTopics = useCallback(async (): Promise<void> => {
+    const seq = ++topicsRefreshSeqRef.current
     try {
       setTopicsRefreshing(true)
       setTopicsLoading(true)
@@ -384,6 +394,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         0,
         TOPICS_PAGE_SIZE
       )
+      // 期间又发起过更新的一次刷新的：这份结果已经过期，不能覆盖更新的那一份
+      // （否则 `topicsWorkspaceId` 会被写回旧工作区，侧栏那边就永远等不到活动工作区的列表）
+      if (seq !== topicsRefreshSeqRef.current) return
       setTopics(result.items)
       // 标记这批 topics 属于哪个工作区：切换工作区时旧列表不能挂到新工作区行下面
       setTopicsWorkspaceId(workspaceId)
@@ -421,6 +434,26 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   useEffect(() => {
     refreshTopics().then()
   }, [])
+
+  /**
+   * 工作区切换（含插件行 /「在对话中修改」/「对话」模式）→ 重拉会话列表。
+   *
+   * 订阅必须挂在 Provider（常驻、跟着应用走），不能挂在对话页：切工作区的入口几乎都在
+   * `/plugins`（插件仓库 / 插件详情）或常驻侧栏里，人根本不在 `/harness`。此前这条订阅写在
+   * `pages/Harness.tsx` 里，离开对话页就没人接这个事件 ⇒ `topics` 一直停在上一个工作区的那份，
+   * 侧栏里「已展开的活动工作区」永远等不到自己的会话列表，一直卡在骨架屏
+   * （用户 2026-11-22 报的就是这个：插件行下面 5 行灰条不动）。
+   *
+   * `refreshTopics` 自己按**设置里的**活动工作区取数，所以不依赖事件 detail；
+   * 并发/乱序由 `topicsRefreshSeqRef` 兜底。
+   */
+  useEffect(() => {
+    const onWorkspaceChanged = (): void => {
+      refreshTopics().then()
+    }
+    window.addEventListener('workspace-changed', onWorkspaceChanged)
+    return () => window.removeEventListener('workspace-changed', onWorkspaceChanged)
+  }, [refreshTopics])
 
   // 组件卸载时清理所有流监听器
   useEffect(() => {
@@ -1877,7 +1910,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             await harnessApi.harness.deleteDialogue(dialogueId)
           } else {
             // 流式期间的消息用临时 id（Date.now() 时间戳），拿它去删会命中不存在的行
-            console.warn(`[Harness] 跳过删除：消息尚无库内 id（index=${idx}）`)
+            console.warn(`[Harness] Skipping delete: message has no stored id yet (index=${idx})`)
           }
         }
       } catch (err) {

@@ -181,7 +181,7 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
     })
   } catch (error) {
     if (error instanceof SandboxUnavailableError) {
-      sandboxLog.warn(`[Sandbox] 命令未执行（无可用沙箱）：${error.reason}`)
+      sandboxLog.warn(`[Sandbox] Command not executed (no sandbox available): ${error.reason}`)
       return {
         exitCode: null,
         output: '',
@@ -204,7 +204,7 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
   const combined = result.output
   // 先排除「后端自己坏了」：它的诊断里也可能出现 denial 词，不能误判成拒绝
   if (isRunnerFailure(combined, result.exitCode, confined.runnerFailure)) {
-    sandboxLog.warn(`[Sandbox] 后端自身失败（${confined.backend}）：${combined.slice(0, 400)}`)
+    sandboxLog.warn(`[Sandbox] Backend failed (${confined.backend}): ${combined.slice(0, 400)}`)
     return {
       exitCode: result.exitCode,
       output: combined,

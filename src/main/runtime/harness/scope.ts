@@ -34,7 +34,7 @@ export class EffectScope {
   async effect<T>(run: () => Promise<T>, undo: () => Promise<void> | void): Promise<T> {
     if (!this.armed) {
       // 已回收（或信号预中止）：效果不再注册，逆由调用方自行处理
-      logger.warn('[EffectScope] 已回收，效果未注册')
+      logger.warn('[EffectScope] Already disposed, effect not registered')
       return await run()
     }
     // 效果失败不回滚（尚未产生副作用），交给调用方处理；成功则以 LIFO 组合逆

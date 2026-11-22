@@ -117,7 +117,7 @@ export class JobsRegistry {
         this.wakeWaiters(record)
         this.broadcast(topicId)
         this.pruneTerminal(topicId)
-        logger.info(`[Jobs] 任务 ${id} 结算为 ${status}`)
+        logger.info(`[Jobs] Job ${id} settled as ${status}`)
       }
     }
   }
@@ -221,7 +221,7 @@ export class JobsRegistry {
         current.finishedAt = Date.now()
         this.wakeWaiters(current)
         this.broadcast(current.topicId)
-        logger.warn(`[Jobs] 任务 ${id} 取消超时，强制 killed`)
+        logger.warn(`[Jobs] Job ${id} cancellation timed out, force-killed`)
       }
     }, 5000)
     this.broadcast(topicId)

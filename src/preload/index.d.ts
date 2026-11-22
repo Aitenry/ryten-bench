@@ -2,6 +2,35 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
 import type { SystemSettings } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
+import type {
+  HubDetail,
+  HubListResult,
+  LatticeAutoInstallSettingResult,
+  LatticeDownloadAssetKind,
+  LatticeDownloadAssetResult,
+  LatticeImportLocalDirResult,
+  LatticeInstallResult,
+  LatticeInstallSummary,
+  LatticeListQuery,
+  LatticeLocalSourcePathResult,
+  LatticeLoginInput,
+  LatticeLoginResult,
+  LatticeMeResult,
+  LatticeOpenSourceResult,
+  LatticeRepublishInput,
+  LatticeRepublishResult,
+  LatticeSetBaseUrlResult,
+  LatticeSetPluginRootResult,
+  LatticeSourcePathResult,
+  LatticeStatus,
+  LatticeSyncDetails,
+  LatticeSyncInput,
+  LatticeSyncResult,
+  LatticeSyncConflict,
+  LatticeResolveConflictResult,
+  LatticeUploadProgress,
+  LatticeUploadResult
+} from '../main/lattice/types'
 
 /**
  * 本地安装插件（压缩包 / 文件夹）的结果。
@@ -100,22 +129,6 @@ interface Api {
     setEnabled: (id: string, enabled: boolean) => Promise<PluginListEntry[]>
     /** 无参 = 第三方插件「选目录安装」；带 id = 从应用包重装某个内置插件 */
     install: (id?: string) => Promise<{ ok: boolean; id?: string; error?: string }>
-    /** 插件仓库（GitHub）里可安装的插件清单（网络失败会抛错） */
-    available: () => Promise<{
-      repo: string
-      tag?: string
-      plugins: {
-        id: string
-        name: string
-        version: string
-        description?: string
-        asset: string
-        size?: number
-        installed: boolean
-      }[]
-    }>
-    /** 从插件仓库安装（或升级）某个插件 */
-    installFromGithub: (id: string) => Promise<{ ok: boolean; id?: string; error?: string }>
     /** 从本地路径安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json` */
     installLocal: (source: string) => Promise<LocalPluginInstallResult>
     /** 弹系统选择框挑一个本地来源并安装（面板唯一的本地安装入口；取消返回 canceled） */
@@ -156,6 +169,95 @@ interface Api {
     tableCounts: (tables: string[]) => Promise<Record<string, number>>
     /** 上报宿主 UI 表的「键 → 导出名」（`plugin://host/ui.js` 桥据此生成） */
     reportHostUi: (names: Record<string, string[]>) => void
+  }
+  /**
+   * Lattice 插件中心（core 通道，不走插件白名单）。
+   *
+   * 契约见 `.dev/ryten-lattice-contract.md` §3；IPC 常量在
+   * `src/main/lattice/types.ts` 的 `LATTICE_IPC`（main/preload 共用一份）。
+   */
+  lattice: {
+    /** 当前状态（基址 / 登录态 / 用户 / 角色 / 最近同步摘要） */
+    status: () => Promise<LatticeStatus>
+    /** 登录；失败不抛错，返回 `{ok:false,error}`（平台 message） */
+    login: (input: LatticeLoginInput) => Promise<LatticeLoginResult>
+    /** 退出登录（先尽力吊销服务端 refresh，本地无条件清） */
+    logout: () => Promise<{ ok: boolean }>
+    /** 当前用户与角色（`/v1/me`） */
+    me: () => Promise<LatticeMeResult>
+    /** 设置基址（环境变量 RB_LATTICE_URL 优先；变更会清除旧登录态） */
+    setBaseUrl: (url: string) => Promise<LatticeSetBaseUrlResult>
+    /** 插件目录（搜索 / 分类 / 排序 / 分页） */
+    list: (query?: LatticeListQuery) => Promise<HubListResult>
+    /** 插件详情（readme / 版本清单 / 我的安装记录） */
+    detail: (pluginId: string) => Promise<HubDetail>
+    /** 弹目录选择框并发布；用户取消 → `{ok:true,canceled:true}` */
+    pickAndUpload: () => Promise<LatticeUploadResult>
+    /** 选 .zip 安装包发布 */
+    pickAndUploadZip: () => Promise<LatticeUploadResult>
+    /** 按显式路径（插件包目录或 .zip）发布 */
+    uploadSource: (source: string) => Promise<LatticeUploadResult>
+    /** 下载并安装（或升级）；失败返回 `{ok:false,error}`，不抛错 */
+    install: (pluginId: string, version?: string) => Promise<LatticeInstallResult>
+    /** 本机已安装插件视图（本地口径，不联网） */
+    listInstalls: () => Promise<{ items: LatticeInstallSummary[] }>
+    /**
+     * 当前源码目录（v2）：安装时自动下载的源码解压位置。
+     * `managed='pluginsPath'` = 用户配置的插件存放路径（= workshop 草稿目录，插件模式可开对话）；
+     * `managed='userData'` = 应用数据目录回退；`path=null` = 本机没有该插件源码。
+     */
+    sourcePath: (pluginId: string) => Promise<LatticeSourcePathResult>
+    /** 本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+    localSource: (pluginId: string) => Promise<LatticeLocalSourcePathResult>
+    /**
+     * 「在对话中修改」：为源码目录建/复用插件工作区并开一条插件会话。
+     * 成功开对话 → `{ok:true,workspaceId,topicId}`；做不到可靠切换时回退文件管理器 →
+     * `{ok:true,opened:'folder'}`（**不会**假装开了对话）。
+     */
+    openSource: (pluginId: string) => Promise<LatticeOpenSourceResult>
+    /** 「发布新版本」：源码目录整包 zip 同时作为安装包与源码包上传 */
+    republish: (input: LatticeRepublishInput) => Promise<LatticeRepublishResult>
+    /** 下载安装包 / 源码包到本机（弹保存框 + sha256 校验；用户取消不是失败） */
+    downloadAsset: (
+      pluginId: string,
+      version: string,
+      kind: LatticeDownloadAssetKind
+    ) => Promise<LatticeDownloadAssetResult>
+    /**
+     * 「从本地导入」：弹目录选择框，把所选目录下带 `plugin.json` 的插件逐个发布到平台
+     * （安装包 + 源码包都是这个目录的整包 zip）；返回成功/跳过摘要。
+     */
+    importLocalDir: (dir?: string) => Promise<LatticeImportLocalDirResult>
+    /**
+     * 显式设置「插件存放路径」并立即生效（插件中心导入本地目录后调用）。
+     * 只接受非空路径；清除路径走设置页。
+     */
+    setPluginRoot: (dir: string) => Promise<LatticeSetPluginRootResult>
+    /**
+     * 手动同步（push / pull / both；也接受裸字符串）。
+     *
+     * 扩展入参：`{direction, installMissing?}` —— `installMissing` 控制本次 pull 是否自动补齐
+     * 「平台有安装记录、本机没有插件包」的插件；缺省跟随设置项（默认开启）。
+     * 返回的 `autoInstall` 带成功/失败明细，`orphaned` 列出平台已删除的安装记录。
+     */
+    sync: (input?: LatticeSyncInput) => Promise<LatticeSyncResult>
+    /** 同步详情：最近一次同步的自动补齐成功/失败明细 + 孤儿记录（失败原因可查看） */
+    syncDetails: () => Promise<LatticeSyncDetails>
+    /** 「缺失插件自动补齐」开关（持久化设置；默认开启） */
+    setAutoInstallMissing: (enabled: boolean) => Promise<LatticeAutoInstallSettingResult>
+    /** 未解决的插件数据冲突（含补拉的云端数据快照） */
+    syncConflicts: () => Promise<LatticeSyncConflict[]>
+    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
+    resolveConflict: (
+      pluginId: string,
+      strategy: 'local' | 'cloud'
+    ) => Promise<LatticeResolveConflictResult>
+    /** 状态变化推送（返回取消订阅函数） */
+    onStateChanged: (callback: (status: LatticeStatus) => void) => () => void
+    /** 上传阶段进度推送（zip / meta / upload） */
+    onUploadProgress: (callback: (progress: LatticeUploadProgress) => void) => () => void
+    /** 同步结果推送（手动与后台防抖同步都会发） */
+    onSyncState: (callback: (result: LatticeSyncResult) => void) => () => void
   }
   mermaid: {
     /** 全屏窗口预览 SVG（可拖拽/缩放画布） */

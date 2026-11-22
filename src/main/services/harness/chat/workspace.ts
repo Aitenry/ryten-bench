@@ -126,11 +126,11 @@ export function removeChatTopicDir(topicId: number): boolean {
   const root = path.resolve(chatWorkspaceRoot())
   const target = path.resolve(chatTopicDir(topicId))
   if (path.dirname(target) !== root) {
-    logger.warn(`[Chat] 拒绝删除非直接子目录：${target}`)
+    logger.warn(`[Chat] Refusing to delete directory that is not a direct child: ${target}`)
     return false
   }
   if (!/^\d+$/.test(path.basename(target))) {
-    logger.warn(`[Chat] 拒绝删除非话题目录：${target}`)
+    logger.warn(`[Chat] Refusing to delete non-topic directory: ${target}`)
     return false
   }
   try {
@@ -138,7 +138,7 @@ export function removeChatTopicDir(topicId: number): boolean {
     logger.info(`[Chat] removed conversation dir ${target}`)
     return true
   } catch (err) {
-    logger.warn(`[Chat] 会话目录删除失败（不影响删话题）：${target}`, err)
+    logger.warn(`[Chat] Failed to delete conversation dir (does not affect topic deletion): ${target}`, err)
     return false
   }
 }

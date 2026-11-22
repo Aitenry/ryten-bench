@@ -550,7 +550,6 @@ button.shell-nav-item {
 .shell-user-sub {
   font-size: 9.5px;
   color: #73737b;
-  margin-top: 2px;
 }
 .shell-user-actions {
   margin-left: auto;
@@ -1111,5 +1110,562 @@ button.shell-nav-item {
   .startup-splash-spark,
   .startup-splash-mote {
     opacity: 0;
+  }
+}
+
+/* ======== 登录页（/login 独立整窗） ========
+   左侧品牌面板（logo + 定位语 + 3 条能力点 + 极淡网格/柔光），右侧登录卡片。
+   颜色全部来自 antd token（由 Login.tsx 映射成 --login-* 内联变量），深色模式自动适配。 */
+.shell-standalone {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.shell-standalone > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.login-page {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: hidden;
+  background: var(--login-bg, #f5f5f5);
+  color: var(--login-text, #1f1f1f);
+}
+/* 页面级极淡渐晕：不是一整块纯色，视线上更聚焦到中央卡片 */
+.login-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      58% 52% at 8% 0%,
+      var(--login-glow-a, rgba(22, 119, 255, 0.08)),
+      transparent 70%
+    ),
+    radial-gradient(46% 46% at 100% 100%, var(--login-glow-b, rgba(0, 0, 0, 0.03)), transparent 72%);
+  pointer-events: none;
+}
+/* macOS 交通灯覆盖层下保留一条可拖拽带；Windows/Linux 原生标题栏时无副作用 */
+.login-drag-region {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+
+.login-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1080px, 100%);
+  height: min(700px, calc(100vh - 72px));
+  min-height: 540px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(376px, 0.94fr);
+  overflow: hidden;
+  border: 1px solid var(--login-border, rgba(5, 5, 5, 0.08));
+  border-radius: 24px;
+  background: var(--login-panel-bg, #fff);
+  box-shadow: var(--login-card-shadow, 0 12px 32px rgba(0, 0, 0, 0.12));
+  animation: login-shell-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes login-shell-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* —— 左侧品牌面板 —— */
+.login-brand {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  padding: 44px 46px;
+  border-right: 1px solid var(--login-border, rgba(5, 5, 5, 0.08));
+  background: linear-gradient(
+    152deg,
+    var(--login-primary-bg, rgba(22, 119, 255, 0.1)) 0%,
+    var(--login-panel-bg, #fff) 56%,
+    var(--login-panel-bg, #fff) 100%
+  );
+}
+.login-brand-grid {
+  position: absolute;
+  inset: -12%;
+  background-image:
+    linear-gradient(to right, var(--login-grid-line, rgba(0, 0, 0, 0.03)) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--login-grid-line, rgba(0, 0, 0, 0.03)) 1px, transparent 1px);
+  background-size: 34px 34px;
+  -webkit-mask-image: radial-gradient(ellipse at 30% 28%, #000 0%, #000 32%, transparent 76%);
+  mask-image: radial-gradient(ellipse at 30% 28%, #000 0%, #000 32%, transparent 76%);
+  pointer-events: none;
+}
+.login-brand-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(44px);
+  pointer-events: none;
+}
+.login-brand-glow-a {
+  width: 360px;
+  height: 360px;
+  left: -120px;
+  top: -130px;
+  background: var(--login-primary-bg, rgba(22, 119, 255, 0.12));
+}
+.login-brand-glow-b {
+  width: 300px;
+  height: 300px;
+  right: -130px;
+  bottom: -150px;
+  background: var(--login-glow-b, rgba(0, 0, 0, 0.04));
+}
+.login-brand-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 420px;
+  min-height: 100%;
+}
+.login-brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.login-brand-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: block;
+  /* 与 logo 自身底色一致：圆角外的四角不会漏出页面背景（暗色主题下也不突兀） */
+  background: #f8f7f3;
+  box-shadow:
+    0 6px 18px rgba(17, 24, 39, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+.login-brand-name {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--login-text, #1f1f1f);
+}
+.login-brand-tagline {
+  margin: 26px 0 0;
+  /* 定位语宁可整句一行，也别把「解决」「办了」这种词拆到第二行只剩一两个字 */
+  max-width: 100%;
+  font-size: 15px;
+  line-height: 1.62;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--login-text-secondary, rgba(0, 0, 0, 0.65));
+  /* 中文只在标点处断行：别把「专属工作台」这种词拆到两行，也别留「需求。」当尾巴；
+     overflow-wrap 只兜「一句话长到没有任何可断点」的极端情况，正常不会生效 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.login-capabilities {
+  list-style: none;
+  margin: 34px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.login-capability {
+  display: flex;
+  /* 图标对齐的是「标题 + 描述」这一整块：顶对齐时图标会吊在标题上方，看起来和右边的字错位 */
+  align-items: center;
+  gap: 13px;
+}
+.login-capability-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid var(--login-border, rgba(5, 5, 5, 0.08));
+  background: var(--login-panel-bg, #fff);
+  color: var(--login-primary, #1677ff);
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.05);
+}
+.login-capability-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.login-capability-title {
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--login-text, #1f1f1f);
+}
+.login-capability-desc {
+  font-size: 11.5px;
+  line-height: 1.62;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+  /* 任何宽度的窗口、任何一条翻译都不许把文字列撑出面板 */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.login-brand-foot {
+  margin-top: auto;
+  padding-top: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+}
+.login-brand-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--login-primary, #1677ff);
+  box-shadow: 0 0 0 3px var(--login-primary-bg, rgba(22, 119, 255, 0.1));
+}
+
+/* —— 右侧登录面板 —— */
+.login-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: safe center;
+  gap: 14px;
+  padding: 30px 44px;
+  overflow-y: auto;
+  background: var(--login-panel-bg, #fff);
+}
+.login-card {
+  width: 100%;
+  max-width: 352px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.login-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.login-card-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--login-text, #1f1f1f);
+}
+.login-card-subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+}
+.login-alert {
+  border-radius: 12px;
+}
+.login-form .ant-form-item {
+  margin-bottom: 14px;
+}
+.login-form .ant-form-item-label > label {
+  font-size: 11.5px;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+}
+.login-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+  margin: 2px 0 16px;
+}
+.login-submit {
+  height: 42px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 20px -12px var(--login-primary, #1677ff);
+}
+/* 「服务器地址」是「记住我」右侧的次要动作：原地展开，输入框落到下一行 */
+.login-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.login-advanced-toggle:hover {
+  color: var(--login-text-secondary, rgba(0, 0, 0, 0.65));
+}
+.login-advanced-chevron {
+  transition: transform 0.18s ease;
+}
+.login-advanced-chevron.is-open {
+  transform: rotate(180deg);
+}
+/* 负上边距抵消 .login-form-row 的 16px 下边距，展开后输入框紧跟这一行 */
+.login-advanced-body {
+  margin: -6px 0 14px;
+  animation: login-adv-in 0.18s ease-out both;
+}
+@keyframes login-adv-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.login-advanced-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+}
+.login-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.login-back:hover {
+  color: var(--login-text-secondary, rgba(0, 0, 0, 0.65));
+  background: var(--login-grid-line, rgba(0, 0, 0, 0.03));
+}
+.login-page .ant-input-affix-wrapper,
+.login-page .ant-input {
+  border-radius: 10px;
+}
+
+/* 窄窗兜底：左栏收起，登录卡片独占（最小窗口 1200×800 时不会触发，仅防极端缩放） */
+@media (max-width: 960px) {
+  .login-shell {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 520px;
+    height: auto;
+    min-height: 0;
+  }
+  .login-brand {
+    display: none;
+  }
+  .login-panel {
+    padding: 36px 28px;
+  }
+}
+@media (max-height: 700px) {
+  .login-shell {
+    height: calc(100vh - 32px);
+    min-height: 0;
+  }
+  .login-panel {
+    padding: 26px 36px;
+  }
+  .login-brand {
+    padding: 32px 38px;
+  }
+  .login-capabilities {
+    margin-top: 20px;
+    gap: 12px;
+  }
+  .login-brand-tagline {
+    margin-top: 16px;
+  }
+  .login-brand-foot {
+    padding-top: 18px;
+  }
+}
+
+/* ======== Lattice 上传进度弹窗 ======== */
+.lattice-upload-bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.lattice-upload-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.2s ease;
+}
+.lattice-upload-bar-indeterminate {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: inherit;
+  opacity: 0.85;
+  animation: lattice-upload-indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes lattice-upload-indeterminate {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* ======== 侧栏用户区（真实账号） ========
+   未登录：灰头像 + 「未登录」+「点击登录」；已登录：首字母头像 + 名称 + 角色副行，
+   整块是 Dropdown 触发器。原写死的 E / Eddie / 本地工作区已移除。 */
+.shell-user-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.shell-user-trigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.shell-user-trigger:hover {
+  background: var(--shell-hover, rgba(255, 255, 255, 0.06));
+}
+.shell-avatar-guest {
+  background: var(--shell-active, #2b2b2f);
+  color: var(--shell-text-tertiary, #8b8b92);
+  box-shadow: inset 0 0 0 1px var(--shell-border, rgba(255, 255, 255, 0.08));
+}
+.shell-avatar-user {
+  color: #fff;
+  font-weight: 600;
+}
+.shell-user-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-user-sub-link {
+  color: var(--shell-primary, #1677ff);
+}
+.shell-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ======== 插件仓库：Lattice 插件中心面板 ======== */
+.lattice-hub-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 190px;
+  padding: 16px;
+  border: 1px solid var(--lattice-card-border, rgba(5, 5, 5, 0.08));
+  border-radius: 16px;
+  background: var(--lattice-card-bg, #fff);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+.lattice-hub-card.is-clickable {
+  cursor: pointer;
+}
+.lattice-hub-card.is-clickable:hover {
+  border-color: var(--lattice-card-border-hover, rgba(5, 5, 5, 0.18));
+  box-shadow: var(--lattice-card-shadow, 0 8px 22px rgba(17, 24, 39, 0.1));
+  transform: translateY(-2px);
+}
+.lattice-hub-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.lattice-hub-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lattice-hub-sync-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--lattice-sync-border, rgba(5, 5, 5, 0.08));
+  border-radius: 11px;
+  background: var(--lattice-sync-bg, rgba(0, 0, 0, 0.02));
+  font-size: 11px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-shell,
+  .login-advanced-body,
+  .lattice-upload-bar-indeterminate {
+    animation: none;
   }
 }

@@ -48,7 +48,7 @@ export class PluginContext {
   /** 提供自定义键（宿主根键不允许被提供） */
   set(key: string, value: unknown): void {
     if ((HOST_KEYS as readonly string[]).includes(key)) {
-      console.warn(`[plugin:${this.id}] 宿主根键 '${key}' 不允许被插件提供，已忽略`)
+      console.warn(`[plugin:${this.id}] Host root key '${key}' is not allowed to be provided by a plugin, ignored`)
       return
     }
     this.providedKeys.add(key)
@@ -61,7 +61,7 @@ export class PluginContext {
     try {
       undo = register()
     } catch (err) {
-      console.error(`[plugin:${this.id}] effect 注册失败:`, err)
+      console.error(`[plugin:${this.id}] Failed to register effect:`, err)
       return
     }
     if (typeof undo === 'function') this.effects.push(undo)
@@ -88,7 +88,7 @@ export class PluginContext {
       try {
         await undo()
       } catch (err) {
-        console.error(`[plugin:${this.id}] install dispose 失败:`, err)
+        console.error(`[plugin:${this.id}] install dispose failed:`, err)
       }
     }
     while (this.effects.length > 0) {
@@ -96,7 +96,7 @@ export class PluginContext {
       try {
         await undo()
       } catch (err) {
-        console.error(`[plugin:${this.id}] effect 回滚失败:`, err)
+        console.error(`[plugin:${this.id}] Failed to roll back effect:`, err)
       }
     }
   }

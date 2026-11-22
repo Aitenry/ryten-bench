@@ -187,7 +187,7 @@ async function persistTurnUsage(params: {
   if (records.length === 0) return
   const totals = sumUsage(records)
   if (!totals.hasTokens) {
-    logger.info('[Harness] 模型未回传 usage_metadata，跳过用量落库')
+    logger.info('[Harness] Model returned no usage_metadata, skipping usage persistence')
     return
   }
   try {
@@ -198,7 +198,7 @@ async function persistTurnUsage(params: {
       providerMark = config?.provider ?? null
       configuredModel = config?.model ?? null
     } catch (err) {
-      logger.warn('[Harness] 读取供应商配置失败，用量行只记 token:', err)
+      logger.warn('[Harness] Failed to read provider config, usage row will only record tokens:', err)
     }
     await addDialogueUsage({
       workspace_id: getActiveWorkspaceId(),
@@ -217,10 +217,10 @@ async function persistTurnUsage(params: {
       )
     })
     logger.info(
-      `[Harness] 用量已落库 dialogue=${dialogueId} in/out/total=${totals.inputTokens}/${totals.outputTokens}/${totals.totalTokens} calls=${totals.calls}`
+      `[Harness] Usage persisted dialogue=${dialogueId} in/out/total=${totals.inputTokens}/${totals.outputTokens}/${totals.totalTokens} calls=${totals.calls}`
     )
   } catch (err) {
-    logger.error('[Harness] 写入对话用量失败:', err)
+    logger.error('[Harness] Failed to write dialogue usage:', err)
   }
 }
 
@@ -235,7 +235,7 @@ async function runHarnessTurn(
 
   // 渲染进程已失效（崩溃/窗口关闭）时跳过本轮：不再创建模型、不保存消息、不向死帧发送
   if (!isSenderAlive(event.sender)) {
-    logger.warn(`[Harness] 渲染进程已失效（senderId=${event.sender.id}），跳过本轮对话`)
+    logger.warn(`[Harness] Renderer process is gone (senderId=${event.sender.id}), skipping this turn`)
     return { topicId: options?.topicId ?? 0, cancelled: true }
   }
 
@@ -259,7 +259,7 @@ async function runHarnessTurn(
   const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
   const tools = buildTools(selectedTools)
   logger.info(
-    `[Harness] 本轮工具 pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
+    `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
   )
 
   // 1. 确保话题存在
@@ -284,7 +284,7 @@ async function runHarnessTurn(
           await activateChatTopic(topicId)
           harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
         } catch (err) {
-          logger.warn('[Chat] 本轮会话目录切换失败（不影响本轮）:', err)
+          logger.warn('[Chat] Failed to switch session directory for this turn (turn unaffected):', err)
         }
       }
     } catch (err) {
@@ -341,7 +341,7 @@ async function runHarnessTurn(
   // 对话轮次失败统一收尾：通知前端错误并复位加载态（保证任何阶段失败前端都能停止反应）
   const failTurn = (error: unknown): { topicId: number; cancelled: boolean } => {
     const errMsg = error instanceof Error ? error.message : String(error)
-    logger.error('[Harness] 对话轮次失败:', error)
+    logger.error('[Harness] Turn failed:', error)
     safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId })
     safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId })
     return { topicId, cancelled: false }
@@ -371,7 +371,7 @@ async function runHarnessTurn(
       `[Harness] Model context window=${windowTokens} tokens → history budget=${contextBudget} chars, maxToolRounds=${maxToolRounds}`
     )
   } catch (err) {
-    logger.warn('[Harness] 读取模型上下文窗口失败，使用默认历史预算 20000:', err)
+    logger.warn('[Harness] Failed to read model context window, using default history budget 20000:', err)
   }
 
   // 创建 AbortController 用于取消流式输出
@@ -397,7 +397,7 @@ async function runHarnessTurn(
   const onSenderGone = (): void => {
     if (senderDead) return
     senderDead = true
-    logger.warn(`[Harness] 渲染进程已失效（senderId=${event.sender.id}），中止流式输出`)
+    logger.warn(`[Harness] Renderer process is gone (senderId=${event.sender.id}), aborting streaming output`)
     abortController.abort()
   }
   event.sender.on('render-process-gone', onSenderGone)
@@ -438,7 +438,7 @@ async function runHarnessTurn(
   } catch (err) {
     // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
     // 避免前端停留在「正在生成…」无任何反应
-    logger.error('[Harness] HarnessService 初始化失败:', err)
+    logger.error('[Harness] Failed to initialize HarnessService:', err)
     streamAbortControllers.delete(event.sender.id)
     event.sender.removeListener('render-process-gone', onSenderGone)
     event.sender.removeListener('destroyed', onSenderGone)
@@ -501,7 +501,7 @@ async function runHarnessTurn(
           blocks: JSON.stringify(acc.blocks)
         })
       } catch (err) {
-        logger.error('[Harness] 保存 AI 消息失败:', err)
+        logger.error('[Harness] Failed to save AI message:', err)
       }
     }
     segments.push({ messageId: segmentMessageId, dialogueId, content: acc.content })
@@ -536,7 +536,7 @@ async function runHarnessTurn(
       drainInjections: async (): Promise<AgentInjection[] | null> => {
         const items = harnessQueue.takeInjections(topicId)
         if (items.length === 0) return null
-        logger.info(`[HarnessQueue] 取出 ${items.length} 条待注入插话（topic=${topicId}）`)
+        logger.info(`[HarnessQueue] Draining ${items.length} queued message(s) for injection (topic=${topicId})`)
         return items.map((item) => {
           safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
             steered: { text: item.text },
@@ -568,7 +568,7 @@ async function runHarnessTurn(
       // 部分输出后流失败：转发错误事件给前端，并标记跳过落库
       if (chunk.streamError) {
         acc.failed = true
-        logger.error('[Harness] 流式执行失败（已有部分输出）:', chunk.streamError.message)
+        logger.error('[Harness] Stream failed (partial output already produced):', chunk.streamError.message)
         safeSend(event.sender, HARNESS_EVENTS.streamError, {
           error: chunk.streamError.message,
           topicId
@@ -986,15 +986,15 @@ async function runHarnessTurn(
       const closed = closeOutInProgress(todoStore, topicId)
       if (closed) {
         logger.info(
-          `[Harness] 本轮收尾：结掉 ${closed.closed} 项进行中 → ${closed.completed}/${closed.total} 已完成`
+          `[Harness] Closing out this turn: closed ${closed.closed} in-progress items -> ${closed.completed}/${closed.total} completed`
         )
       }
     } else {
-      logger.info(`[Harness] 本轮不收尾任务清单（${decision.reason}）`)
+      logger.info(`[Harness] Not closing out todo list this turn (${decision.reason})`)
     }
   } catch (err) {
     // 收尾只是兜底：判定或广播失败不能影响落库与前端收尾通知
-    logger.warn('[Harness] 收尾任务清单失败:', err)
+    logger.warn('[Harness] Failed to close out todo list:', err)
   }
 
   /**
@@ -1015,9 +1015,9 @@ async function runHarnessTurn(
     answerBlocks
   }
   logger.info(
-    `[Harness] 本轮终局：settled=${turnFinal.settled}, goalRound=${turnFinal.goalRound}` +
+    `[Harness] Turn final: settled=${turnFinal.settled}, goalRound=${turnFinal.goalRound}` +
       `${turnFinal.round != null ? `(round=${turnFinal.round}, closed=${turnFinal.goalClosed}, willContinue=${turnFinal.goalWillContinue})` : ''}` +
-      `, answer=${turnFinal.answerBlocks}块(from ${turnFinal.answerFrom}), blocks=${acc.blocks.length}`
+      `, answer=${turnFinal.answerBlocks} blocks (from ${turnFinal.answerFrom}), blocks=${acc.blocks.length}`
   )
 
   // 5. 清理并通知渲染进程流式输出已完成
@@ -1085,7 +1085,7 @@ async function resolveTurnMemoryScope(
       const raw = rows[0]?.memory_scope
       if (raw) return parseMemoryScope(raw, workspaceId)
     } catch (err) {
-      logger.warn('[Harness] 读取话题记忆作用域失败，按工作区记忆处理:', err)
+      logger.warn('[Harness] Failed to read topic memory scope, falling back to workspace memory:', err)
     }
   }
   return parseMemoryScope(fallback, workspaceId)
@@ -1139,7 +1139,7 @@ function drainPendingQueue(
   if (goalRoundDriver.isRunning(topicId)) return
   const item = harnessQueue.shift(topicId)
   if (!item) return
-  logger.info(`[HarnessQueue] 回合结束，接续队列消息：${item.text.slice(0, 40)}`)
+  logger.info(`[HarnessQueue] Turn ended, continuing with queued message: ${item.text.slice(0, 40)}`)
   launchTurn(
     event,
     item.text,
@@ -1153,7 +1153,7 @@ function drainPendingQueue(
       documents: item.documents
     },
     trackTurn
-  ).catch((err) => logger.error('[HarnessQueue] 接续队列消息失败:', err))
+  ).catch((err) => logger.error('[HarnessQueue] Failed to continue with queued message:', err))
 }
 
 /**
@@ -1203,7 +1203,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
   const sandboxStatus = sandboxService.status()
   logger.info(
-    `[Sandbox] 接线完成 backend=${sandboxStatus.backend ?? 'unavailable'} enforcement=${sandboxStatus.enforcement ?? '-'} ${sandboxStatus.reason ?? ''}`
+    `[Sandbox] Wiring complete backend=${sandboxStatus.backend ?? 'unavailable'} enforcement=${sandboxStatus.enforcement ?? '-'} ${sandboxStatus.reason ?? ''}`
   )
 
   // 沙箱拦截到的危险 / 越界操作 → 广播到所有窗口，由审批弹窗问用户「允许一次 / 拒绝」
@@ -1224,7 +1224,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.approvalAsked, payload)
       }
       logger.info(
-        `[Permission] 挂起审批 requestId=${pending.requestId} tool=${pending.toolName} reason=${pending.reasonCode}`
+        `[Permission] Pending approval requestId=${pending.requestId} tool=${pending.toolName} reason=${pending.reasonCode}`
       )
     }
     return () => {
@@ -1285,7 +1285,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
       const tools = buildTools(selectedTools)
       logger.info(
-        `[Harness] 本轮工具 pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
+        `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
       )
 
       const model = await getProviderService().createModel(options?.providerId)
@@ -1298,7 +1298,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       try {
         maxToolRounds = (await getProviderService().getConfig(options?.providerId)).max_tool_rounds
       } catch (err) {
-        logger.warn('[Harness] 读取模型工具调用轮数失败，使用默认值:', err)
+        logger.warn('[Harness] Failed to read model max tool call rounds, using default:', err)
       }
 
       const harnessService = new HarnessService(
@@ -1340,7 +1340,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         if (cancelled) {
           // 用户停止本轮：disarm 目标并跳过自动续跑调度（修复：此前 cancelled 被丢弃，
           // 停止后立即白烧一轮自动轮；目标保持 active，用户要求「继续」时经 resume 重新武装）
-          logger.info('[Harness] 本轮被用户取消，目标 disarm，跳过自动续跑调度')
+          logger.info('[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation')
           goalStore.disarm(topicId)
           return
         }
@@ -1356,7 +1356,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         // 目标续跑全部结束后再处置队列：排队中的插话作为新一轮发出
         drainPendingQueue(event, topicId, options, trackTurn)
       })
-      .catch((err) => logger.error('[Harness] 轮次执行异常:', err))
+      .catch((err) => logger.error('[Harness] Error executing turn:', err))
     activeHarnessStreams.add(streamPromise)
     streamPromise.finally(() => activeHarnessStreams.delete(streamPromise))
   })
@@ -1409,7 +1409,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         .then(() => {
           drainPendingQueue(event, topicId, { topicId }, trackTurn)
         })
-        .catch((err) => logger.error('[HarnessQueue] 直接发起轮次异常:', err))
+        .catch((err) => logger.error('[HarnessQueue] Error starting turn directly:', err))
       return { queued: false }
     }
   )
@@ -1442,7 +1442,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       // 纯注入：条目进入待注入缓冲，下一个工具节点边界会被并进模型上下文，
       // 不落库、不产生对话内容；本轮没等到边界的条目由 releaseHolds 放回队列。
       logger.info(
-        `[HarnessQueue] 插话已受理话题 ${topicId}（等待下一个工具节点边界注入）：${item.text.slice(0, 40)}`
+        `[HarnessQueue] Queued message accepted for topic ${topicId} (waiting for injection at the next tool node boundary): ${item.text.slice(0, 40)}`
       )
       return { accepted: true }
     }
@@ -1529,7 +1529,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           }
         }
       } catch (err) {
-        logger.warn('[Harness] 读取该轮提问失败，记忆整理只带回答:', err)
+        logger.warn('[Harness] Failed to read the question for this turn, memory consolidation will only include the answer:', err)
       }
 
       // 与主轮次同源的工具调用轮数护栏（取不到则由 startMemoryAgent 用默认值兜底）
@@ -1537,7 +1537,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       try {
         maxToolRounds = (await getProviderService().getConfig(undefined)).max_tool_rounds
       } catch (err) {
-        logger.warn('[Harness] 读取模型工具调用轮数失败，记忆整理使用默认值:', err)
+        logger.warn('[Harness] Failed to read model max tool call rounds, memory consolidation will use the default:', err)
       }
 
       // 「存入记忆」也要落进**这条会话自己的**记忆作用域（插件会话 → 那份插件的记忆）
@@ -1559,7 +1559,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         maxToolRounds
       })
       logger.info(
-        `[Harness] 记忆整理子代理：${result.ok ? `${result.agentId} (${result.label})` : result.reason}`
+        `[Harness] Memory consolidation subagent: ${result.ok ? `${result.agentId} (${result.label})` : result.reason}`
       )
       return result
     }
@@ -1652,7 +1652,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       requestId,
       decision === 'allow-once' ? 'allow-once' : ('deny' as ApprovalDecision)
     )
-    logger.info(`[Permission] 审批裁决 requestId=${requestId} decision=${decision} 命中=${allowed}`)
+    logger.info(`[Permission] Approval decision requestId=${requestId} decision=${decision} matched=${allowed}`)
     return allowed
   })
   // 切话题 / 重新加载时拉一次当前挂起的审批（弹窗可能是在别的界面挂起的）
@@ -1678,7 +1678,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     (payload: { topicId?: number; mode?: unknown; scope?: 'topic' | 'default' }) => {
       const mode = payload?.mode
       if (!isPermissionMode(mode)) {
-        logger.warn(`[Permission] 拒绝非法档位: ${String(mode)}`)
+        logger.warn(`[Permission] Rejected invalid permission mode: ${String(mode)}`)
         return permissionStateFor(payload?.topicId ?? null)
       }
       // scope='default' 改「之后新建话题的默认值」；否则改当前话题（DSH 的两层语义）
@@ -1695,7 +1695,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           safeSend(win.webContents, HARNESS_EVENTS.permissionUpdated, state)
         }
       }
-      logger.info(`[Permission] 档位已切换 topic=${state.topicId} mode=${state.mode}`)
+      logger.info(`[Permission] Mode switched topic=${state.topicId} mode=${state.mode}`)
       return state
     }
   )

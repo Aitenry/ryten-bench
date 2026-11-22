@@ -116,7 +116,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
         setQueriedItems(items)
       } catch (err) {
         if (!cancelled) {
-          console.error('查询可用模型失败:', err)
+          console.error('Failed to query available models:', err)
           setQueryFailed(true)
         }
       }
@@ -191,7 +191,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
         .answerQuestion(pending.requestId, [{ id: q.id, selected: [submitValue] }])
         .then(() => close())
         .catch((err) => {
-          console.error('提交模型选择失败:', err)
+          console.error('Failed to submit model selection:', err)
           close()
         })
     },

@@ -40,7 +40,7 @@ export function clearEnabledOverride(id: string): void {
   const rest = { ...states }
   delete rest[id]
   pluginsStore.set('states', rest)
-  logger.info(`[Plugins] 已清除 ${id} 的启用覆写`)
+  logger.info(`[Plugins] Cleared enabled override for ${id}`)
 }
 
 // ---------- 内置插件的安装状态 ----------
@@ -62,7 +62,7 @@ export function markUninstalled(id: string): void {
   const list = getUninstalledBuiltins()
   if (list.includes(id)) return
   pluginsStore.set('uninstalled', [...list, id])
-  logger.info(`[Plugins] 已记录 ${id} 为已卸载（不再自动安装）`)
+  logger.info(`[Plugins] Marked ${id} as uninstalled (will not auto-install)`)
 }
 
 /** 清掉某内置插件的已卸载记录（重装时调用） */
@@ -73,7 +73,7 @@ export function clearUninstalled(id: string): void {
     'uninstalled',
     list.filter((x) => x !== id)
   )
-  logger.info(`[Plugins] 已清除 ${id} 的已卸载记录`)
+  logger.info(`[Plugins] Cleared uninstalled record for ${id}`)
 }
 
 /** 某内置插件上次铺包时的应用版本（未铺过返回 undefined） */

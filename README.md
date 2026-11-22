@@ -4,7 +4,7 @@
 
 <h1 align="center">RytenBench</h1>
 
-<p align="center">An AI-powered personal desktop workspace — documents, knowledge bases, todos, knowledge graphs and an agent workbench, in one Electron app.</p>
+<p align="center">An AI-powered personal desktop workspace — documents, knowledge bases, todos, knowledge graphs, an agent workbench and a plugin hub, in one Electron app.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue" alt="Platform" />
@@ -19,23 +19,29 @@
 
 ## Overview
 
-RytenBench is a cross-platform Electron desktop application that puts two things side by side:
+RytenBench is a cross-platform Electron desktop application that puts three things side by side:
 
 - a **notes workspace** — Markdown documents, knowledge bases with a directory tree, todos, and an
   LLM-built knowledge graph;
 - an **AI assistant workbench** — multiple workspaces, per-workspace conversations driven by a
   LangGraph runtime with streaming, tool calling, sub-agents, background jobs, OS-level sandboxed
-  command execution and a three-layer memory system.
+  command execution and a three-layer memory system;
+- a **plugin hub** — an optional Lattice account for browsing, installing, publishing and syncing
+  plugin state across machines, where each published version also carries its source so the
+  assistant can modify the plugin.
 
-The two flagship views — **Notes** and the **AI assistant** — are **system features**, not plugins:
-their code is part of the main and renderer trees themselves (`src/main/**`, `src/renderer/src/**`)
-and is compiled into the application. They never enter the plugin registry and have no install,
-enable or uninstall step; their IPC channels are the ordinary `harness:*` / `notes:*` namespaces,
-registered by `src/main/system/` at startup and reached through `window.api.system`. The core
-process owns the window / tray / theme / i18n shell, the system-feature wiring, the PGlite database
-engine, the model provider factory and the generic preload bridge. Everything else is a **plugin** —
-third-party extensions loaded from on-disk packages (`userData/plugins/<id>/`) through the plugin
-host, which can be enabled, disabled or uninstalled at any time.
+The flagship surfaces — **Notes**, the **AI assistant** and the **plugin hub** — are **core
+features**, not plugins: their code is part of the main and renderer trees themselves
+(`src/main/**`, `src/renderer/src/**`) and is compiled into the application. They never enter the
+plugin registry and have no install, enable or uninstall step. Notes and the assistant register the
+ordinary `harness:*` / `notes:*` namespaces from `src/main/system/` and are reached through
+`window.api.system`; the hub registers the core `lattice:*` namespace from `registerCoreIpc()` and
+is reached through `window.api.lattice`. The core process owns the window / tray / theme / i18n
+shell, the system-feature wiring, the Lattice client (account, catalog, publishing, sync), the
+PGlite database engine, the model provider factory and the generic preload bridge. Everything else
+is a **plugin** — third-party extensions loaded from on-disk packages (`userData/plugins/<id>/`)
+through the plugin host, which can be enabled, disabled or uninstalled at any time. Plugins arrive
+from the hub or from a local package, and both paths end in the same host installer.
 
 ---
 
@@ -98,15 +104,15 @@ host, which can be enabled, disabled or uninstalled at any time.
 - **Memory (Mnemon)** — a three-layer memory system in every workspace: runtime memory (a user
   profile plus a project memory file, injected every turn), project documents (Markdown archives
   with hot/cold tiering) and long-term memory spaces (graph relations with deep recall, backed by
-  PGlite). It is exposed to the model as 13 `mnemon_*` tools and is configurable in
-  Settings → Memory.
+  PGlite). It is exposed to the model as 13 `mnemon_*` tools and is configurable under
+  More → Memory.
 - **Skills** — a local directory of skills, where every sub-directory containing a `SKILL.md`
   (YAML frontmatter with `name` / `description`) is a skill; enabled skills are injected into the
-  system prompt. Managed in Settings → Skills.
+  system prompt. Managed under More → Skills.
 - **MCP servers** — connect Model Context Protocol servers over stdio (a local command such as
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers), and their tools join the same tool-call loop as
-  the built-in and plugin tools. Managed in Settings → MCP.
+  the built-in and plugin tools. Managed under More → MCP.
 - **Workspace files** — file explorer and CodeMirror 6 editor (with a Markdown rich/source toggle,
   language modes, search, folding, word wrap and caret/selection status) inside the assistant view,
   live-reacting to on-disk changes and warning when a file changed on disk while unsaved edits
@@ -123,11 +129,58 @@ host, which can be enabled, disabled or uninstalled at any time.
   workspace is refused by the kernel and comes back to the model as a `[sandbox: …]` marker; when
   no backend is available the command is **not** run, with no unsandboxed fallback. Risky commands
   are shown for approval first, and a denied call can be retried once through the narrowly wider
-  mode with an explicit prompt. Backend status and workspace-ACE cleanup live in
-  Settings → Agents → Sandbox.
+  mode with an explicit prompt.
 - **Failure recovery** — when a model request fails, a recovery dialog lets you switch to another
   configured model and resume from the interruption point: the prompt is not resent and completed
   tool calls are not re-run.
+
+### Plugin hub & account — core feature
+
+- **Optional sign-in** — a full-window sign-in page (`/login`) exchanges a username and password
+  for a session on a Lattice node; the server address is editable under an advanced disclosure.
+  The app stays fully usable as a guest — the assistant, the Library and local plugin installs need
+  no account — while the hub catalog, publishing and cross-device sync do. "Remember me" stores
+  only the username and the server address, never the password.
+- **Sessions & device binding** — the access token lives in memory only; the refresh token is
+  persisted, encrypted through the OS keystore when `safeStorage` is available (with a logged
+  plaintext fallback where it is not) and tied to the node that issued it, so switching servers
+  drops the old session. Startup restores and refreshes the session; a rejected refresh signs the
+  user out, while a network failure keeps the session so an offline start does not sign anyone out.
+  Sign-in registers a per-install device fingerprint and device name with the platform.
+- **Account area** — the sidebar footer shows the avatar, display name, role and live sync state,
+  plus a badge with the number of unresolved conflicts. Its menu opens account details (user id,
+  server, last sync, conflict count), jumps to the plugin hub, runs a sync on demand and signs out.
+- **Hub catalog** — plugins published on the platform with version, author, tags, download count,
+  install state and a source marker; search matches name, id, description, category, author and
+  tags, and the category filter narrows the list. A card installs or updates one plugin, and
+  "Update all" upgrades every outdated plugin, continuing past individual failures.
+- **Version history & downloads** — each published version lists its size, source size, publish
+  date and changelog, can be installed directly (so a machine can be pinned to an earlier version)
+  and can be downloaded as a package or source archive after a checksum check. The README of a
+  published plugin is rendered on its detail page.
+- **Publishing** — publish a package folder or a `.zip`, publish a new version straight from the
+  local source folder (version plus changelog), or import a folder and batch-publish the plugin
+  directories inside it (one plugin, a repository of plugins, or a `dist/<id>` layout). Packaging
+  and upload report per-phase progress (packaging → metadata → bytes). Who may publish is left to
+  the platform; the client has no separate admin mode.
+- **Source on disk** — installing a version that ships source also unpacks the source on this
+  machine, under the plugin workshop's storage path (falling back to `userData/plugin-sources`),
+  writes a `source.json` marker and backs up user-modified source before replacing it. "Edit in
+  chat" opens that folder as a plugin workspace and conversation so the model can modify the
+  plugin; when a chat cannot be created it opens the folder and reports that instead.
+- **Cross-device sync** — install records (version, enabled state) and each plugin's state file
+  (`userData/plugin-state/<id>.json`, up to 256 KiB) sync with the platform; workspace files, chat
+  history, notes and databases never leave the machine. The app pulls at startup and after
+  sign-in, pushes five seconds after a plugin changes, and offers a manual "Sync now".
+- **Auto-restore** — the default-on "Auto-restore plugins" switch makes a pull reinstall plugins
+  the account has install records for but this machine is missing (a new machine, a reinstall, a
+  deleted folder). Per-plugin failures are itemised instead of aborting the rest, and switching it
+  off makes a pull only list what is missing.
+- **Conflicts & orphaned records** — plugin-data conflicts (`data_rev` changed on both sides) are
+  recorded, never force-overwritten: a dialog shows the local and cloud revisions and lets the user
+  keep either side. Install records whose plugin was removed from the hub are marked orphaned and
+  their local plugin and data are left untouched. A sync-details dialog lists restored plugins,
+  failures, orphaned records and conflicts.
 
 ### Model providers
 
@@ -151,20 +204,26 @@ host, which can be enabled, disabled or uninstalled at any time.
   the app's light / dark choice is pushed to the system title bar and the DWM window border so the
   frame never keeps the wrong colour. macOS keeps `titleBarStyle: hiddenInset` with the traffic
   lights plus a slim self-drawn App / Edit menu strip; Linux uses the native frame.
-- **Shell** — a themed sidebar (brand and version, Library / Plugin repository navigation, the
-  assistant's conversation sidebar with its mode switcher, workspace tree and memory, and the user
-  area with the notification popover, Settings and a light / dark toggle) next to the content area.
-  The old frameless shell — bottom bar, right bar, plugin-registered navigation — is gone; plugin
-  routes still render in the content area but no longer own the chrome.
-- **System pages** — the assistant (`/harness`, the default route), Library (`/notes`) and Plugin
-  repository (`/plugins`, with a per-plugin detail page at `/plugins/:pluginId`), with the shared
-  assistant sidebar always available on the left.
+- **Shell** — a themed sidebar (brand and version, Library / Plugin repository / More navigation,
+  the assistant's conversation sidebar with its mode switcher, workspace tree and memory, and a user
+  dock with the account block, notification popover, Settings and a light / dark toggle) next to the
+  content area. The account block is the plugin hub's face in the shell: a guest button that leads
+  to sign-in, or the signed-in avatar, display name, role, live sync state and conflict badge above
+  its account menu. The old frameless shell — bottom bar, right bar, plugin-registered navigation —
+  is gone; plugin routes still render in the content area but no longer own the chrome.
+- **System pages** — the assistant (`/harness`, the default route), Library (`/notes`), Plugin
+  repository (`/plugins`, with a per-plugin detail page at `/plugins/:pluginId`) and More
+  (`/more/:tab`), with the shared assistant sidebar on the left. The sign-in page (`/login`) is the
+  one full-window route: no sidebar, user dock or title strip.
+- **More** — the assistant's own settings pages (Agents, Skills, Memory and MCP) are standalone
+  screens under `/more/:tab`, chosen from the sidebar's More dropdown and laid out as a hero header
+  above the same settings cards; the Settings modal no longer carries an assistant group.
 - **Weather** — local conditions and a three-day forecast from Open-Meteo, located through IP
   geolocation and cached by the main process (exposed through `window.api.weather`).
-- **Settings** — a two-group modal. **General**: General (interface language, theme, tray
-  behaviour, lock screen), Models, Graph and System. **Assistant**: Agents, Skills, Memory and MCP.
-  Plugin management, the plugin workshop and third-party plugin settings pages are dialogs inside
-  Plugin repository; Settings itself only holds the app's own configuration.
+- **Settings** — a single-group modal: General (interface language, theme, tray behaviour, lock
+  screen), Models, Graph and System. Plugin management lives on the Plugin repository's detail
+  page; the plugin workshop and third-party plugin settings pages are dialogs inside Plugin
+  repository; Settings itself only holds the app's own configuration.
 - **Localization** — Simplified Chinese and English, switchable at runtime without restart, and
   the main process renders tool output and progress text in the current language too.
 - **Theme** — light / dark / auto, where auto follows the time of day (light from 6:00 to 18:00).
@@ -187,34 +246,48 @@ host, which can be enabled, disabled or uninstalled at any time.
 
 Plugins are third-party extensions. They are not bundled with the app, they are loaded from
 on-disk packages (`userData/plugins/<id>/`) through the plugin host, and they can be enabled,
-disabled or uninstalled at any time.
+disabled or uninstalled at any time. They are installed from the **Lattice plugin hub** or from a
+local package.
 
-The two flagship views are **not** plugins: Notes and the AI assistant are system features compiled
-into the application (see [Features](#features)), so they never appear in the registry below.
+Notes, the AI assistant and the plugin hub are **not** plugins: they are core features compiled into
+the application (see [Features](#features)), so they never appear in the registry below.
 
 | Plugin         | What it provides                                                      |
 | -------------- | --------------------------------------------------------------------- |
 | `task-planner` | Planner with a Gantt chart and hierarchical task tree                 |
 | `music-player` | Folder playlists, playback controls, mini player, metadata extraction |
 
-Both are published in the companion repository
-[`Aitenry/ryten-plugins`](https://github.com/Aitenry/ryten-plugins) and installed from the in-app
-plugin repository page (route `/plugins`). A fresh install therefore has an empty plugin registry
-until the user adds one.
+Both are published on the Lattice platform and are installed from the in-app plugin hub (route
+`/plugins`) or from a locally built package. A fresh install therefore has an empty plugin registry
+until the user installs one.
 
-### Installing plugins
+### Installing and publishing plugins
 
-1. **Plugin repository** — a GitHub-hosted index (`plugins.json`) lists plugin ids with their
-   version, size and `sha256`. The app downloads the matching Release asset, verifies the checksum,
-   unpacks it (rejecting path traversal) and validates `plugin.json` before installing or
-   upgrading. The repository URL can be overridden with `RB_PLUGINS_REPO`.
-2. **Local install** — install from a local `.zip` package or an unpacked plugin folder.
+1. **Plugin hub** — sign in with a Lattice account and the `/plugins` page lists the plugins
+   published on that platform. Installing a version downloads its package over a presigned URL
+   (the access token is not forwarded to object storage), verifies its `sha256`, unpacks it
+   (rejecting path traversal), validates `plugin.json` and installs it into
+   `userData/plugins/<id>/`. Versions can be upgraded or rolled back one at a time from the
+   version history; "Update all" walks every outdated plugin. A version that ships source also
+   unpacks that source for editing (see
+   [Plugin hub & account](#plugin-hub--account--core-feature)).
+2. **Local install** — install from a local `.zip` package or an unpacked plugin folder; this needs
+   no account.
+3. **Publishing** — publish a package folder or a `.zip`, publish a new version from the local
+   source folder (version plus changelog), or import a folder and batch-publish the plugin
+   directories inside it. A publish uploads the installable package and the matching source archive
+   together, so the plugin stays editable on whichever machine installs it.
+
+The legacy static-index distribution path is **gone**: there is no `plugins.json` / Release-asset
+download code left (its IPC channels, URL rules and installer module were removed), so the hub — plus
+local installs — is the only source of plugins.
 
 A plugin can be **enabled / disabled** at any time: disabling it unloads its routes, menu entries,
 settings pages, providers, IPC channels, event channels, i18n resources and AI tools immediately.
-**Uninstalling removes its code**; deleting its data is a separate, opt-in checkbox in the confirm
-dialog (each plugin declares what that would remove, and nothing is deleted by default — data is
-still there after reinstalling).
+**Uninstalling removes its code**: the plugin detail page always keeps the plugin's data, while the
+plugin workshop's draft uninstall offers an opt-in "also delete all data" checkbox (each plugin
+declares what that would remove). Data is therefore still there after reinstalling unless it was
+explicitly purged.
 
 ### Plugin package layout
 
@@ -229,6 +302,10 @@ repository (`src/main/plugins/`, `scripts/build-plugins.mjs`) work with any dire
   chunk-*.mjs            lazy chunks
   plugin.css             optional styles, injected by the plugin host
 ```
+
+`icon` is a Remix Icon name, a `plugin://<id>/icon.svg` URL or a `data:` URI; hub cards, the detail
+page and the plugin's sidebar menu all render it, and a stable colour-plus-glyph fallback derived
+from the plugin id is used when nothing usable is declared.
 
 Source layout before bundling, as used by the companion repositories:
 
@@ -315,6 +392,7 @@ More detail lives in [`src/plugins/README.md`](src/plugins/README.md),
 | Icons            | [Remix Icon](https://remixicon.com/) + Ant Design Icons                                                                                                                      |
 | Logging          | [electron-log](https://github.com/megahertz/electron-log)                                                                                                                    |
 | Packaging        | [electron-builder](https://www.electron.build/) 26                                                                                                                           |
+| Plugin hub       | Lattice platform: `/v1` REST over HTTP(S), device-bound token sessions, sha256-verified packages and sources                                                                 |
 | Sandbox          | Self-built, no third-party dependency: Windows restricted token + capability SIDs, Linux Landlock or `bwrap`, macOS `sandbox-exec`                                            |
 
 ---
@@ -363,6 +441,20 @@ cd RytenBench
 pnpm install
 pnpm dev
 ```
+
+### Plugin hub server
+
+The app runs without a Lattice account: the assistant, the Library and local plugin installs work
+immediately. Signing in — from the sidebar's account block or the `/login` page — connects it to a
+Lattice node for the hub catalog, publishing and cross-device sync.
+
+The sign-in page's advanced **Server address** field points the app at a node; the default is
+`http://127.0.0.1:8080`, a local development node. Point the field at your own deployment and sign
+in with an account created there — until then the hub stays behind its sign-in prompt. The
+`RB_LATTICE_URL` environment variable overrides the address for offline fixtures and internal
+deployments and locks it: a value saved from the UI is still written to
+`userData/lattice-settings.json` but no longer takes effect. The scheme follows the address, so use
+an `https://` node outside local development.
 
 ### Scripts
 
@@ -434,8 +526,8 @@ RytenBench/
 │   │   │   ├── workspace-context.ts  # Active workspace for tools and IPC
 │   │   │   └── workspace-migration.ts
 │   │   ├── i18n/                     # Main-process copy (tool results, graph progress)
-│   │   ├── ipc/                      # Core IPC + ipc/harness/** and ipc/notes/**
-│   │   ├── system/                   # System-feature wiring (the two non-plugin features)
+│   │   ├── ipc/                      # Core IPC + ipc/harness/** + ipc/notes/** + ipc/lattice.ts
+│   │   ├── system/                   # System-feature wiring (Notes and the assistant)
 │   │   │   ├── index.ts              # startSystemModules / stopSystemModules
 │   │   │   ├── harness.ts            # AI assistant: channels, workshop/MCP/workspace wiring
 │   │   │   └── notes.ts              # Library: channels + built-in AI tools
@@ -449,8 +541,9 @@ RytenBench/
 │   │   ├── graph/                    # Knowledge-graph extraction pipeline
 │   │   ├── provider/                 # Multi-protocol chat model factory, cache, model tags
 │   │   ├── plugins/                  # Plugin host: contexts, loader, installer, protocol
+│   │   ├── lattice/                  # Lattice account + hub: client, session, hub, sync, sources
 │   │   └── shared/  types/
-│   ├── preload/                      # contextBridge: core APIs + system bridge + plugin bridge
+│   ├── preload/                      # contextBridge: core APIs + system / plugin / lattice bridges
 │   ├── renderer/
 │   │   ├── resource/                 # index.html + window type declarations
 │   │   └── src/
@@ -459,12 +552,13 @@ RytenBench/
 │   │       │   ├── markdown/         # TipTap editor, Markdown view, Mermaid, math, MDX
 │   │       │   ├── harness/          # Assistant UI: messages, panels, settings, workshop
 │   │       │   ├── notes/            # Library UI: tree, editor, graph, todo, wiki
-│   │       │   └── system/           # Shell: AppContent, shell/, settings/, lock screen, splash
+│   │       │   └── system/           # Shell: AppContent, shell/, settings/, PluginIcon, splash
 │   │       ├── contexts/harness/     # HarnessProvider and workspace bridge
 │   │       ├── events/               # doc-changed bus (assistant → library editor)
 │   │       ├── hooks/harness/  utils/harness/
-│   │       ├── i18n/                 # i18next setup + shell / harness / notes copy
-│   │       ├── pages/                # Harness, Notes, plugin repository, plugin detail
+│   │       ├── i18n/                 # i18next setup + shell / harness / notes / lattice copy
+│   │       ├── lattice/              # Renderer hub state: context, bridge, upload progress, avatar
+│   │       ├── pages/                # Harness, Notes, More, Login, plugin repository, detail
 │   │       ├── plugin-host/          # Renderer plugin host: slots, declarations, UI bridge
 │   │       ├── providers/notes/      # Knowledge-graph build progress provider
 │   │       ├── route/  types/  workshop/  # route table; workshop/ = renderer side of the plugin workshop
@@ -495,21 +589,26 @@ RytenBench/
 ### Processes
 
 - **Main process** (`src/main/`) — application lifecycle, windows, tray, weather, the PGlite /
-  Drizzle database engine, the model provider factory, the plugin host, the startup sequence
-  (`windows/startup.ts`) and the system-feature wiring (`system/`). `system/` starts the notes
-  workspace and the AI assistant as plain core modules: their channels are the ordinary
-  `harness:*` / `notes:*` namespaces, registered with `registerIpcHandlers` and torn down with
-  them on quit. Core IPC covers window, settings, dialog and provider management; only third-party
-  plugins go through the reversible `MainPluginContext` contract.
+  Drizzle database engine, the model provider factory, the plugin host, the Lattice plugin hub
+  (account session, catalog, publishing, sync), the startup sequence (`windows/startup.ts`) and the
+  system-feature wiring (`system/`). `system/` starts the notes workspace and the AI assistant as
+  plain core modules: their channels are the ordinary `harness:*` / `notes:*` namespaces,
+  registered with `registerIpcHandlers` and torn down with them on quit. Core IPC covers window,
+  settings, dialog, provider and plugin management plus the `lattice:*` hub channels; only
+  third-party plugins go through the reversible `MainPluginContext` contract.
 - **Preload** (`src/preload/`) — a context-bridged API surface: core capabilities, a **system
   bridge** (`window.api.system.invoke` / `on`, prefix-checked to `harness:` / `notes:`) for the two
-  system features, and a generic **plugin bridge** (`window.api.plugin.invoke` / `on`) for
-  third-party plugins, gated by an authoritative channel list pushed from the main process.
+  system features, a dedicated **lattice bridge** (`window.api.lattice.*`, fixed channel names) for
+  the hub, account and sync, and a generic **plugin bridge** (`window.api.plugin.invoke` / `on`)
+  for third-party plugins, gated by an authoritative channel list pushed from the main process.
 - **Renderer** (`src/renderer/`) — a React 19 single-page app with hash routing, mounted under
-  `Root.tsx` (the startup splash wraps `App.tsx`). The shell renders the sidebar, the system pages
-  (assistant, Library, Plugin repository), the settings modal and the notifications, and macOS
-  additionally renders the self-drawn title strip. The two system pages are plain lazy routes
-  (`pages/Harness`, `pages/Notes`); third-party plugin routes arrive through plugin registrations.
+  `Root.tsx` (the startup splash wraps `App.tsx`, and a `LatticeProvider` above the plugin host
+  shares account, sync and upload state with the shell and the hub pages). The shell renders the
+  sidebar, the system pages (assistant, Library, Plugin repository, More), the sign-in page, the
+  settings modal and the notifications, and macOS additionally renders the self-drawn title strip.
+  Assistant, Library and More are lazy routes (`pages/Harness`, `pages/Notes`, `pages/More`); Plugin
+  repository, plugin detail and sign-in load eagerly; third-party plugin routes arrive through
+  plugin registrations.
 
 ### Plugin host
 
@@ -529,6 +628,35 @@ Plugin lifecycles are reversible: an install returns a dispose function, effects
 LIFO order, and IPC channels, event channels, contributions, i18n resources and UI slots are all
 removed on disable, so a disabled plugin stops executing any of its hooks.
 
+### Plugin hub and sync
+
+```mermaid
+flowchart LR
+    UI["Renderer · sign-in, hub, account area"] -->|window.api.lattice| IPC["Main · ipc/lattice.ts"]
+    IPC --> Sess["lattice/session.ts<br/>tokens + identity"]
+    IPC --> Hub["lattice/hub.ts<br/>catalog, publish, install"]
+    IPC --> Sync["lattice/sync.ts<br/>install records + plugin data"]
+    Sess --> Platform[("Lattice platform · /v1")]
+    Hub -->|"package + source bytes"| Platform
+    Sync -->|"GET / PUT /v1/hub/installs"| Platform
+    Hub --> Pkg["Plugin host installer<br/>userData/plugins/{id}/"]
+    Hub --> Src["Source archive<br/>pluginsPath/{id}/ or userData/plugin-sources/"]
+```
+
+The renderer never speaks HTTP to the platform: the main process holds the session and exposes only
+typed `lattice:*` calls, so tokens stay out of the renderer. Installs reuse the same package kernel
+as a local install (`src/main/plugins/package-install.ts`), which keeps checksum, path-traversal and
+manifest validation identical for both paths, and source archives go through the same safe unzip.
+`session`, `hub` and `sync` are wired through `configure*` hooks from `lattice/index.ts` for the
+callbacks that would otherwise create import cycles, which keeps the module graph acyclic.
+
+A sync round pulls before it pushes: pull applies cloud enabled flags, writes back newer plugin data
+and can auto-install missing plugins; push writes every locally installed plugin's record and — when
+the plugin has a state file — its data with the last-seen `data_rev`. A `409` on that revision is
+recorded as a conflict for the user to resolve, never retried with `force`; `404` / `410` marks the
+record orphaned and leaves local files untouched. Pushes are debounced five seconds after a plugin
+state change and never run concurrently.
+
 ### Data flow
 
 ```mermaid
@@ -539,6 +667,8 @@ flowchart LR
     Handlers --> FS["Workspace directory · file tools"]
     Handlers --> Mem["Mnemon memory store"]
     Handlers --> LLM["Provider factory"]
+    Handlers --> Lat["Lattice client · account, hub, sync"]
+    Lat --> Platform[("Lattice platform · /v1")]
     LLM --> Remote["Model APIs"]
 ```
 
@@ -554,10 +684,20 @@ flowchart LR
   kept in `userData` so they never pollute the user's workspace directory.
 - **Global data** — documents, knowledge bases (and their graphs), todos and the model provider
   list are shared by every workspace and unaffected by switching or deleting one.
+- **Plugin hub** — `userData` holds `lattice-settings.json` (base URL, device fingerprint,
+  auto-restore switch), `lattice-session.json` (refresh token, identity, issuing node),
+  `lattice-sync.json` (last result, `data_rev` cache, conflicts, orphaned records, source cache) and
+  `lattice-sources.json` (source index). Downloaded source lives under the plugin workshop's
+  storage path or `userData/plugin-sources/<id>/<version>/`, marked by a `source.json` and backed up
+  into `plugin-source-backups/` before user-modified source is replaced, while plugin packages stay
+  in `userData/plugins/<id>/`. Only install records and `userData/plugin-state/<id>.json` (≤ 256 KiB)
+  are synced; workspace files, chat history and notes are not.
 - **Uninstall scope** — a plugin's tables live in the shared database, so removing plugin code and
   removing its data are always two separate decisions.
 - **Secrets** — API keys are stored encrypted with AES-256-GCM under a machine-specific key; the
-  keystore is never exposed to the renderer.
+  keystore is never exposed to the renderer. The Lattice refresh token is encrypted through
+  `safeStorage` when the OS provides it (plaintext with a logged warning when it does not), the
+  access token is kept in memory only, and a session is discarded when the configured node changes.
 
 ---
 

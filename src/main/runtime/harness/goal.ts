@@ -117,7 +117,7 @@ export class GoalStore {
       this.cache.set(topicId, view)
       return { ...view, activation: 'disarmed' }
     } catch (err) {
-      logger.error('[Goal] 读取目标失败:', err)
+      logger.error('[Goal] Failed to read goal:', err)
       return null
     }
   }
@@ -151,7 +151,7 @@ export class GoalStore {
     })
     this.cache.set(topicId, view)
     logger.info(
-      `[Goal] 目标已持久化 topicId=${topicId} id=${view.id} phase=${view.phase} round=${view.roundsStarted}/${view.maxGoalRounds} revision=${view.revision}`
+      `[Goal] Goal persisted topicId=${topicId} id=${view.id} phase=${view.phase} round=${view.roundsStarted}/${view.maxGoalRounds} revision=${view.revision}`
     )
     this.onChange?.(topicId, { ...view, activation: this.isArmed(topicId) ? 'armed' : 'disarmed' })
     return view
@@ -206,7 +206,7 @@ export class GoalStore {
     // 持久化成功后再武装（修复：先改内存态后落库,落库失败会留下 armed 但无目标的假状态）
     this.armedTopics.add(topicId)
     logger.info(
-      `[Goal] 目标已创建 topicId=${topicId} id=${view.id}（maxGoalRounds=${maxGoalRounds}，自动续跑轮从第 1 轮起算）`
+      `[Goal] Goal created topicId=${topicId} id=${view.id} (maxGoalRounds=${maxGoalRounds}, auto-continuation rounds start from round 1)`
     )
     return persisted
   }
@@ -309,7 +309,7 @@ export class GoalStore {
     try {
       await deleteGoalByTopic(topicId)
     } catch (err) {
-      logger.error('[Goal] 删除目标失败:', err)
+      logger.error('[Goal] Failed to delete goal:', err)
     }
   }
 

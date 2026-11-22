@@ -5,7 +5,7 @@ import { getMainLanguage } from './index'
  *
  * 文件名说明：这个模块原先叫 `tool-results-planner.ts`，里面塞了 planner / todos / music 三块
  * ——因为历史上三者都在同一个「计划」工具里。现在 planner 与 music 各自变成独立插件
- * （`task-planner` / `music-player`，源码与发布在 ryten-plugins 仓库），它们的文案随之搬走，
+ * （`task-planner` / `music-player`，发布在 Lattice 插件中心），它们的文案随之搬走，
  * 这里只留 notes 的 `todos`（以及共用的「未知命令」提示），模块名也改成实至名归的 todos。
  *
  * 第三方插件不从这里取文案：它们自带一份自己的（见各插件 `main/tool-texts.ts`）。

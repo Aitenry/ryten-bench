@@ -141,7 +141,7 @@ P1~P4 期间 core 还持有两张**静态注册表**（`src/main/plugins/builtin
 ## 结构与契约入口
 
 内置插件已不存在：`src/plugins/manifests.ts` 是空清单，第三方插件（`task-planner` /
-`music-player`，源码在 `github.com/Aitenry/ryten-plugins`）按
+`music-player`，发布在 Lattice 插件中心）按
 `plugins/<id>/{manifest,main,renderer,shared,locales}` 自包含。AI 助手与资料库是 core 的一部分
 （`src/main/**` + `src/renderer/src/**`），不再出现在本目录的形态里。
 

@@ -176,11 +176,11 @@ export class RuntimeMemoryController {
       this.persist(data)
       this.repairProjections(data.entries)
       logger.info(
-        `[Mnemon.RuntimeMemory] 归档 ${archivedIndexes.length} 条记忆到长期层 ${memoryBodyIds.join(',')}`
+        `[Mnemon.RuntimeMemory] Archived ${archivedIndexes.length} memories to long-term layer ${memoryBodyIds.join(',')}`
       )
       return { ok: true, count: archivedIndexes.length }
     } catch (err) {
-      logger.error('[Mnemon.RuntimeMemory] 归档失败:', err)
+      logger.error('[Mnemon.RuntimeMemory] Archive failed:', err)
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
   }
@@ -404,7 +404,7 @@ export class RuntimeMemoryController {
         }
       }
     } catch (err) {
-      logger.warn('[Mnemon.RuntimeMemory] 读取 memories.json 失败，使用空事实源:', err)
+      logger.warn('[Mnemon.RuntimeMemory] Failed to read memories.json, using empty fact source:', err)
     }
     const fresh: RuntimeMemoryFile = { version: RUNTIME_MEMORY_VERSION, entries: [] }
     this.cached = fresh

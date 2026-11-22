@@ -178,7 +178,7 @@ export class SandboxService {
     )
     const result = this.probe(confined.argv, confined.env)
     if (!result.ok) {
-      sandboxLog.warn(`[Sandbox] 工作区 ACE 清理失败: ${result.detail ?? 'unknown'}`)
+      sandboxLog.warn(`[Sandbox] Failed to clean workspace ACE: ${result.detail ?? 'unknown'}`)
       return false
     }
     return true
@@ -204,10 +204,10 @@ export class SandboxService {
     this.verdict = this.probeChain()
     const verdict = this.verdict
     if ('unavailable' in verdict) {
-      sandboxLog.warn(`[Sandbox] 无可用沙箱后端（${this.platform()}）：${verdict.unavailable}`)
+      sandboxLog.warn(`[Sandbox] No sandbox backend available (${this.platform()}): ${verdict.unavailable}`)
     } else {
       sandboxLog.info(
-        `[Sandbox] 后端=${verdict.backend} 强制完整度=${verdict.enforcement}（platform=${this.platform()}）`
+        `[Sandbox] backend=${verdict.backend} enforcement=${verdict.enforcement} (platform=${this.platform()})`
       )
     }
     return verdict
@@ -221,7 +221,7 @@ export class SandboxService {
       if (result.ok) return { backend: candidate.backend, enforcement: candidate.enforcement }
       lastDetail = `${candidate.backend}: ${result.detail ?? 'probe failed'}`
       sandboxLog.info(
-        `[Sandbox] 候选后端 ${candidate.backend} 不可用：${result.detail ?? 'probe failed'}`
+        `[Sandbox] Candidate backend ${candidate.backend} unavailable: ${result.detail ?? 'probe failed'}`
       )
     }
     return { unavailable: lastDetail || `no sandbox backend for platform ${this.platform()}` }
@@ -325,7 +325,7 @@ export class SandboxService {
       try {
         rmSync(probeWorkspace, { recursive: true, force: true })
       } catch (error) {
-        sandboxLog.warn('[Sandbox] 探针临时目录清理失败:', error)
+        sandboxLog.warn('[Sandbox] Failed to clean probe temp directory:', error)
       }
     }
   }
@@ -390,7 +390,7 @@ export function ensureExecutable(path: string): void {
     // windowsHide 对非 Windows 无副作用；带上它只是为了守住「任何子进程都不闪控制台窗口」这条规矩
     if ((mode & 0o111) === 0) execFileSync('chmod', ['+x', path], { windowsHide: true })
   } catch (error) {
-    sandboxLog.warn(`[Sandbox] 无法给 ${path} 加可执行位:`, error)
+    sandboxLog.warn(`[Sandbox] Failed to make ${path} executable:`, error)
   }
 }
 

@@ -59,7 +59,7 @@ export function safeSend(
     wc.send(channel, payload)
     return true
   } catch (err) {
-    logger.warn(`[safe-send] 发送「${channel}」失败（渲染帧已失效）:`, err)
+    logger.warn(`[safe-send] Failed to send "${channel}" (renderer frame is gone):`, err)
     return false
   }
 }
