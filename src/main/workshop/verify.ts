@@ -755,6 +755,8 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
   )
   const unresolvable = mainSpecs.filter((spec) => {
     if (spec.startsWith('@host/') || builtins.has(spec)) return false
+    // 宿主运行时表里直接提供的说明符（含旧 @langchain/* 兼容别名）无需 npm 解析
+    if (hostMainKeys.has(spec)) return false
     try {
       host.loader.resolve(spec)
       return false
@@ -779,7 +781,7 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
       missingMainHost.length > 0
         ? '把模块加进 src/main/plugins/runtime.ts 的宿主运行时表，或改用表里已有的键（见 WORKSHOP.md 第 5 节）'
         : unresolvable.length > 0
-          ? '宿主没装这个依赖：改用宿主已有的模块（electron / electron-log / zod/v4 / @langchain/core/tools 等）'
+          ? '宿主没装这个依赖：改用宿主已有的模块（electron / electron-log / zod/v4 / @host/main/ai/tools 等）'
           : undefined
   })
 

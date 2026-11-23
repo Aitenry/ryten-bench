@@ -652,7 +652,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       memoryLabel: 'Project memory',
       memoryDesc: 'Decisions · Conventions · Reusable lessons',
       memoryPlaceholder:
-        'Enter what to remember about the project, e.g. the refactor plan is final and uses LangChain underneath',
+        'Enter what to remember about the project, e.g. the refactor plan is final and uses the in-house AI runtime',
       memoryHint:
         'Project memory holds 10 KiB; once full, low-priority entries are archived to a memory space automatically.'
     },

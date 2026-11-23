@@ -22,7 +22,7 @@ import type {
   HistoryCompaction
 } from '../../services/harness/types'
 import type { QueueAttachments } from '../../services/harness/queue-store'
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import type { BaseChatModel } from '../../ai/chat-model'
 import { getProviderService } from '../../provider/service'
 import { getSubAgentDefs } from '../../services/harness/preload-cache'
 import { todoStore } from '../../runtime/harness/todo'

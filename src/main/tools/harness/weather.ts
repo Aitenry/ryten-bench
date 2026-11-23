@@ -1,5 +1,5 @@
-import { tool } from '@langchain/core/tools'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import { tool } from '../../ai/tools'
+import type { StructuredToolInterface } from '../../ai/tools'
 import { fetchWeatherApi } from 'openmeteo'
 import * as z from 'zod/v4'
 import { mainFormat } from '../../i18n'

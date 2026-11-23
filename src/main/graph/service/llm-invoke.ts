@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { StructuredOutputParser } from '@langchain/core/output_parsers'
+import { BaseChatModel } from '../../ai/chat-model'
+import { StructuredOutputParser } from '../../ai/output-parsers'
 import logger from 'electron-log'
 import { parseFromLLM } from 'json-llm-repair'
 import type { z } from 'zod/v3'

@@ -1,5 +1,5 @@
 import logger from 'electron-log'
-import { StructuredOutputParser } from '@langchain/core/output_parsers'
+import { StructuredOutputParser } from '../../ai/output-parsers'
 import {
   EntitiesArraySchema,
   UnifiedExtractionSchema,

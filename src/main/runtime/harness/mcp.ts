@@ -3,7 +3,7 @@
  *
  * 职责：
  *  1. 把 electron-store 里的服务器配置翻成真实的 MCP 连接（stdio 子进程 / Streamable HTTP / SSE）；
- *  2. 连上后把服务器暴露的工具翻成 **LangChain 工具实例**，并入 harness 的工具注册表；
+ *  2. 连上后把服务器暴露的工具翻成 **AI 工具实例**，并入 harness 的工具注册表；
  *  3. 维护「设置页看得到的状态」：连没连上、报什么错、这台服务器有哪些工具。
  *
  * 为什么自己建连接而不直接用 `MultiServerMCPClient`：那个封装会把所有服务器塞进一个
@@ -18,7 +18,7 @@
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import logger from 'electron-log'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import type { StructuredToolInterface } from '../../ai/tools'
 import type { ToolInfo } from '../../plugins/tool-contract'
 import {
   buildMcpTool,
@@ -514,7 +514,7 @@ export async function testMcpServer(input: McpServerInput): Promise<{
   }
 }
 
-/** 直接调用一条 MCP 工具（离线回归/调试用；主链路是 LangChain 工具实例内部自调用） */
+/** 直接调用一条 MCP 工具（离线回归/调试用；主链路是 AI 工具实例内部自调用） */
 export async function callMcpTool(
   fullName: string,
   args: Record<string, unknown>,

@@ -39,7 +39,7 @@ function pickNumber(source: unknown, keys: string[]): number | null {
   return null
 }
 
-/** 缓存读取：LangChain 用 input_token_details.cache_read，各家原始字段一并兜住 */
+/** 缓存读取：旧实现用 input_token_details.cache_read，各家原始字段一并兜住 */
 function pickCacheRead(usage: Record<string, unknown>): number {
   return (
     pickNumber(usage.input_token_details, ['cache_read', 'cacheRead', 'cached_tokens']) ??

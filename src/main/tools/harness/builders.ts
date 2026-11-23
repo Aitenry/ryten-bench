@@ -1,4 +1,4 @@
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import type { StructuredToolInterface } from '../../ai/tools'
 import type { SubAgentConfig } from '../../services/harness/types'
 import {
   HARNESS_TOOL_CONTRIBUTION,
@@ -183,7 +183,7 @@ export function listAvailableTools(): ToolInfo[] {
 // Build Tools
 // ============================================================================
 
-/** Build LangChain tool instances from selected tool names */
+/** Build AI tool instances from selected tool names */
 export function buildTools(toolNames: string[]): StructuredToolInterface[] {
   const registry = resolveToolBuilders()
   return toolNames.filter((name) => name in registry).map((name) => registry[name]())

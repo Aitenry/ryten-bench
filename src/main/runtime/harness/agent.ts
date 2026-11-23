@@ -1,21 +1,20 @@
 import {
   Annotation,
-  CompiledStateGraph,
   END,
   START,
   StateGraph,
-  type LangGraphRunnableConfig,
-  type OverwriteValue
-} from '@langchain/langgraph'
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
+  type CompiledStateGraph,
+  type LangGraphRunnableConfig
+} from '../../ai/graph'
+import { BaseChatModel } from '../../ai/chat-model'
 import {
   AIMessage,
   BaseMessage,
   HumanMessage,
   SystemMessage,
   ToolMessage
-} from '@langchain/core/messages'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+} from '../../ai/messages'
+import type { StructuredToolInterface } from '../../ai/tools'
 import logger from 'electron-log'
 import type { RuntimeRecord, ToolCallRecord } from './types'
 // 插话注入载荷的单一真源在 ../types（IPC 层与图共用同一个类型，避免结构漂移）
@@ -33,7 +32,7 @@ import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
 export { pushMessageRecords, pushRecord }
 
-/** 取当前模型的名称（LangChain 各家字段不同，兜一遍；取不到就留空由调用方补） */
+/** 取当前模型的名称（各家 ChatModel 字段不同，兜一遍；取不到就留空由调用方补） */
 function resolveModelName(model: BaseChatModel): string | undefined {
   const candidate = model as unknown as { model?: unknown; modelName?: unknown }
   if (typeof candidate.model === 'string' && candidate.model) return candidate.model
@@ -338,13 +337,7 @@ function createToolRunner(
 }
 
 /** 构建编译后的 Agent 图 */
-export function buildAgentGraph(
-  options: BuildGraphOptions
-): CompiledStateGraph<
-  { messages: BaseMessage[] },
-  { messages?: BaseMessage[] | OverwriteValue<BaseMessage[]> | undefined },
-  'model' | 'tools' | typeof START
-> {
+export function buildAgentGraph(options: BuildGraphOptions): CompiledAgentGraph {
   const { model, tools, systemPrompt } = options
   const queue = options.queue
   const subagentCtx = options.subagentCtx
@@ -439,5 +432,8 @@ export function buildGraphInput(messages: BaseMessage[]): { messages: BaseMessag
   return { messages: [...messages] }
 }
 
-/** 编译后 Agent 图的类型（避免直接依赖 LangGraph 泛型参数） */
-export type CompiledAgentGraph = ReturnType<typeof buildAgentGraph>
+/** 编译后 Agent 图的类型（避免直接依赖图引擎泛型参数） */
+export type CompiledAgentGraph = CompiledStateGraph<
+  { messages: BaseMessage[] },
+  { messages?: BaseMessage[] }
+>

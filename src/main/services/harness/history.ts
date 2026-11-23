@@ -4,7 +4,7 @@ import {
   AIMessage,
   ToolMessage,
   SystemMessage
-} from '@langchain/core/messages'
+} from '../../ai/messages'
 import logger from 'electron-log'
 import type { StructuredMessage, ToolCallDetail, HistoryCompaction } from './types'
 import type { HarnessDialogueRow } from '../../database/mapper/harness/harness'
@@ -40,7 +40,7 @@ interface ReasoningMessage {
 }
 
 /**
- * 从 LangChain 消息列表中提取结构化的消息输出
+ * 从消息列表中提取结构化的消息输出
  */
 export function extractStructuredMessages(messages: BaseMessage[]): StructuredMessage[] {
   const result: StructuredMessage[] = []
@@ -159,7 +159,7 @@ export function isInterjectionRow(d: HistoryDialogue): boolean {
 }
 
 /**
- * 将数据库中的对话记录转换为 LangChain BaseMessage 数组。
+ * 将数据库中的对话记录转换为 BaseMessage 数组。
  *
  * 上下文压缩策略（参考 dsh-compaction-basic 的阈值/保留机制）：
  * 1. 字符总量 ≥ 预算 × PRESSURE_RATIO 且提供了摘要器时：把最老一段对话用一次
@@ -358,7 +358,7 @@ async function saveCheckpointSafe(
   }
 }
 
-/** 将选中的对话追加为 LangChain 消息（工具结果经智能裁剪） */
+/** 将选中的对话追加为消息对象（工具结果经智能裁剪） */
 function appendDialogueMessages(messages: BaseMessage[], selected: HistoryDialogue[]): void {
   for (const d of selected) {
     if (d.role === 'user') {

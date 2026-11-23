@@ -3,8 +3,8 @@
 // 经 harness 的**工具贡献点**（HARNESS_TOOL_CONTRIBUTION，契约见 src/main/plugins/tool-contract.ts）
 // 注册给 AI：插件未启用时 harness 拉不到这条贡献，工具自然不出现在模型面前。
 import { BrowserWindow } from 'electron'
-import { tool } from '@langchain/core/tools'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import { tool } from '../../ai/tools'
+import type { StructuredToolInterface } from '../../ai/tools'
 import * as z from 'zod/v4'
 import { safeSend } from '../../safe-send'
 import { mainFormat, mainPlural } from '../../i18n'

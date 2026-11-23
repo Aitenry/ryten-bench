@@ -61,7 +61,7 @@ export async function migrateChangedStoragePaths(
       }
       // 记忆目录里有 Mnemon 的 PGlite（进程内持有文件句柄）：先关掉，
       // 否则 Windows 上目录搬不动（EBUSY/EPERM）；下一次访问会按新路径重新打开。
-      // 惰性 import：PGlite / LangChain 记忆栈只在真的要迁移记忆目录时才加载，
+      // 惰性 import：PGlite / 记忆栈只在真的要迁移记忆目录时才加载，
       // 不让「改个设置」把整套记忆运行时拖进 core 的启动路径。
       const { closeAllMnemon } = await import('../services/harness/mnemon-singleton')
       await closeAllMnemon()

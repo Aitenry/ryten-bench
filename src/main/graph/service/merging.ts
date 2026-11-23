@@ -1,4 +1,4 @@
-import { StructuredOutputParser } from '@langchain/core/output_parsers'
+import { StructuredOutputParser } from '../../ai/output-parsers'
 import logger from 'electron-log'
 import { dice } from 'strsimkit'
 import { EntityMergingResultSchema, type EntityMergingResultOutput } from '../schemas'

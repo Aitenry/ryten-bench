@@ -23,8 +23,8 @@ RytenBench is a cross-platform Electron desktop application that puts three thin
 
 - a **notes workspace** — Markdown documents, knowledge bases with a directory tree, todos, and an
   LLM-built knowledge graph;
-- an **AI assistant workbench** — multiple workspaces, per-workspace conversations driven by a
-  LangGraph runtime with streaming, tool calling, sub-agents, background jobs, OS-level sandboxed
+- an **AI assistant workbench** — multiple workspaces, per-workspace conversations driven by an
+  in-house agent runtime with streaming, tool calling, sub-agents, background jobs, OS-level sandboxed
   command execution and a three-layer memory system;
 - a **plugin hub** — an optional Lattice account for browsing, installing, publishing and syncing
   plugin state across machines, where each published version also carries its source so the
@@ -333,15 +333,55 @@ Source layout before bundling, as used by the companion repositories:
 `scripts/build-plugins.mjs`; this application currently ships no bundled plugins, so the list is
 empty.
 
+### AI runtime (`src/main/ai/`)
+
+The assistant does not use a third-party agent framework. `src/main/ai/` is a small, self-maintained
+runtime that covers exactly the capability surface this application needs:
+
+- `messages.ts` — `HumanMessage` / `AIMessage` / `SystemMessage` / `ToolMessage` / `AIMessageChunk`,
+  including multimodal content blocks and the `usage_metadata` / `reasoning_content` fields the
+  streaming and usage layers read;
+- `tools.ts` — the `tool()` factory and `StructuredToolInterface`; zod schemas are converted to JSON
+  Schema for each provider and validated before execution (invalid arguments are reported back to
+  the model);
+- `chat-model.ts` — the `BaseChatModel` contract: `invoke()` always streams internally and reports
+  incremental chunks to the graph, `bindTools()` returns a lightweight wrapper so concurrent agents
+  never mutate each other's tool sets. There is deliberately **no built-in retry** — retry budgets
+  live in `runtime/harness/model-recovery.ts`. A provider that returns no text and no tool calls
+  (an empty stream, or a gateway error page served with a 2xx status) is retried once with a
+  **non-streaming** request before it is reported as an error, which keeps gateways whose streaming
+  implementation is broken working (this is the mode Spring AI uses by default). If both attempts
+  are empty, a `ModelEmptyResponseError` carrying the provider, model, `finish_reason` and both raw
+  payloads is raised, so the real upstream failure is visible instead of a silent empty turn;
+- `graph.ts` — a minimal state-graph engine (`Annotation` / `StateGraph` / `START` / `END`), including
+  `streamMode: ['messages']` token chunks and `GraphRecursionError` for graceful round-limit handling;
+- `output-parsers.ts` — `StructuredOutputParser` for the knowledge-graph extraction pipeline;
+- `providers/` — one implementation per protocol: OpenAI-compatible (OpenAI, DeepSeek, xAI,
+  OpenRouter, Mistral, custom endpoints), Anthropic Messages, Gemini, Vertex AI (Express Mode API key
+  or service-account / gcloud ADC OAuth), Ollama (NDJSON), Bedrock Converse (bearer token or SigV4 +
+  AWS event-stream) and Cloudflare Workers AI.
+
+OpenAI-compatible providers are deliberately permissive, because gateways differ in the details:
+both base-URL conventions work (a bare host is probed with Spring AI's `/v1/chat/completions`
+first, a versioned or custom path keeps the OpenAI SDK's `base_url + /chat/completions`), the
+stream parser accepts standard SSE, CR-only framing, bare NDJSON lines, JSON arrays and mislabeled
+content types, and a gateway that rejects optional fields (`stream_options`, `thinking`,
+`reasoning_effort`, …) with 400/422 gets one retry with a minimal, Spring-AI-equivalent request
+body before the error is reported.
+
+Plugins see the same implementation through `@host/main/ai/*`; the old `@langchain/*` specifiers are
+kept only as legacy aliases in the plugin host table so already-published plugins keep loading.
+
 ### Host contract
 
 Plugin packages never bundle their own copy of the database, React or i18n. At build time imports
 pointing into the core or the host UI are rewritten to `@host/**` specifiers, and at runtime the
 host injects the single instances it already has:
 
-- **Main process** — `globalThis.__RB_HOST_RESOLVE__` resolves 21 host module entries
-  (`@host/main/**`, plus shared model-parameter presets); other bare modules (electron,
-  langchain, zod, drizzle, …) resolve to the host's own instances from the application root.
+- **Main process** — `globalThis.__RB_HOST_RESOLVE__` resolves the host module table in
+  `src/main/plugins/runtime.ts` (`@host/main/**`, `@host/shared/**` and the legacy `@langchain/*`
+  aliases); other bare modules (electron, zod, drizzle, …) resolve to the host's own instances from
+  the application root.
 - **Renderer** — an ESM bridge served from `plugin://host/ui.js?m=<key>` exposes 15 host UI
   modules (i18n, hooks, Markdown components, settings UI, routing skeletons, utilities) plus 8
   vendored libraries (react, react-dom, antd, @remixicon/react, @ant-design/icons, dayjs) so
@@ -381,7 +421,7 @@ More detail lives in [`src/plugins/README.md`](src/plugins/README.md),
 | Markdown view    | [react-markdown](https://github.com/remarkjs/react-markdown) + remark-gfm + rehype-katex/highlight                                                                           |
 | Diagrams & math  | [Mermaid](https://mermaid.js.org/) 11 + [KaTeX](https://katex.org/) + [highlight.js](https://highlightjs.org/)                                                               |
 | Code editor      | [CodeMirror 6](https://codemirror.net/) via [@uiw/react-codemirror](https://github.com/uiwjs/react-codemirror) + [@codemirror/merge](https://codemirror.net/docs/ref/#merge) |
-| Agent runtime    | [LangChain](https://www.langchain.com/) 1.5 + [LangGraph](https://langchain-ai.github.io/langgraph/) 1.4                                                                     |
+| Agent runtime    | In-house `src/main/ai` runtime (chat models, tools, messages, minimal state graph) — no third-party agent framework                                                   |
 | Database         | [PGlite](https://pglite.dev/) 0.5 (PostgreSQL compiled to WebAssembly) + [Drizzle ORM](https://orm.drizzle.team/) 0.45                                                       |
 | Settings store   | [electron-store](https://github.com/sindresorhus/electron-store) 11                                                                                                          |
 | Graph rendering  | [ECharts](https://echarts.apache.org/) 6                                                                                                                                     |
@@ -531,7 +571,8 @@ RytenBench/
 │   │   │   ├── index.ts              # startSystemModules / stopSystemModules
 │   │   │   ├── harness.ts            # AI assistant: channels, workshop/MCP/workspace wiring
 │   │   │   └── notes.ts              # Library: channels + built-in AI tools
-│   │   ├── runtime/harness/          # Agent runtime: LangGraph loop, mnemon, permissions, jobs
+│   │   ├── ai/                       # In-house AI runtime: messages, tools, chat models, graph
+│   │   ├── runtime/harness/          # Agent runtime: graph loop, mnemon, permissions, jobs
 │   │   ├── services/harness/         # Stream handling, queues, caches, snapshot, purge
 │   │   ├── services/notes/           # Library data cleanup
 │   │   ├── tools/harness/  tools/notes/   # Tool registry and implementations

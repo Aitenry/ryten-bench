@@ -61,7 +61,7 @@ export interface ThinkingParamsInput {
 }
 
 export interface ThinkingParams {
-  /** 直接并入 LangChain 构造参数的字段（Anthropic / Ollama / Google 用类字段接收） */
+  /** 直接并入 ChatModel 构造参数的字段（Anthropic / Ollama / Google 用类字段接收） */
   fields?: Record<string, unknown>
   /** 需要并入请求体的额外参数（OpenAI 兼容族走 modelKwargs） */
   modelKwargs?: Record<string, unknown>

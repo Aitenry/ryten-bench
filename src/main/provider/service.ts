@@ -1,15 +1,15 @@
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { ChatOpenAI } from '@langchain/openai'
-import { ChatAnthropic } from '@langchain/anthropic'
-import { ChatDeepSeek } from '@langchain/deepseek'
-import { ChatGoogleGenerativeAI } from '@langchain/google-genai'
-import { ChatVertexAI } from '@langchain/google-vertexai'
-import { ChatMistralAI } from '@langchain/mistralai'
-import { ChatOllama } from '@langchain/ollama'
-import { ChatOpenRouter } from '@langchain/openrouter'
-import { ChatXAI } from '@langchain/xai'
-import { ChatBedrockConverse } from '@langchain/aws'
-import { ChatCloudflareWorkersAI } from '@langchain/cloudflare'
+import { BaseChatModel } from '../ai/chat-model'
+import { ChatOpenAI } from '../ai/providers/openai'
+import { ChatAnthropic } from '../ai/providers/anthropic'
+import { ChatDeepSeek } from '../ai/providers/deepseek'
+import { ChatGoogleGenerativeAI } from '../ai/providers/google'
+import { ChatVertexAI } from '../ai/providers/vertexai'
+import { ChatMistralAI } from '../ai/providers/mistral'
+import { ChatOllama } from '../ai/providers/ollama'
+import { ChatOpenRouter } from '../ai/providers/openrouter'
+import { ChatXAI } from '../ai/providers/xai'
+import { ChatBedrockConverse } from '../ai/providers/bedrock'
+import { ChatCloudflareWorkersAI } from '../ai/providers/cloudflare'
 import logger from 'electron-log'
 import { getDefaultProvider, getProviderById, LlmProviderConfig } from '../database/mapper/provider'
 import { mainFormat, mainMessages } from '../i18n'
@@ -20,23 +20,19 @@ import { TOP_K_PROVIDERS } from '../../shared/model-params'
 const TOP_K_PROVIDER_SET = new Set(TOP_K_PROVIDERS)
 
 /**
- * 关闭 LangChain 自带的模型调用重试层。
+ * 关闭「框架内层静默重试」的兼容参数。
  *
- * `BaseChatModel` 会用构造参数建一个 `AsyncCaller`，其 `maxRetries` **缺省是 6**：
- * 一次 `invoke()` 失败后，框架会在后台静默重发最多 6 次（p-retry 指数退避，工装实测
- * 一个 500 报文 = 7 个 HTTP 请求、95 秒），我们自己的「正在重试（第 N/2 次）」完全看不到
- * 这一层；网关读超时 120 秒时，这一层就是 14 分钟的等待（2026-09-23 用户反馈
- * 「模型不可用时报了错还一直重试」的根因之一）。Retry-After 很短、以及 5xx 之外的
- * 4xx（AsyncCaller 的 STATUS_NO_RETRY：400/401/402/403/404/405/406/407/409）它本来就不重发。
- *
- * 重试预算统一交给 harness/runtime/model-recovery.ts：按失败分类决定要不要重试、重试几次，
- * 并把进度如实报给前端。放在 `...extra` 之前展开：用户写进 extra_config 的 maxRetries 仍然优先。
+ * 自研 ChatModel 层**不内置任何重试**（一次 `invoke()` 就是一次 HTTP 请求）；
+ * 但 `maxRetries` 仍作为兼容字段保留：旧版 LangChain 实现曾用它建 `AsyncCaller`
+ * （缺省 6 次静默重发，一次 500 报文等于 7 个 HTTP 请求、95 秒），用户 extra_config 里
+ * 可能还写着它。现在这个字段只是被接受后忽略，重试预算统一交给
+ * harness/runtime/model-recovery.ts：按失败分类决定要不要重试、重试几次，并把进度如实报给前端。
  */
 const INNER_RETRIES_DISABLED = { maxRetries: 0 }
 
 /**
  * 大模型供应商服务
- * 从数据库读取供应商配置，根据 provider 类型创建对应的 LangChain ChatModel 实例
+ * 从数据库读取供应商配置，根据 provider 类型创建对应的自研 ChatModel 实例
  */
 class ProviderService {
   private static instance: ProviderService | null = null

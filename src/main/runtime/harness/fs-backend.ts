@@ -1,4 +1,4 @@
-import { tool, type StructuredToolInterface } from '@langchain/core/tools'
+import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'

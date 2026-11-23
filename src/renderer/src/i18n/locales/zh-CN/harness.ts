@@ -647,7 +647,7 @@ export const harnessZhCN = {
       userHint: '用户画像容量 4 KiB；重要度高的条目整理时优先保留。',
       memoryLabel: '项目记忆',
       memoryDesc: '决策 · 约定 · 可复用经验',
-      memoryPlaceholder: '输入要记住的项目信息，如：重构方案已定稿，底层用 LangChain',
+      memoryPlaceholder: '输入要记住的项目信息，如：重构方案已定稿，底层用自研 AI 运行时',
       memoryHint: '项目记忆容量 10 KiB，写满后低优先级条目自动归档到长期空间。'
     },
     bodies: {

@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import logger from 'electron-log'
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import type { BaseChatModel } from '../../ai/chat-model'
 import { safeSend } from '../../safe-send'
 import { mainMessages } from '../../i18n'
 import { settingsStore } from '../../context'

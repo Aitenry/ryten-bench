@@ -1,6 +1,6 @@
-import type { StructuredToolInterface } from '@langchain/core/tools'
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { BaseMessage } from '@langchain/core/messages'
+import type { StructuredToolInterface } from '../../ai/tools'
+import { BaseChatModel } from '../../ai/chat-model'
+import { BaseMessage } from '../../ai/messages'
 import logger from 'electron-log'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -81,12 +81,12 @@ class HarnessService {
     this.memoryScope = memoryScope ?? workspaceScope(workspaceId)
     this.maxToolRounds = maxToolRounds
     logger.info(
-      `HarnessService initialized with LangChain Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, memoryScope=${this.memoryScopeDirName ?? 'disabled'}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds})`
+      `HarnessService initialized with the agent Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, memoryScope=${this.memoryScopeDirName ?? 'disabled'}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds})`
     )
   }
 
   /**
-   * 创建 LangChain/LangGraph 运行时（每次请求独立实例，隔离性好）。
+   * 创建 Agent 运行时（每次请求独立实例，隔离性好）。
    * Mnemon 记忆组件为进程级单例（跨请求共享，见 mnemon-singleton.ts）。
    */
   private createRuntime(): Runtime {
@@ -173,7 +173,7 @@ class HarnessService {
    * @param onCompactionStart 摘要压缩开始时回调（LLM 调用前触发，前端展示「压缩中」）
    * @param contextBudget 历史上下文字符预算（由模型上下文窗口换算，缺省用默认下限）
    * @param signal 取消信号（贯通到摘要压缩调用：停止后压缩请求真正中断，且不落库 checkpoint）
-   * @returns 转换后的 LangChain BaseMessage 数组及本轮发生的摘要压缩信息
+   * @returns 转换后的 BaseMessage 数组及本轮发生的摘要压缩信息
    */
   private async loadContextMessages(
     topicId: number,

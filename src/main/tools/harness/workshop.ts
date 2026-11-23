@@ -1,4 +1,4 @@
-import { tool, type StructuredToolInterface } from '@langchain/core/tools'
+import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { createHash } from 'node:crypto'
 import * as z from 'zod/v4'
 import type { ToolInfo } from '../../plugins/tool-contract'

@@ -1,4 +1,4 @@
-import { BaseMessage } from '@langchain/core/messages'
+import { BaseMessage } from '../../ai/messages'
 import logger from 'electron-log'
 import { mainFormat, mainMessages } from '../../i18n'
 import { HarnessOptions, StructuredMessage, HistoryCompaction } from './types'
@@ -10,7 +10,7 @@ import { produceMessages, produceToolCalls, produceSubAgents } from './stream-pr
 
 /** 流式处理所需的 HarnessService 依赖（避免循环引用） */
 export interface StreamDeps {
-  /** 创建运行时（LangChain/LangGraph） */
+  /** 创建运行时（自研 Agent 运行时） */
   createRuntime(): Runtime
 
   /** 加载历史上下文（含本轮摘要压缩信息与压缩开始/重试回调；signal 贯通到摘要压缩调用） */

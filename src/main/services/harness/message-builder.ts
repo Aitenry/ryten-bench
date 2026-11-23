@@ -1,4 +1,4 @@
-import { HumanMessage } from '@langchain/core/messages'
+import { HumanMessage } from '../../ai/messages'
 
 /**
  * 上传文件信息（已复制到 agent 文件系统中的路径）

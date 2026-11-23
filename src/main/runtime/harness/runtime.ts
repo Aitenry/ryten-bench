@@ -1,6 +1,6 @@
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { BaseMessage } from '@langchain/core/messages'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import { BaseChatModel } from '../../ai/chat-model'
+import { BaseMessage } from '../../ai/messages'
+import type { StructuredToolInterface } from '../../ai/tools'
 import logger from 'electron-log'
 import type { SubAgentConfig } from '../../services/harness/types'
 import {

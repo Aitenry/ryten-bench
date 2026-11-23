@@ -1,5 +1,5 @@
 /**
- * LangChain 运行时 — 流式事件契约
+ * Agent 运行时 — 流式事件契约
  *
  * 设计说明（对应 docs/proposal/04-详细设计.md）：
  * 运行时内部使用「单一事件队列 + 三路过滤迭代器」替代 deepagents 的 streamEvents(v3) 契约，

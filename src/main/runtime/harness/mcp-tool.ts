@@ -1,13 +1,13 @@
 /**
- * MCP 工具 → LangChain 工具的**纯转换层**（零相对 import，可被 node 直接加载做离线回归）。
+ * MCP 工具 → AI 工具实例的**纯转换层**（只依赖自研 AI 层，可被 node 直接加载做离线回归）。
  *
  * 为什么从 `runtime/mcp.ts` 拆出来：连接管理要读 electron-store、要起子进程（无法离线跑），
  * 但「工具名怎么起、参数 schema 怎么处理、结果怎么变成模型能读的文本」这三件事是纯逻辑，
  * 也正是最容易出问题的地方（schema 翻错会丢参数、二进制内容塞进上下文会撑爆窗口）。
- * 放在这里就能用真实 MCP 服务器 + 真实 langchain 工具做端到端断言。
+ * 放在这里就能用真实 MCP 服务器 + 真实工具实例做端到端断言。
  */
-import { tool as langchainTool } from '@langchain/core/tools'
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import { tool as aiTool } from '../../ai/tools'
+import type { StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod/v4'
 
 /**
@@ -85,7 +85,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, message: string)
 }
 
 /**
- * 把一条 MCP 工具包成 LangChain 工具。
+ * 把一条 MCP 工具包成 AI 工具实例。
  *
  * 参数 schema 用 `z.looseObject({})`（**宽松空对象**）而不是把服务器给的 JSON Schema 翻成 zod：
  * 参数最终由**服务器**校验，本地再翻一遍只会引入「翻错导致参数被剥掉」的风险；描述里已经写清
@@ -101,7 +101,7 @@ export function buildMcpTool(params: {
   timeoutMs?: number
 }): StructuredToolInterface {
   const { fullName, rawName, serverName, description, caller, timeoutMs } = params
-  return langchainTool(
+  return aiTool(
     async (args: Record<string, unknown>) => {
       const result = await withTimeout(
         caller.callTool({ name: rawName, arguments: args ?? {} }),

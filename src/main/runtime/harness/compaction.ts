@@ -20,8 +20,8 @@
  *      下次仍可复用）。
  */
 
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { HumanMessage, SystemMessage } from '@langchain/core/messages'
+import type { BaseChatModel } from '../../ai/chat-model'
+import { HumanMessage, SystemMessage } from '../../ai/messages'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'

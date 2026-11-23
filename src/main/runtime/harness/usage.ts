@@ -1,7 +1,7 @@
 /**
  * 模型用量（真实 token）采集与归集。
  *
- * 数据来源：模型响应上的 `usage_metadata`（LangChain 统一字段）。
+ * 数据来源：模型响应上的 `usage_metadata`（与旧实现同形的统一字段）。
  *  - 部分供应商放在 `response_metadata.usage` / `response_metadata.tokenUsage`，这里一并兜住；
  *  - 一轮对话可能发生多次模型往返（工具循环），所以采集的是**每次调用一条**，
  *    落库时再累加成整轮总量，原始明细以 JSON 数组保留。

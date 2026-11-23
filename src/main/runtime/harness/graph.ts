@@ -1,6 +1,6 @@
-import type { BaseMessage } from '@langchain/core/messages'
-import { AIMessage } from '@langchain/core/messages'
-import { GraphRecursionError } from '@langchain/langgraph'
+import type { BaseMessage } from '../../ai/messages'
+import { AIMessage } from '../../ai/messages'
+import { GraphRecursionError } from '../../ai/graph'
 import logger from 'electron-log'
 import { pushMessageRecords, type CompiledAgentGraph, type StreamMessageLike } from './agent'
 import type {

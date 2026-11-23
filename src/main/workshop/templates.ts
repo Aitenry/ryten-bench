@@ -552,7 +552,7 @@ export function install(ctx: MainPluginContext): void {
 /** AI 工具模板的主进程入口 */
 function toolMain(vars: TemplateVars): string {
   const toolName = toolNameOf(vars.id)
-  return `import { tool } from '@langchain/core/tools'
+  return `import { tool } from '@host/main/ai/tools'
 import * as z from 'zod/v4'
 import { HARNESS_TOOL_CONTRIBUTION } from '@host/main/plugins/tool-contract'
 import type { MainPluginContext } from './context'
@@ -1078,7 +1078,7 @@ export function toolDescriptions(): { zh: string; en: string } {
 function fullMainTools(vars: TemplateVars): string {
   const toolName = toolNameOf(vars.id, 'items')
   const ns = sqlNameOf(vars.id)
-  return `import { tool } from '@langchain/core/tools'
+  return `import { tool } from '@host/main/ai/tools'
 import * as z from 'zod/v4'
 import { mainFormat } from '@host/main/i18n'
 import { HARNESS_TOOL_CONTRIBUTION } from '@host/main/plugins/tool-contract'
@@ -2683,7 +2683,7 @@ export function install(ctx) {
 \`\`\`
 
 - 通道名**必须**以 \`plugin:${vars.id}:\` 开头，否则装载期直接抛错；
-- 主进程可以直接 import \`electron\` / \`electron-log\` / \`zod/v4\` / \`@langchain/core/tools\` 等宿主已装依赖；
+- 主进程可以直接 import \`electron\` / \`electron-log\` / \`zod/v4\` / \`@host/main/ai/tools\` 等宿主已装依赖；
 - 数据请落在 \`app.getPath('userData')\` 下（别写用户工作区）。
 
 ### 可用的宿主模块（主进程）

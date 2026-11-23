@@ -3,6 +3,11 @@ import { app } from 'electron'
 import logger from 'electron-log'
 
 import * as context from '../context'
+import * as aiChatModel from '../ai/chat-model'
+import * as aiGraph from '../ai/graph'
+import * as aiMessages from '../ai/messages'
+import * as aiOutputParsers from '../ai/output-parsers'
+import * as aiTools from '../ai/tools'
 import * as databaseInstance from '../database/instance'
 import * as databaseOrm from '../database/orm'
 import * as databaseSchema from '../database/schema'
@@ -53,14 +58,21 @@ import * as sharedPluginMenuIcons from '../../shared/plugin/menu-icons'
  * 表是**按需补齐**的：P1 保证 music 端到端跑通，同时把 planner/notes/harness 的静态依赖
  * 一次性补齐。P2（planner）用到其中 5 个 `@host/main/**` 键，P3（notes）9 个，
  * P4（harness）18 个 + `@host/shared/model-params`——也就是本表基本被吃满；其余外部依赖
- * （`@langchain/**`、`drizzle-orm`、`zod/v3|v4`、`electron`、`electron-log`、`jsdom`、
- * `mammoth`、`turndown`、`@electric-sql/pglite`、`openmeteo`…）走下面的裸模块解析。
+ * （`zod/v3|v4`、`drizzle-orm`、`electron`、`electron-log`、`jsdom`、`mammoth`、
+ * `turndown`、`@electric-sql/pglite`、`openmeteo`…）走下面的裸模块解析；
+ * 旧插件里的 `@langchain/**` 由 HOST_LEGACY 兼容层兜住（见下）。
  * PACKAGING.md 的契约面（主进程 20 个）已全部在表内。
  */
 
 /** 表键 = 打包产物里的 spec（`@host/main/<相对 src/main 的路径，无扩展名>`） */
 const HOST_MAIN: Record<string, unknown> = {
   '@host/main/context': context,
+  // 自研 AI 层（替代 @langchain/*）：插件做工具 / 消息 / 图编排时用宿主这一份实现
+  '@host/main/ai/chat-model': aiChatModel,
+  '@host/main/ai/graph': aiGraph,
+  '@host/main/ai/messages': aiMessages,
+  '@host/main/ai/output-parsers': aiOutputParsers,
+  '@host/main/ai/tools': aiTools,
   '@host/main/database/instance': databaseInstance,
   '@host/main/database/orm': databaseOrm,
   '@host/main/database/schema': databaseSchema,
@@ -103,6 +115,21 @@ const HOST_SHARED: Record<string, unknown> = {
   // （`scripts/build-plugins.mjs` 会把 `src/shared/**` 的导入统一外部化成 `@host/shared/**`）
   '@host/shared/plugin/css-safety': sharedPluginCssSafety,
   '@host/shared/plugin/menu-icons': sharedPluginMenuIcons
+}
+
+/**
+ * 旧插件**兼容层**：历史插件包把 `@langchain/*` 当宿主依赖直接 import。
+ *
+ * 这些 npm 包已从项目移除（改为自研 `src/main/ai/**`），但已发布的插件不应该因此打不开：
+ * 运行时表把旧说明符映射到自研实现（消息 / 工具 / 图 / 解析器四类契约保持同形）。
+ * 新插件请直接 import `@host/main/ai/tools` 等。
+ */
+const HOST_LEGACY: Record<string, unknown> = {
+  '@langchain/core/tools': aiTools,
+  '@langchain/core/messages': aiMessages,
+  '@langchain/core/language_models/chat_models': aiChatModel,
+  '@langchain/core/output_parsers': aiOutputParsers,
+  '@langchain/langgraph': aiGraph
 }
 
 /** 宿主解析基准：应用根（dev = 仓库根，打包后 = app.asar 根），再兜底进程工作目录 */
@@ -163,12 +190,16 @@ export function resolveHostModule(spec: string): unknown {
 
   if (Object.prototype.hasOwnProperty.call(HOST_MAIN, spec)) return HOST_MAIN[spec]
   if (Object.prototype.hasOwnProperty.call(HOST_SHARED, spec)) return HOST_SHARED[spec]
+  if (Object.prototype.hasOwnProperty.call(HOST_LEGACY, spec)) return HOST_LEGACY[spec]
 
   try {
     return resolveBare(spec)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
-    const count = Object.keys(HOST_MAIN).length + Object.keys(HOST_SHARED).length
+    const count =
+      Object.keys(HOST_MAIN).length +
+      Object.keys(HOST_SHARED).length +
+      Object.keys(HOST_LEGACY).length
     // 可读错误：说清是谁、为什么、下一步该往哪查（表是按需补齐的）
     throw new Error(
       `宿主运行时没有提供模块 '${spec}'：它既不在宿主运行时表（${count} 个 @host/** 契约模块）里，` +
@@ -196,5 +227,5 @@ export function installHostRuntime(): void {
 
 /** 运行时表里的键（诊断用：面板/工装可以核对插件包引用了哪些宿主模块） */
 export function hostRuntimeKeys(): string[] {
-  return [...Object.keys(HOST_MAIN), ...Object.keys(HOST_SHARED)]
+  return [...Object.keys(HOST_MAIN), ...Object.keys(HOST_SHARED), ...Object.keys(HOST_LEGACY)]
 }

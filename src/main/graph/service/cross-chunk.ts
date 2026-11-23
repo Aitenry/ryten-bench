@@ -1,4 +1,4 @@
-import { StructuredOutputParser } from '@langchain/core/output_parsers'
+import { StructuredOutputParser } from '../../ai/output-parsers'
 import logger from 'electron-log'
 import { RelationsArraySchema, ALLOWED_RELATION_TYPES, type RelationsArrayOutput } from '../schemas'
 import { INCREMENTAL_CROSS_CHUNK_PROMPT } from '../prompts'

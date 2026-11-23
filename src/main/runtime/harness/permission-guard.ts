@@ -1,16 +1,16 @@
-import { tool, type StructuredToolInterface } from '@langchain/core/tools'
+import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { permissionGate } from './permission-gate'
 import { recordToolFacts } from './tool-result-facts'
 
 /**
- * 权限闸门的 **LangChain 适配层**：把闸门套在每个工具外面。
+ * 权限闸门的 **AI 工具适配层**：把闸门套在每个工具外面。
  *
  * 为什么在「工具组装处」包而不是在图执行处拦：工具实例会被三个地方拿去跑——
  * 主代理图、子代理子图（task）、工作流脚本里的子代理；只要在 Runtime 组装工具时统一
  * 包一层，这三条路径与「以后新增的调用方」都自动受控，不必逐个改执行流程。
  * 代价是每次调用多一层函数，可忽略。
  *
- * 本文件与闸门分开的原因：这里 import @langchain/core（ESM-only），
+ * 本文件与闸门分开的原因：这里依赖自研 AI 层的工具契约（src/main/ai/tools.ts），
  * 而 permission-gate.ts 要能直接被 node 加载做离线回归（见 permission.ts 头部注释）。
  */
 

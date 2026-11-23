@@ -1,4 +1,4 @@
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import type { BaseChatModel } from '../../ai/chat-model'
 import logger from 'electron-log'
 import { mainFormat, mainMessages } from '../../i18n'
 import { questionService } from './ask'
@@ -12,7 +12,8 @@ import type { AskOption, AskQuestion } from './ask'
  *   408 / 429 / 5xx 与「拿不到状态码的网络失败」→ 值得重试；
  * - **重试次数就是唯一的刹车**：可重试失败最多 MODEL_RETRY_LIMIT 次，之后要么弹一次
  *   「换模型继续」，要么按原错误收尾。曾经的问题（2026-09-23「模型不可用时报了错还一直重试」）
- *   一半出在这里不看预算，另一半出在 LangChain 自带的 6 次静默重发（见 provider/service.ts）；
+ *   一半出在这里不看预算，另一半出在旧实现（LangChain AsyncCaller）的 6 次静默重发
+ *   （见 provider/service.ts 的兼容字段说明）；
  * - 用户取消（signal aborted）不重试；目标自动续跑轮（goal-round）不弹换模型。
  */
 

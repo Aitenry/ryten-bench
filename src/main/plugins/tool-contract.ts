@@ -5,7 +5,7 @@
  * （设计见 test/plugin-coupling-notes.md §5）。契约若写在 harness 里，插件就得反向
  * import harness；放在 core（`src/main/plugins/**`）则两边都只依赖宿主。
  */
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import type { StructuredToolInterface } from '../ai/tools'
 
 /**
  * 贡献点键：AI 工具（**第三方插件**用）。
@@ -39,7 +39,7 @@ export interface PluginToolContribution {
   /** 设置页/提示词用的展示元数据 */
   info: ToolInfo
   /**
-   * 真正构建 langchain 工具实例（**延迟到需要时**调用：插件未启用/未装载时
+   * 真正构建 AI 工具实例（**延迟到需要时**调用：插件未启用/未装载时
    * 根本不会调到，因此工具内部可以放心读自己插件的 mapper）。
    */
   build: () => StructuredToolInterface

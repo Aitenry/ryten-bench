@@ -5,7 +5,8 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/plugins/**/*",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "test/ai/**/*"
   ],
   "exclude": [
     "node_modules",

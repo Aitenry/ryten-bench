@@ -12,7 +12,7 @@ import { getToolOutputStore } from '../../runtime/harness/tool-output-store'
 import { buildToolProjection, projectToolInput, PROJECTED_TOOLS } from './tool-presentation'
 
 /**
- * 流式生产者 — 消费 LangChain 运行时的三路记录流，转换为前端协议 StructuredMessage。
+ * 流式生产者 — 消费 Agent 运行时的三路记录流，转换为前端协议 StructuredMessage。
  *
  * 与旧版 deepagents streamEvents(v3) 版本的行为保持一致：
  * - 消息生产者：推理/文本增量去重（兼容 delta 与整段两种形态）+ 工具 preparing 节流；

@@ -2,7 +2,7 @@
  * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
  *
  * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
- *  - 主进程的连接管理器（`main/runtime/mcp.ts`，把配置翻成 @langchain/mcp-adapters 的连接）；
+ *  - 主进程的连接管理器（`main/runtime/mcp.ts`，把配置翻成 MCP SDK 的连接）；
  *  - 设置 → MCP 页的表单（`renderer/components/settings/McpSettings.tsx`）；
  *  - 落盘（electron-store 的 `mcpServers` 键，见 `main/runtime/mcp-store.ts`）。
  *

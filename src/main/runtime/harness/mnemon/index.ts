@@ -1,4 +1,4 @@
-import type { StructuredToolInterface } from '@langchain/core/tools'
+import type { StructuredToolInterface } from '../../../ai/tools'
 import logger from 'electron-log'
 import { mainToolMessages } from '../../../i18n'
 import { DocumentController } from './documents'

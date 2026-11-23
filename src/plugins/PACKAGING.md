@@ -101,7 +101,7 @@ resources/plugins/<id>/      ──▶   userData/plugins/<id>/
 ```js
 // 打包时插件里的 core/裸模块导入被改写成一句 require 垫片，最终落到这个全局函数：
 globalThis.__RB_HOST_RESOLVE__(spec) // '@host/main/database/orm' → 宿主那一份实例（单例保住）
-// 其它裸模块（electron / langchain / zod / drizzle…）
+// 其它裸模块（electron / zod / drizzle…）
 // → 按宿主自身的解析路径（应用根）require 同一实例
 ```
 

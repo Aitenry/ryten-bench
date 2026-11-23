@@ -1,4 +1,4 @@
-import { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import { BaseChatModel } from '../ai/chat-model'
 import { GraphData } from '../database/mapper/notes/graph'
 import type { BuildConfig, ProgressCallback } from './types'
 import { createCachedInvoke, type ServiceContext } from './service/llm-invoke'
