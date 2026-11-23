@@ -7,7 +7,7 @@ import { SystemSettings } from '@renderer/types/settings'
  *
  * 各插件的命名空间（music / planner / notes 六键 / harness 的 harness·agents·mainAgent·workspace）
  * 已随插件化删除；harness 渲染层也不再依赖本文件（改走插件自己的 renderer/api.ts）。
- * 插件的跨进程 DTO 现在归各插件自己的 `src/plugins/<id>/shared/types.ts`。
+ * 插件的跨进程 DTO 归插件自己的 `shared/types.ts`。
  */
 
 export interface Window {
@@ -117,17 +117,12 @@ export interface Window {
     }
     plugin: {
       list: () => Promise<unknown[]>
-      /** 同步取一次插件清单（含启用态/安装态）；宿主首帧靠它决定只装载哪些静态内置插件 */
+      /** 同步取一次插件清单（含启用态）；宿主首帧靠它做菜单/路由的声明式预注册 */
       listSync: () => {
         id: string
-        builtin: boolean
-        bundled?: boolean
-        installed: boolean
         enabled: boolean
       }[]
       setEnabled: (id: string, enabled: boolean) => Promise<unknown[]>
-      /** 无参 = 第三方插件选目录安装；带 id = 从应用包重装某个内置插件 */
-      install: (id?: string) => Promise<{ ok: boolean; id?: string; error?: string }>
       /** 从本地路径安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json` */
       installLocal: (source: string) => Promise<{
         ok: boolean
@@ -165,12 +160,9 @@ export interface Window {
         memoryDump: string[]
         workspaceListeners: number
       }>
-      /** 只读诊断：各插件主模块的装载来源（磁盘包 / 静态注册表） */
+      /** 只读诊断：各插件主模块的装载来源（磁盘包 / 停用未装载） */
       loadedFrom: () => Promise<
-        Record<
-          string,
-          { installed: boolean; source: 'package' | 'builtin' | 'absent'; file?: string }
-        >
+        Record<string, { installed: boolean; source: 'package' | 'absent'; file?: string }>
       >
       /** 只读诊断：若干张表的行数（表名按标识符白名单校验） */
       tableCounts: (tables: string[]) => Promise<Record<string, number>>

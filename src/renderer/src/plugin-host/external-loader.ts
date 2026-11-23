@@ -9,7 +9,7 @@ import type { Plugin } from './types'
  *
  * 不直接用 `import('plugin://...')`：Chromium 对自定义 scheme 的 ESM import 支持不可靠。
  *
- * 为什么要重写说明符（P1 起，方案见 src/plugins/PACKAGING.md）：
+ * 为什么要重写说明符（P1 起，方案见 src/main/workshop/README.md）：
  * 插件包在打包时把宿主能力（core 与宿主 UI 的 `@host/renderer/**`、以及 react/antd/图标这类
  * vendor）**保留成原来的说明符**，交给宿主在运行期提供——否则每个插件包都会自带第二份
  * React（hooks 直接崩）、第二份 i18n。blob 模块无法解析裸说明符，所以这里在 import 之前
@@ -123,7 +123,7 @@ export function rewriteHostSpecifiers(id: string, source: string): string {
       `插件 '${id}' 的产物里还有未改写的宿主说明符：${[...new Set(leftover)].join(', ')}。` +
         (missing.length > 0
           ? `其中 ${missing.join(', ')} 不在宿主 UI 表里——请确认 src/renderer/src/plugin-host/host-ui.ts 是否覆盖了插件用到的宿主模块。`
-          : `打包器输出的说明符形态可能变了，请检查 scripts/build-plugins.mjs 与本文件的改写规则是否一致。`)
+          : `打包器输出的说明符形态可能变了，请检查工坊的产物改写规则与本文件的改写规则是否一致。`)
     )
   }
   return code

@@ -70,7 +70,6 @@ export const zhCNCommon = {
     inUse: '使用中',
     recommended: '推荐',
     custom: '自定义',
-    builtin: '内置',
     noneSelected: '未选择'
   },
   message: {

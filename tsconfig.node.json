@@ -4,7 +4,6 @@
     "electron.vite.config.*",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/plugins/**/*",
     "src/shared/**/*",
     "test/ai/**/*"
   ],
@@ -12,15 +11,13 @@
     "node_modules",
     "out",
     "dist",
-    "src/plugins/**/renderer/**",
-    "src/plugins/**/locales/**"
+    "src/main/workshop/template-files/**"
   ],
   "compilerOptions": {
     "composite": true,
     "types": ["electron-vite/node"],
     "baseUrl": ".",
     "paths": {
-      "@plugins/*": ["src/plugins/*"],
       "@shared/*": ["src/shared/*"]
     }
   }

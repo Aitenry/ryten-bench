@@ -27,10 +27,10 @@ import { sanitizePluginCss } from '../../shared/plugin/css-safety'
  *
  * | id | 检查 | 说明 |
  * |----|------|------|
- * | `pkg.manifest` | 清单字段齐备（id/name/version 与目录一致，builtin=false） | 致命 |
+ * | `pkg.manifest` | 清单字段齐备（id/name/version 与目录一致） | 致命 |
  * | `pkg.build` | 构建产物（esbuild 诊断） | 致命 |
  * | `pkg.entries` | plugin.json / main.cjs / renderer.mjs 真实存在且非空 | 致命 |
- * | `pkg.identity` | id 不是保留 id / 内置 id / 别人占用的命名空间 | 致命 |
+ * | `pkg.identity` | id 不是保留 id / 别人占用的命名空间 | 致命 |
  * | `pkg.host-main` | 主进程引的 `@host/**` 都在宿主运行时表里、裸依赖能解析 | 致命 |
  * | `pkg.host-ui` | 渲染层引的宿主模块都在宿主 UI 表里 | 致命 |
  * | `pkg.chunks` | 产物里没有相对说明符（blob import 会取不到） | 致命 |
@@ -247,7 +247,6 @@ function checkManifest(manifest: Record<string, unknown> | null, id: string): Wo
   if (typeof manifest.version !== 'string' || !/^\d+\.\d+\.\d+/.test(manifest.version)) {
     problems.push('version 必须是 semver（如 "0.1.0"）')
   }
-  if (manifest.builtin === true) problems.push('builtin 必须是 false（工坊做的是第三方插件）')
   if (problems.length > 0) {
     return {
       ...base,
@@ -726,11 +725,9 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
         : undefined
   })
 
-  // ── 身份（保留 id / 内置 id / 命名空间占用）─────────────────────────────
+  // ── 身份（保留 id / 命名空间占用）───────────────────────────────────────
   const identityProblems: string[] = []
   if (RESERVED_DRAFT_IDS.has(id)) identityProblems.push(`'${id}' 是宿主保留 id`)
-  if (host.isBundledPlugin(id))
-    identityProblems.push(`'${id}' 是随应用分发的内置插件 id，不能被覆盖`)
   if (host.usedNamespaces(id).includes(id)) {
     identityProblems.push(`通道命名空间 plugin:${id}: 已被别的插件占用`)
   }
@@ -743,7 +740,7 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
       identityProblems.length === 0
         ? `id=${id}，命名空间 plugin:${id}: 可用`
         : identityProblems.join('；'),
-    hint: identityProblems.length > 0 ? '换一个草稿 id（保留 id 与内置插件 id 不能用）' : undefined
+    hint: identityProblems.length > 0 ? '换一个草稿 id（保留 id 不能用）' : undefined
   })
 
   // ── 主进程宿主说明符 ────────────────────────────────────────────────────

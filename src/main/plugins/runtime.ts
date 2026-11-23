@@ -33,7 +33,7 @@ import * as sharedPluginCssSafety from '../../shared/plugin/css-safety'
 import * as sharedPluginMenuIcons from '../../shared/plugin/menu-icons'
 
 /**
- * 主进程**宿主运行时**（插件打包方案见 src/plugins/PACKAGING.md）。
+ * 主进程**宿主运行时**（插件打包方案见 src/main/workshop/README.md）。
  *
  * 背景：插件包（`userData/plugins/<id>/main.cjs`）不能各自再打一份 core —— 那会得到
  * 第二个 PGlite 连接、第二份 electron-store 实例、各不相同的 i18n 状态。因此打包时
@@ -112,7 +112,7 @@ const HOST_MAIN: Record<string, unknown> = {
 const HOST_SHARED: Record<string, unknown> = {
   '@host/shared/model-params': sharedModelParams,
   // 插件工坊与插件宿主共用：plugin.css 的宿主保护、声明式菜单图标名单
-  // （`scripts/build-plugins.mjs` 会把 `src/shared/**` 的导入统一外部化成 `@host/shared/**`）
+  // （工坊构建会把 `src/shared/**` 的导入统一外部化成 `@host/shared/**`）
   '@host/shared/plugin/css-safety': sharedPluginCssSafety,
   '@host/shared/plugin/menu-icons': sharedPluginMenuIcons
 }
@@ -144,7 +144,7 @@ function hostRequire(): NodeRequire {
  * `plugins/host.ts` 自己 import 本文件（要 `installHostRuntime`），而工坊要的
  * `@host/main/plugins/host`、`lifecycle`、`package-install` 等（直接或间接）都 import 回
  * `host.ts` —— 静态 import 会形成**环**：CJS 打包下先被求值的那一侧拿到的是「函数还没挂上」
- * 的半成品命名空间，插件运行期表现为 `isBundledPluginId is not a function`
+ * 的半成品命名空间，插件运行期表现为 `xxx is not a function`
  * （2026-09-27 真机实测：工坊建草稿直接失败）。改成首次访问时才 require，环就只存在于
  * 定义期、不存在于求值期。
  */

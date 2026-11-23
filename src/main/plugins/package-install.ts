@@ -5,7 +5,6 @@ import logger from 'electron-log'
 import JSZip from 'jszip'
 import { externalPluginsRoot, findExternalPlugin, invalidateInstalledPluginIds } from './scanner'
 import { readExternalManifest } from './lifecycle'
-import { isBundledPluginId } from './host'
 import { clearInstallRemoved } from './store'
 
 /**
@@ -18,9 +17,7 @@ import { clearInstallRemoved } from './store'
  *
  * 「包目录」= 含 `plugin.json` 的目录（压缩包解压出来的、或用户直接选的）。
  * 约定与校验：
- * - `plugin.json` 必须字段齐备（`isValidManifest`），且 `builtin !== true`
- *   （随应用分发的内置插件不走这条路，见 `readExternalManifest`）；
- * - id 不能撞内置插件 id（否则会覆盖应用自带的包，卸载/重装链路会错乱）；
+ * - `plugin.json` 必须字段齐备（`isValidManifest`）；
  * - `entry.main` / `entry.renderer` 指向的文件必须真的在包里（缺入口的包装了也白装）；
  * - 升级（同 id 已装）时删掉旧版本里多出来的文件，避免旧哈希 chunk 与新入口混装。
  */
@@ -163,11 +160,6 @@ export function installPackageDir(
   const manifest = readExternalManifest(sourceDir)
   if (opts.expectId && manifest.id !== opts.expectId) {
     throw new Error(`插件包清单 id 与索引不一致：索引 ${opts.expectId}，包内 ${manifest.id}`)
-  }
-  if (isBundledPluginId(manifest.id)) {
-    throw new Error(
-      `'${manifest.id}' 是随应用分发的内置插件 id，不能用本地/仓库安装覆盖（请用面板里的「安装」重装内置插件）`
-    )
   }
 
   const files = listFilesRel(sourceDir)

@@ -1,4 +1,4 @@
-﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
 import type { SystemSettings } from '../main/types/settings'
@@ -269,10 +269,7 @@ const api = {
      */
     loadedFrom: () =>
       ipcRenderer.invoke('plugins-loaded-from') as Promise<
-        Record<
-          string,
-          { installed: boolean; source: 'package' | 'builtin' | 'absent'; file?: string }
-        >
+        Record<string, { installed: boolean; source: 'package' | 'absent'; file?: string }>
       >,
     /**
      * 只读诊断：若干张表的行数（工装用，验证「卸载并清数据后插件表行数为 0」）。
@@ -282,18 +279,11 @@ const api = {
       ipcRenderer.invoke('app-table-counts', tables) as Promise<Record<string, number>>,
     setEnabled: (id: string, enabled: boolean) =>
       ipcRenderer.invoke('plugins-set-enabled', id, enabled) as Promise<PluginListEntry[]>,
-    /** 无参：第三方插件「选目录安装」；带 id：从应用包重装某个内置插件 */
-    install: (id?: string) =>
-      ipcRenderer.invoke('plugins-install', id) as Promise<{
-        ok: boolean
-        id?: string
-        error?: string
-      }>,
     /**
      * 从**本地路径**安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json`。
      *
      * 与插件中心的安装同一套校验与落地语义：装完自动启用并装载。失败不抛错，
-     * 返回 `{ ok: false, error }`（路径不存在、包里没有 plugin.json、id 撞内置插件……）。
+     * 返回 `{ ok: false, error }`（路径不存在、包里没有 plugin.json……）。
      */
     installLocal: (source: string) =>
       ipcRenderer.invoke('plugins-install-local', source) as Promise<{

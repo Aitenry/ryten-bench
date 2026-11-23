@@ -2,16 +2,17 @@
 @import 'animate.css';
 
 /**
- * 系统功能目录（src/features/**：harness 对话页、notes 资料库）与自包含插件目录
- * （src/plugins/**）都在 Vite root（src/renderer）之外，Tailwind v4 的自动扫描扫不到
- * 它们——不显式声明，这些页面里用到的工具类就不会进产物 CSS，页面会以「无样式」
- * 形态渲染（2026-11-19 用户反馈「对话窗口整体不可用」就是 harness 移出插件后
- * src/features 没被扫到：max-w-4xl / px-8 / min-h-0 等类全部缺失，消息区被撑到
- * 3600px 宽、布局整体错乱）。
+ * 系统功能目录（src/features/**：harness 对话页、notes 资料库）在 Vite root
+ * （src/renderer）之外，Tailwind v4 的自动扫描扫不到它们——不显式声明，这些页面里
+ * 用到的工具类就不会进产物 CSS，页面会以「无样式」形态渲染（2026-11-19 用户反馈
+ * 「对话窗口整体不可用」就是 harness 移出插件后 src/features 没被扫到：
+ * max-w-4xl / px-8 / min-h-0 等类全部缺失，消息区被撑到 3600px 宽、布局整体错乱）。
  * 路径相对本 CSS 文件（../../../ = 仓库 src/）。
+ *
+ * 外部插件的类名不在这里扫：插件包自带 `plugin.css`，由宿主在装载时注入
+ * （见 `src/renderer/src/plugin-host/plugin-css.ts` 与工坊的样式构建）。
  */
 @source '../../../features/**/*.{ts,tsx}';
-@source '../../../plugins/**/*.{ts,tsx}';
 
 /* ======== 文档级约束：窗口就是一个固定视口，永远不许出现滚动条 ======== */
 

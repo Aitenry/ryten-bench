@@ -1,4 +1,4 @@
-﻿appId: com.ryten.bench
+appId: com.ryten.bench
 productName: RytenBench
 directories:
   buildResources: build
@@ -49,10 +49,6 @@ extraResources:
   # 且 Linux 启动器需要保住可执行位（见 src/main/sandbox/service.ts）
   - from: resources/sandbox
     to: sandbox
-  # 插件包（由 pnpm build:plugins 生成：resources/plugins/<id>/{plugin.json,main.cjs,renderer.mjs,chunk-*.mjs}）
-  # 首次启动时整包 copy 到 userData/plugins/<id>/，此后与第三方插件走同一条装载链路（见 src/plugins/PACKAGING.md）
-  - from: resources/plugins
-    to: plugins
 win:
   executableName: RytenBench
   target: nsis

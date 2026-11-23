@@ -1,4 +1,4 @@
-﻿import { ElectronAPI } from '@electron-toolkit/preload'
+import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
 import type { SystemSettings } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
@@ -118,17 +118,15 @@ interface Api {
     on: (channel: string, callback: (data: unknown) => void) => () => void
   }
   plugin: {
-    /** 已安装插件与启用态（内置铺包 + 第三方扫描合并；未安装的内置插件也在列） */
+    /** 已安装插件与启用态（`userData/plugins/<id>/` 扫描结果） */
     list: () => Promise<PluginListEntry[]>
     /**
-     * **同步**取一次插件清单（含启用态/安装态）。
-     * 渲染层宿主在构造期要同步决定装载哪些静态内置插件，只有同步 IPC 能在这个时机拿到权威状态。
+     * **同步**取一次插件清单（含启用态）。
+     * 渲染层宿主在构造期要同步拿到权威清单，只有同步 IPC 能在这个时机拿到。
      */
     listSync: () => PluginListEntry[]
     /** 启用/停用插件（写入持久化并广播，渲染层即时装载/卸载） */
     setEnabled: (id: string, enabled: boolean) => Promise<PluginListEntry[]>
-    /** 无参 = 第三方插件「选目录安装」；带 id = 从应用包重装某个内置插件 */
-    install: (id?: string) => Promise<{ ok: boolean; id?: string; error?: string }>
     /** 从本地路径安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json` */
     installLocal: (source: string) => Promise<LocalPluginInstallResult>
     /** 弹系统选择框挑一个本地来源并安装（面板唯一的本地安装入口；取消返回 canceled） */
@@ -157,13 +155,10 @@ interface Api {
     }>
     /**
      * 只读诊断：各插件主模块的**装载来源**。
-     * `package` = 由 `userData/plugins/<id>/main.cjs` 提供；`builtin` = 静态注册表回退。
+     * `package` = 由磁盘包 `main.cjs` 提供；`absent` = 已安装但当前停用（未装载）。
      */
     loadedFrom: () => Promise<
-      Record<
-        string,
-        { installed: boolean; source: 'package' | 'builtin' | 'absent'; file?: string }
-      >
+      Record<string, { installed: boolean; source: 'package' | 'absent'; file?: string }>
     >
     /** 只读诊断：若干张表的行数（表名按标识符白名单校验） */
     tableCounts: (tables: string[]) => Promise<Record<string, number>>

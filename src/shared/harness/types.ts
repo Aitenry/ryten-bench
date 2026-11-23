@@ -5,7 +5,7 @@
  * 1. **行类型与视图类型**：沿袭 planner/notes 的做法，由**主进程模块推导**（mapper 内部再用
  *    drizzle schema 的 `$inferSelect` 推导），不手工维护第二份字段表——schema 改一处即两端口径
  *    一致。这里只 `export type`，编译后不留任何运行期依赖：渲染层不会因此把 drizzle、main
- *    目录或 electron 打进产物（契约见 src/plugins/README.md）。
+ *    目录或 electron 打进产物（契约见 src/main/plugins/context.ts）。
  * 2. **消息块形状**：`MessageBlock` / `ToolCard` 等是随流式 chunk 与落库 `blocks` 列跨进程的
  *    契约，原先放在 `src/renderer/src/types/harness.ts`（core），本轮随插件搬来。
  *

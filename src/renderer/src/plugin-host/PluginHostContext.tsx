@@ -25,7 +25,7 @@ const PluginHostCtx = createContext<PluginHost | null>(null)
 
 interface PluginHostProviderProps {
   plugins: Plugin[]
-  /** 启用态覆写：id → 是否启用；缺省按 manifest.builtin（内置默认开、外部默认关） */
+  /** 启用态覆写：id → 是否启用；缺省 = 停用（应用不分发插件，装进来不等于让它跑） */
   enabledOverride?: Record<string, boolean>
   /**
    * 主进程**同步**插件清单（`api.plugin.listSync()`）。
@@ -95,7 +95,7 @@ function declarationsFromEntries(
 /**
  * 插件宿主根 Provider：
  * - 创建 PluginHost 单例；
- * - 按 enabledOverride 装载插件（未指定则内置默认启用）；
+ * - 按 enabledOverride 装载插件（未指定 = 停用）；
  * - 用同步清单里的元数据做**首帧声明式预注册**（构造期，早于任何子组件渲染）；
  * - enabledOverride 变化时 diff 式重放（启停即时生效）。
  */
@@ -106,25 +106,24 @@ export const PluginHostProvider: React.FC<PluginHostProviderProps> = ({
   vendorModules,
   children
 }) => {
-  // 显式覆写之外的默认值：内置开、外部关
+  // 显式覆写之外的默认值：一律停用
   const enabledMap = useMemo<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {}
     for (const p of plugins) {
       map[p.manifest.id] =
         enabledOverride && p.manifest.id in enabledOverride
           ? Boolean(enabledOverride[p.manifest.id])
-          : p.manifest.builtin
+          : false
     }
     return map
   }, [plugins, enabledOverride])
 
-  // 宿主随构造期同步预装载默认启用的内置插件（首帧即注册路由/菜单）
+  // 宿主随构造期同步预装载默认启用的插件（首帧即注册路由/菜单）
   const hostRef = useRef<PluginHost | null>(null)
   if (!hostRef.current) {
     hostRef.current = new PluginHost(plugins, enabledMap)
-    // 首帧声明式预注册（必须在任何子组件渲染之前）：静态内置插件此刻已完成真实注册，
-    // 它们的声明是冗余的（合并时真实优先）；真正受益的是磁盘包插件——渲染模块还在异步
-    // 加载，靠这份声明，首帧侧栏/路由表就是完整的。
+    // 首帧声明式预注册（必须在任何子组件渲染之前）：插件渲染模块还在异步加载，
+    // 靠这份声明，首帧侧栏/路由表就是完整的。
     for (const d of declarationsFromEntries(entries)) hostRef.current.declare(d.id, d.declaration)
   }
   const host = hostRef.current

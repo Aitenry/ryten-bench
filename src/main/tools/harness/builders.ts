@@ -36,7 +36,7 @@ type ToolFactory = () => StructuredToolInterface
  * `PLUGIN_MODE_TOOL_NAMES` 与下面 `listAvailableTools` 的过滤。
  *
  * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
- * （`src/plugins/<id>/main/tools.ts`），由插件 `install(ctx)` 经
+ * （插件源码的 `main/tools.ts`），由插件 `install(ctx)` 经
  * `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)` 注册，这里在组装时拉取。
  */
 export const toolBuilders: Record<string, ToolFactory> = {

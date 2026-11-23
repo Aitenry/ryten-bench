@@ -36,6 +36,7 @@ import UploadProgressModal from '@renderer/lattice/UploadProgressModal'
 import { latticeErrorMessage } from '@renderer/lattice/api'
 import { formatCount, formatSyncTime } from '@renderer/lattice/format'
 import { isChatOpened, isFolderFallback } from '@renderer/lattice/source'
+import { isVersionNewer } from '@shared/plugin/version'
 import type {
   HubEntryV2,
   HubListResultV2,
@@ -282,12 +283,16 @@ const PluginRepository: React.FC = () => {
    *
    * 不用平台的 `update_available`：它是按账号安装记录算的，本机卸载/降级后要等同步才更新，
    * 会出现「本机没装却提示可更新」「仓库有更新但详情页没有」这类不一致。
+   *
+   * 比的是**版本优先级**而不是字符串不等：本机 v0.4.1、中心最新 v0.3.0 时字符串不等，
+   * 但那不是「有更新」，而是「本机更新」（2026-11-23 用户反馈）；按 semver 比才不会再
+   * 给用户一个「更新到 v0.3.0」的降级按钮。
    */
   const hasLocalUpdate = useCallback(
     (item: HubEntryV2): boolean => {
       const local = localById.get(item.plugin_id)
-      if (!local?.installed) return false
-      return Boolean(item.latest_version && item.latest_version !== local.version)
+      if (!local) return false
+      return isVersionNewer(item.latest_version, local.version)
     },
     [localById]
   )
@@ -333,7 +338,7 @@ const PluginRepository: React.FC = () => {
   const localOnlyAll = useMemo(() => {
     const hubIds = new Set(hubItems.map((item) => item.plugin_id))
     return entries
-      .filter((entry) => entry.installed && !hubIds.has(entry.id))
+      .filter((entry) => !hubIds.has(entry.id))
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [entries, hubItems])
 
@@ -549,7 +554,7 @@ const PluginRepository: React.FC = () => {
   /** 卡片主操作：安装（未装）/ 更新（可更新）；安装时主进程会自动下载并解压源码 */
   const handleHubInstall = useCallback(
     async (item: HubEntryV2): Promise<void> => {
-      const wasInstalled = Boolean(localById.get(item.plugin_id)?.installed)
+      const wasInstalled = Boolean(localById.get(item.plugin_id))
       setBusy(item.plugin_id)
       try {
         const result = await installLatticePlugin(item.plugin_id, item.latest_version)
@@ -976,21 +981,31 @@ const PluginRepository: React.FC = () => {
            * 本机清单还没回来时才退回平台字段，避免首帧闪一下。
            */
           const installed = localTrusted
-            ? Boolean(localEntry?.installed)
-            : Boolean(localEntry?.installed || item.installed)
+            ? Boolean(localEntry)
+            : Boolean(localEntry || item.installed)
           const hubEnabled = installed && Boolean(localEntry?.enabled)
-          const localVersion = localEntry?.installed ? localEntry.version : undefined
+          const localVersion = localEntry ? localEntry.version : undefined
           const hasSource = Boolean(item.has_source)
-          const updateAvailable =
-            installed && localVersion
-              ? Boolean(item.latest_version && item.latest_version !== localVersion)
-              : installed && Boolean(item.update_available)
+          // 可更新 = 中心最新版**严格新于**本机版本（不是「版本号字符串不相等」）
+          const updateAvailable = installed
+            ? localVersion
+              ? isVersionNewer(item.latest_version, localVersion)
+              : Boolean(item.update_available)
+            : false
           const ownerName = item.owner?.display_name || item.owner?.username || '—'
           const version =
             (installed ? localVersion : undefined) ??
             item.latest_version ??
             localEntry?.version ??
             '—'
+          /**
+           * 描述按「这张卡片代表谁」取（2026-11-23 用户反馈「描述不正确」）：
+           * 卡片显示的是本机已装版本（版本号取 local），描述也必须取本机那份——
+           * 否则会拿插件中心**旧版本**的描述配本机版本号，两边对不上。
+           */
+          const cardDescription =
+            (installed ? (localEntry?.description ?? item.description) : item.description) ??
+            t('settings.plugins.noDescription')
           const busyThis = busy === item.plugin_id
           const primaryLabel = installed
             ? updateAvailable
@@ -1120,7 +1135,7 @@ const PluginRepository: React.FC = () => {
                   color: token.colorTextSecondary
                 }}
               >
-                {item.description || t('settings.plugins.noDescription')}
+                {cardDescription}
               </div>
 
               {(item.tags ?? []).length > 0 && (

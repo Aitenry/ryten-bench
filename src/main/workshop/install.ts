@@ -16,12 +16,8 @@ import { updateReportRenderer } from './verify'
 
 /** 发布前的守卫：草稿在、产物在、id 合法 */
 function assertPublishable(id: string): { outDir: string } {
-  const host = workshopHost()
   if (!fs.existsSync(draftDir(id))) {
     throw new Error(`草稿 '${id}' 不存在`)
-  }
-  if (host.isBundledPlugin(id)) {
-    throw new Error(`'${id}' 是随应用分发的内置插件 id，工坊不能覆盖它`)
   }
   if (!hasBuild(id)) {
     throw new Error(`草稿 '${id}' 还没有构建产物：先跑 plugin_build（或 plugin_verify）`)

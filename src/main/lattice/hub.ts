@@ -8,7 +8,7 @@ import JSZip from 'jszip'
 import { broadcastWorkshopChanged } from '../ipc/harness/workshop'
 import { broadcastPluginStateChanged } from '../ipc/plugins'
 import { setEnabledOverride } from '../plugins/store'
-import { loadExternalMain } from '../plugins/host'
+import { reloadExternalMain } from '../plugins/host'
 import {
   extractZipToTemp,
   installPackageDir,
@@ -31,6 +31,10 @@ import {
   type ResolvedPluginSource
 } from './sources'
 import { recordLatticeSourceCache, syncLattice } from './sync'
+import { buildDraft } from '../workshop/build'
+import { hasBuild, isBuildStale } from '../workshop/host'
+import { distDir, draftDir } from '../workshop/paths'
+import { isSamePath } from '../storage/migration'
 import type {
   HubDetail,
   HubEntry,
@@ -309,7 +313,6 @@ interface LocalPackageManifest {
   category?: string
   tags?: unknown
   changelog?: string
-  builtin?: boolean
   [key: string]: unknown
 }
 
@@ -405,12 +408,6 @@ function readLocalPackageManifest(
   const relSet = new Set(files.map((file) => file.rel))
   if (!relSet.has(mainEntry)) throw new Error(`插件包缺少主进程入口：${mainEntry}`)
   if (!relSet.has(rendererEntry)) throw new Error(`插件包缺少渲染层入口：${rendererEntry}`)
-  if (manifest.builtin === true) {
-    throw new Error(
-      `'${manifest.id}' 是随应用分发的内置插件（builtin=true），不能发布到插件中心：` +
-        '其他用户在插件中心装不了内置 id 的包'
-    )
-  }
   return { manifest, rawText }
 }
 
@@ -1043,11 +1040,13 @@ export async function installLatticePlugin(
       }
     }
 
-    // 用户是主动点「安装」的：装完即启用并装载主模块（与既有安装流程同口径）
+    // 用户是主动点「安装」的：装完即启用并装载主模块（与既有安装流程同口径）。
+    // 升级（同 id 已在跑）时必须**重载**：`installPackageDir` 刚覆盖了磁盘包，
+    // 直接 load 会因「已装载」提前返回，主进程继续跑旧模块，新版本里的新通道要重启才生效。
     setEnabledOverride(info.id, true)
     let loadError: string | null = null
     try {
-      loadExternalMain(info.id)
+      reloadExternalMain(info.id)
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
       logger.error(`[Lattice] Installed plugin '${info.id}' failed to load:`, err)
@@ -1215,8 +1214,91 @@ function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
 }
 
 /**
- * `lattice:republish`：源码目录 → 校验 plugin.json（id/版本/入口）→ 整包 zip 同时作为安装包与源码包
- * → POST（带 source 元数据）→ PUT 安装包 → PUT 源码。
+ * 目录本身是不是**已构建的插件包**：`plugin.json` 声明了 `entry.main` / `entry.renderer`，
+ * 且这两个入口文件真的在目录里。
+ *
+ * 注意与「源码目录」的区别：工坊/插件仓库的源码 `plugin.json` 通常**不写 entry**
+ * （entry 由构建写进产物），所以源码目录不是安装包，不能拿去发布。
+ */
+function isBuiltPackageDir(dir: string): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'plugin.json'), 'utf-8')
+    const parsed = JSON.parse(raw.replace(/^\uFEFF/u, '')) as {
+      entry?: { main?: unknown; renderer?: unknown }
+    }
+    const main = typeof parsed?.entry?.main === 'string' ? parsed.entry.main : ''
+    const renderer = typeof parsed?.entry?.renderer === 'string' ? parsed.entry.renderer : ''
+    return (
+      main !== '' &&
+      renderer !== '' &&
+      fs.existsSync(path.join(dir, main)) &&
+      fs.existsSync(path.join(dir, renderer))
+    )
+  } catch {
+    return false
+  }
+}
+
+/** 读源码目录的 plugin.json（源码清单可能没有 entry；读不到 / 非法返回 null） */
+function readSourceManifest(dir: string): LocalPackageManifest | null {
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'plugin.json'), 'utf-8')
+    const parsed = JSON.parse(raw.replace(/^\uFEFF/u, '')) as unknown
+    return asRecord(parsed) ? (parsed as LocalPackageManifest) : null
+  } catch {
+    return null
+  }
+}
+
+/** 该源码目录是不是「工坊草稿」（= 配置的插件存放路径下的 `<id>/`，且带 workshop.json） */
+function isWorkshopSourceRoot(pluginId: string, dir: string): boolean {
+  try {
+    return isSamePath(dir, draftDir(pluginId)) && fs.existsSync(path.join(dir, 'workshop.json'))
+  } catch {
+    // 没有配置插件存放路径时 draftDir 会抛错：按「不是草稿」处理，让下面的报错说明去处
+    return false
+  }
+}
+
+/** 发布用的**安装包根目录**解析（源码目录 ≠ 安装包，这是这一层最容易混淆的地方） */
+async function resolveRepublishPackageRoot(pluginId: string, sourceRoot: string): Promise<string> {
+  // 兼容旧口径：源码目录本身就是构建产物（外部插件仓库把 dist 当源码目录上传过）
+  if (isBuiltPackageDir(sourceRoot)) return sourceRoot
+
+  if (!isWorkshopSourceRoot(pluginId, sourceRoot)) {
+    throw new Error(
+      `源码目录不是可发布的**构建产物**（plugin.json 缺少 entry，或入口文件不存在）：${sourceRoot}。` +
+        '插件中心只接受带 main / renderer 入口的安装包：请先在插件工坊/插件仓库里构建（生成 dist/<id>），再发布新版本。'
+    )
+  }
+
+  /**
+   * 工坊草稿：安装包 = 构建产物 `dist/<id>`（构建时把 entry 写进产物清单），源码包 = 草稿目录。
+   * 产物缺失或落后于源码时**当场构建**——「发布新版本」的语义就是「把当前源码发出去」，
+   * 拿旧产物发布会让用户装到旧代码（而且版本号还对得上，排查时极难发现）。
+   */
+  if (!hasBuild(pluginId) || isBuildStale(pluginId)) {
+    logger.info(`[Lattice] Republish needs a fresh build for ${pluginId}, building the draft first`)
+    const built = await buildDraft(pluginId)
+    if (!built.info.ok) {
+      throw new Error(
+        `发布前构建失败：${built.info.errors.join('；') || '未知原因'}（可用插件工坊的 plugin_build 查看详细诊断）`
+      )
+    }
+  }
+  const dist = distDir(pluginId)
+  if (!isBuiltPackageDir(dist)) {
+    throw new Error(
+      `构建产物不完整（plugin.json 的 entry 或 main.cjs / renderer.mjs 缺失）：${dist}。` +
+        '请在插件工坊里重新构建后再发布。'
+    )
+  }
+  return dist
+}
+
+/**
+ * `lattice:republish`：源码目录 → 安装包根目录（工坊草稿先构建/复用 `dist/<id>`；本身是
+ * 构建产物则原样用）→ **安装包 zip + 源码包 zip 分开上传** → POST → PUT。
  *
  * 版本号必填且必须大于平台当前最新版本；服务端 409 会转成可读错误（源码不可替换同样是 409）。
  */
@@ -1230,33 +1312,57 @@ export async function republishLatticePlugin(
     if (!VERSION_RE.test(version)) {
       throw new Error(`版本号必填且必须是 semver（例如 1.4.2）：${version || '（空）'}`)
     }
-    const root = resolveRepublishRoot(pluginId, input?.sourceDir)
-    const files = collectPackageFiles(root)
-    if (files.length === 0) throw new Error(`源码目录是空的：${root}`)
-    const { manifest } = readLocalPackageManifest(root, files)
+    const sourceRoot = resolveRepublishRoot(pluginId, input?.sourceDir)
+    /**
+     * 源码目录**不是**安装包：工坊/插件仓库的源码 `plugin.json` 不写 entry（构建时才写进
+     * `dist/<id>`）。旧实现直接把源码目录当安装包校验，于是每次从源码发布都会报
+     * 「plugin.json 的 entry 缺少 main / renderer」（2026-11-23 用户反馈）。
+     * 现在安装包取构建产物，源码目录只作为源码包上传。
+     */
+    const packageRoot = await resolveRepublishPackageRoot(pluginId, sourceRoot)
+    const files = collectPackageFiles(packageRoot)
+    if (files.length === 0) throw new Error(`安装包目录是空的：${packageRoot}`)
+    const { manifest } = readLocalPackageManifest(packageRoot, files)
     if (manifest.id !== pluginId) {
       throw new Error(
-        `源码目录的 plugin.json.id（${manifest.id}）与要发布的插件 id（${pluginId}）不一致`
+        `安装包的 plugin.json.id（${manifest.id}）与要发布的插件 id（${pluginId}）不一致`
+      )
+    }
+    /**
+     * 源码清单单独读、单独写回：源码目录的清单可能没有 entry（不能过安装包的校验），
+     * 发布成功后只把版本号写回它，保持「本机源码版本 = 刚发布的版本」。
+     */
+    const sourceManifest = readSourceManifest(sourceRoot)
+    if (sourceManifest && typeof sourceManifest.id === 'string' && sourceManifest.id !== pluginId) {
+      throw new Error(
+        `源码目录的 plugin.json.id（${sourceManifest.id}）与要发布的插件 id（${pluginId}）不一致`
       )
     }
     const changelog =
       typeof input.changelog === 'string' && input.changelog.trim() !== ''
         ? input.changelog.trim()
         : undefined
-    const published = await publishPackageDir(root, {
-      includeSource: true,
+    const published = await publishPackageDir(packageRoot, {
+      // 源码与安装包分开：同一个目录时（旧口径）沿用「同一份 zip 当源码包」
+      ...(isSamePath(packageRoot, sourceRoot)
+        ? { includeSource: true }
+        : { sourcePath: sourceRoot }),
       versionOverride: version,
       ...(changelog ? { changelogOverride: changelog } : {})
     })
     // 版本号与磁盘 plugin.json 不一致时落盘：本地源码状态与刚发布的版本保持一致
-    if (manifest.version !== published.version) {
+    const sourceVersion =
+      sourceManifest && typeof sourceManifest.version === 'string' ? sourceManifest.version : ''
+    if (sourceManifest && sourceVersion !== published.version) {
       try {
         fs.writeFileSync(
-          path.join(root, 'plugin.json'),
-          `${JSON.stringify({ ...manifest, version: published.version }, null, 2)}\n`,
+          path.join(sourceRoot, 'plugin.json'),
+          `${JSON.stringify({ ...sourceManifest, version: published.version }, null, 2)}\n`,
           'utf-8'
         )
-        logger.info(`[Lattice] Updated plugin.json version for ${pluginId} to ${published.version}`)
+        logger.info(
+          `[Lattice] Updated source plugin.json version for ${pluginId} to ${published.version}`
+        )
       } catch (err) {
         logger.warn(
           '[Lattice] Failed to write back plugin.json version (publish itself succeeded):',
@@ -1264,19 +1370,23 @@ export async function republishLatticePlugin(
         )
       }
     }
-    recordPublishedSource(pluginId, published.version, root, published.sha256)
+    const sourceSha = published.sourceSha256 ?? published.sha256
+    recordPublishedSource(pluginId, published.version, sourceRoot, sourceSha)
     recordLatticeSourceCache(pluginId, {
-      path: root,
+      path: sourceRoot,
       version: published.version,
-      sha256: published.sha256
+      sha256: sourceSha
     })
-    logger.info(`[Lattice] Republish complete: ${pluginId}@${published.version} (source ${root})`)
+    logger.info(
+      `[Lattice] Republish complete: ${pluginId}@${published.version} ` +
+        `(package ${packageRoot}, source ${sourceRoot})`
+    )
     return {
       ok: true,
       plugin_id: pluginId,
       version: published.version,
       status: published.status,
-      sourcePath: root
+      sourcePath: sourceRoot
     }
   } catch (err) {
     const message = latticeErrorMessage(err)

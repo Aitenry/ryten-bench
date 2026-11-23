@@ -59,10 +59,9 @@ export function registerPluginScheme(): void {
  *
  * 为什么必须自己判而不是交给 `net.fetch`（2026-09-26 用户实测）：`net.fetch('file:///…')`
  * 取不到文件时是**抛异常**（`Error: net::ERR_FILE_NOT_FOUND`），不是返回 404 响应。于是
- * 缺失文件会掉进下面的 catch 被当成「读取失败 500 + warn」——内置插件包的 `plugin.css`
- * 本来就不随包分发（类名由宿主构建期 Tailwind 扫 `src/plugins/**` 编译进宿主 CSS），
- * 每次启用插件都在主日志里留一条带堆栈的假报错；消费方（`plugin-host/plugin-css.ts`）
- * 的 `res.ok` 判断也永远走不到，只能被自己的 catch 兜住。
+ * 缺失文件会掉进下面的 catch 被当成「读取失败 500 + warn」——可选资源（`plugin.css` / 图标）
+ * 本来就允许不存在，每次装载插件都在主日志里留一条带堆栈的假报错；
+ * 消费方（`plugin-host/plugin-css.ts`）的 `res.ok` 判断也永远走不到，只能被自己的 catch 兜住。
  */
 function isServableFile(abs: string): boolean {
   try {

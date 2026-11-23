@@ -26,7 +26,7 @@ export type WorkshopTemplate = 'full' | 'page' | 'tool' | 'panel' | 'minimal'
  * 插件自带样式表的来源。
  *
  * - `auto`：构建期用 Tailwind（theme + utilities，**不含 preflight**）扫草稿源码生成
- *   —— 这正是 `plugin.css` 约定的手工做法（见 src/plugins/PACKAGING.md），工坊把它自动化；
+ *   —— 这正是 `plugin.css` 约定的手工做法（见 src/main/workshop/css.ts），工坊把它自动化；
  * - `file`：草稿里手写的 `plugin.css` 原样进包（写纯 CSS 时用）；
  * - `off`：不带样式表（全部用内联 style / antd 组件）。
  *

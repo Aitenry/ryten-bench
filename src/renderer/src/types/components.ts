@@ -8,7 +8,7 @@ import type { MessageInstance } from 'antd/es/message/interface'
  * 「插件可停用」的边界失真。notes 的 props（`GraphViewProps` / `GraphCanvasProps` /
  * `GraphToolbarProps` / `EntityDetailProps` / `BuildProgressProps` / `WikiEditModalProps` /
  * `WikiCardProps` / `DocPreviewModalProps` / `TodoListProps`）都在
- * `src/plugins/notes/renderer/types.ts`；图谱构建进度的 Provider props 也随插件收走。
+ * `src/renderer/src/types/notes.ts`；图谱构建进度的 Provider props 也随插件收走。
  *
  * core 收尾清理：删掉已无消费方的类型（`StatusOption` / `SidebarProps` / `MainRoutesProps` /
  * `WeatherData`+`WorkTimeData`+`CardItemProps`——底栏天气卡与侧栏/路由各自就地定义 props）。

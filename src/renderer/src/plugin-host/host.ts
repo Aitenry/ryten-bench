@@ -107,15 +107,11 @@ export class PluginHost {
 
   constructor(plugins: Plugin[], initialEnabled?: Record<string, boolean>) {
     plugins.forEach((p) => this.registerPlugin(p))
-    // 启动竞态修复：默认启用的内置插件在构造期同步预装载——首帧渲染前路由/菜单
+    // 启动竞态修复：清单里标为「启用」的插件在构造期同步预装载——首帧渲染前路由/菜单
     // 即已注册。否则首帧 usePluginRoutes/usePluginMenus 为空，启动早期点击菜单
     // navigate 到无路由位置（"No routes matched"、点击无反应）。
     for (const p of plugins) {
-      const want =
-        initialEnabled && p.manifest.id in initialEnabled
-          ? Boolean(initialEnabled[p.manifest.id])
-          : p.manifest.builtin
-      if (want) this.syncInstall(p.manifest.id)
+      if (initialEnabled?.[p.manifest.id] === true) this.syncInstall(p.manifest.id)
     }
   }
 
@@ -179,10 +175,10 @@ export class PluginHost {
     this.registerPlugin(plugin)
   }
 
-  /** 移除外部插件（先卸载再摘除登记；内置插件不可移除） */
+  /** 移除外部插件（先卸载再摘除登记） */
   async removeExternal(id: string): Promise<void> {
     const plugin = this.plugins.find((p) => p.manifest.id === id)
-    if (!plugin || plugin.manifest.builtin) return
+    if (!plugin) return
     await this.disable(id).catch(() => undefined)
     this.declarations.delete(id)
     this.plugins = this.plugins.filter((p) => p.manifest.id !== id)
@@ -194,9 +190,9 @@ export class PluginHost {
   /**
    * 彻底移除某个已登记插件（先停用，再从登记表里摘掉）。
    *
-   * 与 `removeExternal` 的区别：**不检查 builtin**。P1 起内置插件也是磁盘包，卸载后
-   * 主进程清单里就没有它了；此时渲染层必须把静态注册表里那一份也摘掉，否则会留下
-   * 「菜单/路由还在、主进程通道已注销」的僵尸插件（点进去只报通道未注册）。
+   * 与 `removeExternal` 的区别：不看启用态、总是从登记表里删掉。主进程清单里已经没有它
+   * （卸载了）或包换了（升级要重新装载）时用这个，否则会留下「菜单/路由还在、主进程通道
+   * 已注销」的僵尸插件（点进去只报通道未注册）。
    * 依赖 `applyEnabled` 的 diff 是做不到的：它只处理清单里出现过的 id。
    */
   async forgetPlugin(id: string): Promise<void> {
@@ -712,7 +708,7 @@ export class PluginHost {
     const m: PluginManifest = plugin.manifest
     return {
       manifest: m,
-      source: m.builtin ? 'builtin' : 'external',
+      source: 'external',
       enabled: this.enabled.has(m.id),
       state: this.states.get(m.id) ?? 'inactive',
       error: this.errors.get(m.id)

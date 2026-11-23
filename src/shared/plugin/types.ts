@@ -9,14 +9,10 @@
  * 注意：本文件不得引入 electron / node / react 依赖，两侧构建都要能直接打包。
  */
 
-/** 插件清单（plugin.json / 内置插件 manifest） */
+/** 插件清单（plugin.json；第三方插件，随应用分发的内置插件机制已删除） */
 export interface PluginManifest {
   /**
-   * 稳定唯一标识。
-   *
-   * - **内置**（随应用分发、默认启用、可由应用包重装）：`notes` | `harness`；
-   * - **外部/第三方**（不随应用分发、默认停用）：`plugin.<作者>.<名字>`（如示例插件 `plugin.demo`），
-   *   或者不带前缀的中性短名（独立插件仓库里的 `task-planner` / `music-player`）。
+   * 稳定唯一标识（`plugin.<作者>.<名字>`，或不带前缀的中性短名）。
    *
    * 命名空间规则：id 去掉开头的 `plugin.` 段即 IPC 命名空间（`plugin:<命名空间>:*`），
    * 因此 `plugin.demo` 与 `demo` 会撞到同一个命名空间，宿主会拒绝第二个（见 `channelNamespace`）。
@@ -27,15 +23,13 @@ export interface PluginManifest {
   /** semver 版本 */
   version: string
   description?: string
-  /** 内置插件用 remixicon 名；外部插件用 plugin://<id>/icon.svg 或 data: URI */
+  /** 插件图标：plugin://<id>/icon.svg 或 data: URI */
   icon?: string
-  /** 是否为随应用打包的内置插件 */
-  builtin: boolean
-  /** 外部插件入口；内置插件省略（走 builtin 注册表显式 import）。外部门槛校验仍强制存在 */
+  /** 入口（必须齐备；构建产物由工坊写入） */
   entry?: {
-    /** 渲染层入口（ESM）：内置插件是 `renderer.mjs`，第三方插件通常是 `renderer.js` */
+    /** 渲染层入口（ESM），通常是 `renderer.mjs` */
     renderer?: string
-    /** 主进程入口（CJS）：内置插件是 `main.cjs`，第三方插件通常是 `main.js` */
+    /** 主进程入口（CJS），通常是 `main.cjs` */
     main?: string
   }
   /** 依赖声明：install 中可访问的上下文键。未声明而访问 → UNDECLARED_ACCESS */
@@ -53,8 +47,8 @@ export interface PluginManifest {
 /** 插件运行时状态（三端统一的描述符） */
 export interface PluginDescriptor {
   manifest: PluginManifest
-  source: 'builtin' | 'external'
-  /** 外部插件目录绝对路径 */
+  source: 'external'
+  /** 插件目录绝对路径 */
   dir?: string
   /** 合并持久化覆写后的最终启用态 */
   enabled: boolean
@@ -65,40 +59,22 @@ export interface PluginDescriptor {
 /** 渲染层 fiber 生命周期状态（论文 Figure 2 的简化两态 + 失败恢复） */
 export type PluginState = 'inactive' | 'reloading' | 'active' | 'unloading' | 'error'
 
-/** 插件管理员/渲染层看到的最小清单数据（主进程加工后广播） */
+/** 插件管理员/渲染层看到的最小清单数据（主进程加工后广播；只含已安装插件） */
 export interface PluginListEntry {
   id: string
   name: string
   version: string
   description?: string
   icon?: string
-  builtin: boolean
-  /**
-   * 是否**随应用分发**（可从应用包随时重装）。
-   *
-   * 与 `builtin` 的区别：`builtin` 是「展示用的来源标签」，`bundled` 是「应用包里有没有
-   * 这个插件的包」这一事实。P1 之后内置插件也会被卸载掉目录，那时它仍然 `bundled: true`
-   * 但 `installed: false`，面板据此给出「安装」按钮。
-   */
-  bundled?: boolean
-  /** userData/plugins/<id>/ 里当前是否有这个插件（false = 只存在于应用包里） */
-  installed: boolean
   enabled: boolean
   state: PluginState
   error?: string
   /**
-   * 应用包里同名内置插件的版本（面板据此决定菜单里给「更新」还是「重新安装」）。
-   *
-   * 只有「随应用分发的 id」才有值；第三方插件没有应用包副本，更新来源是插件中心目录
-   * （面板自己拉 `lattice.list` 比对，不在这里下发，避免列表读取依赖网络）。
-   */
-  bundledVersion?: string
-  /**
    * 磁盘上这份插件包的**内容戳**（入口文件与 `plugin.css` 的 mtime 最大值）。
    *
-   * 为什么不用 `version`：重装/升级本地包时版本号常常不变（面板菜单里的「重新安装」
-   * 就是同一版本重铺），而渲染层必须知道「磁盘上的代码换了，得重新 fetch renderer.mjs
-   * 并重新注入 plugin.css」——否则用户升完级看到的还是旧界面（2026-09-26 实测踩到）。
+   * 为什么不用 `version`：重装/升级本地包时版本号常常不变，而渲染层必须知道「磁盘上的
+   * 代码换了，得重新 fetch renderer.mjs 并重新注入 plugin.css」——否则用户升完级看到的
+   * 还是旧界面（2026-09-26 实测踩到）。
    */
   stamp?: string
   /** 插件入口（渲染层 loader 与主进程装载依据） */

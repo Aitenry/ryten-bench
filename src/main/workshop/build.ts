@@ -16,7 +16,7 @@ import { draftSourceHash } from './fingerprint'
  * 「从插件中心装的插件」走完全相同的装载/卸载/升级链路）：
  *
  * ```
- * dist/<id>/plugin.json     清单（entry 由这里写入，builtin 强制 false）
+ * dist/<id>/plugin.json     清单（entry 由这里写入）
  *           main.cjs        CJS：宿主能力经 globalThis.__RB_HOST_RESOLVE__ 取
  *           renderer.mjs    ESM：宿主能力保留裸说明符/`@host/**`，由宿主 loader 改成桥 URL
  *           chunk-*.mjs     渲染层的懒加载 chunk（说明符已绝对化成 plugin://<id>/…）
@@ -184,7 +184,7 @@ function formatEsbuildErrors(
 /**
  * 把多文件渲染产物里的**相对说明符**绝对化成 `plugin://<id>/<文件>`，返回改写处数。
  *
- * 与 `scripts/build-plugins.mjs` 的同名函数同源（P3 实测的坑）：blob 模块没有相对基准。
+ * 与工坊的产物改写规则同源（P3 实测的坑）：blob 模块没有相对基准。
  * 只改写**确实指向本次产物文件**的相对说明符（按目标文件名比对），避免误伤字符串字面量。
  */
 export function absolutizeChunkSpecifiers(id: string, outDir: string): number {
@@ -462,10 +462,9 @@ export async function buildDraft(
     missing: missingClasses(finalCss, scanned.strict)
   }
 
-  // ── ④ 清单（entry 由构建写入；builtin 强制 false——工坊做的都是第三方插件）──
+  // ── ④ 清单（entry 由构建写入）──
   const nextManifest: Record<string, unknown> = {
     ...raw,
-    builtin: false,
     entry: { renderer: 'renderer.mjs', main: 'main.cjs' }
   }
   writeJson(path.join(outDir, 'plugin.json'), nextManifest)

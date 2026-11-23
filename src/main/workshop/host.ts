@@ -35,8 +35,6 @@ export interface WorkshopHost {
   hostMainKeys: () => string[]
   /** 宿主渲染层 UI 表的键；`null` = 渲染层还没上报（此时只跳过对应检查） */
   hostUiKeys: () => string[] | null
-  /** 是否内置插件 id（内置插件不能被工坊覆盖安装） */
-  isBundledPlugin: (id: string) => boolean
   /** 是否已安装（`userData/plugins/<id>` 存在） */
   isInstalled: (id: string) => boolean
   /** 是否已启用（含「装了但停用」） */

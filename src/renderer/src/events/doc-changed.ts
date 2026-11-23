@@ -2,7 +2,7 @@
  * 「文档被 AI 工具改写」通知的插件内中转。
  *
  * 事件源是 harness 插件：它把主进程的 `harness:harness-doc-changed` 桥接成**宿主事件
- * 总线**上的语义事件 `doc:changed`（见 `src/plugins/harness/renderer/plugin.tsx`）。
+ * 总线**上的语义事件 `doc:changed`（见 `src/renderer/src/events/` 的订阅方）。
  * 本插件的 `plugin.tsx` 在 install 里订阅该事件并转投到这个模块级订阅表，组件
  * （DocEditorPane）只订阅本模块——它不认识 harness 的通道名，也不 import harness 的任何东西。
  *

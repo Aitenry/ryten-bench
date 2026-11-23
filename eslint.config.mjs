@@ -10,7 +10,18 @@ export default defineConfig(
   // 里面的 node 脚本不是项目源码，纳入 lint 只会持续报无关错误。
   // `data/` 是应用运行期按安装目录创建的存储根（记忆 / 插件源码 / 技能），不是项目源码：
   // 插件源码和技能文档会被 prettier/eslint 当成项目文件反复报错，必须排除。
-  { ignores: ['**/node_modules', '**/dist', '**/out', '**/.dsh-vision-toolkit', 'data/**'] },
+  // `src/main/workshop/template-files/**` 是草稿模板的**文本资产**（保留 .ts/.tsx/.mjs/.md 扩展名），
+  // 里面带 `${vars.*}` 占位符，不是可解析的项目源码：纳入 lint / tsc 只会报语法错误。
+  {
+    ignores: [
+      '**/node_modules',
+      '**/dist',
+      '**/out',
+      '**/.dsh-vision-toolkit',
+      'data/**',
+      'src/main/workshop/template-files/**'
+    ]
+  },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

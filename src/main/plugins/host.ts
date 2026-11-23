@@ -4,10 +4,8 @@ import * as path from 'path'
 import logger from 'electron-log'
 import { getEnabledOverride } from './store'
 import { findExternalPlugin, scanExternalPlugins } from './scanner'
-import { ensureBundledPluginsInstalled } from './installer'
 import { installHostRuntime } from './runtime'
 import { registerCoreIpc } from '../ipc'
-import { BUILTIN_PLUGIN_MANIFESTS } from '../../plugins/manifests'
 import { startSystemModules, SYSTEM_MODULE_IDS_SET } from '../system'
 import { MainPluginContextImpl } from './context'
 import { installPluginProcessGuard, withPluginScope } from './plugin-guard'
@@ -16,22 +14,37 @@ import { IPC_PLUGIN_CHANNELS_SYNC, IPC_PLUGIN_CHANNELS_UPDATED } from '../../sha
 /**
  * 主进程插件宿主。
  *
- * 只有**一条**装载路径（内置与第三方完全相同）：`userData/plugins/<id>/main.cjs`
- * 导出 `install(ctx)`（CJS）或让模块自身即 install 函数；通道经
+ * 应用**不分发**任何插件（没有「内置插件」这种形态）：插件只有一条来源——用户从插件中心
+ * 或本地压缩包/目录装进 `userData/plugins/<id>/` 的磁盘包。装载路径也只有一条：
+ * `main.cjs` 导出 `install(ctx)`（CJS）或让模块自身即 install 函数；通道经
  * `ctx.registerIpc({ 'plugin:<ns>:...': handler })` 注册，停用时 `ctx.dispose()`
  * 一次性回滚（效果 LIFO + 通道摘除 + 贡献摘除）。
  *
- * core 的角色到此为止：注册自己的 IPC（`registerCoreIpc`）、把应用包里的插件铺到 userData、
- * 按持久化启用态装载/卸载插件、把通道清单推给 preload 白名单。core 不认识任何插件模块，
- * 也不认识任何插件通道名。
+ * core 的角色到此为止：注册自己的 IPC（`registerCoreIpc`）、按持久化启用态装载/卸载插件、
+ * 把通道清单推给 preload 白名单。core 不认识任何插件模块，也不认识任何插件通道名。
  *
- * 历史（P1~P4 的过渡形态）已删：应用内的静态插件注册表（`./builtin.ts`）、
- * 「已就绪白名单」（`./packaged.ts`）与 `stateSyncHook` 都没了——四个内置插件现在
- * 与第三方插件走完全相同的磁盘包链路（见 src/plugins/PACKAGING.md）。
+ * 「内置插件」机制（应用包铺包 / 指纹自更新 / 静态注册表回退）已整体删除：应用包里不带
+ * 插件代码，`resources/plugins` 与 `build:plugins` 也不再存在。
  */
 
-/** 已装载的插件主模块（键 = id，内置与第三方不分家） */
-const externalMains = new Map<string, { ctx: MainPluginContextImpl; teardown: () => void }>()
+/** 一条已装载的插件主模块（键 = 插件 id） */
+interface LoadedExternalMain {
+  ctx: MainPluginContextImpl
+  teardown: () => void
+  /** 装载时的插件包目录（卸载时即使在扫描结果里找不到它，也照这个目录摘模块缓存） */
+  dir: string
+  /**
+   * 装载时主入口的**内容戳**（mtime + 字节数）。
+   *
+   * 用途：磁盘上的包被原地覆盖（插件中心升级 / 本地重装 / 工坊发布）后，
+   * `loadExternalMain()` 又被调用时据此判定「装载的还是旧代码，得重载」。
+   * **不能只看版本号**：重装与同版本重发时版本号不变，而那正是升级最常见的形态。
+   */
+  stamp: string
+}
+
+/** 已装载的插件主模块（键 = 插件 id） */
+const externalMains = new Map<string, LoadedExternalMain>()
 
 /** install 返回的 dispose 先跑，再回滚 ctx.effect 登记的效果、通道与贡献 */
 function runTeardown(id: string, dispose: void | (() => void), ctx: MainPluginContextImpl): void {
@@ -57,14 +70,10 @@ export function initPluginHost(): void {
   // 顺序不可换：
   // ① 宿主运行时表（`globalThis.__RB_HOST_RESOLVE__`）必须在**任何插件 main.cjs 被 require
   //    之前**挂上——插件包里的 `require('@host/main/x')` 会立刻调它；
-  // ② 首次安装把应用包里的插件铺到 userData/plugins/（dev 下会先按需补打产物），
-  //    之后的扫描/装载就只剩「磁盘包」一条路径；
+  // ② 进程保护必须早于任何插件 main.cjs 被 require（见 plugin-guard.ts）；
   // ③ core 自己的 IPC 与 preload 的通道同步入口（都必须在窗口创建之前）。
   installHostRuntime()
-  // 进程保护必须早于任何插件 main.cjs 被 require：插件装载期的一行 process.exit
-  // 就能让应用在启动途中消失（见 plugin-guard.ts）。
   installPluginProcessGuard()
-  ensureBundledPluginsInstalled()
   registerCoreIpc()
   // 系统级功能（AI 助手 / 资料库）是 core 的一部分：直接启动，不经过插件宿主。
   // 必须在 preload 通道同步之前完成，否则渲染层首批订阅会撞上「主进程还没挂通道」。
@@ -111,14 +120,68 @@ function registerPluginChannelsSync(): void {
 
 // ---------- 外部插件主进程模块 ----------
 
-/** 装载外部插件主进程模块（require CJS，导出的 install 或 { install }） */
+/**
+ * 摘掉某插件目录下所有模块的 `require` 缓存。
+ *
+ * 为什么必须有：插件主模块是 `require('<插件目录>/main.cjs')` 装进来的，Node 按**绝对
+ * 路径**缓存模块。升级时磁盘上的 `main.cjs` 被覆盖，缓存里却还是旧模块——再次 require
+ * 直接拿回旧对象，于是新渲染层调新通道时主进程只有旧的那批 handler，报
+ * `No handler registered for 'plugin:<id>:…'`，插件界面只能提示
+ * 「插件刚刚更新，但应用主进程还在跑旧版本，请完全退出并重新打开应用」
+ * （2026-11-23 用户反馈：全球时区加「手动排序」后点上移/下移就撞上这条，必须重启应用）。
+ *
+ * 只删**插件目录内**的条目：`@host/main/**` 是宿主自己的单例，裸模块（electron / zod…）
+ * 也按应用根解析，都不在这个前缀里，因此不会被误伤——「插件主进程与宿主共用同一份 core」
+ * 这条语义必须保住。
+ */
+function purgePluginModuleCache(dir: string): void {
+  const root = path.resolve(dir)
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep
+  for (const key of Object.keys(require.cache)) {
+    const resolved = path.resolve(key)
+    if (resolved === root || resolved.startsWith(prefix)) delete require.cache[key]
+  }
+}
+
+/** 插件主入口的「内容戳」（mtime + 字节数）；入口不在时给 `missing` */
+function mainEntryStamp(abs: string): string {
+  try {
+    const stat = fs.statSync(abs)
+    return `${Math.round(stat.mtimeMs)}:${stat.size}`
+  } catch {
+    return 'missing'
+  }
+}
+
+/**
+ * 装载/重载外部插件主进程模块（require CJS，导出的 install 或 `{ install }`）。
+ *
+ * **幂等且认磁盘**：已装载且主入口内容戳没变 → 直接返回；已装载但内容戳变了
+ * （升级 / 重装 / 工坊发布刚覆盖了 `userData/plugins/<id>/`）→ 先走完整 teardown
+ * （注销通道、回滚 effects、摘贡献）再按磁盘上的新文件重装。这样「更新插件」不需要用户
+ * 完全退出应用：渲染层换新 `renderer.mjs` 的同时，主进程也换成了新的 `main.cjs`。
+ */
 export function loadExternalMain(id: string): void {
-  if (externalMains.has(id)) return
   const scanned = findExternalPlugin(id)
   if (!scanned) throw new Error(`外部插件 '${id}' 未找到`)
   const entryRel = scanned.manifest.entry?.main ?? 'main.js'
   const abs = path.join(scanned.dir, entryRel)
-  if (!fs.existsSync(abs)) return // 允许纯渲染层插件（无主进程代码）
+  if (!fs.existsSync(abs)) {
+    // 允许纯渲染层插件（无主进程代码）；若之前有主模块而新包把入口删了，旧模块要摘掉
+    if (externalMains.has(id)) unloadExternalMain(id)
+    return
+  }
+
+  const stamp = mainEntryStamp(abs)
+  const loaded = externalMains.get(id)
+  if (loaded) {
+    if (loaded.stamp === stamp) return // 已装载且代码没变：真幂等（重复 enable 不重建状态）
+    logger.info(`[Plugins] Package on disk changed, reloading main module: ${id}`)
+    unloadExternalMain(id)
+  }
+
+  // 缓存里可能留着上一次装载的模块（停用 → 覆盖包 → 启用）：先摘掉，require 才会读新文件
+  purgePluginModuleCache(scanned.dir)
 
   // 动态 require 外部文件（out/main 为 CJS 产物）
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -142,14 +205,41 @@ export function loadExternalMain(id: string): void {
     throw err
   }
 
-  externalMains.set(id, { ctx, teardown: () => runTeardown(id, dispose, ctx) })
+  externalMains.set(id, {
+    ctx,
+    teardown: () => runTeardown(id, dispose, ctx),
+    dir: scanned.dir,
+    stamp
+  })
   logger.info(`[Plugins] Loaded external plugin main module: ${id} (${ctx.channels.length} channels)`)
   pushPluginChannels()
+}
+
+/**
+ * **强制重载**某插件的主模块（磁盘上的包刚被覆盖时调用）。
+ *
+ * 与 `loadExternalMain` 的区别：不看内容戳，一定 teardown → 重新 require。
+ * 升级路径（安装内核刚把新文件拷进 `userData/plugins/<id>/`）用它，是为了不赌 mtime 精度：
+ * 同一次安装里「删旧文件 + 写新文件」可能落在同一毫秒，内容却已经换了。
+ */
+export function reloadExternalMain(id: string): void {
+  if (externalMains.has(id)) {
+    // 留一行可核对的日志：升级后「主进程真的换了模块」只能从这里/装载日志看出来，
+    // 否则现场排查又会退化成「到底重启没重启」的口水战。
+    logger.info(`[Plugins] Reloading external plugin main module (package replaced on disk): ${id}`)
+    unloadExternalMain(id)
+  }
+  loadExternalMain(id)
 }
 
 /** 卸载外部插件主进程模块（注销 IPC + 通道清单推送刷新） */
 export function unloadExternalMain(id: string): void {
   const record = externalMains.get(id)
+  // 停用期间包也可能被更新（面板「重新安装」/ 插件中心升级）：模块缓存一起摘掉，
+  // 否则「停用 → 升级 → 启用」拿到的还是旧模块（同一条「主进程跑旧代码」的另一半）。
+  // 用装载时记下的目录兜底：卸载流程里目录随后就被删了，那时 `findExternalPlugin` 已经找不到它。
+  const dir = record?.dir ?? findExternalPlugin(id)?.dir
+  if (dir) purgePluginModuleCache(dir)
   if (!record) return
   record.teardown()
   externalMains.delete(id)
@@ -171,36 +261,23 @@ function initExternalMains(): void {
   }
 }
 
-/** 内置插件 id 集合（不 import 插件实现，只借 manifests 的 id 面） */
-const BUILTIN_MAIN_IDS: Record<string, true> = Object.fromEntries(
-  BUILTIN_PLUGIN_MANIFESTS.map((m) => [m.id, true as const])
-)
-
 /**
- * 已安装 plugin id 的**默认启用态**。
+ * 已安装插件的最终启用态：**显式覆写优先，未覆写即停用**。
  *
- * 内置插件铺包后就走磁盘包这条装载路径，但它们的语义仍是「内置：默认启用」——
- * 若这里按外部插件的默认值（停用）算，首次安装后音乐播放器在重启时就再也不装载了。
- * 第三方插件保持默认停用（用户装完要自己打开）。
+ * 应用不分发插件（没有任何内置插件），所以「没被用户显式启用过的插件」一律不装载——
+ * 默认停用也是安全默认值：装进来不等于让它开始跑代码。
  */
-export function isBundledPluginId(id: string): boolean {
-  return Object.prototype.hasOwnProperty.call(BUILTIN_MAIN_IDS, id)
-}
-
-/** 已安装插件的最终启用态（显式覆写优先，否则内置默认启用 / 第三方默认停用） */
 export function isEnabledPlugin(id: string): boolean {
-  const override = getEnabledOverride(id)
-  if (override !== undefined) return override
-  return isBundledPluginId(id)
+  return getEnabledOverride(id) ?? false
 }
 
 // ---------- 只读诊断（工装/面板核对「插件到底从哪来」） ----------
 
 /** 某插件主模块的装载来源 */
 export interface PluginLoadInfo {
-  /** userData/plugins/<id>/ 下是否有插件包（内置铺包或第三方） */
+  /** userData/plugins/<id>/ 下是否有插件包 */
   installed: boolean
-  /** package = 由磁盘包提供；absent = 已铺包但当前未装载（停用） */
+  /** package = 由磁盘包提供；absent = 已安装但当前未装载（停用） */
   source: 'package' | 'absent'
   /** 磁盘包主入口绝对路径（installed 时才有；工装用它证明是包在应答） */
   file?: string
@@ -210,8 +287,7 @@ export interface PluginLoadInfo {
  * 各插件主模块的装载来源。
  *
  * 为什么需要它：工装要能断言「<id> 的 handler 确实由 userData/plugins/<id>/main.cjs 提供」，
- * 也能断言「卸载后目录没了、包来源消失」。P1~P4 期间 `source` 还可能是 `'builtin'`
- * （静态注册表回退），P5 删掉静态注册表后只剩这两态。
+ * 也能断言「卸载后目录没了、包来源消失」。
  */
 export function pluginLoadInfo(): Record<string, PluginLoadInfo> {
   const out: Record<string, PluginLoadInfo> = {}

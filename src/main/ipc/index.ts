@@ -14,7 +14,7 @@ import { registerLatticeIpc } from './lattice'
  * - 系统功能（AI 助手 `harness:*` / 资料库 `notes:*`）的通道在 `src/main/ipc/harness/**`、
  *   `src/main/ipc/notes/**`，由 `src/main/system/` 在启动时注册——它们是 core 的一部分，
  *   不是插件；
- * - 第三方插件的通道走 `src/plugins/<id>/main/index.ts` 的 `install(ctx)` +
+ * - 第三方插件的通道走插件自己的 `main/index.ts` 的 `install(ctx)` +
  *   `ctx.registerIpc`，由插件宿主按启用态注册与摘除。
  *
  * 归属变更记录：

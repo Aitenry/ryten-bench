@@ -97,23 +97,16 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
         const list = await window.api.plugin.list()
         if (disposed) return
 
-        // 1) 处置：① 主进程清单里已不在（第三方被卸载 / 目录被删）或已不是「已安装」状态
-        //    （内置插件物理卸载）→ forgetPlugin；② **只是被停用** → disable（保留登记）。
+        // 1) 处置：① 主进程清单里已不在（卸载 / 目录被删）→ forgetPlugin；
+        //    ② **只是被停用** → disable（保留登记，重启用走宿主的 enable() 重新 install）。
         //
-        //    ①为什么不能用 host.removeExternal：它对 builtin 插件直接 return，而被卸载的
-        //    内置插件（例如 music）仍带着 builtin=true 留在静态注册表里，不移除就会留下
-        //    一个「菜单/路由还在、主进程通道已没了」的僵尸插件。
-        //
-        //    ②为什么不能也用 forgetPlugin（2026-09-26 实测）：停用**静态回退**的内置插件
-        //    （P4 之后只剩「dev 没跑打包脚本」这一种情况）一旦把登记摘掉，重新启用时第 2 步
-        //    会去 `plugin://<id>/renderer.js` 取渲染模块——那个文件根本不存在，于是插件永远回不来
-        //    （现象：工装「重新启用 notes」等到超时，菜单不再出现）。停用是可逆的，登记必须留着，
-        //    重启用走宿主的 enable() 重新 install。
+        //    ①为什么必须用 forgetPlugin：把登记摘掉，第 2 步才会用**磁盘上的新包**重新
+        //    fetch + install；光靠 applyEnabled 的 diff 做不到（它只处理清单里出现过的 id）。
         const liveIds = new Set(list.map((e) => e.id))
         for (const descriptor of host.getDescriptors()) {
           const id = descriptor.manifest.id
           const entry = list.find((e) => e.id === id)
-          if (!liveIds.has(id) || !entry || entry.installed === false) {
+          if (!liveIds.has(id) || !entry) {
             await host
               .forgetPlugin(id)
               .catch((err) => console.error(`[plugins] Failed to remove plugin: ${id}`, err))
@@ -142,9 +135,7 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
         }
 
         // 2) 加载：清单里启用但尚未登记的插件渲染模块。
-        //    注意条件里没有 `e.builtin` ——P1 起内置插件也是磁盘包（`plugin://<id>/renderer.mjs`
-        //    + 宿主 UI 桥），与第三方插件走完全相同的加载路径；尚未搬走、仍靠静态回退的插件
-        //    已经在静态注册表里登记过，会因 `getDescriptor` 命中而被跳过。
+        //    磁盘包插件的渲染入口一律是 `plugin://<id>/renderer.mjs`（+ 宿主 UI 桥）。
         for (const e of list) {
           if (!e.enabled) continue
           if (host.getDescriptor(e.id)) continue
@@ -155,7 +146,6 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
               version: e.version,
               description: e.description,
               icon: e.icon,
-              builtin: Boolean(e.builtin),
               entry: e.entry
             })
             if (!disposed) host.addExternal(plugin)
@@ -187,14 +177,11 @@ const PluginStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }
 
 const App: React.FC = () => {
   /**
-   * 首帧权威清单：P5 起应用里没有静态插件，四个内置插件与第三方插件一样要等渲染模块
-   * 从 `plugin://<id>/renderer.mjs` 加载完才真实注册。因此必须在**构造宿主的同一时机**
-   * 拿到主进程的权威启用态与元数据：
-   * - 启用态：只声明/装载用户启用的插件，避免「先按默认值全装一遍再异步卸载」——
-   *   那样被停用插件的 Provider 会短暂挂载并订阅事件通道，而主进程并没有它的通道
-   *   （2026-09-26 事故：整页 RUNTIME ERROR / 插件通道未启用: plugin:music:play-track）。
+   * 首帧权威清单：应用里没有静态插件，插件都要等渲染模块从 `plugin://<id>/renderer.mjs`
+   * 加载完才真实注册。因此必须在**构造宿主的同一时机**拿到主进程的清单：
    * - 元数据（`routes`/`menu`）：宿主据此**首帧声明式预注册**菜单与路由，否则首帧侧栏
-   *   空着、点菜单还会导航到空路由（见 plugin-host/host.ts 的 declare()）。
+   *   空着、点菜单还会导航到空路由（见 plugin-host/host.ts 的 declare()）；
+   * - 启用态由 `PluginStateBridge` 在渲染模块加载完成后统一应用。
    * 取不到时返回 null，各消费点退回「无声明、无初始插件」（随后仍由异步清单装载）。
    */
   const syncEntries = useMemo<PluginListEntry[] | null>(() => {
@@ -207,23 +194,12 @@ const App: React.FC = () => {
     }
   }, [])
 
-  const initialEnabled = useMemo<Record<string, boolean> | undefined>(() => {
-    if (!syncEntries || syncEntries.length === 0) return undefined
-    const map: Record<string, boolean> = {}
-    for (const entry of syncEntries) {
-      if (entry.builtin) map[entry.id] = entry.enabled
-    }
-    return Object.keys(map).length > 0 ? map : undefined
-  }, [syncEntries])
-
   /**
-   * 交给宿主的**初始**插件集合：P5 起是空数组。
+   * 交给宿主的**初始**插件集合：恒为空数组。
    *
-   * 以前这里是应用内静态 import 的四个内置插件（`@plugins/<id>/renderer/plugin`），
-   * 磁盘包那条链路只负责「排除已被包接管的」。现在应用里没有任何插件代码的静态 import，
-   * 四个内置插件与第三方插件一样，全部由下面的 PluginStateBridge 从
+   * 应用里没有任何插件代码的静态 import：全部由下面的 PluginStateBridge 从
    * `plugin://<id>/renderer.mjs` 加载；首帧的菜单/路由由清单元数据的**声明式预注册**撑住
-   * （见 plugin-host/host.ts 的 declare 与 App 下面第一段 useMemo）。
+   * （见 plugin-host/host.ts 的 declare 与上面的 syncEntries）。
    */
   const initialPlugins = useMemo<Plugin[]>(() => [], [])
 
@@ -242,7 +218,6 @@ const App: React.FC = () => {
             plugins={initialPlugins}
             entries={syncEntries ?? undefined}
             vendorModules={vendorModules}
-            enabledOverride={initialEnabled}
           >
             <PluginStateBridge>
               <CoreProviders>

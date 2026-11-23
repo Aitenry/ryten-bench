@@ -79,7 +79,7 @@ export interface SandboxStatusView {
  * 白名单；插件停用时订阅调用**不再抛错**（preload 只告警），但没有发送方 ⇒ 事件不会来——
  * 调用方仍要按「可能永远收不到事件」写（历史教训：异常从 useEffect 逃逸会卸载整棵渲染树，白屏）。
  *
- * 契约见 src/plugins/README.md；类型取自 shared/types.ts（跨进程 DTO，运行期零依赖）。
+ * 契约见 src/main/plugins/context.ts；类型取自 shared/types.ts（跨进程 DTO，运行期零依赖）。
  */
 const invoke = window.api.system.invoke
 

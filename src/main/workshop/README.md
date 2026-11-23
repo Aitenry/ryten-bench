@@ -255,13 +255,34 @@ props），只能靠这个单例对齐。两个读取方都按它调记忆通道
 | 文件                            | 作用                                                         |
 | ------------------------------- | ------------------------------------------------------------ |
 | `plugin.json`                   | 清单（entry 由构建写入，助手不手写）                         |
-| `WORKSHOP.md`                   | 契约单（生成时注入**运行期**的宿主模块白名单）               |
+| `WORKSHOP.md`                   | 契约单（生成时注入**运行期**的宿主模块白名单；第 5 节写明 `install` 会被重跑、升级热生效，第 9 节写明发布即换新代码） |
 | `main/index.ts`                 | 主进程入口（可缺省，产物仍会有一个空 main.cjs）              |
 | `renderer/plugin.tsx`           | 渲染层入口（必需）                                           |
 | `renderer/*.tsx`                | 页面/组件（被 `load()` 引用的会拆成懒加载 chunk）            |
 | `plugin.css`                    | 可选：手写样式（`workshop.json` 的 `css='file'` 时原样进包） |
 | `workshop.smoke.mjs`            | 可选：通道级冒烟用例                                         |
 | `plugin.json` / `workshop.json` | 清单与工坊元数据（模板/时间戳/css 模式）                     |
+
+生成这些文件的**模板正文不在 `templates.ts` 里**：
+
+```
+src/main/workshop/template-files/   按草稿真实布局、保留原扩展名（不改写成 ts 字符串）
+  _shared/WORKSHOP.md               契约单（五个模板共用；「模板 / 已注册」两行 + 宿主模块白名单随模板/运行期变）
+  _shared/main/context.ts           两个宿主上下文的最小类型声明
+  _shared/renderer/context.ts
+  full/ page/ panel/ tool/ minimal/ 各模板自己的文件（路径就是草稿里的路径）
+```
+
+- `template-files.ts` 用 `import.meta.glob('./template-files/**/*', { query: '?raw', eager: true })`
+  **统一按路径匹配**，并在构建期把文本内联进主进程产物（打包后的应用不依赖磁盘上的 src）；
+  `_shared` 先、模板目录后（同名文件由模板覆盖共享）；
+- 正文里的占位符只有一种：`${vars.<name>}`（id / title / titleJson / pascal / sqlName / toolName /
+  menuIcon / templateLabel / mainKeys …），由 `templates.ts` 的 `renderTemplate()` 提供取值；
+  生成代码自带的 `${...}` 与 i18n 的 `{{...}}` 原样保留；缺值直接抛错，不会产出半成品草稿；
+- 这些文件**带占位符、不是可解析源码**，已在 `tsconfig.node.json`（typecheck）、
+  `eslint.config.mjs`（lint）与 `.prettierignore` 里排除；
+- `plugin.json` 仍是**数据**，由 `templates.ts` 的 `manifestFile()` 生成（各模板的
+  inject / routes / menu 不同）。
 
 ## 工作流（助手侧）
 
@@ -328,17 +349,17 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 | **外观** | 设置页模板只保留字段行（标题 + 开关 + 输入 + 保存），不再写「这一页由插件自己注册…」这类解释性段落；菜单图标按 id 散列挑（不再所有草稿都是笔记的图标） |
 
 宿主侧的隔离（每个挂载点的错误边界、路由/菜单/设置页占位冲突、`plugin.css` 全局规则过滤、
-主进程 `process.exit` 拦截、`safety.scan`）见 `src/plugins/README.md` 的「隔离与边界」一节；
+主进程 `process.exit` 拦截、`safety.scan`）见 `src/main/plugins/plugin-guard.ts` 与各挂载点源码；
 回归是 `node --experimental-strip-types test/verify-plugin-isolation.mjs`。
 
 ## 验收电池（`verify.ts`）
 
 | id               | 检查                                                             | 致命 | 说明                                                                        |
 | ---------------- | ---------------------------------------------------------------- | ---- | --------------------------------------------------------------------------- |
-| `pkg.manifest`   | 清单字段齐备、id 与目录一致、`builtin=false`                     | ✅   | 语义错误给「改哪个字段」级别的提示                                          |
+| `pkg.manifest`   | 清单字段齐备、id 与目录一致                                      | ✅   | 语义错误给「改哪个字段」级别的提示                                          |
 | `pkg.build`      | 构建产物（esbuild 诊断）                                         | ✅   | 第三方依赖错误直接列出宿主可用的 vendor                                     |
 | `pkg.entries`    | `plugin.json` / `main.cjs` / `renderer.mjs` 存在且非空           | ✅   |                                                                             |
-| `pkg.identity`   | 不是保留 id / 内置 id / 别人占用的命名空间                       | ✅   | 命名空间撞车按 `plugin.<ns>` 与 `<ns>` 同源判定                             |
+| `pkg.identity`   | 不是保留 id / 别人占用的命名空间                                 | ✅   | 命名空间撞车按 `plugin.<ns>` 与 `<ns>` 同源判定                             |
 | `pkg.host-main`  | 主进程引的 `@host/**` 都在运行时表里、裸依赖能解析               | ✅   | 与 `test/audit-plugin-host-contract.mjs` 同源口径                           |
 | `pkg.host-ui`    | 渲染层引的宿主键都在宿主 UI 表里，且产物里没有残留裸说明符       | ✅   |                                                                             |
 | `pkg.chunks`     | 产物里没有相对说明符（blob import 会取不到）                     | ✅   |                                                                             |
@@ -436,7 +457,7 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 
 ## 回归
 
-> `test/verify-plugin-workshop.mjs`（280 条）是 `src/plugins/harness` 拍平进 `src/main` 之前的
+> `test/verify-plugin-workshop.mjs`（280 条）是 harness 拍平进 `src/main` 之前的
 > 工装：它 import 的是旧目录树，拍平后已不可运行，保留在原处只作历史参考。当前工坊回归是下面
 > 两条离线工装 + 真机探针。
 

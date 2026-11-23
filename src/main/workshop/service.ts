@@ -166,9 +166,6 @@ export function createDraftFromTemplate(opts: CreateDraftOptions): ReturnType<ty
       '还没有配置「插件存放路径」：先在 设置 → 助手 → 插件工坊 里选一个文件夹（所有插件都放在它下面）'
     )
   }
-  if (host?.isBundledPlugin(opts.id)) {
-    throw new Error(`'${opts.id}' 是随应用分发的内置插件 id，换一个名字（例如 'my-${opts.id}'）`)
-  }
   return createDraft({
     ...opts,
     hostMainKeys: host?.hostMainKeys() ?? [],

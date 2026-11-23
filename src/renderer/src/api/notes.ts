@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   DirectoryDocRef,
   DocListItem,
   DocRow,
@@ -28,7 +28,7 @@
  * 在不同域之间重名），实现改为走 preload 唯一暴露的通用桥
  * （`window.api.system.invoke/on`，通道名 `notes:*`）。
  *
- * 契约见 src/plugins/README.md；类型取自 shared/types.ts（跨进程 DTO，运行期零依赖）。
+ * 契约见 src/main/plugins/context.ts；类型取自 shared/types.ts（跨进程 DTO，运行期零依赖）。
  */
 const invoke = window.api.system.invoke
 

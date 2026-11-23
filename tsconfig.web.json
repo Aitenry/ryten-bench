@@ -6,7 +6,6 @@
     "src/renderer/src/**/*.tsx",
     "src/renderer/src/types/**/*",
     "src/main/types/**/*",
-    "src/plugins/**/*",
     "src/shared/**/*",
     "src/preload/*.d.ts"
   ],
@@ -22,9 +21,6 @@
     "paths": {
       "@renderer/*": [
         "src/renderer/src/*"
-      ],
-      "@plugins/*": [
-        "src/plugins/*"
       ],
       "@shared/*": [
         "src/shared/*"

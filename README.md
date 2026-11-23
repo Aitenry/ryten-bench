@@ -291,8 +291,9 @@ explicitly purged.
 
 ### Plugin package layout
 
-Third-party plugins use the shape below; the host-side loader, installer and bundler in this
-repository (`src/main/plugins/`, `scripts/build-plugins.mjs`) work with any directory following it:
+Third-party plugins use the shape below; the host-side loader and installer in this repository
+(`src/main/plugins/`) and the in-app workshop (`src/main/workshop/`) work with any directory
+following it:
 
 ```
 <id>/
@@ -327,11 +328,11 @@ Source layout before bundling, as used by the companion repositories:
   locales/index.ts       zh-CN / en-US copy, registered with the plugin
 ```
 
-`pnpm build:plugins` bundles each configured plugin into a loadable disk package —
-`resources/plugins/<id>/{plugin.json,main.cjs,renderer.mjs,chunk-*.mjs}` — which is what ships as an
-`extraResources` entry and what the host actually loads. The id list lives in
-`scripts/build-plugins.mjs`; this application currently ships no bundled plugins, so the list is
-empty.
+Plugins are built **in the app** (workshop: `plugin_build` / `plugin_publish`) or with the plugin
+repository's own build script; either way the result is a disk package
+(`plugin.json` / `main.cjs` / `renderer.mjs` / `chunk-*.mjs` / optional `plugin.css`) that is
+installed into `userData/plugins/<id>/`. The application ships **no** bundled plugins: there is no
+`resources/plugins` in the installer and no `build:plugins` step.
 
 ### AI runtime (`src/main/ai/`)
 
@@ -401,9 +402,9 @@ Channel naming is namespaced as `plugin:<id>:<channel>`; the host validates owne
 duplicates, and pushes the authoritative channel list to the preload whitelist whenever plugins
 are loaded or unloaded.
 
-More detail lives in [`src/plugins/README.md`](src/plugins/README.md),
-[`src/plugins/PACKAGING.md`](src/plugins/PACKAGING.md) and
-[`src/plugins/MIGRATION.md`](src/plugins/MIGRATION.md).
+More detail lives in [`src/main/plugins/`](src/main/plugins/) (host, context, runtime table) and
+[`src/main/workshop/README.md`](src/main/workshop/README.md) (draft → build → verify → publish, and
+the `WORKSHOP.md` contract generated for every draft).
 
 ---
 
@@ -502,13 +503,12 @@ an `https://` node outside local development.
 | -------------------- | ------------------------------------------------------------------------------------ |
 | `pnpm dev`           | Build the sandbox assets, then start the app with hot reload                         |
 | `pnpm build:sandbox` | Build the sandbox assets into `resources/sandbox/`                                   |
-| `pnpm build:plugins` | Bundle every plugin listed in `scripts/build-plugins.mjs` into `resources/plugins/`  |
 | `pnpm build`         | Type-check and build the main, preload and renderer bundles                          |
 | `pnpm typecheck`     | `tsc --noEmit` for the node and web projects                                         |
 | `pnpm lint`          | ESLint over the repository (it also walks build output, so it is slow)               |
-| `pnpm build:win`     | Sandbox assets + plugin packages + app bundles + Windows NSIS installer              |
-| `pnpm build:mac`     | Sandbox assets + plugin packages + app bundles + macOS DMG and ZIP (not notarized)   |
-| `pnpm build:linux`   | Sandbox assets + plugin packages + app bundles + Linux AppImage and DEB              |
+| `pnpm build:win`     | Sandbox assets + app bundles + Windows NSIS installer                                |
+| `pnpm build:mac`     | Sandbox assets + app bundles + macOS DMG and ZIP (not notarized)                     |
+| `pnpm build:linux`   | Sandbox assets + app bundles + Linux AppImage and DEB                                |
 | `pnpm build:unpack`  | Unpacked directory build, useful for quick smoke tests                               |
 
 A faster local lint that skips `dist/` and `node_modules/`:
@@ -517,13 +517,12 @@ A faster local lint that skips `dist/` and `node_modules/`:
 npx eslint --cache src examples electron.vite.config.ts
 ```
 
-> Plugin packages and sandbox assets are generated artifacts: `resources/plugins/` and
-> `resources/sandbox/` are not committed, and packaging scripts run `build:plugins` and
-> `build:sandbox` first. This app currently bundles no plugins, so the list in
-> `scripts/build-plugins.mjs` is empty; a plugin added to that list is built from
-> `src/plugins/<id>/` and shipped as an `extraResources` entry. The sandbox sources live in
-> `native/`, and CI runs its `--selfcheck` against the packaged app, so a build only ships when the
-> sandbox inside the installer really enforces the write boundary.
+> Sandbox assets are generated artifacts: `resources/sandbox/` is not committed, and packaging
+> scripts run `build:sandbox` first. Sandbox sources live in `native/`, and CI runs its
+> `--selfcheck` against the packaged app, so a build only ships when the sandbox inside the
+> installer really enforces the write boundary. Plugins are **not** bundled with the app: they are
+> installed at runtime from the plugin hub or from a local package (see
+> [`src/main/workshop/README.md`](src/main/workshop/README.md)).
 
 ## Releases
 
@@ -605,17 +604,13 @@ RytenBench/
 │   │       ├── route/  types/  workshop/  # route table; workshop/ = renderer side of the plugin workshop
 │   │       └── Root.tsx  App.tsx  main.tsx  window-title.ts
 │   ├── shared/                       # Cross-process DTOs (plugin/, harness/, notes/)
-│   └── plugins/                      # Plugin host docs + bundled-plugin registry
-│       ├── manifests.ts              # Bundled-plugin registry (currently empty)
-│       └── README.md  PACKAGING.md  MIGRATION.md
+│   └── plugins/                      # Plugin host: scanner, store, context, runtime table, protocol
 ├── native/                           # Self-built sandbox backends (no third-party dependency)
 │   ├── build-sandbox.mjs             # Builds resources/sandbox, --selfcheck runs the packaged app
 │   ├── win32-sandbox-runner/         # Windows restricted-token runner (JS + koffi)
 │   └── landlock-launcher/            # Linux Landlock launcher (C, kernel ≥ 5.13)
 ├── resources/                        # Icons, tray assets, models-profile.json
-│   ├── plugins/                      # Generated bundled plugin packages (not committed)
 │   └── sandbox/                      # Generated sandbox assets (not committed)
-├── scripts/build-plugins.mjs         # Plugin bundler
 ├── drizzle/                          # Generated migrations and snapshots
 ├── build/                            # electron-builder resources (macOS entitlements)
 ├── .github/workflows/                # Release builds for Windows, macOS and Linux (on main)

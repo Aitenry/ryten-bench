@@ -10,7 +10,7 @@ import { installHostUi } from './plugin-host/host-ui'
 
 /**
  * 宿主 UI 表（插件渲染包的 `@host/**` 与 react/antd 等 vendor 都从这里取实例，
- * 见 src/plugins/PACKAGING.md）。必须**在任何插件渲染模块被 fetch 之前**挂上：
+ * 见 src/main/workshop/README.md）。必须**在任何插件渲染模块被 fetch 之前**挂上：
  * 插件是异步加载的（PluginStateBridge 的 effect），而桥模块的生成依赖这里上报的
  * 「键 → 导出名」，所以放在模块求值期（早于 React 渲染）最稳。
  */

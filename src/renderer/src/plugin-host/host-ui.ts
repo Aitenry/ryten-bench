@@ -24,7 +24,7 @@ import * as documentUtils from '@renderer/utils/document'
 import * as providerMeta from '@renderer/utils/providerMeta'
 
 /**
- * 渲染层**宿主 UI 表**（插件打包方案见 src/plugins/PACKAGING.md）。
+ * 渲染层**宿主 UI 表**（插件打包方案见 src/main/workshop/README.md）。
  *
  * 背景：插件包（`userData/plugins/<id>/renderer.mjs`）不能各自再打一份 React / antd /
  * i18n —— 那会得到第二个 React 实例（hooks 直接崩）、与宿主不同的 antd 主题上下文、
@@ -32,7 +32,7 @@ import * as providerMeta from '@renderer/utils/providerMeta'
  * 改写成 `plugin://host/ui.js?m=<key>`，由主进程的协议处理器动态生成 ESM 桥，
  * 桥里的每个导出都指向**宿主这里的同一份实例**。
  *
- * 键的两种形态（与 `scripts/build-plugins.mjs` 生成的一致）：
+ * 键的两种形态（与工坊构建产物一致）：
  * - `@host/renderer/<相对 src/renderer/src 的路径，无扩展名>`：宿主 UI 模块；
  * - `@host/vendor/<包名>`：宿主里的第三方 vendor 唯一实例。
  *

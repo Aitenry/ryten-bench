@@ -6,7 +6,7 @@
  *
  * 只有 `export type` / `import type`，编译后不留任何运行期依赖：
  * 渲染层不会因此把 drizzle、main 目录或 electron 打进产物
- * （契约见 src/plugins/README.md）。
+ * （契约见 src/main/plugins/context.ts）。
  */
 
 /* ── 待办（todo）与任务依赖 ── */

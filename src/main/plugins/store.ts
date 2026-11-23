@@ -4,34 +4,30 @@ import logger from 'electron-log'
 /**
  * 插件启用态持久化（userData/plugins.json）。
  *
- * 只存「显式覆写」：内置插件默认启用、外部插件默认停用——
- * 未写入的 id 取默认值，避免每次内置插件新增都要迁移存量配置。
+ * 只存「显式覆写」：插件默认**停用**（装进来不等于让它开始跑代码），用户启用后写入 true；
+ * 未写入的 id 取默认值 false。
  *
- * 同一个文件还存三类**安装状态**（物理卸载方案见 src/plugins/PACKAGING.md）：
- * - `uninstalled`：用户主动卸载过的内置插件 id（启动时不再自动装回来）；
- * - `seeded`：每个内置插件上次铺包时的应用版本（应用升级后覆盖插件包）；
- * - `removedInstalls`：用户在这台机器上卸载过的外部插件 id（插件中心换机自动补齐时跳过它）。
+ * 同一个文件还存一类**安装状态**：
+ * - `removedInstalls`：用户在这台机器上卸载过的插件 id（插件中心换机自动补齐时跳过它）。
  */
 export const Store = _Store['default'] || _Store
 
 export const pluginsStore = new Store<{
   states?: Record<string, boolean>
-  uninstalled?: string[]
-  seeded?: Record<string, string>
   /**
-   * 用户在这台机器上主动卸载过的**外部**插件 id。
+   * 用户在这台机器上主动卸载过的插件 id。
    *
-   * 与 `uninstalled`（内置插件「别再铺回来」）分开存：外部插件的目录删掉就没了，
-   * 它防的不是「应用包复活」，而是**插件中心的换机自动补齐**——平台按用户保存安装记录，
-   * pull 发现本机缺插件就会自动装回来；如果卸载时不记这一笔，卸载过的插件会在下次同步
-   * 时「自己回来」。用户重新安装该插件时清掉（见 package-install 的 installPackageDir）。
+   * 它防的不是「应用包复活」（应用不分发插件），而是**插件中心的换机自动补齐**——
+   * 平台按用户保存安装记录，pull 发现本机缺插件就会自动装回来；如果卸载时不记这一笔，
+   * 卸载过的插件会在下次同步时「自己回来」。用户重新安装该插件时清掉
+   * （见 package-install 的 installPackageDir）。
    */
   removedInstalls?: string[]
 }>({
   name: 'plugins'
 })
 
-/** 读取某插件的显式启用覆写；undefined = 未覆写（取默认值） */
+/** 读取某插件的显式启用覆写；undefined = 未覆写（取默认值 false） */
 export function getEnabledOverride(id: string): boolean | undefined {
   const states = pluginsStore.get('states') ?? {}
   return states[id]
@@ -43,7 +39,7 @@ export function setEnabledOverride(id: string, enabled: boolean): void {
   pluginsStore.set('states', { ...states, [id]: enabled })
 }
 
-/** 清除显式覆写（回到默认值） */
+/** 清除显式覆写（回到默认值：停用） */
 export function clearEnabledOverride(id: string): void {
   const states = pluginsStore.get('states') ?? {}
   if (!(id in states)) return
@@ -53,41 +49,10 @@ export function clearEnabledOverride(id: string): void {
   logger.info(`[Plugins] Cleared enabled override for ${id}`)
 }
 
-// ---------- 内置插件的安装状态 ----------
+// ---------- 显式卸载记录（换机自动补齐要跳过） ----------
 
 /**
- * 用户主动卸载过的内置插件 id。
- *
- * 语义严格限定在「内置」：外部插件（用户自己装的）目录被删掉就没了，不需要这个标记；
- * 内置插件**必须**记一笔，否则下次启动 `ensureBundledPluginsInstalled()` 会把它装回来，
- * 「物理卸载」就退化成了「卸载后自动复活」。
- */
-export function getUninstalledBuiltins(): string[] {
-  const list = pluginsStore.get('uninstalled') ?? []
-  return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
-}
-
-/** 记下「用户卸载了内置插件 id」 */
-export function markUninstalled(id: string): void {
-  const list = getUninstalledBuiltins()
-  if (list.includes(id)) return
-  pluginsStore.set('uninstalled', [...list, id])
-  logger.info(`[Plugins] Marked ${id} as uninstalled (will not auto-install)`)
-}
-
-/** 清掉某内置插件的已卸载记录（重装时调用） */
-export function clearUninstalled(id: string): void {
-  const list = getUninstalledBuiltins()
-  if (!list.includes(id)) return
-  pluginsStore.set(
-    'uninstalled',
-    list.filter((x) => x !== id)
-  )
-  logger.info(`[Plugins] Cleared uninstalled record for ${id}`)
-}
-
-/**
- * 用户在这台机器上主动卸载过的外部插件 id。
+ * 用户在这台机器上主动卸载过的插件 id。
  *
  * 用途只有一个：**别让插件中心的换机自动补齐把刚卸载的插件装回来**。
  * 平台按用户保存安装记录，pull 时发现「平台有记录、本机没包」会自动安装；
@@ -104,7 +69,7 @@ export function isInstallRemoved(id: string): boolean {
   return getRemovedInstalls().includes(id)
 }
 
-/** 记下「用户在这台机器上卸载了外部插件 id」 */
+/** 记下「用户在这台机器上卸载了插件 id」 */
 export function markInstallRemoved(id: string): void {
   const list = getRemovedInstalls()
   if (list.includes(id)) return
@@ -121,37 +86,4 @@ export function clearInstallRemoved(id: string): void {
     list.filter((x) => x !== id)
   )
   logger.info(`[Plugins] Cleared explicit-uninstall mark for ${id}`)
-}
-
-/** 某内置插件上次铺包时的应用版本（未铺过返回 undefined） */
-export function getPluginSeeded(id: string): string | undefined {
-  const map = pluginsStore.get('seeded') ?? {}
-  return map[id]
-}
-
-/** 记下某内置插件本次铺包时的应用版本 */
-export function setPluginSeeded(id: string, version: string): void {
-  const map = pluginsStore.get('seeded') ?? {}
-  pluginsStore.set('seeded', { ...map, [id]: version })
-}
-
-/**
- * 本应用曾经铺过包的全部 id（`seeded` 的键）。
- *
- * 用途：判断「某个已安装插件是不是本应用铺的」——升级清理要用（见 `installer.ts` 的
- * `removeRetiredBundledPlugins()`）。**不能**用目录扫描代替：目录扫描分不清
- * 「本应用铺的内置包」与「用户自己装的第三方插件」。
- */
-export function getSeededPluginIds(): string[] {
-  const map = pluginsStore.get('seeded') ?? {}
-  return Object.keys(map)
-}
-
-/** 清掉某 id 的铺包记录（该 id 不再是内置插件、或用户把它卸载掉时调用） */
-export function clearPluginSeeded(id: string): void {
-  const map = pluginsStore.get('seeded') ?? {}
-  if (!(id in map)) return
-  const rest = { ...map }
-  delete rest[id]
-  pluginsStore.set('seeded', rest)
 }

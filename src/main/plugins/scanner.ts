@@ -97,12 +97,10 @@ export function findExternalPlugin(id: string): ScannedExternalPlugin | null {
  * 为什么缓存：插件面板的列表合并要在每次 `plugins-list` 时问「哪些 id 已经装在
  * `userData/plugins/` 下」，而每次都真去 readdir + 解析 N 份 `plugin.json` 太浪费。
  * 安装 / 卸载 / 重装目录之后调 `invalidateInstalledPluginIds()` 刷新。
- *
- * （P5 前它还有个热路径调用方——`builtin.ts` 的过渡共存判断；那张静态注册表已删。）
  */
 let installedIdsCache: Set<string> | null = null
 
-/** 已安装插件的 id 集合（含内置铺包与第三方） */
+/** 已安装插件的 id 集合 */
 export function installedPluginIds(): Set<string> {
   installedIdsCache ??= new Set(scanExternalPlugins().map((p) => p.id))
   return installedIdsCache

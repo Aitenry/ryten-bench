@@ -57,7 +57,7 @@ const SNAPSHOT_TTL_MS = 5 * 60_000
 /* ── MCP SDK 的加载方式（有意为之，别改回静态 import） ─────────────────────
  *
  * `@modelcontextprotocol/sdk` 是 **ESM-only**（package.json "type": "module"），而插件
- * 主进程入口是 **CJS**（打包产物 `userData/plugins/<id>/main.cjs`，见 src/plugins/PACKAGING.md）。
+ * 主进程入口是 **CJS**（打包产物 `userData/plugins/<id>/main.cjs`，见 src/main/workshop/README.md）。
  * 打包器把裸模块改写成**同步**的宿主解析调用（`globalThis.__RB_HOST_RESOLVE__(spec)`），
  * 于是 `require('@modelcontextprotocol/sdk/...')` 只会在插件装载期直接抛 ERR_REQUIRE_ESM；
  * 动态 `import()` 又会在**插件目录**下解析说明符——userData 不在应用树里，那里没有

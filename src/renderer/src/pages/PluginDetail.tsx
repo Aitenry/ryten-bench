@@ -41,6 +41,7 @@ import type {
   LatticeSourcePathResult
 } from '@renderer/lattice/types'
 import type { PluginListEntry } from '@shared/plugin/types'
+import { isVersionNewer } from '@shared/plugin/version'
 
 /** 版本号：semver（允许 1.2.3 / 1.2.3-beta.1）；平台服务端还会做严格校验 */
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
@@ -94,6 +95,9 @@ const PluginDetail: React.FC = () => {
   const [republishOpen, setRepublishOpen] = useState(false)
   const [republishVersion, setRepublishVersion] = useState('')
   const [republishChangelog, setRepublishChangelog] = useState('')
+  /** 版本号字段的校验错误（只红框 + 显示在输入框下方） */
+  const [republishVersionError, setRepublishVersionError] = useState<string | null>(null)
+  /** 发布动作本身的错误（构建/打包/上传；显示在表单底部，不红框版本号） */
   const [republishError, setRepublishError] = useState<string | null>(null)
   const [republishing, setRepublishing] = useState(false)
   /**
@@ -146,7 +150,7 @@ const PluginDetail: React.FC = () => {
   /** 本机源码路径 / 本机安装目录：已安装时读一次（v2 通道未就绪时静默为空） */
   const loadSourceInfo = useCallback(
     async (found: PluginListEntry | null): Promise<void> => {
-      if (!found?.installed) {
+      if (!found) {
         setSourceInfo({ path: null })
         setLocalSourcePath(null)
         return
@@ -218,13 +222,20 @@ const PluginDetail: React.FC = () => {
     [allSettingsSections, pluginId]
   )
 
-  const installed = Boolean(entry?.installed)
+  const installed = Boolean(entry)
   const enabled = Boolean(entry?.enabled)
   const failed = descriptor?.state === 'error'
   const localVersion = entry?.version
   const hubLatestVersion = hubDetail?.latest_version
+  /**
+   * 可更新 = 中心最新版**严格新于**本机版本。
+   *
+   * 不能用「版本号字符串不相等」：本机 v0.4.1、中心最新 v0.3.0 时字符串不等，页面会打
+   * 「可更新」并给出「更新到 v0.3.0」的降级入口（2026-11-23 用户反馈
+   * 「明明本地版本号更高，为什么要更新」）。按 semver 比，本机更新时这里为 null。
+   */
   const updateVersion =
-    installed && hubLatestVersion && hubLatestVersion !== localVersion ? hubLatestVersion : null
+    installed && isVersionNewer(hubLatestVersion, localVersion) ? (hubLatestVersion ?? null) : null
 
   const name = entry?.name ?? hubDetail?.name ?? pluginId
   const description = entry?.description ?? hubDetail?.description ?? ''
@@ -431,23 +442,31 @@ const PluginDetail: React.FC = () => {
   }, [capabilities.openSource, message, navigate, openSource, pluginId, t])
 
   const openRepublishModal = useCallback((): void => {
-    setRepublishVersion('')
+    /**
+     * 版本号**回填本机当前版本**（用户 2026-11-23：「发布版本号应该回填」）。
+     *
+     * 发布对话框要填的是「这次要发布的版本」：本机源码的版本通常已经改好了，回填省得
+     * 用户对着空框猜；输入框下方仍会提示「需高于插件中心当前最新版本 vX」。
+     */
+    setRepublishVersion(entry?.version ?? '')
     setRepublishChangelog('')
+    setRepublishVersionError(null)
     setRepublishError(null)
     setRepublishOpen(true)
-  }, [])
+  }, [entry])
 
   /** 发布新版本：校验 semver → 主进程读源码目录重打包（安装包 + 源码）并上传 */
   const submitRepublish = useCallback(async (): Promise<void> => {
     const nextVersion = republishVersion.trim()
     if (!nextVersion) {
-      setRepublishError(t('plugins.hub.publish.versionRequired'))
+      setRepublishVersionError(t('plugins.hub.publish.versionRequired'))
       return
     }
     if (!VERSION_PATTERN.test(nextVersion)) {
-      setRepublishError(t('plugins.hub.publish.versionInvalid'))
+      setRepublishVersionError(t('plugins.hub.publish.versionInvalid'))
       return
     }
+    setRepublishVersionError(null)
     setRepublishError(null)
     setRepublishing(true)
     try {
@@ -997,9 +1016,7 @@ const PluginDetail: React.FC = () => {
                     color: token.colorTextTertiary
                   }}
                 >
-                  {entry?.builtin
-                    ? t('settings.plugins.builtinBadge')
-                    : t('settings.plugins.externalBadge')}
+                  {t('settings.plugins.externalBadge')}
                 </span>
                 {!publishedOnHub && (
                   <span
@@ -1424,10 +1441,11 @@ const PluginDetail: React.FC = () => {
               value={republishVersion}
               onChange={(e) => {
                 setRepublishVersion(e.target.value)
+                if (republishVersionError) setRepublishVersionError(null)
                 if (republishError) setRepublishError(null)
               }}
               placeholder={t('plugins.hub.publish.versionPlaceholder')}
-              status={republishError ? 'error' : undefined}
+              status={republishVersionError ? 'error' : undefined}
               onPressEnter={() => void submitRepublish()}
             />
             <div style={{ marginTop: 5, fontSize: 10, color: token.colorTextTertiary }}>
@@ -1435,9 +1453,9 @@ const PluginDetail: React.FC = () => {
                 ? t('plugins.hub.publish.versionHint', { version: hubLatestVersion })
                 : t('plugins.hub.local.desc')}
             </div>
-            {republishError && (
+            {republishVersionError && (
               <div style={{ marginTop: 5, fontSize: 10.5, color: token.colorError }}>
-                {republishError}
+                {republishVersionError}
               </div>
             )}
           </div>
@@ -1451,8 +1469,40 @@ const PluginDetail: React.FC = () => {
               placeholder={t('plugins.hub.publish.changelogPlaceholder')}
               rows={4}
               maxLength={2000}
-              showCount
             />
+            {/*
+              字数统计自己画（不要 antd 的 `showCount`）：它把计数绝对定位在输入框**下方**
+              （`bottom: -22px`），弹窗正文高度不够时下半截会被底部按钮栏盖住
+              （2026-11-23 用户反馈「下面描述的数字被遮挡」）。放进正常流里，位置就是稳的。
+            */}
+            <div
+              style={{
+                marginTop: 4,
+                textAlign: 'right',
+                fontSize: 10,
+                color: token.colorTextTertiary
+              }}
+            >
+              {republishChangelog.length} / 2000
+            </div>
+            {/*
+              发布动作本身的报错（构建 / 打包 / 上传）放表单底部：它不是版本号的问题，
+              之前错误地显示在版本输入框下面 + 红框，看起来像「版本号填错了」
+              （2026-11-23 用户反馈：「plugin.json 的 entry 缺少 main / renderer」为何出现在版本号下）。
+            */}
+            {republishError && (
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 10.5,
+                  lineHeight: 1.6,
+                  color: token.colorError,
+                  whiteSpace: 'pre-wrap'
+                }}
+              >
+                {republishError}
+              </div>
+            )}
           </div>
         </div>
       </Modal>

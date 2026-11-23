@@ -2,34 +2,22 @@ import { ipcMain, BrowserWindow } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
-import {
-  clearEnabledOverride,
-  clearUninstalled,
-  markInstallRemoved,
-  setEnabledOverride
-} from '../plugins/store'
+import { clearEnabledOverride, markInstallRemoved, setEnabledOverride } from '../plugins/store'
 import { scanExternalPlugins } from '../plugins/scanner'
-import { installExternalPlugin, uninstallExternalPlugin } from '../plugins/lifecycle'
+import { uninstallExternalPlugin } from '../plugins/lifecycle'
 import { emitAppEvent } from '../plugins/app-events'
 import { APP_EVENT_PLUGIN_DATA_PURGED } from '../plugins/app-hooks'
 import {
-  isBundledPluginId,
   isEnabledPlugin,
   loadExternalMain,
   pluginLoadInfo,
+  reloadExternalMain,
   unloadExternalMain
 } from '../plugins/host'
-import {
-  bundledPluginDir,
-  installBundledPlugin,
-  listBundledPluginIds,
-  removeBundledPlugin
-} from '../plugins/installer'
 import { pluginPurge } from '../plugins/contributions'
 import {
   IPC_PLUGIN_HOST_UI_EXPORTS,
   IPC_PLUGIN_STATE_CHANGED,
-  IPC_PLUGINS_INSTALL,
   IPC_PLUGINS_INSTALL_LOCAL,
   IPC_PLUGINS_LIST,
   IPC_PLUGINS_LIST_SYNC,
@@ -45,11 +33,8 @@ import { installPluginFromLocalPath, pickLocalPluginSource } from '../plugins/lo
 /**
  * 插件管理 IPC（core，始终注册）。
  *
- * 列表口径（P1 起）：**一切以 `userData/plugins/<id>/` 里装了什么为准**——
- * - 「内置（bundled）」= 应用包里带着、可以随时重装（`bundled: true`）；
- * - 「第三方」= 用户自己放进去的；
- * - 内置插件**只有在已安装**（目录存在）时才进列表；未安装的内置插件出现在
- *   「可安装的内置插件」区（同一条目 `bundled: true, installed: false`）。
+ * 列表口径：**一切以 `userData/plugins/<id>/` 里装了什么为准**。应用不再分发任何插件
+ * （没有「内置插件」），因此清单里只有用户自己装的插件：默认停用，装完由宿主自动启用。
  *
  * 启停/安装/卸载都会广播 `plugin-state-changed`，渲染层据此重新拉清单并 diff 装载。
  */
@@ -79,29 +64,19 @@ function packageStamp(dir: string, entry?: { main?: string; renderer?: string })
   return String(Math.round(max))
 }
 
-/** 已安装插件与启用态（内置默认启用、第三方默认停用） */
+/** 已安装插件与启用态（默认停用，用户装完由宿主显式启用） */
 function listEntries(): PluginListEntry[] {
-  const entries: PluginListEntry[] = []
-
-  // ① 已安装的插件：内置铺包与第三方走同一个扫描结果，天然去重（都看 userData/plugins/<id>）
-  for (const ext of scanExternalPlugins()) {
-    const bundled = isBundledPluginId(ext.id)
+  return scanExternalPlugins().map((ext) => {
     const enabled = isEnabledPlugin(ext.id)
-    entries.push({
+    return {
       id: ext.id,
       name: ext.manifest.name,
       version: ext.manifest.version,
       description: ext.manifest.description,
       icon: ext.manifest.icon,
-      // builtin 保留原语义（「随应用分发」的展示标签），bundled 是同一件事的显式字段
-      builtin: bundled,
-      bundled,
-      installed: true,
       enabled,
       state: enabled ? 'active' : 'inactive',
       entry: ext.manifest.entry,
-      // 应用包里的同名副本版本：面板据此把菜单项写成「更新」（版本不同）或「重新安装」（同版本）
-      bundledVersion: bundled ? (bundledManifest(ext.id)?.version ?? undefined) : undefined,
       // 包内容戳：渲染层据此决定「要不要重新装载这个插件」（见 packageStamp 的说明）
       stamp: packageStamp(ext.dir, ext.manifest.entry),
       // 清单里的路由/菜单元数据：渲染层首帧据此声明式预注册（见 shared/plugin/types.ts）
@@ -109,81 +84,8 @@ function listEntries(): PluginListEntry[] {
       menu: ext.manifest.menu,
       // 「卸载会删掉什么」：插件自己的 plugin.purge 贡献（停用/未装载时拿不到，面板有兜底文案）
       purgeLabel: pluginPurge(ext.id)?.label
-    })
-  }
-
-  // ② 未安装的内置插件：应用包里有包、但目录没铺（用户卸载过）→ 供面板给「安装」按钮
-  for (const id of bundledPluginIdsFromPackage()) {
-    if (entries.some((e) => e.id === id)) continue
-    const manifest = bundledManifest(id)
-    if (!manifest) continue
-    entries.push({
-      id,
-      name: manifest.name,
-      version: manifest.version,
-      description: manifest.description,
-      icon: manifest.icon,
-      builtin: true,
-      bundled: true,
-      installed: false,
-      enabled: false,
-      state: 'inactive',
-      routes: manifest.routes,
-      menu: manifest.menu
-    })
-  }
-
-  return entries
-}
-
-/**
- * 应用包里的内置插件 id（读 `resources/plugins/` 下的插件包目录）。
- *
- * 用包里的清单而不是源码里的静态清单：面板要显示的是
- * **能装回来的那个包**的信息（版本可能与源码不同），而且这样 core 侧不必认识任何插件。
- */
-function bundledPluginIdsFromPackage(): string[] {
-  return listBundledPluginIds()
-}
-
-/**
- * 读应用包里某插件的清单（读不到返回 null）。
- *
- * 除展示字段外一并带回 `routes`/`menu`：它们是渲染层**首帧声明式预注册**的输入
- * （未安装的插件在安装前也要能在面板里说清「装回来会有什么菜单」）。
- */
-function bundledManifest(id: string): {
-  name: string
-  version: string
-  description?: string
-  icon?: string
-  routes?: { path: string; skeleton?: string }[]
-  menu?: { key: string; labelKey: string; icon: string; order?: number }
-} | null {
-  const dir = bundledPluginDir(id)
-  if (!dir) return null
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf-8')) as {
-      name?: string
-      version?: string
-      description?: string
-      icon?: string
-      routes?: { path: string; skeleton?: string }[]
-      menu?: { key: string; labelKey: string; icon: string; order?: number }
     }
-    if (!raw.name || !raw.version) return null
-    return {
-      name: raw.name,
-      version: raw.version,
-      description: raw.description,
-      icon: raw.icon,
-      routes: raw.routes,
-      menu: raw.menu
-    }
-  } catch (err) {
-    logger.warn(`[Plugins] Failed to read bundled plugin manifest: ${id}`, err)
-    return null
-  }
+  })
 }
 
 /**
@@ -223,8 +125,6 @@ export function broadcastPluginStateChanged(): void {
 /**
  * 启停某插件的主进程侧：装载/卸载它的磁盘包主模块。
  *
- * P5 起没有第二条路径了（应用内的静态插件注册表已删），因此这里就是一句
- * load/unload——早先的 `stateSyncHook`（通知静态注册表同名注册/注销）已经不需要。
  * 未安装的 id 不在这里判：`loadExternalMain` 找不到目录会抛「外部插件 '<id>' 未找到」，
  * 而调用方（面板开关）只在已安装的条目上触发。
  */
@@ -236,15 +136,14 @@ function applyEnabled(id: string, enabled: boolean): void {
 /**
  * 卸载插件。
  *
- * @param purgeData 用户口径（P5 起语义按用户澄清调整为两件独立的事）：
- *                  - 卸载本身 = **移除插件代码**（删 `userData/plugins/<id>/`，写 `uninstalled`）；
- *                  - `purgeData` = **是否同时清除插件的数据**（表内记录 + 应用托管的文件）。
+ * @param purgeData 用户口径：卸载本身 = **移除插件代码**（删 `userData/plugins/<id>/`）；
+ *                  `purgeData` 只决定**是否同时清除插件的数据**（表内记录 + 应用托管的文件），
  *                  因此 `false` 也照样卸载，只是把数据留着（重装后还能用）。
  *
  * 顺序有讲究：
  * ① `plugin.purge` 贡献必须在**插件仍装载**时调用（它要读自己的 mapper / 托管目录）；
  * ② 摘除 IPC（`unloadExternalMain`）：渲染层随后由广播驱动卸载；
- * ③ 删 `userData/plugins/<id>/`；④ 记 `uninstalled`、清启用覆写；⑤ 广播。
+ * ③ 删 `userData/plugins/<id>/`；④ 记「用户显式卸载」、清启用覆写；⑤ 广播。
  */
 async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginListEntry[]> {
   if (!listEntries().some((e) => e.id === id)) {
@@ -283,25 +182,14 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
   // ② 摘除主进程装载（磁盘包模块）
   unloadExternalMain(id)
 
-  // ③ 删目录
+  // ③ 删目录 + ④ 记账（清启用覆写）
   //
-  // 内置插件必须走 `removeBundledPlugin`：它除了删目录还会写 `uninstalled` 记录。
-  // 早先这里不分来源一律调第三方的 `uninstallExternalPlugin`（只删目录、不记账），
-  // 于是**卸载后重启会被 `ensureBundledPluginsInstalled()` 立刻铺回来**——「物理卸载」
-  // 退化成「卸载后自动复活」（2026-09-26 工装实测：plugins.json 里没有 uninstalled）。
-  const bundled = isBundledPluginId(id)
-  if (bundled) {
-    removeBundledPlugin(id)
-    clearEnabledOverride(id)
-  } else {
-    uninstallExternalPlugin(id)
-    /**
-     * 外部插件额外记一笔「用户显式卸载」：插件中心按用户保存安装记录，
-     * pull 时发现本机缺包会**换机自动补齐**；没有这笔标记，刚卸载的插件会在
-     * 下次同步/重启时被装回来（用户 2026-11-23 反馈「卸载后状态对不上」）。
-     */
-    markInstallRemoved(id)
-  }
+  // 卸载**只动本地**：云端安装记录与数据快照一律保留。用户显式卸载要留一笔标记，
+  // 否则插件中心按用户保存的安装记录会在下次同步时把刚卸载的插件「自动补齐」回来
+  // （用户 2026-11-23 反馈「卸载后状态对不上」）。
+  uninstallExternalPlugin(id)
+  markInstallRemoved(id)
+  clearEnabledOverride(id)
 
   /**
    * 卸载**只动本地**：云端安装记录与数据快照一律保留。
@@ -320,47 +208,18 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
 }
 
 /**
- * 安装（重装）内置插件：从应用包 copy 回 `userData/plugins/<id>/`。
- * 第三方插件不走这里（它们由「安装插件」目录选择流程处理）。
- */
-function installPlugin(id: string): PluginListEntry[] {
-  if (!isBundledPluginId(id)) {
-    throw new Error(`'${id}' 不是随应用分发的内置插件，请用「安装插件」选择目录安装`)
-  }
-  if (!bundledPluginDir(id)) {
-    throw new Error(
-      `应用包里找不到插件 '${id}'（resources/plugins/${id}）。` +
-        `开发环境下请先运行 node scripts/build-plugins.mjs 生成插件包。`
-    )
-  }
-  installBundledPlugin(id, true)
-  clearUninstalled(id)
-  // 重装后按默认启用态装载（内置默认启用；用户此前显式停用过就保持停用）
-  if (isEnabledPlugin(id)) {
-    try {
-      loadExternalMain(id)
-    } catch (err) {
-      logger.error(`[Plugins] Plugin '${id}' failed to load after reinstall:`, err)
-      throw new Error(
-        `插件 '${id}' 已安装，但装载失败：${err instanceof Error ? err.message : err}`
-      )
-    }
-  }
-  logger.info(`[Plugins] Plugin installed: ${id}`)
-  broadcastPluginStateChanged()
-  return listEntries()
-}
-
-/**
- * 装好之后的统一收尾：「用户主动装的」→ 启用 + 装载主模块。
+ * 装好之后的统一收尾：启用 + 装载主模块。
  *
  * 装载失败不掩盖「已经装上了」这个事实：抛出的错误里写明目录已就位，避免用户以为
  * 什么都没发生（与插件中心的安装同一口径）。
+ *
+ * 这里必须是**重载**：升级（同 id 已在跑）时磁盘包刚被覆盖，直接 load 会因「已装载」
+ * 提前返回，主进程继续跑旧模块——正是「插件刚刚更新，但主进程还在跑旧版本」的来源。
  */
 function enableInstalled(id: string): void {
   setEnabledOverride(id, true)
   try {
-    loadExternalMain(id)
+    reloadExternalMain(id)
   } catch (err) {
     logger.error(`[Plugins] Installed plugin '${id}' failed to load:`, err)
     throw new Error(
@@ -420,7 +279,7 @@ export function registerPluginsIpc(): void {
     )
   })
 
-  // 只读诊断：插件主模块的装载来源（工装核对「music 是否由磁盘包接管」）
+  // 只读诊断：插件主模块的装载来源（工装核对「handler 是否由磁盘包提供」）
   ipcMain.handle(IPC_PLUGINS_LOADED_FROM, () => pluginLoadInfo())
 
   ipcMain.handle(IPC_PLUGINS_SET_ENABLED, (_event, id: unknown, enabled: unknown) => {
@@ -438,31 +297,6 @@ export function registerPluginsIpc(): void {
     return listEntries()
   })
 
-  ipcMain.handle(IPC_PLUGINS_INSTALL, async (_event, id: unknown) => {
-    // 无参数 = 第三方插件「选目录安装」；带 id = 重装内置插件
-    if (id === undefined || id === null) {
-      try {
-        const installed = await installExternalPlugin()
-        return { ok: true, id: installed }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        logger.warn('[Plugins] Install failed:', msg)
-        return { ok: false, error: msg }
-      }
-    }
-    if (typeof id !== 'string') {
-      throw new Error('plugins-install 参数非法')
-    }
-    try {
-      installPlugin(id)
-      return { ok: true, id }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      logger.warn(`[Plugins] Failed to install bundled plugin '${id}':`, msg)
-      return { ok: false, error: msg }
-    }
-  })
-
   ipcMain.handle(IPC_PLUGINS_UNINSTALL, async (_event, id: unknown, purgeData: unknown) => {
     if (typeof id !== 'string') throw new Error('plugins-uninstall 参数非法')
     if (typeof purgeData !== 'boolean') {
@@ -476,7 +310,7 @@ export function registerPluginsIpc(): void {
    *
    * 与插件中心的安装共用同一套落地与校验（`package-install.ts`），因此这里的
    * 语义完全一致：装完即启用 + 装载 + 广播；失败返回 `{ ok: false, error }` 而不是抛错，
-   * 面板据此提示（路径不存在、包里没有 plugin.json、id 撞内置插件等都走这条）。
+   * 面板据此提示（路径不存在、包里没有 plugin.json 等都走这条）。
    */
   ipcMain.handle(IPC_PLUGINS_INSTALL_LOCAL, async (_event, source: unknown) => {
     if (typeof source !== 'string' || source === '') {

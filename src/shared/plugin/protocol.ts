@@ -3,12 +3,10 @@
  *
  * 通道命名规范：
  * - 插件 invoke 通道：`plugin:<命名空间>:<channel>`，命名空间 = 插件 id 去掉开头的 `plugin.`
- *   段（plugin.demo → plugin:demo:*，内置 planner → plugin:planner:*），主进程权威校验、
- *   preload 白名单缓存；
- * - 主进程 → 渲染层的事件通道同规则命名（如 `plugin:planner:tasks-updated`），
+ *   段（plugin.demo → plugin:demo:*），主进程权威校验、preload 白名单缓存；
+ * - 主进程 → 渲染层的事件通道同规则命名（如 `plugin:demo:items-updated`），
  *   由插件在主进程 `ctx.registerEvent(...)` 声明后才进白名单；
- * - **core 自己的通道不进这个命名空间**（扁平名）——原先那批扁平插件通道
- *   （'todo-items-get-paginate' 等）已随四个内置插件迁走，core 现在只剩
+ * - **core 自己的通道不进这个命名空间**（扁平名）：core 只剩
  *   window-* / setting / provider-* / plugins-* / weather-* 等外壳能力；
  * - 管理通道为 kebab-case（plugins-*），与现有主进程风格一致。
  */
@@ -31,11 +29,8 @@ export const IPC_PLUGIN_CHANNELS_SYNC = 'plugin-channels-sync'
 /**
  * 渲染层 → 主进程：**同步**取一次插件启用清单（`ipcRenderer.sendSync`）。
  *
- * 为什么需要它（2026-09-26 用户实测报错「插件通道未启用: plugin:music:play-track」）：
- * 渲染层宿主在构造期会**同步预装载**内置插件（否则首帧没有路由/菜单），但它此前只能先按
- * manifest 默认值（内置=启用）装载，等异步 `plugins-list` 回来才把用户停用的插件卸掉。
- * 这个空窗期里被停用插件的 Provider 已经挂载并订阅事件通道，而主进程根本没装载它的通道
- * → preload 白名单拒绝订阅（当时直接抛错）→ 被 ErrorBoundary 接住（整页 RUNTIME ERROR）。
+ * 为什么需要它：渲染层宿主在构造期要同步决定装载哪些插件（首帧既要有路由/菜单，又不能把
+ * 用户停用的插件先装一遍再卸——那会让被停用插件的 Provider 订阅到不存在的通道）。
  * preload 在启动时用一次同步 IPC 取回权威启用态，渲染层即可**一开始就只装载启用的插件**。
  */
 export const IPC_PLUGINS_LIST_SYNC = 'plugins-list-sync'
@@ -45,7 +40,6 @@ export const IPC_PLUGIN_STATE_CHANGED = 'plugin-state-changed'
 
 export const IPC_PLUGINS_LIST = 'plugins-list'
 export const IPC_PLUGINS_SET_ENABLED = 'plugins-set-enabled'
-export const IPC_PLUGINS_INSTALL = 'plugins-install'
 
 /** 从**本地路径**安装插件（`.zip` 压缩包或插件包目录；工装与拖入路径走它） */
 export const IPC_PLUGINS_INSTALL_LOCAL = 'plugins-install-local'
@@ -68,8 +62,7 @@ export const IPC_PLUGIN_HOST_UI_EXPORTS = 'plugin-host-ui-exports'
 /**
  * 渲染层 → 主进程：查询当前已装载的插件**来自哪个文件**（只读诊断）。
  *
- * 用于验证「music 由磁盘包接管」而不是静态注册表：返回
- * `{ id: { source: 'package' | 'builtin' | 'absent', file?: string } }`。
+ * 返回 `{ id: { installed, source: 'package' | 'absent', file?: string } }`。
  */
 export const IPC_PLUGINS_LOADED_FROM = 'plugins-loaded-from'
 

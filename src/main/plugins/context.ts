@@ -6,7 +6,7 @@ import { withPluginScope } from './plugin-guard'
 /**
  * 主进程插件上下文（与渲染层 `plugin-host/context.ts` 对称的轻量实现）。
  *
- * 契约（内置插件与外部插件**完全相同**，见 src/plugins/README.md）：
+ * 契约（见 src/main/workshop/README.md 与每个草稿里生成的 WORKSHOP.md）：
  * - `install(ctx)` 是可逆装配：注册的 IPC 通道与 `ctx.effect` 里登记的效果，
  *   在插件停用/卸载时由宿主一次性回滚（效果 LIFO）；
  * - IPC 通道必须落在本插件命名空间 `plugin:<命名空间>:` 内，宿主权威校验，

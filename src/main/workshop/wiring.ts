@@ -3,9 +3,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
 import {
-  isBundledPluginId,
   isEnabledPlugin,
-  loadExternalMain,
+  reloadExternalMain,
   unloadExternalMain
 } from '../plugins/host'
 import { scanExternalPlugins } from '../plugins/scanner'
@@ -152,14 +151,17 @@ export function installWorkshopHost(): void {
     loader,
     hostMainKeys: () => hostRuntimeKeys(),
     hostUiKeys: () => hostUiExportKeys(),
-    isBundledPlugin: (id) => isBundledPluginId(id),
     isInstalled: (id) => scanExternalPlugins().some((plugin) => plugin.id === id),
     isEnabled: (id) => isEnabledPlugin(id),
     usedNamespaces,
     installPackage: (dir) => installPackageDir(dir),
     enable: (id) => {
       setEnabledOverride(id, true)
-      loadExternalMain(id)
+      // 发布 = 「装到 userData 后立刻启用」：磁盘包刚被覆盖，升级场景下插件还开着，
+      // 必须重载主模块。否则新渲染层调新通道时主进程只有旧 handler——用户看到的就是
+      // 「插件刚刚更新，但应用主进程还在跑旧版本，请完全退出并重新打开应用」
+      // （2026-11-23 用户反馈：全球时区加了手动排序，点上移/下移就报这条）。
+      reloadExternalMain(id)
     },
     disable: (id) => {
       setEnabledOverride(id, false)

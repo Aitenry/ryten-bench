@@ -71,7 +71,6 @@ export const enUSCommon: typeof zhCNCommon = {
     inUse: 'In use',
     recommended: 'Recommended',
     custom: 'Custom',
-    builtin: 'Built-in',
     noneSelected: 'None selected'
   },
   message: {
