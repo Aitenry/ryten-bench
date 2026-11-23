@@ -281,7 +281,21 @@ export type LatticeLoginResult =
 /** 上传结果。用户取消选择框不是失败（`canceled:true`） */
 export type LatticeUploadResult =
   | { ok: true; canceled: true }
-  | { ok: true; plugin_id: string; version: string }
+  | {
+      ok: true
+      plugin_id: string
+      version: string
+      /**
+       * 平台的最终状态：`published` = 已发布；`review` = 已提交，等待管理员审核。
+       *
+       * 平台自 2026-11-23 起默认送审（审核通过前对其他用户不可见），所以“上传成功”
+       * 不再等于“已发布”——界面必须按这个字段选择提示文案，不能把 review 当失败。
+       * 旧平台不返回时视为 `published`。
+       */
+      status?: 'published' | 'review'
+      /** 本次是否真的上传了源码包（没有源码 / 平台未给上传地址时为 false） */
+      sourceUploaded?: boolean
+    }
   | { ok: false; error: string }
 
 /** 下载安装结果：失败不抛到渲染层，返回 `{ok:false,error}` */
@@ -362,7 +376,14 @@ export interface LatticeRepublishInput {
 
 /** `lattice:republish` 返回：安装包 = 源码目录整包 zip，源码包 = 同一份字节 */
 export type LatticeRepublishResult =
-  | { ok: true; plugin_id: string; version: string; sourcePath?: string }
+  | {
+      ok: true
+      plugin_id: string
+      version: string
+      /** 平台最终状态：已发布 / 等待管理员审核（平台自 2026-11-23 起默认送审） */
+      status?: 'published' | 'review'
+      sourcePath?: string
+    }
   | { ok: false; error: string }
 
 /** 下载类型：安装包 / 源码包 */
@@ -462,8 +483,12 @@ export const LATTICE_IPC = {
   hubList: 'lattice:hub-list',
   hubDetail: 'lattice:hub-detail',
   hubPickUpload: 'lattice:hub-pick-upload',
+  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  hubPublishInstalled: 'lattice:hub-publish-installed',
   hubUpload: 'lattice:hub-upload',
   hubPickUploadZip: 'lattice:hub-pick-upload-zip',
+  /** 选「安装包目录 + 源码目录」两个目录后发布（源码与安装包是两份不同的 zip） */
+  hubPickUploadWithSource: 'lattice:hub-pick-upload-with-source',
   hubInstall: 'lattice:hub-install',
   hubInstalls: 'lattice:hub-installs',
   /** 当前源码目录（path/version/managed） */

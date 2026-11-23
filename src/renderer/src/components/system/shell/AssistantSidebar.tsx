@@ -45,6 +45,8 @@ const AssistantSidebar: React.FC = () => {
     topicsWorkspaceId,
     currentTopicId,
     loadingTopicIds,
+    awaitingTopicIds,
+    completedTopicIds,
     topicsHasMore,
     topicsLoading,
     topicsRefreshing,
@@ -65,7 +67,11 @@ const AssistantSidebar: React.FC = () => {
       colorTextSecondary={token.colorTextSecondary}
       colorTextTertiary={token.colorTextTertiary}
       colorFillAlter={token.colorFillAlter}
+      colorWarning={token.colorWarning}
+      colorSuccess={token.colorSuccess}
       loadingTopicIds={loadingTopicIds}
+      awaitingTopicIds={awaitingTopicIds}
+      completedTopicIds={completedTopicIds}
       hasMoreTopics={topicsHasMore}
       isLoadingMoreTopics={topicsLoading}
       isRefreshingTopics={topicsRefreshing}

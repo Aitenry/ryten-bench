@@ -50,6 +50,14 @@ export interface WorkspaceFsChange {
 let watcher: fs.FSWatcher | null = null
 let watchedRoot = ''
 let watchedWorkspaceId = 0
+/**
+ * 已确认「根目录不存在」的工作区路径。
+ *
+ * 工作区目录被删除 / 移走（最常见：改了「插件存放路径」后旧插件工作区还记着老路径，
+ * 或删掉插件草稿只留会话）时，`fs.watch` 会抛 ENOENT。每次设置更新都会 sync 一次，
+ * 不能每次都打两条堆栈；这里只对同一个缺失根提示一次，目录回来后自动清空。
+ */
+let missingRoot = ''
 const pendingPaths = new Set<string>()
 let debounceTimer: NodeJS.Timeout | null = null
 
@@ -175,11 +183,42 @@ async function flush(): Promise<void> {
   broadcastFsChanged(changes)
 }
 
+/** 目标根目录存在且是目录吗（工作区目录被删/移走时 `fs.watch` 必然 ENOENT） */
+function isExistingDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /** 开始监听工作区（切换工作区时先停再起；同一工作区重复调用是空操作） */
 export function startWorkspaceWatcher(root: string, workspaceId: number): void {
+  if (!root) {
+    stopWorkspaceWatcher()
+    return
+  }
+
+  // 目录不在：不 watch、也不走「递归不可用 → 再试一次」的兜底（那只会打两条堆栈）。
+  // 停掉旧根的监听，同一缺失根只提示一次；恢复目录或切到别的工作区后会重新开始监听。
+  // 这个判断必须在「已在监听同一根」之前：目录就是**在监听期间**被删掉时，watcher 仍是
+  // 非空的，先返回就永远发现不了它已经失效。
+  if (!isExistingDirectory(root)) {
+    if (watchedRoot) stopWorkspaceWatcher()
+    if (missingRoot !== root) {
+      missingRoot = root
+      logger.warn(
+        `[WorkspaceWatcher] Workspace folder is missing (or is not a directory), file watching skipped: ${root}` +
+          ' (restore it or switch workspace to resume watching)'
+      )
+    }
+    return
+  }
+  missingRoot = ''
+
   if (watcher && watchedRoot === root && watchedWorkspaceId === workspaceId) return
+
   stopWorkspaceWatcher()
-  if (!root) return
   watchedRoot = root
   watchedWorkspaceId = workspaceId
   try {

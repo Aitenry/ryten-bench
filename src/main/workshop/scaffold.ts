@@ -8,9 +8,11 @@ import type {
 import {
   assertDraftId,
   backupsRoot,
+  distDir,
   draftDir,
   draftExists,
   ensureDir,
+  reportPath,
   requirePluginsRoot,
   writeJson
 } from './paths'
@@ -174,6 +176,22 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
       }
     }
     throw err
+  }
+
+  /**
+   * 覆盖 = 换了一份源码：旧产物与旧验收报告不再对应当前草稿，必须一起清掉。
+   *
+   * 不清的后果：`hasBuild` 仍为 true，面板的「导出 / 安装」会拿到上一份源码的包
+   * （指纹能挡住 `plugin_publish install`，但挡不住 `export` 与面板上的直接安装）。
+   */
+  if (overwritten) {
+    for (const target of [distDir(id), reportPath(id)]) {
+      try {
+        fs.rmSync(target, { recursive: true, force: true })
+      } catch {
+        // 删不掉不阻断重建：指纹/报告校验还会兜住（最多多一次「先重新验收」）
+      }
+    }
   }
 
   return {

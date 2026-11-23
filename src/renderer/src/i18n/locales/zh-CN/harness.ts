@@ -72,6 +72,10 @@ export const harnessZhCN = {
       topicDeleteBlocked: '进行中，无法删除',
       topicDelete: '删除会话',
       topicRunning: '会话进行中',
+      /** 行首黄点（呼吸）：这条会话挂着提问 / 审批，等你确认后才会继续 */
+      topicAwaiting: '等待你确认',
+      /** 行首绿点（呼吸）：这一轮刚跑完、还没点开看过；点一下这条会话就消失 */
+      topicCompleted: '已完成，点击查看',
       topicActions: '会话操作',
       workspaceActions: '工作区操作',
       workspaceHasRunning: '有会话进行中',

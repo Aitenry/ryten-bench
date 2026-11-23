@@ -215,7 +215,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
   }
 
   /**
-   * 配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
+   * 配置**插件存放路径**（所有插件的源码根目录；首次启动已按安装目录预置）。
    *
    * 已经放着的旧草稿会被搬过来（主进程做，用户不用管）；取消不是失败，不提示。
    */
@@ -365,7 +365,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
         </div>
       )}
 
-      {/* 插件存放路径：所有插件源码的根目录。没有默认值，未配置时下面也列不出草稿 */}
+      {/* 插件存放路径：所有插件源码的根目录。首次启动已按安装目录预置，用户可改（改地址会迁数据） */}
       <SettingsSection
         title={t('workshopSettings.root.title')}
         icon={<RiFolderOpenLine size={14} />}

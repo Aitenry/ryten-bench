@@ -122,6 +122,26 @@ async function updateWorkspace(id: number, updates: { name: string }): Promise<b
   })
 }
 
+/**
+ * 改工作区路径（存储根整体搬迁后，让旧会话跟到新位置）。
+ *
+ * 只由 `storage/workspace-refs.ts` 调用：它先查重（`workspace_path_key` 有唯一约束），
+ * 再逐行改；这里保持「只改一个字段」的最小语义。
+ */
+async function updateWorkspacePath(id: number, nextPath: string): Promise<boolean> {
+  return withOrm('updateWorkspacePath', async (db) => {
+    const updated = await db
+      .update(workspace)
+      .set({ path: nextPath, updated_at: sql`now()` })
+      .where(eq(workspace.id, id))
+      .returning({ id: workspace.id })
+    logger.info(
+      `Updated workspace ID=${id} path="${nextPath}", ${updated.length} row(s) affected.`
+    )
+    return updated.length > 0
+  })
+}
+
 async function deleteWorkspace(id: number): Promise<boolean> {
   return withOrm('deleteWorkspace', async (db) => {
     await db.transaction(async (tx) => {
@@ -497,6 +517,7 @@ export {
   findWorkspaceByPath,
   getWorkspacesByKind,
   updateWorkspace,
+  updateWorkspacePath,
   deleteWorkspace,
   getAllTopics,
   getAllTopicsPaginated,

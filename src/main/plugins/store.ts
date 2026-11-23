@@ -7,9 +7,10 @@ import logger from 'electron-log'
  * 只存「显式覆写」：内置插件默认启用、外部插件默认停用——
  * 未写入的 id 取默认值，避免每次内置插件新增都要迁移存量配置。
  *
- * 同一个文件还存两类**内置插件安装状态**（物理卸载方案见 src/plugins/PACKAGING.md）：
+ * 同一个文件还存三类**安装状态**（物理卸载方案见 src/plugins/PACKAGING.md）：
  * - `uninstalled`：用户主动卸载过的内置插件 id（启动时不再自动装回来）；
- * - `seeded`：每个内置插件上次铺包时的应用版本（应用升级后覆盖插件包）。
+ * - `seeded`：每个内置插件上次铺包时的应用版本（应用升级后覆盖插件包）；
+ * - `removedInstalls`：用户在这台机器上卸载过的外部插件 id（插件中心换机自动补齐时跳过它）。
  */
 export const Store = _Store['default'] || _Store
 
@@ -17,6 +18,15 @@ export const pluginsStore = new Store<{
   states?: Record<string, boolean>
   uninstalled?: string[]
   seeded?: Record<string, string>
+  /**
+   * 用户在这台机器上主动卸载过的**外部**插件 id。
+   *
+   * 与 `uninstalled`（内置插件「别再铺回来」）分开存：外部插件的目录删掉就没了，
+   * 它防的不是「应用包复活」，而是**插件中心的换机自动补齐**——平台按用户保存安装记录，
+   * pull 发现本机缺插件就会自动装回来；如果卸载时不记这一笔，卸载过的插件会在下次同步
+   * 时「自己回来」。用户重新安装该插件时清掉（见 package-install 的 installPackageDir）。
+   */
+  removedInstalls?: string[]
 }>({
   name: 'plugins'
 })
@@ -74,6 +84,43 @@ export function clearUninstalled(id: string): void {
     list.filter((x) => x !== id)
   )
   logger.info(`[Plugins] Cleared uninstalled record for ${id}`)
+}
+
+/**
+ * 用户在这台机器上主动卸载过的外部插件 id。
+ *
+ * 用途只有一个：**别让插件中心的换机自动补齐把刚卸载的插件装回来**。
+ * 平台按用户保存安装记录，pull 时发现「平台有记录、本机没包」会自动安装；
+ * 用户显式卸载后必须留一笔本地标记，否则下次同步/重启就复活。
+ * 重新安装该插件时清掉（`installPackageDir` → `clearInstallRemoved`）。
+ */
+export function getRemovedInstalls(): string[] {
+  const list = pluginsStore.get('removedInstalls') ?? []
+  return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
+}
+
+/** 某插件是否被用户显式卸载过（换机自动补齐要跳过它） */
+export function isInstallRemoved(id: string): boolean {
+  return getRemovedInstalls().includes(id)
+}
+
+/** 记下「用户在这台机器上卸载了外部插件 id」 */
+export function markInstallRemoved(id: string): void {
+  const list = getRemovedInstalls()
+  if (list.includes(id)) return
+  pluginsStore.set('removedInstalls', [...list, id])
+  logger.info(`[Plugins] Marked ${id} as explicitly uninstalled (auto-restore will skip it)`)
+}
+
+/** 清掉「显式卸载」标记（用户重新安装时调用） */
+export function clearInstallRemoved(id: string): void {
+  const list = getRemovedInstalls()
+  if (!list.includes(id)) return
+  pluginsStore.set(
+    'removedInstalls',
+    list.filter((x) => x !== id)
+  )
+  logger.info(`[Plugins] Cleared explicit-uninstall mark for ${id}`)
 }
 
 /** 某内置插件上次铺包时的应用版本（未铺过返回 undefined） */

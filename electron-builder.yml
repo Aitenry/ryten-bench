@@ -6,6 +6,8 @@ files:
   - '!**/.vscode/*'
   - '!src/**'
   - '!drizzle/**'
+  # 安装目录下的运行期存储根（dev 态会出现在仓库根）：绝不能打进安装包
+  - '!data/**'
   # 沙箱资产只走 extraResources（下面的 `from: resources/sandbox → to: sandbox`）：
   # 不排除的话它会被同时塞进 asar（再被 asarUnpack 解出来）和 resourcesPath 两份，
   # 而 service.ts 的 resolveSandboxAsset 在打包态会先命中 asar 里那份 → 路径不确定。

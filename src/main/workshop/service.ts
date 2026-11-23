@@ -5,10 +5,12 @@ import type {
   WorkshopDraftDetail,
   WorkshopDraftMeta,
   WorkshopDraftSummary,
+  WorkshopPublishGate,
   WorkshopPublishResult,
   WorkshopReport,
   WorkshopTemplate
 } from '../../shared/harness/workshop'
+import { isSamePath, migrateStorageDirectory } from '../storage/migration'
 import { buildDraft, type BuildDraftOptions } from './build'
 import { createDraft, type CreateDraftOptions } from './scaffold'
 import {
@@ -33,8 +35,15 @@ import {
   readDraftMeta,
   writeDraftFile
 } from './store'
-import { hasBuild, isBuildStale, workshopHost, workshopHostOrNull, type WorkshopHost } from './host'
-import { publishDraft, disableDraft, unpublishDraft, exportDraft } from './install'
+import {
+  hasBuild,
+  isBuildStale,
+  currentSourceHash,
+  workshopHost,
+  workshopHostOrNull,
+  type WorkshopHost
+} from './host'
+import { publishDraft, disableDraft, enableDraft, unpublishDraft, exportDraft } from './install'
 import { readReport, verifyDraft, type VerifyOptions } from './verify'
 
 /**
@@ -49,7 +58,7 @@ export interface WorkshopServiceState {
   /** 工坊接线是否就绪（AI 助手插件装载着） */
   ready: boolean
   /**
-   * 是否已配置**插件存放路径**（用户设置；没有默认值）。
+   * 是否已配置**插件存放路径**（首次启动已按安装目录预置，用户清空后为 false）。
    * 未配置时草稿列表为空、新建会被拒，界面据此引导用户去选文件夹。
    */
   configured: boolean
@@ -101,9 +110,18 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
       distBytes = undefined
     }
   }
+  /**
+   * 展示名：工坊草稿的 `workshop.json` 标题优先；没有（例如从插件中心下载的源码包）
+   * 就用 `plugin.json` 的 `name`；两者都没有才退回 id。
+   *
+   * 之前只看 `workshop.json`，从插件中心安装的源码在侧栏会显示成 `personal-ledger`
+   * 这种 id（用户 2026-11-23：「安装源码的内容，显示的为什么是 id，而不是名称」）。
+   */
+  const manifestName =
+    typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : ''
   return {
     id,
-    title: meta?.title ?? id,
+    title: meta?.title ?? (manifestName || id),
     template: (meta?.template ?? 'minimal') as WorkshopTemplate,
     version: typeof manifest?.version === 'string' ? manifest.version : '0.0.0',
     description:
@@ -226,11 +244,18 @@ export function removeDraft(id: string): { removedDir: boolean } {
 /**
  * 配置**插件存放路径**（用户在设置里选的文件夹）。
  *
- * 三件事，顺序有意义：① 校验目录（存在、是目录、不在工坊内部目录里）；
- * ② 落进设置（由宿主注入的 `setPluginsRoot` 持久化）；③ 把旧版草稿搬过来
+ * 四件事，顺序有意义：① 校验目录（存在、是目录、不在工坊内部目录里）；
+ * ② **把旧路径里的插件源码迁到新路径**（用户主动改存储地址 = 数据跟着走，
+ * 见 `storage/migration.ts`；同名文件保留目标那份、旧文件另存 `*.migrated-*`）；
+ * ③ 落进设置（由宿主注入的 `setPluginsRoot` 持久化）；④ 把旧版草稿搬过来
  * （早期版本把源码放在 `<userData>/plugin-workshop/drafts/`，配置之后自然迁移，用户不用管）。
  */
-export function adoptPluginsRoot(dir: string): { dir: string; moved: string[] } {
+export function adoptPluginsRoot(dir: string): {
+  dir: string
+  moved: string[]
+  /** 改地址前的插件根（供调用方把旧插件工作区行改到新根下） */
+  previousDir?: string
+} {
   const host = workshopHost()
   const target = path.resolve(dir)
   const workshop = path.resolve(host.root)
@@ -244,16 +269,32 @@ export function adoptPluginsRoot(dir: string): { dir: string; moved: string[] } 
     throw new Error(`插件存放路径必须是文件夹：${target}`)
   }
 
-  const moved = migrateLegacyDrafts(target)
+  // 先迁移旧路径的数据：迁移失败就抛错，设置保持旧值（不会出现「设置换了、源码没搬」）
+  const previous = pluginsRootPath()
+  const changed = Boolean(previous) && !isSamePath(previous, target)
+  const migrated = changed ? migrateStorageDirectory('plugins', previous, target).moved : []
+  const legacyMoved = migrateLegacyDrafts(target)
+
   host.setPluginsRoot(target)
   configurePluginsRoot(target)
-  return { dir: target, moved }
+  return {
+    dir: target,
+    moved: [...new Set([...migrated, ...legacyMoved])],
+    ...(changed ? { previousDir: previous } : {})
+  }
 }
 
-/** 旧版草稿目录里的草稿搬到新的插件存放路径（同名子目录已存在就跳过，绝不覆盖） */
-function migrateLegacyDrafts(target: string): string[] {
+/**
+ * 旧版草稿目录里的草稿搬到新的插件存放路径（同名子目录已存在就跳过，绝不覆盖）。
+ *
+ * 除了 `adoptPluginsRoot`，启动装配时也会调一次：现在 `pluginsPath` 由安装目录自动预置，
+ * 老用户不会再经过「第一次手动选路径」这一步，但 `userData/plugin-workshop/drafts/`
+ * 里的历史草稿仍要跟着进新默认路径。
+ */
+export function migrateLegacyDrafts(target: string): string[] {
   const legacy = legacyDraftsRoot()
   if (!fs.existsSync(legacy)) return []
+  fs.mkdirSync(target, { recursive: true })
   const moved: string[] = []
   for (const entry of fs.readdirSync(legacy, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
@@ -286,6 +327,91 @@ export function lastReport(id: string): WorkshopReport | null {
   return readReport(id)
 }
 
+/**
+ * 发布闸门：**当前源码**是否有一份通过的验收报告 + 一份与之对应的产物。
+ *
+ * 三份证据必须同时对上当前源码，缺一不可：
+ * - 验收报告 `ok`（致命项全过）；
+ * - 报告里的 `sourceHash` = 当前源码指纹（验收后改过源码就得重验——只重新构建不算）；
+ * - 产物记录的 `sourceHash` = 当前源码指纹（构建之后改过源码，产物就是旧的）。
+ *
+ * 用指纹而不是 mtime 的原因见 `fingerprint.ts`：旧口径在构建回写 `workshop.json`
+ * 之后必然判「过期」，导致 `plugin_publish install` 永远拒绝安装（2026-11-23 事故）。
+ */
+export function publishGate(id: string): WorkshopPublishGate {
+  const report = readReport(id)
+  if (!report) {
+    return {
+      ready: false,
+      reason: 'no-report',
+      detail:
+        `拒绝安装：'${id}' 还没有一次通过的验收。先跑 plugin_verify（构建 + 全部检查，` +
+        `含宿主安全的 safety.scan），全绿再安装——没验过的插件装上去大概率是「菜单不出现 / 调用报无处理器」。`
+    }
+  }
+  if (!report.ok) {
+    const fatal = report.checks.filter((c) => c.status === 'fail' && c.fatal)
+    const problems = fatal
+      .map((c) => `${c.id} ${c.title}${c.detail ? `：${c.detail}` : ''}`)
+      .join('；')
+    return {
+      ready: false,
+      reason: 'report-failed',
+      detail:
+        `拒绝安装：最近一次验收没有通过（致命项 ${fatal.length} 项失败` +
+        `${problems ? `：${problems}` : ''}）。按报告里的建议改完，重新 plugin_verify。`
+    }
+  }
+  if (!hasBuild(id)) {
+    return {
+      ready: false,
+      reason: 'no-build',
+      detail: `拒绝安装：草稿 '${id}' 还没有构建产物。先跑 plugin_build（或直接 plugin_verify，它会重新构建）。`
+    }
+  }
+
+  let current: string
+  try {
+    current = currentSourceHash(id)
+  } catch (err) {
+    return {
+      ready: false,
+      reason: 'sources-changed',
+      detail: `拒绝安装：读不到当前草稿源码（${(err as Error).message}）。先确认插件存放路径与草稿目录还在。`
+    }
+  }
+  // 旧版本（或手工造的）报告没有源码指纹：无法证明它代表当前源码，宁可多验一次
+  if (typeof report.sourceHash !== 'string' || report.sourceHash === '') {
+    return {
+      ready: false,
+      reason: 'stale-report',
+      detail:
+        `拒绝安装：这份验收报告来自旧版本（没有源码指纹，无法确认它验的是当前源码）。` +
+        `重新跑一次 plugin_verify 即可——第一次会慢一点，之后同源码的构建/发布都不再重复拦。`
+    }
+  }
+  const built = readDraftMeta(id)?.sourceHash
+  if (report.sourceHash !== current) {
+    return {
+      ready: false,
+      reason: 'sources-changed',
+      detail:
+        `拒绝安装：验收之后源码又改过（报告的指纹与当前源码不一致）。` +
+        `重新构建不算——没重新验收的新代码不许装，先 plugin_verify。`
+    }
+  }
+  if (typeof built === 'string' && built !== current) {
+    return {
+      ready: false,
+      reason: 'stale-build',
+      detail:
+        `拒绝安装：产物比源码旧（构建之后草稿又被改过）。先 plugin_verify` +
+        `（它会重新构建并跑完整验收），再 plugin_publish install。`
+    }
+  }
+  return { ready: true, detail: '' }
+}
+
 /** 发布（安装 + 启用 + 安装后渲染层复验；复验失败会自动回滚并抛错） */
 export async function publish(id: string): Promise<WorkshopPublishResult> {
   return await publishDraft(id)
@@ -294,6 +420,11 @@ export async function publish(id: string): Promise<WorkshopPublishResult> {
 /** 停用（保留目录与数据） */
 export function disable(id: string): void {
   disableDraft(id)
+}
+
+/** 启用一个已装好的插件（启用后自动做渲染层复验；失败会自动停用并抛错） */
+export function enable(id: string): ReturnType<typeof enableDraft> {
+  return enableDraft(id)
 }
 
 /** 卸载（删插件代码，数据保留） */

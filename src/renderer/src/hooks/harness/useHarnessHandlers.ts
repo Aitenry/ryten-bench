@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
@@ -30,6 +31,7 @@ import type { LlmProviderConfig } from '../../../../main/database/mapper/provide
 import { harnessApi } from '../../api/harness'
 import { getMemoryScope, setMemoryScope } from '../../utils/harness/memory-scope'
 import { isChatScope } from '../../../../shared/harness/memory-scope'
+import { useTopicRunStatus } from './useTopicRunStatus'
 
 const TOPICS_PAGE_SIZE = 20
 const MESSAGES_PAGE_SIZE = 20 // 10对消息
@@ -92,6 +94,16 @@ export interface UseHarnessHandlersReturn {
   currentSessionIdRef: React.RefObject<string | null>
   currentTopicIdRef: React.RefObject<number | null>
   loadingTopicIds: Set<number>
+  /**
+   * 正挂着提问 / 审批、等用户确认的会话（侧栏行首的黄色呼吸点）。
+   * 与 loadingTopicIds 取并存的含义：进行中的会话挂起等确认时，黄点优先。
+   */
+  awaitingTopicIds: Set<number>
+  /**
+   * 刚自然跑完、还没被用户点开过的会话（侧栏行首的绿色呼吸点）。
+   * 跑完时正显示在对话窗口里的那条不进这个集合（完成即自动移除）；点开即熄灭，不落盘。
+   */
+  completedTopicIds: Set<number>
   selectedProvider: LlmProviderConfig | null
   modelSupportsTools: boolean
   modelSupportsVision: boolean
@@ -243,6 +255,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const activeSubAgentCauseIdsRef = useRef<Map<number, Set<string>>>(new Map())
   const [currentTopicId, setCurrentTopicId] = useState<number | null>(null)
   const currentTopicIdRef = useRef<number | null>(null)
+  /**
+   * 对话页（`/harness`）此刻是不是显示在主内容区。
+   *
+   * 绿点的判定要用「这条会话此刻是否就摆在用户眼前」而不是只看 currentTopicId：
+   * 人切到资料库 / 插件仓库时，对话窗口并不在屏幕上，那条会话跑完了仍该提醒。
+   * 完成事件到达时才读（见下面的 conversationVisibleRef），所以这里用 ref 存最新值。
+   */
+  const location = useLocation()
+  const conversationVisible =
+    location.pathname === '/harness' || location.pathname.startsWith('/harness/')
+  const conversationVisibleRef = useRef(conversationVisible)
+  conversationVisibleRef.current = conversationVisible
   /** messages React 状态实际属于哪个话题——用于检测 handleSelectTopic 异步间隙中的跨话题污染 */
   const messagesBelongToTopicRef = useRef<number | null>(null)
   const [topics, setTopics] = useState<HarnessTopicRow[]>([])
@@ -254,6 +278,20 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [loadingTopicIds, setLoadingTopicIds] = useState<Set<number>>(new Set())
+  /**
+   * 侧栏行首指示器的另外两端：等待用户确认（黄）/ 刚完成（绿）。
+   * 「进行中」不在这里（见 loadingTopicIds），三者的切换规则集中在 useTopicRunStatus。
+   *
+   * `isTopicActive` 用来实现「当前这个会话窗口跑完不亮绿点」（用户口径 2026-11-23
+   * 「如果当前是这个会话窗口，任务完成后自动移除」）：完成事件到达时按 ref 现取
+   * 「当前话题 + 对话页是否显示着」，人正看着结果出来就不再用绿点提醒；
+   * 人跑到资料库 / 插件仓库等别的页面时，对话窗口并不在眼前，绿点照常提醒。
+   */
+  const { awaitingTopicIds, completedTopicIds, beginTopicTurn, acknowledgeTopic, forgetTopic } =
+    useTopicRunStatus({
+      isTopicActive: (topicId) =>
+        currentTopicIdRef.current === topicId && conversationVisibleRef.current
+    })
   /** 正在气泡内编辑的提问 id（气泡变成可编辑态用） */
   const [editingOrphanId, setEditingOrphanId] = useState<string | null>(null)
 
@@ -1280,6 +1318,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       }
 
       // 标记加载状态（停止按钮可用、侧边栏转圈）
+      // 目标自动续跑轮也是「这一轮真的开跑了」：清掉上一轮可能残留的绿点 / 黄点
+      beginTopicTurn(topicId)
       isLoadingMapRef.current.set(topicId, true)
       syncLoadingTopics()
       if (currentTopicIdRef.current === topicId) {
@@ -1301,7 +1341,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       startStreamListener(topicId, aiMessageId)
     })
     return cleanup
-  }, [startStreamListener, syncLoadingTopics])
+  }, [startStreamListener, syncLoadingTopics, beginTopicTurn])
 
   // ── Handlers ──
 
@@ -1355,6 +1395,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const handleSelectTopic = useCallback(
     async (topic: HarnessTopicRow): Promise<void> => {
       // 不在加载时禁止切换，允许自由切换
+
+      // 用户点开了这条会话 = 刚完成的绿点可以消失了（用户口径 2026-11-23
+      // 「当用户点击这个会话时，这个绿色的点会消失」；黄点不动，见 acknowledgeTopic）
+      acknowledgeTopic(topic.id)
 
       // 保存当前话题状态到缓存
       saveSessionToCache()
@@ -1419,7 +1463,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       setInputValue('')
       setAttachments([])
     },
-    [saveSessionToCache, restoreSessionFromCache]
+    [saveSessionToCache, restoreSessionFromCache, acknowledgeTopic]
   )
 
   /**
@@ -1517,6 +1561,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         sessionsRef.current.delete(topicId)
         isLoadingMapRef.current.delete(topicId)
         syncLoadingTopics()
+        // 行首的两端标记跟着这条会话一起消失（id 之后可能被数据库复用）
+        forgetTopic(topicId)
         chunkCleanupsRef.current.get(topicId)?.()
         chunkCleanupsRef.current.delete(topicId)
         doneCleanupsRef.current.get(topicId)?.()
@@ -1542,7 +1588,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         console.error('Failed to delete topic:', err)
       }
     },
-    [handleNewHarness, syncLoadingTopics]
+    [handleNewHarness, syncLoadingTopics, forgetTopic]
   )
 
   const handleLoadMoreMessages = useCallback(async (): Promise<void> => {
@@ -1688,6 +1734,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
         currentSessionIdRef.current = aiMessageId
 
+        // 这一轮开跑：上一轮留下的「刚完成」绿点作废（会话从「等你查看」回到「进行中」）
+        beginTopicTurn(topicId)
+
         // 标记加载状态
         isLoadingMapRef.current.set(topicId, true)
         syncLoadingTopics()
@@ -1758,6 +1807,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       getActiveWorkspaceId,
       notifyChatTopicActivated,
       refreshTopics,
+      beginTopicTurn,
       t
     ]
   )
@@ -2039,6 +2089,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     setAttachments,
     isLoading,
     loadingTopicIds,
+    awaitingTopicIds,
+    completedTopicIds,
     // refs
     messagesEndRef,
     textareaRef,

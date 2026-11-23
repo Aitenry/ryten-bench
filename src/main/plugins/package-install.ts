@@ -6,6 +6,7 @@ import JSZip from 'jszip'
 import { externalPluginsRoot, findExternalPlugin, invalidateInstalledPluginIds } from './scanner'
 import { readExternalManifest } from './lifecycle'
 import { isBundledPluginId } from './host'
+import { clearInstallRemoved } from './store'
 
 /**
  * **插件包安装内核**：一个已经落盘的「包目录」→ `userData/plugins/<id>/`。
@@ -198,6 +199,8 @@ export function installPackageDir(
     }
   }
   invalidateInstalledPluginIds()
+  // 用户重新装回来了：清掉「显式卸载」标记，否则插件中心的换机自动补齐会一直跳过它
+  clearInstallRemoved(manifest.id)
   logger.info(
     `[Plugins] ${upgraded ? 'Upgraded' : 'Installed'} '${manifest.id}' v${manifest.version} (${files.length} files) -> ${dest}`
   )

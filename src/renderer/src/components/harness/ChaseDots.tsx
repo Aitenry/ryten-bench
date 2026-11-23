@@ -22,7 +22,7 @@ const DOT_POSITIONS: ReadonlyArray<readonly [number, number]> = [
 ]
 
 /** 追逐动画基础样式与关键帧（全局仅注入一次） */
-const CHASE_DOT_CSS = `
+export const CHASE_DOT_CSS = `
 .ryt-chase-dot {
   fill: currentColor;
   opacity: 0.15;

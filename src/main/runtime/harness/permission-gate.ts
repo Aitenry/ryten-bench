@@ -110,6 +110,14 @@ export class PermissionGate {
   /** 新审批广播回调（主进程 IPC 层注入，通知前端弹窗） */
   onApprovalAsked?: (view: ApprovalRequestView) => void
 
+  /**
+   * 挂起审批已结算（用户允许 / 拒绝 / 本轮中止）→ 通知界面「这条会话不再等人」。
+   *
+   * 与 onApprovalAsked 成对：侧栏的「等待确认」黄点靠这两端翻转，
+   * 缺了结算那一端就会一直亮着（哪怕用户已经点过「允许一次」）。
+   */
+  onResolved?: (topicId: number) => void
+
   private modeOf: (topicId: number) => PermissionMode = () => DEFAULT_PERMISSION_MODE
   private workspaceRootOf: () => string | undefined = () => undefined
   private texts: GateTexts = DEFAULT_TEXTS
@@ -125,6 +133,15 @@ export class PermissionGate {
     if (options?.modeOf) this.modeOf = options.modeOf
     if (options?.workspaceRootOf) this.workspaceRootOf = options.workspaceRootOf
     if (options?.texts) this.texts = options.texts
+  }
+
+  /** 结算广播：失败只意味着界面少一次状态翻转，不能影响挂起审批本身的结算 */
+  private notifyResolved(topicId: number): void {
+    try {
+      this.onResolved?.(topicId)
+    } catch {
+      // 广播出口失效（窗口已销毁等）：忽略，结算已经完成
+    }
   }
 
   /* ── 接线 ── */
@@ -292,26 +309,33 @@ export class PermissionGate {
     this.pending.delete(requestId)
     this.detach(record)
     record.resolve(decision === 'allow-once' ? 'allow-once' : 'deny')
+    this.notifyResolved(record.view.topicId)
     return true
   }
 
   /** 话题的全部挂起审批按拒绝结算（用户点了停止 / 话题关闭） */
   abortTopic(topicId: number): void {
+    let settled = false
     for (const [id, record] of [...this.pending]) {
       if (record.view.topicId !== topicId) continue
       this.pending.delete(id)
       this.detach(record)
       record.resolve('deny')
+      settled = true
     }
+    if (settled) this.notifyResolved(topicId)
   }
 
   /** 全部挂起审批按拒绝结算（应用级兜底：渲染进程失效） */
   abortAll(): void {
+    const topics = new Set<number>()
     for (const [id, record] of [...this.pending]) {
       this.pending.delete(id)
       this.detach(record)
       record.resolve('deny')
+      topics.add(record.view.topicId)
     }
+    for (const topicId of topics) this.notifyResolved(topicId)
   }
 
   private detach(record: PendingApproval): void {
@@ -341,6 +365,7 @@ export class PermissionGate {
       const onAbort = (): void => {
         this.pending.delete(requestId)
         resolve('deny')
+        this.notifyResolved(view.topicId)
       }
       record.onAbort = onAbort
       if (signal) {

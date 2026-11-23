@@ -674,6 +674,13 @@ flowchart LR
 
 ### Storage and isolation
 
+- **Default storage layout** — on first launch the app provisions `data/memory`, `data/plugins`
+  and `data/skills` next to the installation (the directory containing the executable; the
+  `.AppImage` location on Linux). If that location is not writable (Program Files, `/opt`, a
+  signed macOS `.app`) it falls back to `<userData>/data`; a packaged macOS build always
+  uses the user data directory. The three settings are prefilled once and can be changed
+  later; changing a path migrates the existing contents to the new location (same-name files
+  keep the target copy and preserve the old one as `*.migrated-*`) before the new setting is saved.
 - **Database** — a single PGlite cluster in `userData/RytenBenchDB`. The DDL single source of truth
   is the Drizzle schema (`src/main/database/schema/` for core tables plus each plugin's
   `main/db/schema*`); migrations are generated with `npx drizzle-kit generate` into `drizzle/` and

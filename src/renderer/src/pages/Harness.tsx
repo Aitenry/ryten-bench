@@ -320,6 +320,8 @@ const Harness: React.FC = () => {
           modelSupportsTools={modelSupportsTools}
           modelSupportsVision={modelSupportsVision}
           currentTopicId={currentTopicId}
+          /* 助手形象只在空白会话里出现：有对话内容时会压住消息/思考过程 */
+          showMascot={isWelcomeMode}
           isDarkMode={isDarkMode}
           colorBgLayout={colorBgLayout}
           colorBorder={colorBorder}
@@ -426,7 +428,16 @@ const Harness: React.FC = () => {
         .harness-message-list .ant-collapse-header { align-items: center; }
         /* 消息之间与折叠步骤之间留出呼吸空间：长任务里连续工具调用不再挤成一片 */
         .harness-message-list .harness-message-row { margin-bottom: 14px; }
+        /* 最后一条消息不留尾巴：底部只需要给悬浮「回到底部」按钮留出空间（见消息区的 pb-14）。
+           endRef 放在内容容器**外面**，所以这里的 :last-child 真的命中最后一行；
+           它以前是内容容器的最后一个子节点，导致这条规则一直没生效。 */
         .harness-message-list .harness-message-row:last-child { margin-bottom: 0; }
+        /* 消息主体的段间距（原先是各消息根节点上的 mb-6）：最后一条同样清零，
+           否则它会带着 24px 尾距和消息区的 pb-14 一起把输入框上方的空隙撑大。 */
+        .harness-message-list .harness-message-body { margin-bottom: 24px; }
+        .harness-message-list .harness-message-row:last-child .harness-message-body {
+          margin-bottom: 0;
+        }
         .harness-message-list .ant-collapse-item { margin-bottom: 7px; }
         .harness-message-list .ant-collapse-item:last-child { margin-bottom: 0; }
         .harness-message-list .ant-collapse-title {

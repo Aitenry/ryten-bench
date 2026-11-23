@@ -15,6 +15,7 @@ import {
 import logo from '@renderer/assets/logo.png'
 import { useTranslation } from '@renderer/i18n'
 import { useLattice } from '@renderer/lattice/useLattice'
+import { resolveLoginReturn } from '@renderer/utils/login-return'
 
 /**
  * 独立登录页（`/login`）。
@@ -100,10 +101,23 @@ const Login: React.FC = () => {
     setServerUrl(status.baseUrl)
   }, [serverTouched, serverUrl, status.baseUrl])
 
-  /** 已登录用户访问 /login：直接回插件仓库（如需要换号，先在账号菜单里退出登录） */
+  /**
+   * 登录页的统一出口：回到**进来之前停的那一页**（见 utils/login-return.ts）。
+   *
+   * 以前三处出口都写死 `/plugins`：从对话页的「未登录」进来，点「返回工作台」却落到插件
+   * 仓库，侧栏记住的插件会话还在、主区域却换了页（用户口径 2026-11-23「无论我选中哪一个
+   * 内容，回来都是选中插件仓库」）。从插件仓库进来时记录的就是插件仓库，行为不变。
+   *
+   * 用 replace 而不是 push：登录页是一次性的中间页，返回后不该还能「后退」回登录页。
+   */
+  const leaveLogin = useCallback((): void => {
+    navigate(resolveLoginReturn(), { replace: true })
+  }, [navigate])
+
+  /** 已登录用户访问 /login：直接回进来之前那一页（如需要换号，先在账号菜单里退出登录） */
   useEffect(() => {
-    if (loggedIn) navigate('/plugins', { replace: true })
-  }, [loggedIn, navigate])
+    if (loggedIn) leaveLogin()
+  }, [loggedIn, leaveLogin])
 
   const handleFinish = useCallback(
     async (values: LoginFormValues): Promise<void> => {
@@ -122,14 +136,14 @@ const Login: React.FC = () => {
         }
         writeRemembered(remember ? { username, baseUrl: serverUrl.trim() } : null)
         message.success(t('login.success'))
-        navigate('/plugins', { replace: true })
+        leaveLogin()
       } catch (err) {
         setError(err instanceof Error ? err.message : t('login.failure'))
       } finally {
         setSubmitting(false)
       }
     },
-    [login, message, navigate, remember, serverUrl, t]
+    [login, message, leaveLogin, remember, serverUrl, t]
   )
 
   /** 内联样式变量：把 antd token 映射成样式表可用的 CSS 变量（亮/暗主题自动跟随） */
@@ -328,7 +342,7 @@ const Login: React.FC = () => {
             </Form>
           </div>
 
-          <button type="button" className="login-back" onClick={() => navigate('/plugins')}>
+          <button type="button" className="login-back" onClick={leaveLogin}>
             <RiArrowLeftLine size={13} />
             {t('login.back')}
           </button>

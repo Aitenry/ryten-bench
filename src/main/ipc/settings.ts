@@ -2,10 +2,13 @@ import { ipcMain } from 'electron'
 import logger from 'electron-log'
 import { settingsStore } from '../context'
 import { awaitInitialized } from '../database/instance'
-import { SystemSettings } from '../types/settings'
+import { HarnessSettings, SystemSettings } from '../types/settings'
 import { syncTrayState } from '../tray'
 import { emitAppEvent } from '../plugins/app-events'
 import { APP_EVENT_WORKSPACE_CHANGED, type AppWorkspaceChangedPayload } from '../plugins/app-hooks'
+import { configurePluginsRoot } from '../workshop/paths'
+import { isSamePath, migrateChangedStoragePaths, storagePathOf } from '../storage'
+import { remapWorkspacePathsUnderRoot } from '../storage/workspace-refs'
 
 /** 当前活动工作区（设置已落盘后读取；未配置时为 null/空串） */
 function workspaceChangedPayload(): AppWorkspaceChangedPayload {
@@ -89,7 +92,30 @@ export function registerSettingsIpc(): void {
         'weatherLastFetched',
         'weatherData'
       ]
-      for (const [key, value] of Object.entries(updates)) {
+      const nextUpdates: Partial<SystemSettings> = { ...updates }
+
+      // 存储路径（记忆 / 插件 / 技能）变更：先把旧目录的数据迁到新目录，成功了才落设置。
+      // 失败时抛错、设置保持原值——绝不出现「设置指向新目录，数据还在旧目录」。
+      let previousHarness: HarnessSettings | undefined
+      let nextHarness: HarnessSettings | undefined
+      if (
+        nextUpdates.harness &&
+        typeof nextUpdates.harness === 'object' &&
+        !Array.isArray(nextUpdates.harness)
+      ) {
+        const rawPreviousHarness = settingsStore.get('harness')
+        previousHarness =
+          rawPreviousHarness &&
+          typeof rawPreviousHarness === 'object' &&
+          !Array.isArray(rawPreviousHarness)
+            ? (rawPreviousHarness as HarnessSettings)
+            : {}
+        nextHarness = { ...previousHarness, ...nextUpdates.harness }
+        await migrateChangedStoragePaths(previousHarness, nextHarness)
+        nextUpdates.harness = nextHarness
+      }
+
+      for (const [key, value] of Object.entries(nextUpdates)) {
         if (value === undefined) continue
         if (!ALLOWED_KEYS.includes(key as keyof SystemSettings)) {
           logger.warn(`[Settings] Rejected unknown setting key: ${key}`)
@@ -102,6 +128,22 @@ export function registerSettingsIpc(): void {
           settingsStore.set(key as keyof SystemSettings, { ...(existing ?? {}), ...value } as never)
         } else {
           settingsStore.set(key as keyof SystemSettings, value)
+        }
+      }
+
+      // 插件存放路径变了：运行时注入的根目录要立即跟着换（不重启）。
+      // 设置页本身不走这条通道（用 workshop-set-root），但探针/外部调用可能直接写设置。
+      if (previousHarness && nextHarness) {
+        const beforePlugins = storagePathOf(previousHarness, 'plugins')
+        const afterPlugins = storagePathOf(nextHarness, 'plugins')
+        if (!isSamePath(beforePlugins, afterPlugins)) {
+          // 插件源码目录整体换了：旧插件工作区行 / 活动工作区也跟着换到新根下，
+          // 否则旧会话会一直指着已经不存在的目录。
+          await remapWorkspacePathsUnderRoot(beforePlugins, afterPlugins)
+          configurePluginsRoot(afterPlugins)
+          logger.info(
+            `[Settings] Plugins storage root applied at runtime: ${afterPlugins || '(cleared)'}`
+          )
         }
       }
       // 托盘设置变化时即时同步（关闭行为 / 菜单勾选态）；语言变化时同步托盘提示文案

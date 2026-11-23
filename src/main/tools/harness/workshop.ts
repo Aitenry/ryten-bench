@@ -1,4 +1,5 @@
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
+import { createHash } from 'node:crypto'
 import * as z from 'zod/v4'
 import type { ToolInfo } from '../../plugins/tool-contract'
 import { TEMPLATE_INFOS } from '../../workshop/templates'
@@ -9,11 +10,13 @@ import {
   disable,
   draftDetail,
   draftSummary,
+  enable,
   exportZip,
   lastReport,
   listDraftSummaries,
   metaOf,
   publish,
+  publishGate,
   readFile,
   removeDraft,
   removeFile,
@@ -23,7 +26,7 @@ import {
   writeFile
 } from '../../workshop/service'
 import { formatReport } from '../../workshop/verify'
-import type { WorkshopBuildInfo, WorkshopReport } from '../../../shared/harness/workshop'
+import type { WorkshopBuildInfo, WorkshopRendererProbe, WorkshopReport } from '../../../shared/harness/workshop'
 
 /**
  * 插件工坊的 AI 工具（4 个）——「和助手对话，把插件做出来」的那条链路。
@@ -35,7 +38,7 @@ import type { WorkshopBuildInfo, WorkshopReport } from '../../../shared/harness/
  * | `plugin_draft` | 草稿与文件（create / list / tree / read / write / remove） |
  * | `plugin_build` | 构建 + 静态体检（宿主说明符、第三方依赖、语法） |
  * | `plugin_verify` | 自动化验收（构建 + 完整检查电池：真实装载冒烟 / 样式作用域 / 宿主安全） |
- * | `plugin_publish` | 装进应用并启用 / 停用 / 卸载 / 导出 zip |
+ * | `plugin_publish` | 装进应用并启用 / 重新启用 / 停用 / 卸载 / 导出 zip |
  *
  * 这样模型在每一步都拿到**针对那一步的诊断**：构建失败给的是 esbuild 的文件:行:列，
  * 验收失败给的是逐项 PASS/FAIL 与「建议怎么改」。把四步合成一个动作，
@@ -77,7 +80,7 @@ export const workshopToolInfos: ToolInfo[] = [
   {
     name: 'plugin_publish',
     label: '发布插件',
-    description: '把插件装进应用并启用 / 停用 / 卸载 / 导出',
+    description: '把插件装进应用并启用 / 重新启用 / 停用 / 卸载 / 导出',
     icon: 'RiUploadCloud2Line',
     color: '#52c41a'
   }
@@ -146,6 +149,19 @@ function contributionHint(report: WorkshopReport | null): string {
   )
 }
 
+/** 渲染层探针结果 → 一行可读结论（安装/验收的回复都用它） */
+function probeLine(probe: WorkshopRendererProbe): string {
+  const registrations =
+    probe.registrations && probe.registrations.length > 0
+      ? `（注册项：${probe.registrations.join('、')}）`
+      : ''
+  if (probe.status === 'pass') return `渲染层探针：通过${registrations}`
+  if (probe.status === 'skip') {
+    return `渲染层探针：跳过（${probe.detail ?? '当前没有可用界面'}）——打开界面后重跑验收可覆盖`
+  }
+  return `渲染层探针：失败（${probe.detail ?? '未知原因'}）`
+}
+
 // ============================================================================
 // plugin_draft
 // ============================================================================
@@ -212,7 +228,16 @@ const createDraftTool = (): StructuredToolInterface =>
             if (!input.id || !input.path) return '缺少 id 或 path'
             if (typeof input.content !== 'string') return '缺少 content'
             const file = writeFile(input.id, input.path, input.content)
-            return `已写入 ${input.id}/${file.path}（${file.size}B）。改完记得 plugin_build 重新构建。`
+            // 带上内容指纹：同路径、同体积的不同内容也能被「防循环护栏」识别成有进展
+            const contentDigest = createHash('sha1')
+              .update(input.content, 'utf-8')
+              .digest('hex')
+              .slice(0, 8)
+            return (
+              `已写入 ${input.id}/${file.path}（${file.size}B，sha ${contentDigest}）。` +
+              `下一步：plugin_build → plugin_verify。每次改完源码都要重新验收——` +
+              `发布闸门按源码指纹核对，只重新构建不算。`
+            )
           }
           case 'remove-file': {
             if (!input.id || !input.path) return '缺少 id 或 path'
@@ -247,7 +272,9 @@ const createDraftTool = (): StructuredToolInterface =>
         'plugins path is configured, ask the user to pick one in Settings -> Assistant -> Plugin Workshop.\n' +
         '  A draft is a real plugin source tree: plugin.json + main/index.ts + renderer/plugin.tsx.\n' +
         '  Every draft ships a WORKSHOP.md with the exact host contract (mount points, host module keys, smoke cases) - read it before writing code.\n' +
-        '  After editing, run plugin_build, then plugin_verify, then plugin_publish.',
+        '  After every source edit, run plugin_build, then plugin_verify, then plugin_publish install. ' +
+        'The publish gate compares a source fingerprint: a report produced before your latest edit is not reusable, ' +
+        'and rebuilding without re-verifying is not enough.',
       schema: z.object({
         action: z
           .enum(['create', 'list', 'tree', 'read', 'write', 'remove-file', 'remove'])
@@ -284,8 +311,13 @@ const buildTool = (): StructuredToolInterface =>
     async (input: { id: string; dev?: boolean }): Promise<string> => {
       const missing = notReady()
       if (missing) return missing
-      const info = await build(input.id, { dev: input.dev })
-      return buildText(info)
+      try {
+        const info = await build(input.id, { dev: input.dev })
+        return buildText(info)
+      } catch (err) {
+        // buildDraft 本身不抛错；这里兜住补写元数据/读写文件这类意外
+        return `plugin_build 失败：${(err as Error).message}`
+      }
     },
     {
       name: 'plugin_build',
@@ -309,15 +341,30 @@ const verifyTool = (): StructuredToolInterface =>
     async (input: { id: string; probe?: boolean }): Promise<string> => {
       const missing = notReady()
       if (missing) return missing
-      const report = await verify(input.id, { probeRenderer: input.probe })
+      let report: WorkshopReport
+      try {
+        report = await verify(input.id, { probeRenderer: input.probe })
+      } catch (err) {
+        // 验收里的文件/权限/宿主意外：给模型一句可读原因，别让整轮工具调用变成框架错误
+        return `plugin_verify 失败：${(err as Error).message}`
+      }
       const text = [formatReport(report)]
       if (!report.ok) {
         text.push('验收未通过：按上面 FAIL 项的建议改代码，然后重新 plugin_verify。')
       } else {
-        text.push('验收通过：可以用 plugin_publish 装进应用并启用。')
+        text.push('验收通过：可以 plugin_publish install 装进应用并启用。')
+        // 安装前探针只能 SKIP（插件还没装），要让模型/用户知道这一项不是漏了
+        if (report.renderer && report.renderer.status !== 'pass') {
+          text.push(
+            `说明：${probeLine(report.renderer)}。发布时会自动在真界面上复验一次，` +
+              `失败会自动回滚卸载——所以这里 SKIP 不影响安装。`
+          )
+        }
       }
       const stale = buildStale(input.id)
-      if (stale) text.push('注意：产物比源码旧（验收后草稿又改过），发布前重新验收一次。')
+      if (stale) {
+        text.push('注意：产物比源码旧（验收过程中源码又被改过），发布前重新 plugin_verify。')
+      }
       return text.join('\n')
     },
     {
@@ -346,34 +393,51 @@ const publishTool = (): StructuredToolInterface =>
   tool(
     async (input: {
       id: string
-      action: 'install' | 'disable' | 'uninstall' | 'export'
+      action: 'install' | 'enable' | 'disable' | 'uninstall' | 'export'
     }): Promise<string> => {
       const missing = notReady()
       if (missing) return missing
       try {
         switch (input.action) {
           case 'install': {
-            const report = lastReport(input.id)
-            if (!report || !report.ok) {
-              return (
-                `拒绝安装：'${input.id}' 还没有一次通过的验收。先跑 plugin_verify（构建 + 全部检查，` +
-                `含宿主安全的 safety.scan），全绿再安装——没验过的插件装上去大概率是「菜单不出现 / 调用报无处理器」。`
+            // 闸门只看三份证据是否都对应**当前源码**：验收通过 + 报告指纹 + 产物指纹。
+            // 具体原因（没验收/验收没过/验收后改过源码/产物过期）由 service 给可执行说明。
+            const gate = publishGate(input.id)
+            if (!gate.ready) return gate.detail
+            const result = await publish(input.id)
+            const lines = [
+              `${result.upgraded ? '已升级并启用' : '已安装并启用'}插件 '${result.id}' v${result.version}（${result.files} 个文件）`,
+              `落地目录：${result.dest}`
+            ]
+            if (result.rendererProbe) {
+              lines.push(probeLine(result.rendererProbe))
+              // 发布流程装完会立刻在真界面上复验；结论已回写最近一次验收报告
+              if (result.rendererProbe.status !== 'fail') {
+                lines.push('最近一次验收报告已同步为发布后复验结果（renderer.probe）。')
+              }
+            }
+            if (!result.enabled) {
+              lines.push(
+                '警告：安装完成但启用状态未生效——请让用户到 设置 → 插件 里手动启用，并查看主日志的 [Plugins] 行。'
               )
             }
-            if (buildStale(input.id)) {
-              return `拒绝安装：产物比源码旧（验收之后草稿又被改过）。先重新 plugin_verify。`
+            lines.push('界面应该马上出现它的菜单/设置页；如果没出现，让用户看一眼主日志的 [Plugins] 行。')
+            return lines.join('\n') + contributionHint(lastReport(input.id))
+          }
+          case 'enable': {
+            const result = await enable(input.id)
+            const lines = [`已启用插件 '${result.id}'`]
+            if (result.rendererProbe) lines.push(probeLine(result.rendererProbe))
+            if (!result.enabled) {
+              lines.push('警告：启用状态未生效——请检查主日志的 [Plugins] 行。')
+            } else {
+              lines.push('界面应该马上出现它的菜单/设置页。')
             }
-            const result = await publish(input.id)
-            return (
-              `${result.upgraded ? '已升级并启用' : '已安装并启用'}插件 '${result.id}' v${result.version}（${result.files} 个文件）\n` +
-              `落地目录：${result.dest}\n` +
-              `界面应该马上出现它的菜单/设置页；如果没出现，让用户看一眼主日志的 [Plugins] 行。` +
-              contributionHint(report)
-            )
+            return lines.join('\n')
           }
           case 'disable':
             disable(input.id)
-            return `已停用插件 '${input.id}'（目录与数据都还在，可在 设置 → 插件 里重新启用）`
+            return `已停用插件 '${input.id}'（目录与数据都还在，可用 plugin_publish enable 或面板开关重新启用）`
           case 'uninstall':
             unpublish(input.id)
             return `已卸载插件 '${input.id}'（删掉插件代码；数据未动）`
@@ -392,14 +456,19 @@ const publishTool = (): StructuredToolInterface =>
       name: 'plugin_publish',
       description:
         'Publish a verified plugin draft into the running app, or manage an already published one.\n' +
-        '  install - Install (or upgrade) the built package into userData/plugins/<id> and enable it immediately; ' +
-        'refused unless the latest verification passed and the build is not stale\n' +
+        '  install - Install (or upgrade) the built package into userData/plugins/<id>, enable it immediately, then re-check ' +
+        'the renderer in the real UI (rolls back automatically if that fails). Refused unless the latest verification passed ' +
+        'AND both the verification report and the built package were made from the current sources; when refused, follow the ' +
+        'stated reason (usually plugin_verify again) instead of retrying the same install call\n' +
+        '  enable - Turn an already installed plugin back on and re-check it in the real UI (auto-disables it again if that fails)\n' +
         '  disable - Turn the plugin off but keep its files and data\n' +
         '  uninstall - Remove the plugin code (data is kept)\n' +
         '  export - Write a distributable zip of the built package',
       schema: z.object({
         id: z.string().describe('插件 id'),
-        action: z.enum(['install', 'disable', 'uninstall', 'export']).describe('要执行的动作')
+        action: z
+          .enum(['install', 'enable', 'disable', 'uninstall', 'export'])
+          .describe('要执行的动作')
       })
     }
   )

@@ -30,7 +30,7 @@ import {
   resolvePluginSource,
   type ResolvedPluginSource
 } from './sources'
-import { recordLatticeSourceCache } from './sync'
+import { recordLatticeSourceCache, syncLattice } from './sync'
 import type {
   HubDetail,
   HubEntry,
@@ -75,8 +75,9 @@ import type {
  * - `importLocalPlugins`：弹目录选择框，把本地源码目录下带 plugin.json 的插件逐个发布到平台。
  */
 
-/** 平台取值（设计 §17.16）：包 ≤20MiB、readme ≤16KiB、manifest ≤16KiB */
+/** 平台取值（设计 §17.16）：包 ≤20MiB、源码包 ≤50MiB、readme ≤16KiB、manifest ≤16KiB */
 const PACKAGE_MAX_BYTES = 20 * 1024 * 1024
+const SOURCE_MAX_BYTES = 50 * 1024 * 1024
 const README_MAX_BYTES = 16 * 1024
 const MANIFEST_MAX_BYTES = 16 * 1024
 const NAME_MAX_CHARS = 64
@@ -511,10 +512,22 @@ interface ApiUploadResponse {
   download_path?: unknown
 }
 
-/** 发布目录的选项（v2：重新发布/本地导入都会把同一份 zip 作为源码包一起上传） */
+/** 发布目录的选项（v2：源码包默认与安装包同字节；也可以显式指定独立的源码目录） */
 interface PublishPackageOptions {
-  /** 同时把同一个 zip 作为源码包上传（契约 v2：安装包 = 源码目录整包 zip，源码包 = 同一份字节） */
+  /**
+   * 兼容路径：把**同一个 zip** 作为源码包上传（插件工坊里“插件 = 源码目录”，
+   * 安装包就是源码目录整包 zip，所以两份字节相同）。
+   *
+   * 指定 `sourcePath` 时不生效——真实源码目录必须与构建产物分开上传。
+   */
   includeSource?: boolean
+  /**
+   * 独立源码目录 / 源码 .zip：作为该版本的源码包上传（≤50MiB）。
+   *
+   * 适用场景是“仓库里的插件”：安装包取自 `dist/<id>/`（构建产物），源码取自
+   * `plugins/<id>/`（TypeScript 等源码）。平台按声明里的 sha256 校验，两份字节不同。
+   */
+  sourcePath?: string
   /** 覆盖 plugin.json 里的版本号（重新发布时用户填的新版本号；包内清单同步改写） */
   versionOverride?: string
   /** 覆盖更新说明（未给时沿用 plugin.json.changelog / `发布 v<version>`） */
@@ -526,8 +539,12 @@ interface PublishPackageOptions {
 interface PublishPackageResult {
   plugin_id: string
   version: string
-  /** 本次包体（= 源码包）的 sha256 */
+  /** 本次包体的 sha256 */
   sha256: string
+  /** 本次源码包的 sha256（没有源码包时缺省） */
+  sourceSha256?: string
+  /** 平台最终状态：已发布 / 等待管理员审核（平台自 2026-11-23 起默认送审） */
+  status: 'published' | 'review'
   /** 平台是否接受了源码包（返回 source_upload 且 PUT 成功） */
   sourceUploaded: boolean
   /** 幂等复用：同版本同 sha 已发布过，没有上传任何字节 */
@@ -562,6 +579,44 @@ function publishPhaseError(
     return new Error(`安装包上传失败${err.status ? `（HTTP ${err.status}）` : ''}：${err.message}`)
   }
   return err
+}
+
+/**
+ * 源码包来源解析：目录（重新打包，跳过 `.git` / `node_modules` 等无关目录）或 `.zip`（原样上传）。
+ *
+ * 与安装包的区别：源码目录**不需要** plugin.json（平台允许源码包是纯工程目录）；
+ * 体积上限是 50MiB，比安装包宽松。
+ */
+async function resolveSourceArchive(
+  sourcePath: string,
+  options: { silent?: boolean } = {}
+): Promise<{ buffer: Buffer; sha256: string; size: number }> {
+  const trimmed = String(sourcePath ?? '').trim()
+  if (trimmed === '') throw new Error('源码目录为空')
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(trimmed)
+  } catch {
+    throw new Error(`源码路径不存在：${trimmed}`)
+  }
+  let buffer: Buffer
+  if (stat.isDirectory()) {
+    const files = collectPackageFiles(trimmed)
+    if (files.length === 0) throw new Error('源码目录是空的')
+    const zipped = await zipPackageDir(files, options.silent ? { silent: true } : {})
+    buffer = zipped.buffer
+  } else if (stat.isFile() && trimmed.toLowerCase().endsWith('.zip')) {
+    buffer = fs.readFileSync(trimmed)
+  } else {
+    throw new Error('源码必须是目录或 .zip 文件')
+  }
+  if (buffer.length === 0) throw new Error('源码包是空的')
+  if (buffer.length > SOURCE_MAX_BYTES) {
+    throw new Error(
+      `源码包 ${(buffer.length / 1024 / 1024).toFixed(1)}MiB 超过平台上限 50MiB，请去掉不需要的文件`
+    )
+  }
+  return { buffer, sha256: createHash('sha256').update(buffer).digest('hex'), size: buffer.length }
 }
 
 /** 把包目录发布到插件中心：元数据 → 安装包体 →（可选）源码包体 */
@@ -601,6 +656,12 @@ async function publishPackageDir(
     )
   }
   const sha256 = createHash('sha256').update(buffer).digest('hex')
+  // 源码包：显式源码目录优先（源码与构建产物分离）；否则沿用「安装包 = 源码目录整包」的旧口径
+  const sourceArchive = options.sourcePath
+    ? await resolveSourceArchive(options.sourcePath, options.silent ? { silent: true } : {})
+    : options.includeSource
+      ? { buffer, sha256, size: buffer.length }
+      : null
   const readme = readReadme(root)
   const tags = readStringArray(effectiveManifest.tags)
     .slice(0, 8)
@@ -634,12 +695,11 @@ async function publishPackageDir(
     sha256,
     manifest: manifestForPublish(effectiveManifest, effectiveRawText)
   }
-  if (options.includeSource) {
-    // v2：源码包与安装包是**同一份字节**（安装包 = 源码目录整包 zip）
+  if (sourceArchive) {
     meta.source = {
       asset_name: `${pluginId}-${version}-src.zip`,
-      size: buffer.length,
-      sha256
+      size: sourceArchive.size,
+      sha256: sourceArchive.sha256
     }
   }
   if (description !== '') meta.description = description
@@ -654,7 +714,7 @@ async function publishPackageDir(
   emit({ phase: 'meta', sent: 0, total: 1 })
   logger.info(
     `[Lattice] Publishing metadata for ${pluginId}@${version} (${(buffer.length / 1024).toFixed(1)}KiB` +
-      `${options.includeSource ? ', with source package' : ''})`
+      `${sourceArchive ? `, source ${(sourceArchive.size / 1024).toFixed(1)}KiB` : ''})`
   )
   let publish: ApiPublishResponse
   try {
@@ -670,9 +730,15 @@ async function publishPackageDir(
   const uploadPath = typeof publish.upload?.path === 'string' ? publish.upload.path : ''
   const reused = uploadPath === ''
   let sourceUploaded = false
+  // 平台自 2026-11-23 起默认送审：上传成功 ≠ 已发布，两者都是成功，只是提示文案不同
+  let status: 'published' | 'review' = 'published'
   if (!uploadPath) {
     // 幂等重试命中：同版本同 sha 已经在平台发布过，不需要再传包体
-    logger.info(`[Lattice] ${pluginId}@${version} already exists with identical content (idempotent reuse), skipping package upload`)
+    const reusedStatus = asRecord(publish.version)?.status
+    if (reusedStatus === 'review') status = 'review'
+    logger.info(
+      `[Lattice] ${pluginId}@${version} already exists with identical content (idempotent reuse), skipping package upload`
+    )
   } else {
     const headers = normalizeHeaders(publish.upload?.headers)
     if (!headers['Content-Type']) headers['Content-Type'] = 'application/octet-stream'
@@ -689,26 +755,36 @@ async function publishPackageDir(
       } catch {
         // 上传响应不是 JSON 也不影响 2xx 已成功的事实
       }
-      if (typeof uploadResult?.status === 'string' && uploadResult.status !== 'published') {
-        throw new Error(`插件包上传后状态异常：${uploadResult.status}（期望 published）`)
+      const uploadStatus = typeof uploadResult?.status === 'string' ? uploadResult.status : ''
+      if (uploadStatus === 'review') {
+        // 已提交、等待管理员审核：这是正常结果，不是失败
+        status = 'review'
+      } else if (uploadStatus !== '' && uploadStatus !== 'published') {
+        throw new Error(`插件包上传后状态异常：${uploadStatus}（期望 published 或 review）`)
       }
     } catch (err) {
       throw publishPhaseError(err, 'package', pluginId, version)
     }
   }
 
-  if (options.includeSource) {
+  if (sourceArchive) {
     const sourceUploadPath =
       typeof publish.source_upload?.path === 'string' ? publish.source_upload.path : ''
     if (sourceUploadPath) {
       const sourceHeaders = normalizeHeaders(publish.source_upload?.headers)
       if (!sourceHeaders['Content-Type']) sourceHeaders['Content-Type'] = 'application/zip'
-      if (!sourceHeaders['X-Content-SHA256']) sourceHeaders['X-Content-SHA256'] = sha256
-      emit({ phase: 'upload', sent: 0, total: buffer.length })
+      if (!sourceHeaders['X-Content-SHA256'])
+        sourceHeaders['X-Content-SHA256'] = sourceArchive.sha256
+      emit({ phase: 'upload', sent: 0, total: sourceArchive.size })
       try {
-        await uploadLatticeBytes(sourceUploadPath, buffer, sourceHeaders, (sent, total) => {
-          emit({ phase: 'upload', sent, total })
-        })
+        await uploadLatticeBytes(
+          sourceUploadPath,
+          sourceArchive.buffer,
+          sourceHeaders,
+          (sent, total) => {
+            emit({ phase: 'upload', sent, total })
+          }
+        )
         sourceUploaded = true
       } catch (err) {
         throw publishPhaseError(err, 'source', pluginId, version)
@@ -723,18 +799,38 @@ async function publishPackageDir(
 
   logger.info(
     `[Lattice] Published ${pluginId}@${version} (${(buffer.length / 1024).toFixed(1)}KiB` +
-      `${options.includeSource ? ', with source package' : ''})`
+      `${sourceArchive ? ', with source package' : ''}, status=${status})`
   )
   notifyStateChanged()
-  return { plugin_id: pluginId, version, sha256, sourceUploaded, reused }
+  return {
+    plugin_id: pluginId,
+    version,
+    sha256,
+    ...(sourceArchive ? { sourceSha256: sourceArchive.sha256 } : {}),
+    status,
+    sourceUploaded,
+    reused
+  }
 }
 
-/** 上传插件包（v2 起安装包与源码包一起上传）并归一成 IPC 结果形状 */
-async function uploadPackageDirAsLatticeResult(root: string): Promise<LatticeUploadResult> {
+/** 上传插件包并归一成 IPC 结果形状（`sourcePath` 给出时源码与安装包分开上传） */
+async function uploadPackageDirAsLatticeResult(
+  root: string,
+  sourcePath?: string
+): Promise<LatticeUploadResult> {
   // v2：用户口径「需要版本管理、源代码管理、安装包」——从本机上传的插件同样必须带源码，
   // 否则别的机器装上以后无法查看/修改源码（安装包只是 bundle）。
-  const result = await publishPackageDir(root, { includeSource: true })
-  return { ok: true, plugin_id: result.plugin_id, version: result.version }
+  // 仓库里的插件：安装包取构建产物目录，源码取源码目录（两份字节不同）。
+  const result = sourcePath
+    ? await publishPackageDir(root, { sourcePath })
+    : await publishPackageDir(root, { includeSource: true })
+  return {
+    ok: true,
+    plugin_id: result.plugin_id,
+    version: result.version,
+    status: result.status,
+    sourceUploaded: result.sourceUploaded
+  }
 }
 
 /** 上传来源解析：目录 / .zip（压缩包先解到临时目录） */
@@ -762,20 +858,67 @@ async function resolveUploadRoot(source: string): Promise<{ root: string; cleanu
   throw new Error('请选择插件包目录（含 plugin.json）或 .zip 压缩包')
 }
 
-/** 按显式路径上传（目录或 zip） */
-export async function uploadLatticePackage(source: string): Promise<LatticeUploadResult> {
+/** 按显式路径上传（目录或 zip）；`sourcePath` 给出时源码与安装包分开上传 */
+export async function uploadLatticePackage(
+  source: string,
+  sourcePath?: string
+): Promise<LatticeUploadResult> {
   const trimmed = String(source ?? '').trim()
   if (!trimmed) return { ok: false, error: '缺少插件包路径' }
   try {
     const resolved = await resolveUploadRoot(trimmed)
     try {
-      return await uploadPackageDirAsLatticeResult(resolved.root)
+      return await uploadPackageDirAsLatticeResult(resolved.root, sourcePath)
     } finally {
       resolved.cleanup?.()
     }
   } catch (err) {
     const message = latticeErrorMessage(err)
     logger.warn(`[Lattice] Failed to upload plugin package (${trimmed}): ${message}`)
+    return { ok: false, error: message }
+  }
+}
+
+/**
+ * 「本机已安装插件」直接发布时一起上传的源码目录。
+ *
+ * 只有目录里确实是**同一个插件**的 `plugin.json` 才算源码；否则不传源码
+ * （退回「安装包字节同时作为源码包」的旧口径），避免把别的目录误传上去。
+ */
+function sourceDirForInstalledPublish(pluginId: string): string | undefined {
+  const resolved = resolvePluginSource(pluginId)
+  if (!resolved?.path) return undefined
+  try {
+    const raw = fs.readFileSync(path.join(resolved.path, 'plugin.json'), 'utf-8')
+    const manifest = JSON.parse(raw.replace(/^\uFEFF/u, '')) as { id?: unknown }
+    return manifest?.id === pluginId ? resolved.path : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `lattice:hub-publish-installed`：把**本机已安装**的这个插件直接发布到插件中心。
+ *
+ * 为什么需要它（用户 2026-11-23：「为什么发布本地插件还要用户自己去选择」）：
+ * 详情页的「发布到插件中心」只出现在「已安装、未发布」的插件上，安装包目录
+ * （`userData/plugins/<id>`）与源码目录都是现成的——没必要再弹系统目录选择框，
+ * 让用户从磁盘上把自己的插件再找一遍。找不到已安装包时才由调用方回退到「选目录发布」。
+ */
+export async function publishInstalledLatticePlugin(
+  pluginId: string
+): Promise<LatticeUploadResult> {
+  const id = String(pluginId ?? '').trim()
+  if (!id) return { ok: false, error: '缺少插件 id' }
+  const installed = findExternalPlugin(id)
+  if (!installed) {
+    return { ok: false, error: `插件 '${id}' 没有安装在本机，无法直接发布` }
+  }
+  try {
+    return await uploadPackageDirAsLatticeResult(installed.dir, sourceDirForInstalledPublish(id))
+  } catch (err) {
+    const message = latticeErrorMessage(err)
+    logger.warn(`[Lattice] Failed to publish installed plugin '${id}': ${message}`)
     return { ok: false, error: message }
   }
 }
@@ -790,6 +933,30 @@ export async function pickAndUploadLatticePackage(): Promise<LatticeUploadResult
     return { ok: true, canceled: true }
   }
   return await uploadLatticePackage(result.filePaths[0])
+}
+
+/**
+ * 弹两个目录选择框：先选构建产物（安装包），再选源码目录（源码包）。
+ *
+ * 这是给“仓库里的插件”用的：`dist/<id>/` 是打包产物、`plugins/<id>/` 是 TypeScript 源码，
+ * 两者字节不同，平台上的「源代码」下载才拿得到真正的源码。任一对话框取消都按“取消发布”处理。
+ */
+export async function pickAndUploadLatticePackageWithSource(): Promise<LatticeUploadResult> {
+  const pkg = await dialog.showOpenDialog({
+    title: '选择要发布到插件中心的安装包目录（构建产物，含 plugin.json）',
+    properties: ['openDirectory']
+  })
+  if (pkg.canceled || pkg.filePaths.length === 0) {
+    return { ok: true, canceled: true }
+  }
+  const src = await dialog.showOpenDialog({
+    title: '选择该版本的源码目录（源码工程，不含 node_modules；将与安装包分开上传）',
+    properties: ['openDirectory']
+  })
+  if (src.canceled || src.filePaths.length === 0) {
+    return { ok: true, canceled: true }
+  }
+  return await uploadLatticePackage(pkg.filePaths[0], src.filePaths[0])
 }
 
 /** 弹 .zip 安装包选择框并上传（走同一套解压/清单/发布流水线） */
@@ -905,7 +1072,9 @@ export async function installLatticePlugin(
         }
       })
     } catch (err) {
-      logger.warn(`[Lattice] Failed to write install record (already installed locally): ${latticeErrorMessage(err)}`)
+      logger.warn(
+        `[Lattice] Failed to write install record (already installed locally): ${latticeErrorMessage(err)}`
+      )
     }
 
     // v2：该版本带源码就自动下载并解压到本机源码目录（失败不判安装失败，见契约 §2）
@@ -929,7 +1098,9 @@ export async function installLatticePlugin(
           sourcePath = existing.path
           sourceVersion = target.version
           sourceManaged = existing.managed
-          logger.info(`[Lattice] ${installedId}@${target.version} source is already local, skipping duplicate download`)
+          logger.info(
+            `[Lattice] ${installedId}@${target.version} source is already local, skipping duplicate download`
+          )
         } else {
           logger.info(`[Lattice] Downloading source ${installedId}@${target.version}...`)
           const downloaded = await downloadLatticeFile(
@@ -968,7 +1139,17 @@ export async function installLatticePlugin(
     }
 
     notifyStateChanged()
-    logger.info(`[Lattice] Install complete: ${info.id}@${info.version}${info.upgraded ? ' (upgrade)' : ''}`)
+    /**
+     * 安装/更新后拉一次云端安装记录（不自动补齐其它插件）：
+     * 全新安装的本机可能只有默认数据，而云端还留着这份插件的数据快照——
+     * 尤其是「卸载勾选清除本机数据」后重装时，`data_rev` 缓存已被清掉，这里 pull
+     * 会把云端数据写回 `plugin-state/<id>.json`（用户 2026-11-23：「不然以后的数据同步怎么办」）。
+     * 不 await：安装结果不依赖网络同步，后台完成即可。
+     */
+    void syncLattice({ direction: 'pull', installMissing: false })
+    logger.info(
+      `[Lattice] Install complete: ${info.id}@${info.version}${info.upgraded ? ' (upgrade)' : ''}`
+    )
     return {
       ok: true,
       id: info.id,
@@ -1077,7 +1258,10 @@ export async function republishLatticePlugin(
         )
         logger.info(`[Lattice] Updated plugin.json version for ${pluginId} to ${published.version}`)
       } catch (err) {
-        logger.warn('[Lattice] Failed to write back plugin.json version (publish itself succeeded):', err)
+        logger.warn(
+          '[Lattice] Failed to write back plugin.json version (publish itself succeeded):',
+          err
+        )
       }
     }
     recordPublishedSource(pluginId, published.version, root, published.sha256)
@@ -1087,7 +1271,13 @@ export async function republishLatticePlugin(
       sha256: published.sha256
     })
     logger.info(`[Lattice] Republish complete: ${pluginId}@${published.version} (source ${root})`)
-    return { ok: true, plugin_id: pluginId, version: published.version, sourcePath: root }
+    return {
+      ok: true,
+      plugin_id: pluginId,
+      version: published.version,
+      status: published.status,
+      sourcePath: root
+    }
   } catch (err) {
     const message = latticeErrorMessage(err)
     logger.warn(`[Lattice] Republish failed: ${message}`)
@@ -1210,7 +1400,9 @@ function scanLocalPluginDirs(root: string): string[] {
 }
 
 /** `lattice:import-local-dir`：弹目录选择框 → 批量发布本地源码目录下的插件（安装包 + 源码） */
-export async function importLocalPlugins(explicitDir?: string): Promise<LatticeImportLocalDirResult> {
+export async function importLocalPlugins(
+  explicitDir?: string
+): Promise<LatticeImportLocalDirResult> {
   const preset = typeof explicitDir === 'string' ? explicitDir.trim() : ''
   if (preset) {
     // 显式路径：给「设为插件存放路径」与自动化/工装用（正常 UI 不传，走系统选择框）

@@ -319,6 +319,25 @@ function isManagedSourceDir(dir: string, pluginId: string): boolean {
   return meta !== null && meta.managed_by === SOURCE_META_MARKER && meta.plugin_id === pluginId
 }
 
+/**
+ * 这个目录能不能被应用当成「插件源码/草稿」使用。
+ *
+ * 判据与 `resolvePluginSource` 的草稿分支一致：有 `source.json`（应用托管）、
+ * 有 `plugin.json`（插件包/草稿）、或有 `workshop.json`（工坊草稿）。
+ *
+ * 为什么需要它：用户删源码时经常只删掉文件（甚至删一半），目录里只剩空文件夹或
+ * 零散文件——这样的目录既不是可用草稿，又会被「不是本应用托管的，别覆盖」的保护挡住，
+ * 导致重装后的源码被放到 userData、`在对话中修改` 永远走「打开文件夹」回退
+ * （用户 2026-11-23：「卸载并删除源码后重装，在对话中修改会失败，重启才好」）。
+ */
+function isUsableDraftDir(dir: string): boolean {
+  return (
+    readSourceMeta(dir) !== null ||
+    readManifestInfo(dir) !== null ||
+    fs.existsSync(path.join(dir, 'workshop.json'))
+  )
+}
+
 // ---------- 索引文件（userData/lattice-sources.json） ----------
 
 function registryPath(): string {
@@ -362,7 +381,10 @@ function saveRegistry(next: SourceRegistryFile): void {
   try {
     writeJsonAtomic(registryPath(), next)
   } catch (err) {
-    logger.warn('[Lattice] Failed to write lattice-sources.json (does not affect the sources themselves):', err)
+    logger.warn(
+      '[Lattice] Failed to write lattice-sources.json (does not affect the sources themselves):',
+      err
+    )
   }
 }
 
@@ -395,7 +417,13 @@ function planSourceTarget(pluginId: string, version: string): SourceTargetPlan {
     if (!dirExists(draft)) {
       return { target: draft, managed: 'pluginsPath', existing: false, existingMeta: null }
     }
-    if (isManagedSourceDir(draft, pluginId) || isDirEmpty(draft)) {
+    /**
+     * 只保护「能被应用认出来的草稿」（plugin.json / workshop.json / source.json）。
+     * 只剩空文件夹/半删文件的残留目录不是可用草稿，直接当本次安装的落点：
+     * `installSourceBytes` 会先备份再替换，既不会丢用户数据，也不会把源码挤到
+     * userData 导致后续「在对话中修改」失败。
+     */
+    if (isManagedSourceDir(draft, pluginId) || !isUsableDraftDir(draft)) {
       return {
         target: draft,
         managed: 'pluginsPath',
@@ -453,7 +481,10 @@ function cleanupUserDataVersions(pluginId: string, keepDirName: string | null): 
       fs.rmSync(dir, { recursive: true, force: true })
       logger.info(`[Lattice] Cleaned up old source directory: ${dir}`)
     } catch (err) {
-      logger.warn(`[Lattice] Failed to clean up old source directory (can be deleted manually): ${dir}`, err)
+      logger.warn(
+        `[Lattice] Failed to clean up old source directory (can be deleted manually): ${dir}`,
+        err
+      )
     }
   }
   if (keepDirName === null) {
@@ -500,7 +531,9 @@ function ensureRootManifest(dir: string, pluginId: string): void {
     ) as unknown
     if (asRecord(parsed) === null) return
     fs.writeFileSync(path.join(dir, 'plugin.json'), `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8')
-    logger.info(`[Lattice] No plugin.json in the source package root, added one from the installed package: ${dir}`)
+    logger.info(
+      `[Lattice] No plugin.json in the source package root, added one from the installed package: ${dir}`
+    )
   } catch (err) {
     logger.warn(
       '[Lattice] Source package is missing plugin.json and the write-back failed (source is still saved, but may not appear in the plugin mode sidebar):',
@@ -568,7 +601,9 @@ export async function installSourceBytes(
       }
       if (modified) {
         backupPath = backupExistingSource(pluginId, plan.target)
-        logger.info(`[Lattice] Backed up user changes before replacing source: ${plan.target} -> ${backupPath}`)
+        logger.info(
+          `[Lattice] Backed up user changes before replacing source: ${plan.target} -> ${backupPath}`
+        )
       }
       fs.rmSync(plan.target, { recursive: true, force: true })
     }
@@ -702,7 +737,29 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
   if (!pluginId) return null
   const draft = workshopDraftDirFor(pluginId)
   if (!draft) return null
-  if (dirExists(draft)) return resolvePluginSource(pluginId)
+  if (dirExists(draft)) {
+    // 可用草稿（用户自己的源码 / 已托管源码）：不动它，直接用现有源码
+    if (isUsableDraftDir(draft)) return resolvePluginSource(pluginId)
+    /**
+     * 不可用的残留目录（用户删源码后只剩空文件夹/零散文件）：它会让下面的迁移
+     * 直接放弃，于是「在对话中修改」永远只打开文件夹（用户 2026-11-23 的现场）。
+     * 备份后清掉，把 userData 里的源码迁回插件存放路径；清不掉就退回现有源码。
+     */
+    try {
+      const backup = isDirEmpty(draft) ? null : backupExistingSource(pluginId, draft)
+      fs.rmSync(draft, { recursive: true, force: true })
+      logger.warn(
+        `[Lattice] Removed unusable leftover source directory before migrating: ${draft}` +
+          (backup ? ` (backup: ${backup})` : ' (it was empty)')
+      )
+    } catch (err) {
+      logger.warn(
+        `[Lattice] Failed to remove unusable leftover source directory (${draft}); keeping the source where it is:`,
+        err
+      )
+      return resolvePluginSource(pluginId)
+    }
+  }
   const current = resolvePluginSource(pluginId)
   if (!current || current.inWorkshop) return current
   try {
@@ -730,7 +787,10 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
       ...(sha256 ? { sha256 } : {})
     }
   } catch (err) {
-    logger.warn(`[Lattice] Failed to migrate source to plugin storage path (continuing to use ${current.path}):`, err)
+    logger.warn(
+      `[Lattice] Failed to migrate source to plugin storage path (continuing to use ${current.path}):`,
+      err
+    )
     return current
   }
 }
@@ -773,6 +833,9 @@ export function recordPublishedSource(
     })
     logger.info(`[Lattice] Recorded release version: ${pluginId}@${version} (${resolvedDir})`)
   } catch (err) {
-    logger.warn('[Lattice] Failed to record published source info (does not affect the release itself):', err)
+    logger.warn(
+      '[Lattice] Failed to record published source info (does not affect the release itself):',
+      err
+    )
   }
 }

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
 import type { SystemSettings } from '../main/types/settings'
@@ -393,16 +393,25 @@ const api = {
       ipcRenderer.invoke(LATTICE_IPC.hubList, query ?? {}) as Promise<HubListResult>,
     /** 插件详情（含 readme / 版本清单 / 我的安装记录） */
     detail: (pluginId: string) =>
-      ipcRenderer.invoke(LATTICE_IPC.hubDetail, pluginId) as Promise<HubDetail>,
+      ipcRenderer.invoke(LATTICE_IPC.hubDetail, pluginId) as Promise<HubDetail | null>,
+    /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+    publishInstalled: (pluginId: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.hubPublishInstalled, pluginId) as Promise<LatticeUploadResult>,
     /** 弹系统目录选择框并发布（取消返回 `{ok:true,canceled:true}`） */
     pickAndUpload: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubPickUpload) as Promise<LatticeUploadResult>,
     /** 选 .zip 安装包发布（目录上传的补充入口） */
     pickAndUploadZip: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubPickUploadZip) as Promise<LatticeUploadResult>,
-    /** 按显式路径（插件包目录或 .zip）发布 */
-    uploadSource: (source: string) =>
-      ipcRenderer.invoke(LATTICE_IPC.hubUpload, { source }) as Promise<LatticeUploadResult>,
+    /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+    pickAndUploadWithSource: () =>
+      ipcRenderer.invoke(LATTICE_IPC.hubPickUploadWithSource) as Promise<LatticeUploadResult>,
+    /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 可选，给出时源码单独上传 */
+    uploadSource: (source: string, sourcePath?: string) =>
+      ipcRenderer.invoke(LATTICE_IPC.hubUpload, {
+        source,
+        ...(sourcePath ? { sourcePath } : {})
+      }) as Promise<LatticeUploadResult>,
     /** 下载并安装（或升级）插件；失败返回 `{ok:false,error}`，不抛错 */
     install: (pluginId: string, version?: string) =>
       ipcRenderer.invoke(
@@ -465,8 +474,7 @@ const api = {
         input ?? { direction: 'both' }
       ) as Promise<LatticeSyncResult>,
     /** 同步详情：最近一次同步的自动补齐成功/失败明细与孤儿记录（失败原因可查看） */
-    syncDetails: () =>
-      ipcRenderer.invoke(LATTICE_IPC.syncDetails) as Promise<LatticeSyncDetails>,
+    syncDetails: () => ipcRenderer.invoke(LATTICE_IPC.syncDetails) as Promise<LatticeSyncDetails>,
     /** 「缺失插件自动补齐」开关（持久化；默认开启） */
     setAutoInstallMissing: (enabled: boolean) =>
       ipcRenderer.invoke(
@@ -478,7 +486,11 @@ const api = {
       ipcRenderer.invoke(LATTICE_IPC.syncConflicts) as Promise<LatticeSyncConflict[]>,
     /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
     resolveConflict: (pluginId: string, strategy: 'local' | 'cloud') =>
-      ipcRenderer.invoke(LATTICE_IPC.resolveConflict, pluginId, strategy) as Promise<LatticeResolveConflictResult>,
+      ipcRenderer.invoke(
+        LATTICE_IPC.resolveConflict,
+        pluginId,
+        strategy
+      ) as Promise<LatticeResolveConflictResult>,
     /** 登录态/基址/同步摘要变化推送 */
     onStateChanged: (callback: (status: LatticeStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: LatticeStatus): void =>

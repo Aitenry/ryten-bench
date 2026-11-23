@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Input, Modal, Table, Tooltip, theme } from 'antd'
+import { App, Button, Checkbox, Input, Modal, Table, Tooltip, theme } from 'antd'
 import type { TableProps } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -71,7 +71,7 @@ function formatPublishedAt(value?: string): string {
 const PluginDetail: React.FC = () => {
   const { pluginId = '' } = useParams<{ pluginId: string }>()
   const { token } = theme.useToken()
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
   const { effectiveTheme } = useTheme()
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -96,6 +96,15 @@ const PluginDetail: React.FC = () => {
   const [republishChangelog, setRepublishChangelog] = useState('')
   const [republishError, setRepublishError] = useState<string | null>(null)
   const [republishing, setRepublishing] = useState(false)
+  /**
+   * 卸载确认框（用户 2026-11-23：「卸载的时候没有清除本地数据的勾选，之前是有的」）。
+   *
+   * 用受控 Modal 而不是 `modal.confirm`：勾选项决定传给主进程的 `purgeData`，
+   * 必须有真实状态；确认按钮还要有 loading（卸载会先撤云端安装记录，最长几秒）。
+   */
+  const [uninstallOpen, setUninstallOpen] = useState(false)
+  const [purgeData, setPurgeData] = useState(false)
+  const [uninstalling, setUninstalling] = useState(false)
 
   /**
    * 插件中心（登录后才可用）：
@@ -106,6 +115,7 @@ const PluginDetail: React.FC = () => {
     available: latticeReady,
     loggedIn,
     pickAndUpload,
+    publishInstalled,
     clearUploadProgress,
     detailHub,
     installFromHub,
@@ -167,9 +177,10 @@ const PluginDetail: React.FC = () => {
       return
     }
     try {
+      // 未发布到平台 → 主进程把 404 归一成 null；网络失败也按「无平台信息」降级
       setHubDetail(await detailHub(pluginId))
     } catch {
-      // 未发布 / 网络失败：详情页照常展示本机信息，不弹错
+      // 详情页照常展示本机信息，不弹错、不刷 console（平台不可达是常见状态）
       setHubDetail(null)
     }
   }, [detailHub, latticeReady, loggedIn, pluginId])
@@ -224,9 +235,29 @@ const PluginDetail: React.FC = () => {
   const versions = hubDetail?.versions ?? []
   const latestVersionHasSource = Boolean(
     hubDetail?.has_source ??
-      (versions.length > 0 ? versions[versions.length - 1]?.has_source : false)
+    (versions.length > 0 ? versions[versions.length - 1]?.has_source : false)
   )
   const resolvedSourcePath = sourceInfo.path ?? null
+  /**
+   * 「运行状态」一句话：未安装 / 加载失败 / 使用中 / 已停用。
+   *
+   * 之前只要不是 error 就显示「使用中」，卸载后的插件（没有 descriptor）也显示绿色「使用中」，
+   * 和同一张卡片里的「未安装」互相打架（用户 2026-11-23 反馈「大堆问题」）。
+   */
+  const runtimeLabel = !installed
+    ? t('settings.plugins.notInstalledState')
+    : failed
+      ? t('settings.plugins.loadFailed')
+      : enabled
+        ? t('harness.sidebar.pluginState.enabled')
+        : t('harness.sidebar.pluginState.disabled')
+  const runtimeColor = !installed
+    ? token.colorTextTertiary
+    : failed
+      ? token.colorError
+      : enabled
+        ? token.colorSuccess
+        : token.colorTextTertiary
 
   const toggle = useCallback(async (): Promise<void> => {
     if (!entry) return
@@ -306,15 +337,20 @@ const PluginDetail: React.FC = () => {
   )
 
   /**
-   * 发布到插件中心（本地安装包，平台上还没有这个插件）：
-   * 主进程弹系统选择框挑「插件包目录」，打包后上传安装包 + 源码。
+   * 发布到插件中心（本机已安装、平台上还没有这个插件）。
+   *
+   * 默认**直接发**：安装包目录（`userData/plugins/<id>`）与源码目录都是现成的，不需要
+   * 再弹系统目录选择框（用户 2026-11-23：「为什么发布本地插件还要用户自己去选择」）。
+   * 只有旧主进程没有 `publishInstalled` 通道时，才退回「选目录发布」。
    */
   const handlePublish = useCallback(async (): Promise<void> => {
     clearUploadProgress()
     setUploadOpen(true)
     setPublishing(true)
     try {
-      const result = await pickAndUpload()
+      const result = capabilities.publishInstalled
+        ? await publishInstalled(pluginId)
+        : await pickAndUpload()
       if (!result.ok) {
         setUploadOpen(false)
         message.error(result.error || t('lattice.upload.fail'))
@@ -327,7 +363,9 @@ const PluginDetail: React.FC = () => {
       }
       setUploadOpen(false)
       message.success(
-        t('lattice.upload.success', { name: result.plugin_id, version: result.version })
+        result.status === 'review'
+          ? t('lattice.upload.submitted', { name: result.plugin_id, version: result.version })
+          : t('lattice.upload.success', { name: result.plugin_id, version: result.version })
       )
       // 发布成功后刷新平台最新版本（首次发布后这里从「尚未发布」变成具体版本）
       await loadHubDetail()
@@ -338,7 +376,16 @@ const PluginDetail: React.FC = () => {
     } finally {
       setPublishing(false)
     }
-  }, [clearUploadProgress, loadHubDetail, message, pickAndUpload, t])
+  }, [
+    capabilities.publishInstalled,
+    clearUploadProgress,
+    loadHubDetail,
+    message,
+    pickAndUpload,
+    pluginId,
+    publishInstalled,
+    t
+  ])
 
   /** 在对话中修改：主进程优先建/复用源码工作区并开一条插件会话，失败回退文件管理器 */
   const handleOpenSource = useCallback(async (): Promise<void> => {
@@ -414,7 +461,11 @@ const PluginDetail: React.FC = () => {
         return
       }
       setRepublishOpen(false)
-      message.success(t('plugins.hub.publish.success', { version: result.version }))
+      message.success(
+        result.status === 'review'
+          ? t('plugins.hub.publish.submitted', { version: result.version })
+          : t('plugins.hub.publish.success', { version: result.version })
+      )
       await Promise.all([load(), loadHubDetail()])
     } catch (err) {
       setRepublishError(latticeErrorMessage(err))
@@ -452,26 +503,35 @@ const PluginDetail: React.FC = () => {
     [capabilities.downloadAsset, downloadAsset, message, pluginId, t]
   )
 
-  const uninstall = useCallback((): void => {
-    if (!entry) return
-    modal.confirm({
-      title: t('settings.plugins.uninstallTitle', { name }),
-      content: t('settings.plugins.uninstallBody'),
-      okText: t('settings.plugins.uninstallConfirm'),
-      okButtonProps: { danger: true },
-      cancelText: t('common.action.cancel'),
-      onOk: async () => {
-        try {
-          await window.api.plugin.uninstall(entry.id, false)
-          message.success(t('settings.plugins.uninstallKeptData'))
-          navigate('/plugins')
-        } catch (err) {
-          message.error(t('settings.plugins.uninstallFail'))
-          console.error('[plugins] Failed to uninstall:', err)
-        }
-      }
-    })
-  }, [entry, modal, message, navigate, name, t])
+  /** 打开卸载确认框：每次打开都重置勾选（默认**保留**数据） */
+  const openUninstall = useCallback((): void => {
+    setPurgeData(false)
+    setUninstallOpen(true)
+  }, [])
+
+  /**
+   * 卸载：移除插件代码（+ 可选清除该插件数据）→ 主进程撤云端安装记录 → 回插件仓库。
+   *
+   * 成功提示按勾选口径区分（`uninstallDone` / `uninstallKeptData`），不再固定「数据已保留」。
+   */
+  const confirmUninstall = useCallback(async (): Promise<void> => {
+    if (!entry || uninstalling) return
+    const purge = purgeData
+    setUninstalling(true)
+    try {
+      await window.api.plugin.uninstall(entry.id, purge)
+      message.success(
+        purge ? t('settings.plugins.uninstallDone') : t('settings.plugins.uninstallKeptData')
+      )
+      setUninstallOpen(false)
+      navigate('/plugins')
+    } catch (err) {
+      message.error(t('settings.plugins.uninstallFail'))
+      console.error('[plugins] Failed to uninstall:', err)
+    } finally {
+      setUninstalling(false)
+    }
+  }, [entry, message, navigate, purgeData, t, uninstalling])
 
   const actionRow = (
     icon: React.ReactNode,
@@ -566,16 +626,14 @@ const PluginDetail: React.FC = () => {
   )
 
   /** 版本表：版本 / 大小 / 源码 / 发布时间 / 更新说明 / 下载 */
-  const versionColumns = useMemo<
-    NonNullable<TableProps<HubVersionV2>['columns']>
-  >(() => {
+  const versionColumns = useMemo<NonNullable<TableProps<HubVersionV2>['columns']>>(() => {
     const downloadUnsupported = !capabilities.downloadAsset
     return [
       {
         title: t('plugins.hub.versionTable.version'),
         dataIndex: 'version',
         key: 'version',
-        width: 140,
+        width: 130,
         render: (_: unknown, row: HubVersionV2) => (
           <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
             v{row.version}
@@ -598,7 +656,7 @@ const PluginDetail: React.FC = () => {
         title: t('plugins.hub.versionTable.size'),
         dataIndex: 'size',
         key: 'size',
-        width: 100,
+        width: 80,
         render: (size: number) => (
           <span style={{ color: token.colorTextSecondary }}>{formatBytes(size)}</span>
         )
@@ -610,7 +668,7 @@ const PluginDetail: React.FC = () => {
           </Tooltip>
         ),
         key: 'source',
-        width: 150,
+        width: 130,
         render: (_: unknown, row: HubVersionV2) =>
           row.has_source ? (
             <Tooltip title={row.source_asset_name || t('plugins.hub.source.hasSource')}>
@@ -650,7 +708,12 @@ const PluginDetail: React.FC = () => {
         ellipsis: true,
         render: (value?: string) => {
           const text = value?.trim()
-          if (!text) return <span style={{ color: token.colorTextQuaternary }}>{t('plugins.hub.versionTable.noChangelog')}</span>
+          if (!text)
+            return (
+              <span style={{ color: token.colorTextQuaternary }}>
+                {t('plugins.hub.versionTable.noChangelog')}
+              </span>
+            )
           return (
             <Tooltip title={text}>
               <span style={{ display: 'inline-block', maxWidth: '100%' }}>{text}</span>
@@ -661,7 +724,7 @@ const PluginDetail: React.FC = () => {
       {
         title: t('plugins.hub.versionTable.actions'),
         key: 'actions',
-        width: 260,
+        width: 272,
         render: (_: unknown, row: HubVersionV2) => {
           const packageKey = `${row.version}:package`
           const sourceKey = `${row.version}:source`
@@ -689,7 +752,9 @@ const PluginDetail: React.FC = () => {
                     : t('plugins.hub.versionTable.installVersion')}
                 </Button>
               </Tooltip>
-              <Tooltip title={downloadUnsupported ? t('plugins.hub.download.unsupported') : undefined}>
+              <Tooltip
+                title={downloadUnsupported ? t('plugins.hub.download.unsupported') : undefined}
+              >
                 <Button
                   size="small"
                   type="link"
@@ -747,7 +812,20 @@ const PluginDetail: React.FC = () => {
 
   if (loading && !entry && !hubDetail) {
     return (
-      <div style={{ padding: 36, fontSize: 12, color: token.colorTextTertiary }}>
+      <div
+        style={{
+          height: '100%',
+          boxSizing: 'border-box',
+          padding: '6px 9px',
+          background: token.colorBgContainer,
+          borderTopLeftRadius: token.borderRadiusLG,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 12,
+          color: token.colorTextTertiary
+        }}
+      >
         {t('common.state.loading')}
       </div>
     )
@@ -755,11 +833,28 @@ const PluginDetail: React.FC = () => {
 
   if (!entry && !hubDetail) {
     return (
-      <div style={{ padding: 36 }}>
+      <div
+        style={{
+          height: '100%',
+          boxSizing: 'border-box',
+          padding: '6px 9px',
+          background: token.colorBgContainer,
+          borderTopLeftRadius: token.borderRadiusLG,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 12
+        }}
+      >
         <div style={{ fontSize: 13, color: token.colorTextSecondary }}>
           {t('settings.plugins.pluginNotFound')}
         </div>
-        <Button size="small" style={{ marginTop: 12 }} onClick={() => navigate('/plugins')}>
+        <Button
+          size="small"
+          icon={<RiArrowLeftLine size={13} />}
+          onClick={() => navigate('/plugins')}
+        >
           {t('settings.plugins.backToRepo')}
         </Button>
       </div>
@@ -807,191 +902,218 @@ const PluginDetail: React.FC = () => {
             t('plugins.hub.detail.tags'),
             (hubDetail?.tags ?? []).length > 0 ? (hubDetail?.tags ?? []).join(' / ') : '—'
           ),
-          infoRow(
-            t('plugins.hub.detail.downloadsLabel'),
-            formatCount(hubDetail?.downloads)
-          )
+          infoRow(t('plugins.hub.detail.downloadsLabel'), formatCount(hubDetail?.downloads))
         ]
       : []),
     infoRow(t('settings.plugins.entry'), entry?.entry?.renderer ?? entry?.entry?.main ?? '—')
   ]
 
-  return (
-    <div style={{ height: '100%', overflowY: 'auto', background: token.colorBgContainer }}>
-      <div style={{ maxWidth: 1120, margin: '0 auto', padding: '0 36px 36px' }}>
-        {/* 顶行：与侧栏品牌区同高（33px），返回按钮垂直居中 */}
-        <div className="shell-topbar">
-          <button
-            onClick={() => navigate('/plugins')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              border: 'none',
-              background: 'transparent',
-              color: token.colorTextTertiary,
-              fontSize: 11,
-              cursor: 'pointer',
-              padding: 0
-            }}
-          >
-            <RiArrowLeftLine size={13} />
-            {t('settings.plugins.backToRepo')}
-          </button>
-        </div>
+  /**
+   * 页面级 CSS 变量：返回按钮的常态/悬停配色随主题走，不把 hover 写成内联事件。
+   */
+  const pageVars = {
+    '--plugin-detail-back-color': token.colorTextTertiary,
+    '--plugin-detail-back-hover-bg': token.colorFillQuaternary,
+    '--plugin-detail-back-hover-color': token.colorText
+  } as React.CSSProperties
 
-        {/* 头部：图标 / 名称 / 版本状态 / 描述 / 平台最新版 + 主要操作 */}
-        <div
+  return (
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        /* 与插件仓库完全一致：顶部不留白，左右 9px、上下 6px（用户 2026-11-23 口径） */
+        padding: '6px 9px',
+        background: token.colorBgContainer,
+        borderTopLeftRadius: token.borderRadiusLG,
+        ...pageVars
+      }}
+    >
+      <div
+        className="custom-scrollbar"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        {/*
+         * 头部：返回入口**合并进同一张卡片**（用户 2026-11-23：「返回插件仓库这个按钮
+         * 需要和其下面内容合并」）——不再单独占一行 33px 的工具条。
+         */}
+        <section
           style={{
-            marginTop: 12,
             border: `1px solid ${token.colorBorderSecondary}`,
             borderRadius: 16,
             background: token.colorBgContainer,
-            padding: '18px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 15
+            padding: '10px 20px 18px'
           }}
         >
-          <PluginIcon id={pluginId} icon={icon} menuIcon={menuIcon} size={54} />
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: 20,
-                  fontWeight: 700,
-                  letterSpacing: '-0.025em',
-                  color: token.colorText
-                }}
-              >
-                {name}
-              </h1>
-              <span
-                style={{
-                  fontSize: 9,
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  background: token.colorFillTertiary,
-                  color: token.colorTextTertiary
-                }}
-              >
-                {entry?.builtin
-                  ? t('settings.plugins.builtinBadge')
-                  : t('settings.plugins.externalBadge')}
-              </span>
-              {!publishedOnHub && (
-                <span
-                  className="lattice-hub-tag"
-                  style={{ background: token.colorFillSecondary, color: token.colorTextTertiary }}
-                >
-                  {t('plugins.hub.local.badge')}
-                </span>
-              )}
-            </div>
-            <div
-              style={{
-                marginTop: 5,
-                fontSize: 11,
-                color: token.colorTextTertiary,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                flexWrap: 'wrap'
-              }}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              paddingBottom: 10,
+              marginBottom: 14,
+              borderBottom: `1px solid ${token.colorBorderSecondary}`
+            }}
+          >
+            <button
+              className="plugin-detail-back"
+              onClick={() => navigate('/plugins')}
+              aria-label={t('settings.plugins.backToRepo')}
             >
-              <span>v{version}</span>
-              {updateVersion && <span>→ v{updateVersion}</span>}
-              <span>·</span>
-              <span>
-                {installed
-                  ? t('settings.plugins.installedState')
-                  : t('settings.plugins.notInstalledState')}
-              </span>
-              {installed && (
-                <>
-                  <span>·</span>
-                  <span>{enabled ? t('plugins.hub.enabled') : t('plugins.hub.disabled')}</span>
-                </>
-              )}
-              {publishedOnHub && hubLatestVersion && (
-                <>
-                  <span>·</span>
+              <RiArrowLeftLine size={13} />
+              {t('settings.plugins.backToRepo')}
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+            <PluginIcon id={pluginId} icon={icon} menuIcon={menuIcon} size={54} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: 20,
+                    fontWeight: 700,
+                    letterSpacing: '-0.025em',
+                    color: token.colorText
+                  }}
+                >
+                  {name}
+                </h1>
+                <span
+                  style={{
+                    fontSize: 9,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: token.colorFillTertiary,
+                    color: token.colorTextTertiary
+                  }}
+                >
+                  {entry?.builtin
+                    ? t('settings.plugins.builtinBadge')
+                    : t('settings.plugins.externalBadge')}
+                </span>
+                {!publishedOnHub && (
                   <span
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    title={t('plugins.hub.detail.latestVersion')}
+                    className="lattice-hub-tag"
+                    style={{ background: token.colorFillSecondary, color: token.colorTextTertiary }}
                   >
-                    <RiCloudLine size={11} />
-                    {t('plugins.hub.detail.latestVersion')} v{hubLatestVersion}
+                    {t('plugins.hub.local.badge')}
                   </span>
-                </>
-              )}
-            </div>
-            {description && (
+                )}
+              </div>
               <div
                 style={{
-                  marginTop: 7,
-                  fontSize: 11.5,
-                  color: token.colorTextSecondary,
-                  lineHeight: 1.6,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 3,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden'
+                  marginTop: 5,
+                  fontSize: 11,
+                  color: token.colorTextTertiary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flexWrap: 'wrap'
                 }}
               >
-                {description}
+                <span>v{version}</span>
+                {updateVersion && <span>→ v{updateVersion}</span>}
+                <span>·</span>
+                <span>
+                  {installed
+                    ? t('settings.plugins.installedState')
+                    : t('settings.plugins.notInstalledState')}
+                </span>
+                {installed && (
+                  <>
+                    <span>·</span>
+                    <span>{enabled ? t('plugins.hub.enabled') : t('plugins.hub.disabled')}</span>
+                  </>
+                )}
+                {publishedOnHub && hubLatestVersion && (
+                  <>
+                    <span>·</span>
+                    <span
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      title={t('plugins.hub.detail.latestVersion')}
+                    >
+                      <RiCloudLine size={11} />
+                      {t('plugins.hub.detail.latestVersion')} v{hubLatestVersion}
+                    </span>
+                  </>
+                )}
               </div>
-            )}
-            {installed && !publishedOnHub && latticeReady && loggedIn && (
-              <div style={{ marginTop: 7, fontSize: 10, color: token.colorTextTertiary }}>
-                {t('plugins.hub.detail.notPublishedHint')}
-              </div>
-            )}
+              {description && (
+                <div
+                  style={{
+                    marginTop: 7,
+                    fontSize: 11.5,
+                    color: token.colorTextSecondary,
+                    lineHeight: 1.6,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {description}
+                </div>
+              )}
+              {installed && !publishedOnHub && latticeReady && loggedIn && (
+                <div style={{ marginTop: 7, fontSize: 10, color: token.colorTextTertiary }}>
+                  {t('plugins.hub.detail.notPublishedHint')}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {installed && (
+                <Button size="small" loading={busy} onClick={() => void toggle()}>
+                  {enabled ? t('settings.plugins.disable') : t('settings.plugins.enable')}
+                </Button>
+              )}
+              {updateVersion ? (
+                <Button
+                  size="small"
+                  loading={busy}
+                  icon={<RiRefreshLine size={14} />}
+                  onClick={() => void installOrUpdate()}
+                >
+                  {t('plugins.hub.updateTo', { version: updateVersion })}
+                </Button>
+              ) : !installed ? (
+                <Button
+                  size="small"
+                  loading={busy}
+                  icon={<RiDownloadLine size={14} />}
+                  onClick={() => void installOrUpdate()}
+                >
+                  {hubLatestVersion
+                    ? t('plugins.hub.detail.installVersion', { version: hubLatestVersion })
+                    : t('plugins.hub.install')}
+                </Button>
+              ) : route ? (
+                <Button
+                  size="small"
+                  icon={<RiExternalLinkLine size={14} />}
+                  onClick={() => navigate(route.path)}
+                >
+                  {t('settings.plugins.openPage')}
+                </Button>
+              ) : null}
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {installed && (
-              <Button size="small" loading={busy} onClick={() => void toggle()}>
-                {enabled ? t('settings.plugins.disable') : t('settings.plugins.enable')}
-              </Button>
-            )}
-            {updateVersion ? (
-              <Button
-                size="small"
-                loading={busy}
-                icon={<RiRefreshLine size={14} />}
-                onClick={() => void installOrUpdate()}
-              >
-                {t('plugins.hub.updateTo', { version: updateVersion })}
-              </Button>
-            ) : !installed ? (
-              <Button
-                size="small"
-                loading={busy}
-                icon={<RiDownloadLine size={14} />}
-                onClick={() => void installOrUpdate()}
-              >
-                {hubLatestVersion
-                  ? t('plugins.hub.detail.installVersion', { version: hubLatestVersion })
-                  : t('plugins.hub.install')}
-              </Button>
-            ) : route ? (
-              <Button
-                size="small"
-                icon={<RiExternalLinkLine size={14} />}
-                onClick={() => navigate(route.path)}
-              >
-                {t('settings.plugins.openPage')}
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        </section>
 
         {/* 主体：左「操作」；右「信息」+「运行状态」 */}
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1.4fr 1fr',
+            gridTemplateColumns: 'minmax(0, 1.4fr) minmax(320px, 1fr)',
             gap: 12,
             marginTop: 12
           }}
@@ -1067,7 +1189,7 @@ const PluginDetail: React.FC = () => {
                     <RiDeleteBin6Line size={15} />,
                     t('settings.plugins.uninstall'),
                     t('settings.plugins.uninstallBody'),
-                    uninstall,
+                    openUninstall,
                     false,
                     true
                   )
@@ -1153,13 +1275,10 @@ const PluginDetail: React.FC = () => {
                   style={{
                     fontSize: 10,
                     fontWeight: 400,
-                    color: failed ? token.colorError : token.colorSuccess
+                    color: runtimeColor
                   }}
                 >
-                  ●{' '}
-                  {failed
-                    ? t('settings.plugins.loadFailed')
-                    : t('harness.sidebar.pluginState.enabled')}
+                  ● {runtimeLabel}
                 </span>
               </div>
               <div
@@ -1239,9 +1358,7 @@ const PluginDetail: React.FC = () => {
               }}
             >
               {t('plugins.hub.versionTable.title')}
-              <span
-                style={{ fontWeight: 400, fontSize: 10.5, color: token.colorTextTertiary }}
-              >
+              <span style={{ fontWeight: 400, fontSize: 10.5, color: token.colorTextTertiary }}>
                 {t('plugins.hub.versions', { n: versions.length })}
               </span>
               <Tooltip title={t('plugins.hub.source.hint')}>
@@ -1277,7 +1394,7 @@ const PluginDetail: React.FC = () => {
                 columns={versionColumns}
                 dataSource={versions}
                 pagination={false}
-                scroll={{ x: 960 }}
+                tableLayout="fixed"
                 locale={{ emptyText: t('plugins.hub.versionTable.empty') }}
               />
             </div>
@@ -1358,6 +1475,55 @@ const PluginDetail: React.FC = () => {
               <section.Component />
             </PluginBoundary>
           ))}
+        </div>
+      </Modal>
+
+      {/* 卸载确认：代码与数据分开（勾选项决定要不要连数据一起清）——默认不勾 = 保留数据 */}
+      <Modal
+        open={uninstallOpen}
+        title={t('settings.plugins.uninstallTitle', { name })}
+        okText={t('settings.plugins.uninstallConfirm')}
+        cancelText={t('common.action.cancel')}
+        okButtonProps={{ danger: true }}
+        confirmLoading={uninstalling}
+        onOk={() => void confirmUninstall()}
+        onCancel={() => {
+          if (!uninstalling) setUninstallOpen(false)
+        }}
+        width={460}
+        destroyOnHidden
+      >
+        <div style={{ fontSize: 12.5, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+          {t('settings.plugins.uninstallBody')}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'flex-start' }}>
+          <Checkbox
+            checked={purgeData}
+            onChange={(event) => setPurgeData(event.target.checked)}
+            style={{ marginTop: 1 }}
+          />
+          {/* 文案区域整块可点：点标题/说明与点方框等价（不必精确点中 16px 的方框） */}
+          <div
+            style={{ cursor: 'pointer', userSelect: 'none' }}
+            onClick={() => setPurgeData((value) => !value)}
+          >
+            <div style={{ fontSize: 13, color: token.colorText }}>
+              {t('settings.plugins.purgeCheckbox')}
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: token.colorTextTertiary,
+                lineHeight: 1.6,
+                marginTop: 2
+              }}
+            >
+              {latticeReady && loggedIn
+                ? t('settings.plugins.purgeDetailCloud')
+                : t('settings.plugins.purgeDetail')}
+            </div>
+          </div>
         </div>
       </Modal>
 

@@ -488,9 +488,10 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     <div className="harness-message-list relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollRef}
-        // 底部 pb-20 为悬浮的「回到底部」按钮预留空间：
-        // 任务卡（输入框上方）展开压缩消息区高度时，按钮也不会盖住最后一条消息
-        className="flex-1 overflow-y-scroll my-1 mr-1 ml-3 px-8 pt-5 pb-20 harness-scrollbar"
+        // 底部 pb-14（56px）为悬浮的「回到底部」按钮预留：按钮 30px + 距底 20px + 外圈光弧 4px = 54px，
+        // 56px 刚好容得下；比原来的 pb-20 少 24px，按钮不会盖住最后一条消息，也不会空出一大片。
+        // endRef 挪到内容容器外面，最后一行才能命中 :last-child 去掉尾部间距。
+        className="flex-1 overflow-y-scroll my-1 mr-1 ml-3 px-8 pt-5 pb-14 harness-scrollbar"
       >
         <div ref={contentRef} className={messages.length === 0 ? 'h-full' : 'max-w-4xl mx-auto'}>
           {messages.length === 0 ? (
@@ -630,10 +631,12 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                   </div>
                 )
               })}
-              <div ref={messagesEndRef} />
             </>
           )}
         </div>
+        {/* 滚动锚点放在内容容器外：它若留在容器内，就永远是最后一个子节点，
+            .harness-message-row:last-child 命不中，最后一行会保留 14px 尾距 */}
+        <div ref={messagesEndRef} />
       </div>
       <MessageLocator
         messages={messages}

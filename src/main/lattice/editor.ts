@@ -1,4 +1,5 @@
 import { shell } from 'electron'
+import * as fs from 'fs'
 import logger from 'electron-log'
 import { settingsStore } from '../context'
 import { getAllTopics } from '../database/mapper/harness/harness'
@@ -62,7 +63,9 @@ function activatePluginWorkspace(
     pluginContent: { workspaceId, topicId, pluginId }
   })
   emitAppEvent(APP_EVENT_WORKSPACE_CHANGED, { workspaceId, workspacePath: dir })
-  logger.info(`[Lattice] Active workspace switched to plugin source directory: ${dir} (workspace=${workspaceId})`)
+  logger.info(
+    `[Lattice] Active workspace switched to plugin source directory: ${dir} (workspace=${workspaceId})`
+  )
 }
 
 /**
@@ -84,12 +87,29 @@ async function findPluginTopic(workspaceId: number, pluginId: string): Promise<n
 
 /** 回退：在系统文件管理器里打开目录（如实返回 opened:'folder'，不假装开了对话） */
 async function openFolderFallback(dir: string): Promise<LatticeOpenSourceResult> {
+  /**
+   * 先自查目录是否真的可访问：直接 `shell.openPath` 一个不存在/被删了一半/无权限的目录，
+   * Windows 会先弹一个「位置不可用 / 拒绝访问」的资源管理器窗口，用户看到的就是
+   * 「弹出一个打不开的文件夹」（用户 2026-11-23 现场）。这里如实返回错误，由界面提示。
+   */
+  try {
+    const stat = fs.statSync(dir)
+    if (!stat.isDirectory()) throw new Error('目标不是文件夹')
+    // 真正读一次目录：没权限（EACCES/EPERM）时会在这里就抛，而不是交给 Explorer 弹窗
+    fs.readdirSync(dir)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    logger.warn(`[Lattice] Source directory is not accessible (${dir}): ${message}`)
+    return { ok: false, error: `源码目录不可访问：${dir}（${message}）` }
+  }
   const error = await shell.openPath(dir)
   if (error) {
     logger.warn(`[Lattice] Failed to open source directory (${dir}): ${error}`)
     return { ok: false, error: `打开源码目录失败：${error}` }
   }
-  logger.info(`[Lattice] Opened source directory in file manager (could not create session): ${dir}`)
+  logger.info(
+    `[Lattice] Opened source directory in file manager (could not create session): ${dir}`
+  )
   return { ok: true, opened: 'folder', path: dir }
 }
 
@@ -136,7 +156,9 @@ export async function openLatticePluginSource(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn(`[Lattice] Failed to create/reuse plugin workspace for '${pluginId}', falling back to file manager: ${message}`)
+      logger.warn(
+        `[Lattice] Failed to create/reuse plugin workspace for '${pluginId}', falling back to file manager: ${message}`
+      )
     }
   }
 

@@ -25,6 +25,7 @@ import { useNotification } from '@renderer/hooks/useNotification'
 import { useTheme } from '@renderer/hooks/useTheme'
 import { usePlugins, usePluginRoutes } from '@renderer/plugin-host/PluginHostContext'
 import { setWindowTitleSource } from '@renderer/window-title'
+import { rememberLoginReturn } from '@renderer/utils/login-return'
 import { useTranslation } from '@renderer/i18n'
 import { useLattice } from '@renderer/lattice/useLattice'
 import { LatticeUserAvatar } from '@renderer/lattice/UserAvatar'
@@ -525,6 +526,18 @@ const AppShell: React.FC = () => {
     }
     setWindowTitleSource('route', '')
   }, [location.pathname, pluginRoutes, plugins, t])
+
+  /**
+   * 记住登录页要回的那一页（见 utils/login-return.ts）。
+   *
+   * 登录页是整窗独立布局，但它仍是同一次运行里的普通路由：从哪一页点进登录，返回时就回
+   * 哪一页（对话页回来仍是那条会话，插件仓库回来仍是插件仓库）。登录页自身不记录，
+   * 否则「返回工作台」会又停在登录页。
+   */
+  useEffect(() => {
+    if (location.pathname === '/login') return
+    rememberLoginReturn(`${location.pathname}${location.search}${location.hash}`)
+  }, [location.pathname, location.search, location.hash])
 
   /**
    * 全局「打开设置」事件：

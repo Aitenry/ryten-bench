@@ -9,6 +9,7 @@ import { createMainWindow } from './windows/main-window'
 import { registerMermaidPreviewIpc } from './windows/mermaid-preview'
 import { createTray } from './tray'
 import { setupWeather } from './weather'
+import { bootstrapStorageLayout } from './storage'
 
 // 单实例锁：防止多开，同时确保安装程序能正确检测和关闭进程
 const gotTheLock = app.requestSingleInstanceLock()
@@ -76,6 +77,10 @@ app
 
     // plugin:// 协议处理器（外部插件静态文件；需在 ready 后注册）
     registerPluginProtocolHandler()
+
+    // 默认存储布局：<安装目录>/data/{memory,plugins,skills}（不可写时退回 userData/data）。
+    // 必须早于 initPluginHost()：插件工坊在装载期就会读 harness.pluginsPath 注入运行时。
+    bootstrapStorageLayout()
 
     // 文件改动快照目录（userData/file-history）、工具结果详情目录（userData/tool-output）
     // 与工作区文件监听随「AI 助手」一起装配（`src/main/system/harness.ts`），

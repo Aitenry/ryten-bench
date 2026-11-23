@@ -64,6 +64,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       topicDeleteBlocked: 'Running, cannot delete',
       topicDelete: 'Delete conversation',
       topicRunning: 'Conversation is running',
+      /** Row leading dot (breathing, yellow): waiting for your answer / approval */
+      topicAwaiting: 'Waiting for your confirmation',
+      /** Row leading dot (breathing, green): the turn just finished and you have not opened it */
+      topicCompleted: 'Completed — click to view',
       topicActions: 'Conversation actions',
       workspaceActions: 'Workspace actions',
       workspaceHasRunning: 'A conversation is running',

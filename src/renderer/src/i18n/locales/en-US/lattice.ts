@@ -1,4 +1,4 @@
-import type { zhCNLattice } from '../zh-CN/lattice'
+﻿import type { zhCNLattice } from '../zh-CN/lattice'
 
 /**
  * Copy for the login page, the account area, the Lattice plugin hub and sync.
@@ -87,7 +87,7 @@ export const enUSLattice: typeof zhCNLattice = {
     },
     upload: {
       modalTitle: 'Publish to plugin hub',
-      preparing: 'Pick a plugin package folder in the system dialog…',
+      preparing: 'Preparing to publish…',
       phaseZip: 'Packaging plugin',
       phaseMeta: 'Writing plugin metadata',
       phaseUpload: 'Uploading plugin package',
@@ -95,6 +95,7 @@ export const enUSLattice: typeof zhCNLattice = {
       bytes: '{{sent}} / {{total}}',
       keepOpen: 'Please keep the window open while uploading',
       success: 'Published {{name}} v{{version}}',
+      submitted: '{{name}} v{{version}} submitted — waiting for an administrator to approve it',
       canceled: 'Upload canceled',
       fail: 'Upload failed',
       publishAction: 'Publish to plugin hub',
@@ -110,8 +111,15 @@ export const enUSLattice: typeof zhCNLattice = {
       refresh: 'Refresh',
       upload: 'Upload',
       uploadZipHint: 'Upload .zip package',
+      uploadWithSourceHint: 'Publish install package + source folder (two separate zips)',
+      /** Header "Publish" dropdown: three publish variants + local folder import in one menu */
+      publishMenu: 'Publish',
+      publishMenuTitle: 'Publish plugins to the hub',
+      publishDir: 'Publish a plugin folder…',
+      publishZip: 'Publish a .zip package…',
+      publishWithSource: 'Publish package + source folders…',
       installLocal: 'Install local',
-      importLocalDir: 'Import folder',
+      importLocalDir: 'Import plugin folder…',
       total: '{{n}} plugins',
       loading: 'Loading plugin hub…',
       loadFail: 'Could not load the plugin hub catalog: {{reason}}',
@@ -205,7 +213,7 @@ export const enUSLattice: typeof zhCNLattice = {
           'Read the local source folder, repackage the plugin and source, and publish to the hub',
         publishLocal: 'Publish to plugin hub',
         publishLocalDesc:
-          'Upload this local plugin package to the hub (package and source are uploaded together)',
+          'Publish the installed copy of this plugin directly (package and source are attached; no folder picking)',
         notPublishedHint:
           'This plugin is not published to the hub yet; publish it so others can install it.',
         workflowTitle: 'Source & publishing',
@@ -223,6 +231,7 @@ export const enUSLattice: typeof zhCNLattice = {
         changelogPlaceholder: 'What changed? (optional)',
         submit: 'Publish',
         success: 'Published v{{version}}',
+        submitted: 'v{{version}} submitted — waiting for an administrator to approve it',
         fail: 'Publish failed: {{reason}}'
       },
       openSource: {

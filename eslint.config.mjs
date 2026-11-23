@@ -6,9 +6,11 @@ import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 
 export default defineConfig(
-  // .dsh-vision-toolkit 是 vision 工具链的临时产物目录（已在 .gitignore 中），
-  // 里面的 node 脚本不是项目源码，纳入 lint 只会持续报无关错误
-  { ignores: ['**/node_modules', '**/dist', '**/out', '**/.dsh-vision-toolkit'] },
+  // `.dsh-vision-toolkit` 是 vision 工具链的临时产物目录（已在 .gitignore 中），
+  // 里面的 node 脚本不是项目源码，纳入 lint 只会持续报无关错误。
+  // `data/` 是应用运行期按安装目录创建的存储根（记忆 / 插件源码 / 技能），不是项目源码：
+  // 插件源码和技能文档会被 prettier/eslint 当成项目文件反复报错，必须排除。
+  { ignores: ['**/node_modules', '**/dist', '**/out', '**/.dsh-vision-toolkit', 'data/**'] },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

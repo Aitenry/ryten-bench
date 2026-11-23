@@ -1,3 +1,4 @@
+import * as fs from 'fs'
 import * as path from 'path'
 import {
   createWorkspace,
@@ -85,6 +86,20 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
     if (existing.kind !== 'plugin') await setWorkspaceKind(existing.id, 'plugin')
     await reparentPluginTopics(existing.id, `plugin:${pluginId}`)
     return { ...existing, name, kind: 'plugin' }
+  }
+  /**
+   * 新行只在源码目录**真实存在**时创建。
+   *
+   * 为什么必须看盘：插件存放路径改掉之后，「插件模式记住的那份插件」以及老会话还在，
+   * 但新根下未必有它的源码。此前这里直接 `createWorkspace`，于是悄悄造出一条指向
+   * 不存在目录的工作区行（用户 2026-11-23 的 `fs.watch ENOENT` 日志就是这么来的：
+   * `personal-ledger` 的旧工作区在旧插件根下，切到新插件根后又造了一条新路径的行）。
+   * 现有行不动（老会话的归属与历史要保留），只是不再为不存在的目录新增行。
+   */
+  if (!fs.existsSync(dir)) {
+    throw new Error(
+      `插件源码目录不存在：${dir}（插件可能已被删除或移走；请恢复插件存放路径，或重新导入插件后再开会话）`
+    )
   }
   const id = await createWorkspace(name, dir, 'plugin')
   const created = await findPluginWorkspace(pluginId)

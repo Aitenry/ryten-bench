@@ -4,8 +4,10 @@ import * as path from 'path'
 import logger from 'electron-log'
 import { broadcastPluginStateChanged, onPluginStateChanged } from '../ipc/plugins'
 import { isEnabledPlugin, loadExternalMain, unloadExternalMain } from '../plugins/host'
-import { setEnabledOverride } from '../plugins/store'
+import { isInstallRemoved, setEnabledOverride } from '../plugins/store'
 import { scanExternalPlugins } from '../plugins/scanner'
+import { onAppEvent } from '../plugins/app-events'
+import { APP_EVENT_PLUGIN_DATA_PURGED, type AppPluginDataPurgedPayload } from '../plugins/app-hooks'
 import { LatticeApiError, isLatticeLoggedIn, latticeErrorMessage, latticeRequest } from './client'
 import { getLatticeAutoInstallMissing } from './settings'
 import { getLatticeDeviceId } from './session'
@@ -150,7 +152,7 @@ function loadSyncCache(): LatticeSyncCacheFile {
   const revs: Record<string, number> = {}
   const sources: Record<string, LatticeSourceCacheEntry> = {}
   const orphaned: LatticeSyncOrphanedItem[] = []
-  let conflicts: LatticeSyncConflict[] = []
+  const conflicts: LatticeSyncConflict[] = []
   try {
     const parsed = JSON.parse(fs.readFileSync(syncCachePath(), 'utf-8')) as unknown
     const record = asRecord(parsed)
@@ -182,7 +184,9 @@ function loadSyncCache(): LatticeSyncCacheFile {
       if (!pluginId) continue
       orphaned.push({
         plugin_id: pluginId,
-        ...(readOptionalString(entry?.version) ? { version: readOptionalString(entry?.version) } : {}),
+        ...(readOptionalString(entry?.version)
+          ? { version: readOptionalString(entry?.version) }
+          : {}),
         reason: entry?.reason === 'not_found' ? 'not_found' : 'plugin_deleted',
         at: typeof entry?.at === 'number' && Number.isFinite(entry.at) ? entry.at : 0,
         ...(readOptionalString(entry?.error) ? { error: readOptionalString(entry?.error) } : {})
@@ -210,7 +214,8 @@ function loadSyncCache(): LatticeSyncCacheFile {
     }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | null)?.code
-    if (code !== 'ENOENT') logger.warn('[Lattice] Failed to read lattice-sync.json, using empty cache:', err)
+    if (code !== 'ENOENT')
+      logger.warn('[Lattice] Failed to read lattice-sync.json, using empty cache:', err)
   }
   cache = {
     revs,
@@ -275,7 +280,8 @@ function readPluginData(pluginId: string): { data: unknown; bytes: number } | nu
     return { data: JSON.parse(text) as unknown, bytes: stat.size }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | null)?.code
-    if (code !== 'ENOENT') logger.warn(`[Lattice] Failed to read plugin-state/${pluginId}.json:`, err)
+    if (code !== 'ENOENT')
+      logger.warn(`[Lattice] Failed to read plugin-state/${pluginId}.json:`, err)
     return null
   }
 }
@@ -412,7 +418,9 @@ function clearLatticeOrphaned(pluginId: string): boolean {
   if (!orphaned.some((entry) => entry.plugin_id === id)) return false
   store.orphaned = orphaned.filter((entry) => entry.plugin_id !== id)
   saveSyncCache()
-  logger.info(`[Lattice] Install record '${id}' is no longer orphaned (plugin is back on the platform)`)
+  logger.info(
+    `[Lattice] Install record '${id}' is no longer orphaned (plugin is back on the platform)`
+  )
   return true
 }
 
@@ -523,7 +531,9 @@ export async function resolveLatticeSyncConflict(
     } catch (err) {
       logger.warn('[Lattice] Error in state callback after conflict resolution:', err)
     }
-    logger.info(`[Lattice] Conflict resolved: ${id} -> ${strategy === 'local' ? 'use local' : 'use cloud'}`)
+    logger.info(
+      `[Lattice] Conflict resolved: ${id} -> ${strategy === 'local' ? 'use local' : 'use cloud'}`
+    )
     return { ok: true }
   } catch (err) {
     const message = latticeErrorMessage(err)
@@ -655,7 +665,9 @@ async function autoInstallMissingPlugin(
     )
     const result = await installer(pluginId, version)
     if (!result.ok) {
-      logger.warn(`[Lattice] Failed to auto-restore ${pluginId} (other plugins unaffected): ${result.error}`)
+      logger.warn(
+        `[Lattice] Failed to auto-restore ${pluginId} (other plugins unaffected): ${result.error}`
+      )
       return failure(result.error || '安装失败')
     }
     // 启用态：安装默认启用；云端记录明确停用时按云端关掉（不擅自启用用户停用过的插件）
@@ -664,9 +676,14 @@ async function autoInstallMissingPlugin(
       try {
         if (item.enabled) loadExternalMain(pluginId)
         else unloadExternalMain(pluginId)
-        logger.info(`[Lattice] Applied cloud enabled state to ${pluginId} after auto-restore: ${item.enabled}`)
+        logger.info(
+          `[Lattice] Applied cloud enabled state to ${pluginId} after auto-restore: ${item.enabled}`
+        )
       } catch (err) {
-        logger.warn(`[Lattice] Failed to load/unload main module of ${pluginId} after auto-restore:`, err)
+        logger.warn(
+          `[Lattice] Failed to load/unload main module of ${pluginId} after auto-restore:`,
+          err
+        )
       }
     }
     // 数据：补齐后本机没有数据，沿用 pull 口径写回云端 rev 更大的数据
@@ -692,7 +709,9 @@ async function autoInstallMissingPlugin(
     }
   } catch (err) {
     const message = latticeErrorMessage(err)
-    logger.warn(`[Lattice] Error while auto-restoring ${pluginId} (other plugins unaffected): ${message}`)
+    logger.warn(
+      `[Lattice] Error while auto-restoring ${pluginId} (other plugins unaffected): ${message}`
+    )
     return failure(message)
   }
 }
@@ -739,6 +758,18 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
     // 插件在平台可见：历史 orphaned 标记自动消除（作者重新发布后恢复）
     clearLatticeOrphaned(item.plugin_id)
 
+    /**
+     * 本机**显式卸载过**的插件：平台记录可能因为离线卸载/别的设备推送而还在。
+     * 这时不能走「换机自动补齐」（否则卸载同步一次就复活），也不放进 pending
+     * （那不是「缺失」，是用户主动不要了）。重新安装会清掉这个标记。
+     */
+    if (!localIds.has(item.plugin_id) && isInstallRemoved(item.plugin_id)) {
+      logger.info(
+        `[Lattice] Skipping auto-restore of '${item.plugin_id}': explicitly uninstalled on this machine`
+      )
+      continue
+    }
+
     if (!localIds.has(item.plugin_id)) {
       // 换机/重装/用户删了插件目录：平台有安装记录但本机没有插件包
       if (installMissing) {
@@ -765,7 +796,10 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
         appliedEnabled.push(item.plugin_id)
         logger.info(`[Lattice] Applied cloud enabled state to ${item.plugin_id}: ${item.enabled}`)
       } catch (err) {
-        logger.warn(`[Lattice] Failed to load/unload main module of ${item.plugin_id} per cloud enabled state:`, err)
+        logger.warn(
+          `[Lattice] Failed to load/unload main module of ${item.plugin_id} per cloud enabled state:`,
+          err
+        )
       }
     }
 
@@ -917,10 +951,40 @@ export function cancelPendingLatticePush(): void {
   }
 }
 
+/**
+ * 本机插件数据被清（卸载勾选「删除全部数据」）后，丢掉该插件的 `data_rev` 缓存。
+ *
+ * 云端安装记录与数据快照**保留**；本地 rev 若还停在旧值，重新安装后的 pull 会拿
+ * 旧 rev 与服务端比较，误判「已经是最新」而不回写数据。清掉后服务端 rev > 0 即会
+ * 把云端快照恢复到 `plugin-state/<id>.json`，用户重新安装后数据照常同步。
+ * 同插件的历史冲突也一并丢弃：本地数据已经不存在，保留冲突只会误导用户。
+ */
+function forgetLocalPluginDataRev(pluginId: string): void {
+  const id = String(pluginId ?? '').trim()
+  if (!id) return
+  const store = loadSyncCache()
+  const hadRev = id in store.revs
+  if (hadRev) delete store.revs[id]
+  const hadConflict = (store.conflicts ?? []).some((c) => c.plugin_id === id)
+  if (hadConflict) store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
+  if (!hadRev && !hadConflict) return
+  saveSyncCache()
+  logger.info(
+    `[Lattice] Local data purged for ${id}: cleared local data_rev cache ` +
+      '(cloud install record and data snapshot are kept)'
+  )
+}
+
 /** 启动接线：旁听 `plugin-state-changed`（安装/卸载/启停/数据文件变化统一走这条广播） */
 export function initLatticeSync(): void {
   onPluginStateChanged(() => {
     scheduleLatticePush()
+  })
+  onAppEvent(APP_EVENT_PLUGIN_DATA_PURGED, (payload) => {
+    const record = payload as Partial<AppPluginDataPurgedPayload> | null
+    if (record && typeof record.pluginId === 'string') {
+      forgetLocalPluginDataRev(record.pluginId)
+    }
   })
 }
 

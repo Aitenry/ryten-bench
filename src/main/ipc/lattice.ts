@@ -1,8 +1,8 @@
 import { ipcMain } from 'electron'
-import * as path from 'path'
 import logger from 'electron-log'
 import { broadcastWorkshopChanged } from './harness/workshop'
 import { applyPluginsRoot } from '../workshop/wiring'
+import { remapWorkspacePathsUnderRoot } from '../storage/workspace-refs'
 import * as client from '../lattice/client'
 import { openLatticePluginSource } from '../lattice/editor'
 import * as hub from '../lattice/hub'
@@ -17,6 +17,7 @@ import {
 } from '../lattice/index'
 import {
   LATTICE_IPC,
+  type HubDetail,
   type LatticeAutoInstallSettingResult,
   type LatticeDownloadAssetResult,
   type LatticeImportLocalDirResult,
@@ -116,11 +117,14 @@ function normalizeSyncInput(raw: unknown): LatticeSyncOptions {
   return options
 }
 
-/** `lattice:uploadSource` 入参：契约是 `{source}`；也接受裸路径字符串 */
-function normalizeUploadSource(raw: unknown): string | null {
-  if (typeof raw === 'string') return raw.trim() !== '' ? raw : null
-  const source = readOptionalString(asRecord(raw)?.source)
-  return source ?? null
+/** `lattice:uploadSource` 入参：契约是 `{source, sourcePath?}`；也接受裸路径字符串 */
+function normalizeUploadSource(raw: unknown): { source: string; sourcePath?: string } | null {
+  if (typeof raw === 'string') return raw.trim() !== '' ? { source: raw } : null
+  const record = asRecord(raw)
+  const source = readOptionalString(record?.source)
+  if (!source) return null
+  const sourcePath = readOptionalString(record?.sourcePath)
+  return sourcePath ? { source, sourcePath } : { source }
 }
 
 /**
@@ -223,7 +227,10 @@ export function registerLatticeIpc(): void {
         try {
           await client.logoutLattice()
         } catch (err) {
-          logger.warn('[Lattice] Failed to log out old account before login (continuing with new login):', err)
+          logger.warn(
+            '[Lattice] Failed to log out old account before login (continuing with new login):',
+            err
+          )
         }
       }
       const result = await client.loginLattice(input.username, input.password)
@@ -313,12 +320,45 @@ export function registerLatticeIpc(): void {
     return await hub.listLatticeHub(query)
   })
 
-  ipcMain.handle(LATTICE_IPC.hubDetail, async (_event, pluginId: unknown) => {
-    if (typeof pluginId !== 'string' || pluginId.trim() === '') {
-      throw new Error('缺少插件 id')
+  ipcMain.handle(
+    LATTICE_IPC.hubDetail,
+    async (_event, pluginId: unknown): Promise<HubDetail | null> => {
+      if (typeof pluginId !== 'string' || pluginId.trim() === '') {
+        throw new Error('缺少插件 id')
+      }
+      try {
+        return await hub.getLatticeHubDetail(pluginId.trim())
+      } catch (err) {
+        /**
+         * 404 = 这个插件没有发布到平台（本地安装 / 平台已删除），是详情页的正常状态，
+         * 不是 IPC 故障：返回 null 让页面按「尚未发布」渲染。
+         * 之前直接抛错，Electron 会把每次打开本地插件详情都打成一条
+         * `Error occurred in handler for 'lattice:hub-detail': ... 404`，刷满主进程日志。
+         */
+        if (err instanceof client.LatticeApiError && err.status === 404) return null
+        throw err
+      }
     }
-    return await hub.getLatticeHubDetail(pluginId.trim())
-  })
+  )
+
+  /**
+   * 直接发布**本机已安装**的插件（安装包 + 源码）：详情页「发布到插件中心」走这里，
+   * 不再弹系统目录选择框让用户自己找一遍安装目录。
+   */
+  ipcMain.handle(
+    LATTICE_IPC.hubPublishInstalled,
+    async (_event, pluginIdRaw: unknown): Promise<LatticeUploadResult> => {
+      const pluginId = typeof pluginIdRaw === 'string' ? pluginIdRaw.trim() : ''
+      if (!pluginId) return { ok: false, error: '缺少插件 id' }
+      try {
+        return await hub.publishInstalledLatticePlugin(pluginId)
+      } catch (err) {
+        const message = client.latticeErrorMessage(err)
+        logger.warn(`[Lattice] Failed to publish installed plugin '${pluginId}':`, err)
+        return { ok: false, error: message }
+      }
+    }
+  )
 
   ipcMain.handle(LATTICE_IPC.hubPickUpload, async (): Promise<LatticeUploadResult> => {
     try {
@@ -340,12 +380,23 @@ export function registerLatticeIpc(): void {
     }
   })
 
+  /** 选「安装包目录 + 源码目录」两个目录后发布（源码与安装包是两份不同的 zip） */
+  ipcMain.handle(LATTICE_IPC.hubPickUploadWithSource, async (): Promise<LatticeUploadResult> => {
+    try {
+      return await hub.pickAndUploadLatticePackageWithSource()
+    } catch (err) {
+      const message = client.latticeErrorMessage(err)
+      logger.warn('[Lattice] Failed to select and upload plugin package with source:', err)
+      return { ok: false, error: message }
+    }
+  })
+
   ipcMain.handle(
     LATTICE_IPC.hubUpload,
     async (_event, raw: unknown): Promise<LatticeUploadResult> => {
-      const source = normalizeUploadSource(raw)
-      if (!source) return { ok: false, error: '缺少插件包路径（source）' }
-      return await hub.uploadLatticePackage(source)
+      const input = normalizeUploadSource(raw)
+      if (!input) return { ok: false, error: '缺少插件包路径（source）' }
+      return await hub.uploadLatticePackage(input.source, input.sourcePath)
     }
   )
 
@@ -464,9 +515,12 @@ export function registerLatticeIpc(): void {
       try {
         const dir = typeof dirRaw === 'string' ? dirRaw.trim() : ''
         if (!dir) return { ok: false, error: '插件存放路径不能为空' }
-        applyPluginsRoot(dir)
+        const applied = applyPluginsRoot(dir)
+        if (applied.previousDir) {
+          await remapWorkspacePathsUnderRoot(applied.previousDir, applied.dir)
+        }
         broadcastWorkshopChanged()
-        return { ok: true, dir: path.resolve(dir) }
+        return { ok: true, dir: applied.dir }
       } catch (err) {
         return { ok: false, error: client.latticeErrorMessage(err) }
       }
@@ -494,7 +548,11 @@ export function registerLatticeIpc(): void {
     LATTICE_IPC.setAutoInstallMissing,
     (_event, enabledRaw: unknown): LatticeAutoInstallSettingResult => {
       if (typeof enabledRaw !== 'boolean') {
-        return { ok: false, enabled: settings.getLatticeAutoInstallMissing(), error: '参数不合法：需要布尔值' }
+        return {
+          ok: false,
+          enabled: settings.getLatticeAutoInstallMissing(),
+          error: '参数不合法：需要布尔值'
+        }
       }
       try {
         const enabled = settings.setLatticeAutoInstallMissing(enabledRaw)
@@ -516,7 +574,11 @@ export function registerLatticeIpc(): void {
   /** 显式解决一个冲突：local=用本机覆盖云端（force），cloud=用云端覆盖本机 */
   ipcMain.handle(
     LATTICE_IPC.resolveConflict,
-    async (_event, pluginIdRaw: unknown, strategyRaw: unknown): Promise<LatticeResolveConflictResult> => {
+    async (
+      _event,
+      pluginIdRaw: unknown,
+      strategyRaw: unknown
+    ): Promise<LatticeResolveConflictResult> => {
       const pluginId = typeof pluginIdRaw === 'string' ? pluginIdRaw.trim() : ''
       const strategy = strategyRaw === 'local' || strategyRaw === 'cloud' ? strategyRaw : null
       if (!pluginId || !strategy) return { ok: false, error: '参数不合法' }

@@ -27,6 +27,7 @@ import {
 } from '@remixicon/react'
 import { useNavigate } from 'react-router-dom'
 import ChaseDots from './ChaseDots'
+import TopicStatusDot from './TopicStatusDot'
 import NewDraftModal from './workshop/NewDraftModal'
 import { requestWorkshopModal } from './workshop/workshop-modal-request'
 import { useDraftActions } from './workshop/useDraftActions'
@@ -40,6 +41,7 @@ import type { HarnessTopicRow, WorkspaceRow } from '../../../../shared/harness/t
 import type { WorkshopDraftSummary } from '../../../../shared/harness/workshop'
 import { harnessApi } from '../../api/harness'
 import { useMemoryScope } from '../../utils/harness/memory-scope'
+import { resolveTopicRunStatus } from '../../hooks/harness/useTopicRunStatus'
 
 interface HarnessSidebarProps {
   /** 当前工作区的会话列表（实时 + 分页，由 useHarness 维护） */
@@ -53,7 +55,15 @@ interface HarnessSidebarProps {
   colorTextSecondary: string
   colorTextTertiary: string
   colorFillAlter: string
+  /** 黄色呼吸点（等待用户确认）的颜色 */
+  colorWarning: string
+  /** 绿色呼吸点（刚完成、还没点开）的颜色 */
+  colorSuccess: string
   loadingTopicIds: Set<number>
+  /** 正挂着提问 / 审批、等用户确认的会话（行首黄点） */
+  awaitingTopicIds: Set<number>
+  /** 刚自然跑完、且当时不在对话窗口里的会话（行首绿点，点开即消失） */
+  completedTopicIds: Set<number>
   /** 分页 */
   hasMoreTopics: boolean
   isLoadingMoreTopics: boolean
@@ -176,6 +186,17 @@ const SidebarModeSwitch: React.FC<{
 }> = ({ mode, onChange, track, thumb, active, inactive, hairline, t }) => {
   const listRef = useRef<HTMLDivElement>(null)
   const [thumbBox, setThumbBox] = useState({ left: 0, width: 0 })
+  /**
+   * 滑块过渡只在**用户点开关**时播放。
+   *
+   * 启动恢复（记住的模式）、跟随内容（点会话、工坊页打开）同样会改 mode，但那是「状态跟着
+   * 内容走」，不是一次切换动作；此时滑块滑过去会让刚回来的人以为被谁点了一下（用户口径
+   * 2026-11-23「记住选中哪个模式的时候，就没有必要有切换动画了，只有主动点击切换其他模式
+   * 才出现动画」）。
+   */
+  const [animateThumb, setAnimateThumb] = useState(false)
+  /** 用户点的是哪一档；只有紧接着的 mode 变化正好是它，才算一次可见的切换 */
+  const clickTargetRef = useRef<SidebarMode | null>(null)
 
   /** 按当前档的按钮实测位置（含内边距），滑块据此贴合 */
   const measure = useCallback((): void => {
@@ -193,13 +214,16 @@ const SidebarModeSwitch: React.FC<{
   }, [mode])
 
   useLayoutEffect(() => {
+    // 非点击造成的改档（恢复 / 跟随内容）直接落位，不播放滑动；点同一档不算切换，不会到这
+    setAnimateThumb(clickTargetRef.current === mode)
+    clickTargetRef.current = null
     measure()
     const list = listRef.current
     if (!list || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
     observer.observe(list)
     return () => observer.disconnect()
-  }, [measure])
+  }, [measure, mode])
 
   return (
     <div
@@ -208,7 +232,8 @@ const SidebarModeSwitch: React.FC<{
       className="relative flex items-center select-none"
       style={{ padding: 2, height: 24, borderRadius: 7, background: track }}
     >
-      {/* 滑块：绝对定位 + transform（不动布局、不重排文字），切换时滑到另一档 */}
+      {/* 滑块：绝对定位 + transform（不动布局、不重排文字），切换时滑到另一档。
+          过渡只在点击时打开（见 animateThumb），播完由 onTransitionEnd 关掉。 */}
       <span
         aria-hidden
         style={{
@@ -222,8 +247,11 @@ const SidebarModeSwitch: React.FC<{
           border: `1px solid ${hairline}`,
           boxShadow: '0 1px 2px rgba(0, 0, 0, 0.28)',
           transform: `translateX(${thumbBox.left}px)`,
-          transition: `transform 240ms ${MODE_THUMB_EASE}, width 240ms ${MODE_THUMB_EASE}`
+          transition: animateThumb
+            ? `transform 240ms ${MODE_THUMB_EASE}, width 240ms ${MODE_THUMB_EASE}`
+            : 'none'
         }}
+        onTransitionEnd={() => setAnimateThumb(false)}
       />
       {SIDEBAR_MODES.map((item) => (
         <button
@@ -231,7 +259,11 @@ const SidebarModeSwitch: React.FC<{
           type="button"
           role="tab"
           aria-selected={mode === item}
-          onClick={() => onChange(item)}
+          onClick={() => {
+            if (item === mode) return
+            clickTargetRef.current = item
+            onChange(item)
+          }}
           title={t(`harness.sidebar.mode.${item}Hint` as never)}
           style={{
             position: 'relative',
@@ -249,7 +281,7 @@ const SidebarModeSwitch: React.FC<{
             whiteSpace: 'nowrap',
             color: mode === item ? active : inactive,
             fontWeight: mode === item ? 500 : 400,
-            transition: 'color 180ms ease'
+            transition: animateThumb ? 'color 180ms ease' : 'none'
           }}
         >
           {/* 图标与文字同色：选中态/未选中态由按钮的 color 一起带过去，不用另配一套 */}
@@ -315,7 +347,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   colorTextSecondary,
   colorTextTertiary,
   colorFillAlter,
+  colorWarning,
+  colorSuccess,
   loadingTopicIds,
+  awaitingTopicIds,
+  completedTopicIds,
   hasMoreTopics,
   isLoadingMoreTopics,
   isRefreshingTopics,
@@ -1732,6 +1768,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 会话行 */
   const renderTopicRow = (workspaceId: number, topic: HarnessTopicRow): React.ReactNode => {
     const isTopicLoading = loadingTopicIds.has(topic.id)
+    /**
+     * 行首指示槽显示哪一种状态（优先级见 resolveTopicRunStatus 与用户口径 2026-11-23）：
+     * 等待用户确认（黄点呼吸）> 进行中（追逐点）> 刚完成（绿点呼吸，点开即清）。
+     */
+    const topicStatus = resolveTopicRunStatus({
+      awaiting: awaitingTopicIds.has(topic.id),
+      running: isTopicLoading,
+      completed: completedTopicIds.has(topic.id)
+    })
     const selected = workspaceId === activeWorkspaceId && currentTopicId === topic.id
     return (
       <div
@@ -1740,6 +1785,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         /* 稳定钩子：工装靠它判断「现在是哪一条会话」（切模式后内容有没有跟着切） */
         data-topic-id={topic.id}
         data-topic-selected={selected ? '1' : '0'}
+        /* 稳定钩子：行首指示器的状态（idle / running / awaiting / completed），工装断言用 */
+        data-topic-status={topicStatus}
         className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
         style={{
           // 左内边距 6 + 行首 16px 指示槽 = 与工作区行图标列（14~30px）对齐；
@@ -1757,12 +1804,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           if (!selected) e.currentTarget.style.background = 'transparent'
         }}
       >
-        {/* 行首指示槽：固定 16px（平时留空，生成中显示追逐点），保证与工作区图标同列且标题不位移 */}
+        {/* 行首指示槽：固定 16px（平时留空；进行中 = 追逐点，等待确认 = 黄点呼吸，
+            刚完成 = 绿点呼吸），保证与工作区图标同列且标题不位移 */}
         <span
           className="flex items-center justify-center shrink-0"
           style={{ width: 16, height: 16 }}
         >
-          {isTopicLoading && <ChaseDots size={14} color={colorTextTertiary} />}
+          {topicStatus === 'awaiting' ? (
+            <TopicStatusDot color={colorWarning} label={t('harness.sidebar.topicAwaiting')} />
+          ) : topicStatus === 'running' ? (
+            <ChaseDots size={14} color={colorTextTertiary} />
+          ) : topicStatus === 'completed' ? (
+            <TopicStatusDot color={colorSuccess} label={t('harness.sidebar.topicCompleted')} />
+          ) : null}
         </span>
         <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
           {topic.title}

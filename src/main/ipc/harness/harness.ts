@@ -88,6 +88,8 @@ export const HARNESS_EVENTS = {
   agentOutputUpdated: 'harness:harness-agent-output-updated',
   questionAsked: 'harness:harness-question-asked',
   approvalAsked: 'harness:harness-approval-asked',
+  /** 某条会话「是否正挂着等用户确认」（侧栏黄点）：提问 / 审批挂起时 true，结算时 false */
+  topicPending: 'harness:harness-topic-pending',
   permissionUpdated: 'harness:harness-permission-updated',
   todosUpdated: 'harness:harness-todos-updated'
 } as const
@@ -1048,6 +1050,34 @@ function broadcastQueue(topicId: number): void {
   }
 }
 
+/**
+ * 这条会话此刻是不是挂着「等用户确认」的东西（提问 / 沙箱审批）。
+ *
+ * 两个服务各持一张挂起表（提问在 questionService，审批在 permissionGate），
+ * 侧栏只关心「这条会话还要不要人管」，所以取并集；哪一端结算都重新算一次，
+ * 另一端还挂着时仍算 true（同一轮里可能先问一句、再要一次授权）。
+ */
+function isTopicAwaitingUser(topicId: number): boolean {
+  return questionService.getPending(topicId) != null || permissionGate.getPending(topicId) != null
+}
+
+/**
+ * 广播「这条会话还要不要用户确认」——侧栏据此把行首的**进行中**换成**黄色呼吸点**
+ * （用户口径 2026-11-23「当需要用户继续确认操作时，这个图标需要变成黄色的点在呼吸」）。
+ *
+ * 发送时机：提问 / 审批**挂起时**发一次、**结算时**（允许 / 拒绝 / 中止）再发一次，
+ * 两端都按 `isTopicAwaitingUser` 现算，所以同一话题连续两次挂起、先结算一端另一端还挂着
+ * 这类情形都不会报错状态；重复的同值事件由渲染层去重（Set 里有没有它本来就幂等）。
+ */
+function broadcastTopicPending(topicId: number): void {
+  if (!Number.isFinite(topicId) || topicId <= 0) return
+  const pending = isTopicAwaitingUser(topicId)
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed())
+      safeSend(win.webContents, HARNESS_EVENTS.topicPending, { topicId, pending })
+  }
+}
+
 /** sender.id → 该渲染帧当前在跑的话题（「停止」时据此丢弃待注入缓冲） */
 const senderTopic = new Map<number, number>()
 
@@ -1223,13 +1253,18 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.approvalAsked, payload)
       }
+      // 挂起的同一刻告诉侧栏「这条会话在等人」：行首由进行中换成黄色呼吸点
+      broadcastTopicPending(pending.topicId)
       logger.info(
         `[Permission] Pending approval requestId=${pending.requestId} tool=${pending.toolName} reason=${pending.reasonCode}`
       )
     }
+    // 结算（允许 / 拒绝 / 中止）→ 撤回那个黄点，回到进行中
+    permissionGate.onResolved = broadcastTopicPending
     return () => {
       // 退出装配即不再有人应答：挂起审批全部按拒绝结算（故障关闭）
       permissionGate.onApprovalAsked = undefined
+      permissionGate.onResolved = undefined
       permissionGate.abortAll()
     }
   })
@@ -1630,9 +1665,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.questionAsked, payload)
       }
+      // 挂起的同一刻告诉侧栏「这条会话在等人」：行首由进行中换成黄色呼吸点
+      broadcastTopicPending(pending.topicId)
     }
+    // 结算（用户回答 / 本轮中止）→ 撤回那个黄点，回到进行中
+    questionService.onResolved = broadcastTopicPending
     return () => {
       questionService.onAsk = undefined
+      questionService.onResolved = undefined
     }
   })
   handle('harness-question-answer', (requestId: string, answers: unknown) => {

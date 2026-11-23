@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Modal, Select, Switch, Tooltip, theme } from 'antd'
+import { App, Button, Dropdown, Modal, Select, Switch, Tooltip, theme } from 'antd'
+import type { MenuProps } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
+  RiArrowDownSLine,
   RiArrowUpLine,
   RiCheckboxCircleLine,
   RiCloudLine,
@@ -34,7 +36,12 @@ import UploadProgressModal from '@renderer/lattice/UploadProgressModal'
 import { latticeErrorMessage } from '@renderer/lattice/api'
 import { formatCount, formatSyncTime } from '@renderer/lattice/format'
 import { isChatOpened, isFolderFallback } from '@renderer/lattice/source'
-import type { HubEntryV2, HubListResultV2, LatticeSyncConflict, LatticeSyncDetails } from '@renderer/lattice/types'
+import type {
+  HubEntryV2,
+  HubListResultV2,
+  LatticeSyncConflict,
+  LatticeSyncDetails
+} from '@renderer/lattice/types'
 import type { PluginListEntry } from '@shared/plugin/types'
 
 /**
@@ -43,11 +50,13 @@ import type { PluginListEntry } from '@shared/plugin/types'
  * 本页**只有平台一个远程来源**：
  * - 目录来自 `lattice.list`（搜索/分类在本地过滤），没有第二个数据源；
  * - 安装、更新、发布、源码下载都走 `lattice.*` 通道；
- * - 本地上传保留两条路：`上传插件`（把本机包目录发布到平台，安装包+源码一起传）、
- *   `从本地安装`（本机 zip/目录装进应用）、`导入本地插件目录`（选一个含多插件子目录的文件夹批量发布）。
+ * - 发布相关的入口收进顶栏「发布」下拉（用户 2026-11-23：按钮太多、功能相似）：
+ *   发布插件目录 / 发布 .zip / 发布安装包+源码目录 / 导入本地插件目录；
+ *   「从本地安装」（本机 zip/目录装进应用）是另一类动作，单独保留。
  *
  * 卡片按契约 v2 显示：版本 / 作者 / 描述 / tags / 下载数 / 已安装・可更新 / 源码标记；
- * 操作：安装、更新、打开源码（已安装且有源码）。本机已安装但未发布到平台的插件单独一组，
+ * 操作：安装、更新、打开源码（已安装且有源码）。本机已安装但未发布到平台的插件与目录卡片
+ * 排在**同一张网格**里（用户 2026-11-23：「本地的和线上的不要分开显示，合并」），
  * 保证「发布到插件中心」这条入口可达。
  */
 const PluginRepository: React.FC = () => {
@@ -73,6 +82,7 @@ const PluginRepository: React.FC = () => {
     installFromHub: installLatticePlugin,
     pickAndUpload,
     pickAndUploadZip,
+    pickAndUploadWithSource,
     clearUploadProgress,
     capabilities,
     openSource,
@@ -87,8 +97,18 @@ const PluginRepository: React.FC = () => {
    * 清单没回来之前 `entries` 还是空数组，直接按「没有本机插件」渲染会让整块引导先闪一下再塌成一条。
    */
   const [localLoaded, setLocalLoaded] = useState(false)
+  /**
+   * 本机清单是否**成功**读到过一次。
+   *
+   * `localLoaded` 只表示「请求已经结束」（未登录时的引导形态要靠它避免闪屏）；
+   * 卡片判断「已安装 / 已启用」时用这个：只有真的读到了本机清单，才敢用
+   * 「不在清单里 = 未安装」覆盖平台字段；读取失败时退回平台视图，而不是把
+   * 所有插件都误报成未安装。
+   */
+  const [localTrusted, setLocalTrusted] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadingZip, setUploadingZip] = useState(false)
+  const [uploadingWithSource, setUploadingWithSource] = useState(false)
   const [importing, setImporting] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [openBusy, setOpenBusy] = useState<string | null>(null)
@@ -135,6 +155,7 @@ const PluginRepository: React.FC = () => {
     try {
       const list = await window.api.plugin.list()
       setEntries(Array.isArray(list) ? list : [])
+      setLocalTrusted(true)
     } catch (err) {
       console.error('[plugins] Failed to load list:', err)
     } finally {
@@ -256,6 +277,21 @@ const PluginRepository: React.FC = () => {
     return map
   }, [entries])
 
+  /**
+   * 目录条目在本机是否真有更新：**以本机已装版本**与平台最新版比对。
+   *
+   * 不用平台的 `update_available`：它是按账号安装记录算的，本机卸载/降级后要等同步才更新，
+   * 会出现「本机没装却提示可更新」「仓库有更新但详情页没有」这类不一致。
+   */
+  const hasLocalUpdate = useCallback(
+    (item: HubEntryV2): boolean => {
+      const local = localById.get(item.plugin_id)
+      if (!local?.installed) return false
+      return Boolean(item.latest_version && item.latest_version !== local.version)
+    },
+    [localById]
+  )
+
   const hubItems = hub?.items ?? []
   const hubCategories = useMemo(() => {
     const set = new Set<string>()
@@ -288,7 +324,12 @@ const PluginRepository: React.FC = () => {
     })
   }, [hubCategory, hubItems, normalizedQuery])
 
-  /** 已装但平台上没有的插件（本地上传装的）：单独一组，保证详情页/发布入口可达 */
+  /**
+   * 已装但平台上没有的插件（本地上传装的）。
+   *
+   * 展示上不再单独成组（用户 2026-11-23：「本地的和线上的不要分开显示，合并」）：
+   * 它们和目录卡片排在同一张网格里，只是详情页/发布入口要保证可达。
+   */
   const localOnlyAll = useMemo(() => {
     const hubIds = new Set(hubItems.map((item) => item.plugin_id))
     return entries
@@ -307,6 +348,14 @@ const PluginRepository: React.FC = () => {
       )
     })
   }, [localOnlyAll, normalizedQuery])
+
+  /**
+   * 网格里实际出现的本机插件。
+   *
+   * 选了平台分类时它们不出现：本机插件没有登记到目录的分类里，跟着任何分类显示都算错配
+   * （合并成一张网格后尤其明显）；搜索框仍然能搜到它们，清掉分类就回来。
+   */
+  const visibleLocal = hubCategory === 'all' ? localOnly : []
 
   /** 顶栏「上传插件」：选插件包目录 → 主进程打包上传（安装包 + 源码） */
   const handleUpload = useCallback(async (): Promise<void> => {
@@ -329,7 +378,9 @@ const PluginRepository: React.FC = () => {
         return
       }
       message.success(
-        t('lattice.upload.success', { name: result.plugin_id, version: result.version })
+        result.status === 'review'
+          ? t('lattice.upload.submitted', { name: result.plugin_id, version: result.version })
+          : t('lattice.upload.success', { name: result.plugin_id, version: result.version })
       )
       setUploadOpen(false)
       await Promise.all([refresh(), loadHub()])
@@ -363,7 +414,9 @@ const PluginRepository: React.FC = () => {
         return
       }
       message.success(
-        t('lattice.upload.success', { name: result.plugin_id, version: result.version })
+        result.status === 'review'
+          ? t('lattice.upload.submitted', { name: result.plugin_id, version: result.version })
+          : t('lattice.upload.success', { name: result.plugin_id, version: result.version })
       )
       setUploadOpen(false)
       await Promise.all([refresh(), loadHub()])
@@ -375,6 +428,56 @@ const PluginRepository: React.FC = () => {
       setUploadingZip(false)
     }
   }, [clearUploadProgress, loadHub, loggedIn, message, navigate, pickAndUploadZip, refresh, t])
+
+  /**
+   * 顶栏「连同源码目录发布」：先选构建产物目录（安装包），再选源码目录。
+   *
+   * 安装包与源码是两份不同的 zip：仓库类插件 dist/<id>/ 是产物、plugins/<id>/ 是源码，
+   * 平台「源代码」下载到的才是真正的源码，而不是安装包本身。
+   */
+  const handleUploadWithSource = useCallback(async (): Promise<void> => {
+    if (!loggedIn) {
+      navigate('/login')
+      return
+    }
+    clearUploadProgress()
+    setUploadingWithSource(true)
+    setUploadOpen(true)
+    try {
+      const result = await pickAndUploadWithSource()
+      if (!result.ok) {
+        setUploadOpen(false)
+        message.error(result.error || t('lattice.upload.fail'))
+        return
+      }
+      if ('canceled' in result) {
+        setUploadOpen(false)
+        return
+      }
+      message.success(
+        result.status === 'review'
+          ? t('lattice.upload.submitted', { name: result.plugin_id, version: result.version })
+          : t('lattice.upload.success', { name: result.plugin_id, version: result.version })
+      )
+      setUploadOpen(false)
+      await Promise.all([refresh(), loadHub()])
+    } catch (err) {
+      setUploadOpen(false)
+      message.error(t('lattice.upload.fail'))
+      console.error('[lattice] Failed to upload plugin with source:', err)
+    } finally {
+      setUploadingWithSource(false)
+    }
+  }, [
+    clearUploadProgress,
+    loadHub,
+    loggedIn,
+    message,
+    navigate,
+    pickAndUploadWithSource,
+    refresh,
+    t
+  ])
 
   /** 顶栏「从本地安装」：选 zip / 目录装进应用（不发布） */
   const handleInstallLocal = useCallback(async (): Promise<void> => {
@@ -432,11 +535,21 @@ const PluginRepository: React.FC = () => {
     } finally {
       setImporting(false)
     }
-  }, [capabilities.importLocalDir, importLocalDir, loadHub, loggedIn, message, navigate, refresh, t])
+  }, [
+    capabilities.importLocalDir,
+    importLocalDir,
+    loadHub,
+    loggedIn,
+    message,
+    navigate,
+    refresh,
+    t
+  ])
 
   /** 卡片主操作：安装（未装）/ 更新（可更新）；安装时主进程会自动下载并解压源码 */
   const handleHubInstall = useCallback(
     async (item: HubEntryV2): Promise<void> => {
+      const wasInstalled = Boolean(localById.get(item.plugin_id)?.installed)
       setBusy(item.plugin_id)
       try {
         const result = await installLatticePlugin(item.plugin_id, item.latest_version)
@@ -444,7 +557,7 @@ const PluginRepository: React.FC = () => {
           message.error(result.error || t('plugins.hub.installFail'))
           return
         }
-        if (item.update_available) {
+        if (wasInstalled) {
           message.success(
             t('plugins.hub.updateSuccess', {
               name: item.name,
@@ -465,7 +578,7 @@ const PluginRepository: React.FC = () => {
         setBusy(null)
       }
     },
-    [installLatticePlugin, loadHub, message, refresh, t]
+    [installLatticePlugin, loadHub, localById, message, refresh, t]
   )
 
   /**
@@ -473,7 +586,7 @@ const PluginRepository: React.FC = () => {
    * 失败不中断后续插件（单个失败很常见：网络/源码包），最后汇总成功/失败数量。
    */
   const handleUpdateAll = useCallback(async (): Promise<void> => {
-    const targets = (hub?.items ?? []).filter((item) => item.installed && item.update_available)
+    const targets = (hub?.items ?? []).filter((item) => hasLocalUpdate(item))
     if (targets.length === 0 || bulkUpdating) return
     setBulkUpdating(true)
     let ok = 0
@@ -508,15 +621,7 @@ const PluginRepository: React.FC = () => {
     } finally {
       setBulkUpdating(false)
     }
-  }, [
-    bulkUpdating,
-    hub?.items,
-    installLatticePlugin,
-    loadHub,
-    message,
-    refresh,
-    t
-  ])
+  }, [bulkUpdating, hasLocalUpdate, hub?.items, installLatticePlugin, loadHub, message, refresh, t])
 
   /**
    * 卡片「打开源码」：主进程优先建/复用工作区并开一条插件会话；
@@ -633,6 +738,43 @@ const PluginRepository: React.FC = () => {
   }, [loadHub, message, openSyncDetails, syncLattice, t])
 
   /**
+   * 顶栏「发布」下拉菜单（用户 2026-11-23：「按键太多，很多都是功能相似的」）。
+   *
+   * 发布插件目录 / 发布 .zip / 发布安装包+源码 / 导入本地插件目录，本质都是
+   * 「把本机的一个插件包/目录发到插件中心」，收进一个菜单后顶栏只剩：
+   * 工坊、本地安装、发布、刷新（+ 有更新时的「更新全部」）。
+   */
+  const publishing = uploading || uploadingZip || uploadingWithSource || importing
+  const publishMenuItems: MenuProps['items'] = [
+    {
+      key: 'publish-dir',
+      icon: <RiUploadCloud2Line size={14} />,
+      label: t('plugins.hub.publishDir'),
+      onClick: () => void handleUpload()
+    },
+    {
+      key: 'publish-zip',
+      icon: <RiFileZipLine size={14} />,
+      label: t('plugins.hub.publishZip'),
+      onClick: () => void handleUploadZip()
+    },
+    {
+      key: 'publish-with-source',
+      icon: <RiCodeSSlashLine size={14} />,
+      label: t('plugins.hub.publishWithSource'),
+      onClick: () => void handleUploadWithSource()
+    },
+    { type: 'divider' },
+    {
+      key: 'import-dir',
+      icon: <RiFolderOpenLine size={14} />,
+      label: t('plugins.hub.importLocalDir'),
+      disabled: !capabilities.importLocalDir,
+      onClick: () => void handleImportLocalDir()
+    }
+  ]
+
+  /**
    * 页面级 CSS 变量：把 antd token 下发到 main.css 里的 `.lattice-*` 类，
    * 亮/暗主题切换时卡片、同步条一起换色，不在组件里写死颜色。
    */
@@ -704,10 +846,35 @@ const PluginRepository: React.FC = () => {
     </span>
   )
 
+  /**
+   * 平台目录处于状态卡（未就绪 / 未登录 / 加载中 / 失败 / 空）时的本机插件兜底。
+   *
+   * 本机插件不依赖平台目录，任何时候都得能管理：状态卡照常显示，本机卡片接在下面。
+   * 目录可用时不再走这里——本机卡片直接排在目录卡片后面，是同一张网格。
+   */
+  const withLocalCards = (state: React.ReactNode): React.ReactNode => {
+    if (visibleLocal.length === 0) return state
+    return (
+      <>
+        {state}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+            gap: 14,
+            marginTop: 16
+          }}
+        >
+          {renderLocalCards()}
+        </div>
+      </>
+    )
+  }
+
   /** 平台目录内容区状态：未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格 */
   const renderHubContent = (): React.ReactNode => {
     if (!latticeReady) {
-      return (
+      return withLocalCards(
         <StateCard
           icon={<RiErrorWarningLine size={24} />}
           title={t('plugins.hub.unavailableTitle')}
@@ -724,14 +891,16 @@ const PluginRepository: React.FC = () => {
       }
       // 下方还有本机插件卡片时，登录只是目录不可用的说明 → 一条提示；
       // 整页只剩登录这一件事时才铺开成居中引导。
-      return localOnlyAll.length > 0 ? (
-        <GuestNotice onLogin={goLogin} />
-      ) : (
-        <GuestWelcome onLogin={goLogin} />
+      return withLocalCards(
+        localOnlyAll.length > 0 ? (
+          <GuestNotice onLogin={goLogin} />
+        ) : (
+          <GuestWelcome onLogin={goLogin} />
+        )
       )
     }
     if (hubError) {
-      return (
+      return withLocalCards(
         <StateCard
           icon={<RiErrorWarningLine size={24} />}
           title={t('plugins.hub.loadFailTitle')}
@@ -746,7 +915,7 @@ const PluginRepository: React.FC = () => {
       )
     }
     if (hubLoading && !hub) {
-      return (
+      return withLocalCards(
         <div
           style={{
             display: 'flex',
@@ -767,7 +936,7 @@ const PluginRepository: React.FC = () => {
     }
     if (visibleHub.length === 0) {
       const filtered = Boolean(normalizedQuery) || hubCategory !== 'all'
-      return (
+      return withLocalCards(
         <div
           style={{
             display: 'flex',
@@ -799,13 +968,29 @@ const PluginRepository: React.FC = () => {
       >
         {visibleHub.map((item) => {
           const localEntry = localById.get(item.plugin_id)
-          const installed = Boolean(item.installed || localEntry?.installed)
-          const hubEnabled = Boolean(localEntry?.enabled)
-          const installEnabled = item.install_enabled !== false
+          /**
+           * 本机视角优先（用户 2026-11-23）：
+           * 「已安装 / 已启用 / 可更新」一律以**本机插件清单**为准。平台目录里的
+           * `installed` 是按账号保存的安装记录视图，本机卸载后要等下一次 push 才变；
+           * 直接拿它渲染就会出现「仓库卡片说已安装、点进详情说未安装」的自相矛盾。
+           * 本机清单还没回来时才退回平台字段，避免首帧闪一下。
+           */
+          const installed = localTrusted
+            ? Boolean(localEntry?.installed)
+            : Boolean(localEntry?.installed || item.installed)
+          const hubEnabled = installed && Boolean(localEntry?.enabled)
+          const localVersion = localEntry?.installed ? localEntry.version : undefined
           const hasSource = Boolean(item.has_source)
-          const updateAvailable = Boolean(item.update_available)
+          const updateAvailable =
+            installed && localVersion
+              ? Boolean(item.latest_version && item.latest_version !== localVersion)
+              : installed && Boolean(item.update_available)
           const ownerName = item.owner?.display_name || item.owner?.username || '—'
-          const version = item.latest_version ?? localEntry?.version ?? '—'
+          const version =
+            (installed ? localVersion : undefined) ??
+            item.latest_version ??
+            localEntry?.version ??
+            '—'
           const busyThis = busy === item.plugin_id
           const primaryLabel = installed
             ? updateAvailable
@@ -875,7 +1060,9 @@ const PluginRepository: React.FC = () => {
                       }}
                     >
                       <span style={{ flexShrink: 0 }}>{t('plugins.hub.owner')}</span>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ownerName}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {ownerName}
+                      </span>
                     </span>
                   </div>
                 </div>
@@ -892,15 +1079,10 @@ const PluginRepository: React.FC = () => {
                     <Button
                       size="small"
                       icon={
-                        updateAvailable ? (
-                          <RiArrowUpLine size={13} />
-                        ) : (
-                          <RiDownloadLine size={13} />
-                        )
+                        updateAvailable ? <RiArrowUpLine size={13} /> : <RiDownloadLine size={13} />
                       }
                       loading={busyThis}
-                      disabled={!installEnabled || (busy !== null && busy !== item.plugin_id)}
-                      title={!installEnabled ? t('plugins.hub.installDisabled') : undefined}
+                      disabled={busy !== null && busy !== item.plugin_id}
                       onClick={(e) => {
                         e.stopPropagation()
                         void handleHubInstall(item)
@@ -992,9 +1174,9 @@ const PluginRepository: React.FC = () => {
                     <>
                       <RiCheckboxCircleLine size={12} />
                       {hubEnabled ? t('plugins.hub.enabled') : t('plugins.hub.disabled')}
-                      {item.installed_version && (
+                      {localVersion && (
                         <span style={{ color: token.colorTextTertiary }}>
-                          · {t('plugins.hub.installedVersion', { version: item.installed_version })}
+                          · {t('plugins.hub.installedVersion', { version: localVersion })}
                         </span>
                       )}
                     </>
@@ -1036,6 +1218,8 @@ const PluginRepository: React.FC = () => {
             </div>
           )
         })}
+        {/* 本机已装、平台上还没有的插件：同一张网格里接着排（不是另一组） */}
+        {renderLocalCards()}
       </div>
     )
   }
@@ -1043,160 +1227,153 @@ const PluginRepository: React.FC = () => {
   /**
    * 本机已安装但未发布到平台的插件（本地安装包）：保证详情页与「发布到插件中心」可达。
    *
-   * 不再单起「本机已安装（未发布到插件中心）」一行分组标题（用户 2026-11-22：「不需要这个内容」）：
-   * 卡片自己的「本地安装」标签和「通过本地上传安装，尚未发布到插件中心」已经把来源说清楚了，
-   * 头顶再压一行标题只会把真正能用的卡片挤成第二等分组。
+   * 和平台目录的卡片**排在同一张网格**里（用户 2026-11-23：「本地的和线上的不要分开显示，合并」）：
+   * 不再单独铺一张网格，也不单起分组标题（用户 2026-11-22：「不需要这个内容」）。
+   * 外面这层 `display: contents` 不参与布局，卡片本身就是调用方网格的网格项——
+   * 所以本机插件不会另起一行，而是紧接在目录卡片后面按同列宽、同间距排下去。
    */
-  const renderLocalSection = (): React.ReactNode => {
-    if (localOnly.length === 0) return null
+  const renderLocalCards = (): React.ReactNode => {
+    if (visibleLocal.length === 0) return null
     return (
-      <div style={{ marginTop: 16 }}>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-            gap: 14
-          }}
-        >
-          {localOnly.map((entry) => {
-            const state = runtimeState(entry.id)
-            const failed = state === 'error'
-            return (
-              <div
-                key={entry.id}
-                className="lattice-hub-card is-clickable"
-                onClick={() => navigate(`/plugins/${entry.id}`)}
-              >
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                  <PluginIcon id={entry.id} icon={entry.icon} menuIcon={entry.menu?.icon} size={44} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                      <span
-                        style={{
-                          fontSize: 14.5,
-                          fontWeight: 600,
-                          letterSpacing: '-0.005em',
-                          color: token.colorText,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {entry.name}
-                      </span>
-                      <span
-                        className="lattice-hub-tag"
-                        style={{
-                          flexShrink: 0,
-                          background: token.colorFillSecondary,
-                          color: token.colorTextTertiary
-                        }}
-                      >
-                        {t('plugins.hub.local.badge')}
-                      </span>
-                    </div>
-                    <div
+      <div style={{ display: 'contents' }}>
+        {visibleLocal.map((entry) => {
+          const state = runtimeState(entry.id)
+          const failed = state === 'error'
+          return (
+            <div
+              key={entry.id}
+              className="lattice-hub-card is-clickable"
+              onClick={() => navigate(`/plugins/${entry.id}`)}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <PluginIcon id={entry.id} icon={entry.icon} menuIcon={entry.menu?.icon} size={44} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span
                       style={{
-                        marginTop: 6,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        flexWrap: 'wrap',
-                        fontSize: 10.5,
+                        fontSize: 14.5,
+                        fontWeight: 600,
+                        letterSpacing: '-0.005em',
+                        color: token.colorText,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {entry.name}
+                    </span>
+                    <span
+                      className="lattice-hub-tag"
+                      style={{
+                        flexShrink: 0,
+                        background: token.colorFillSecondary,
                         color: token.colorTextTertiary
                       }}
                     >
-                      {chip(`v${entry.version}`)}
-                      <span>{t('plugins.hub.local.desc')}</span>
-                    </div>
+                      {t('plugins.hub.local.badge')}
+                    </span>
                   </div>
-                  {capabilities.openSource && (
-                    <Tooltip title={t('plugins.hub.source.open')}>
-                      <Button
-                        size="small"
-                        icon={<RiCodeSSlashLine size={13} />}
-                        loading={openBusy === entry.id}
-                        disabled={openBusy !== null && openBusy !== entry.id}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void handleOpenSource(entry.id)
-                        }}
-                      />
-                    </Tooltip>
-                  )}
-                </div>
-                <div
-                  className="lattice-hub-description"
-                  style={{
-                    marginTop: 12,
-                    minHeight: 41,
-                    fontSize: 12.5,
-                    lineHeight: 1.65,
-                    color: token.colorTextSecondary
-                  }}
-                >
-                  {entry.description || t('settings.plugins.noDescription')}
-                </div>
-                <div
-                  style={{
-                    marginTop: 'auto',
-                    paddingTop: 12,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    fontSize: 10
-                  }}
-                >
-                  <span
+                  <div
                     style={{
-                      display: 'inline-flex',
+                      marginTop: 6,
+                      display: 'flex',
                       alignItems: 'center',
-                      gap: 5,
-                      color: failed
-                        ? token.colorError
-                        : entry.enabled
-                          ? token.colorSuccess
-                          : token.colorTextTertiary
+                      gap: 6,
+                      flexWrap: 'wrap',
+                      fontSize: 10.5,
+                      color: token.colorTextTertiary
                     }}
                   >
-                    {failed ? (
-                      t('settings.plugins.loadFailed')
-                    ) : entry.enabled ? (
-                      <>
-                        <RiCheckboxCircleLine size={12} />
-                        {t('plugins.hub.enabled')}
-                      </>
-                    ) : (
-                      t('plugins.hub.disabled')
-                    )}
-                  </span>
+                    {chip(`v${entry.version}`)}
+                    <span>{t('plugins.hub.local.desc')}</span>
+                  </div>
+                </div>
+                {capabilities.openSource && (
+                  <Tooltip title={t('plugins.hub.source.open')}>
+                    <Button
+                      size="small"
+                      icon={<RiCodeSSlashLine size={13} />}
+                      loading={openBusy === entry.id}
+                      disabled={openBusy !== null && openBusy !== entry.id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void handleOpenSource(entry.id)
+                      }}
+                    />
+                  </Tooltip>
+                )}
+              </div>
+              <div
+                className="lattice-hub-description"
+                style={{
+                  marginTop: 12,
+                  minHeight: 41,
+                  fontSize: 12.5,
+                  lineHeight: 1.65,
+                  color: token.colorTextSecondary
+                }}
+              >
+                {entry.description || t('settings.plugins.noDescription')}
+              </div>
+              <div
+                style={{
+                  marginTop: 'auto',
+                  paddingTop: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 10
+                }}
+              >
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    color: failed
+                      ? token.colorError
+                      : entry.enabled
+                        ? token.colorSuccess
+                        : token.colorTextTertiary
+                  }}
+                >
+                  {failed ? (
+                    t('settings.plugins.loadFailed')
+                  ) : entry.enabled ? (
+                    <>
+                      <RiCheckboxCircleLine size={12} />
+                      {t('plugins.hub.enabled')}
+                    </>
+                  ) : (
+                    t('plugins.hub.disabled')
+                  )}
+                </span>
+                <Button
+                  size="small"
+                  type="text"
+                  style={{ marginLeft: 'auto', fontSize: 10.5 }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigate(`/plugins/${entry.id}`)
+                  }}
+                >
+                  {t('plugins.hub.local.detail')}
+                </Button>
+                {sectionsOf(entry.id).length > 0 && (
                   <Button
                     size="small"
                     type="text"
-                    style={{ marginLeft: 'auto', fontSize: 10.5 }}
+                    icon={<RiSettings3Line size={13} />}
                     onClick={(e) => {
                       e.stopPropagation()
-                      navigate(`/plugins/${entry.id}`)
+                      setSettingsPlugin({ id: entry.id, name: entry.name })
                     }}
-                  >
-                    {t('plugins.hub.local.detail')}
-                  </Button>
-                  {sectionsOf(entry.id).length > 0 && (
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<RiSettings3Line size={13} />}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSettingsPlugin({ id: entry.id, name: entry.name })
-                      }}
-                    />
-                  )}
-                </div>
+                  />
+                )}
               </div>
-            )
-          })}
-        </div>
+            </div>
+          )
+        })}
       </div>
     )
   }
@@ -1311,10 +1488,8 @@ const PluginRepository: React.FC = () => {
   }
 
   const showContent = Boolean(latticeReady && loggedIn)
-  /** 有更新的已安装插件数（顶栏「更新全部」入口；0 时隐藏） */
-  const updatableCount = (hub?.items ?? []).filter(
-    (item) => item.installed && item.update_available
-  ).length
+  /** 有更新的已安装插件数（顶栏「更新全部」入口；0 时隐藏；口径同卡片：本机已装 + 版本不同） */
+  const updatableCount = (hub?.items ?? []).filter((item) => hasLocalUpdate(item)).length
 
   /** 冲突弹窗里的数据预览：只展示前 240 字符，避免 256KiB JSON 撑爆弹窗 */
   const conflictPreview = (value: unknown): string => {
@@ -1343,6 +1518,7 @@ const PluginRepository: React.FC = () => {
     >
       {/* 内容排满页面；首行仍是与品牌区同高的工具条 */}
       <div
+        className="custom-scrollbar"
         style={{
           flex: 1,
           minHeight: 0,
@@ -1370,6 +1546,7 @@ const PluginRepository: React.FC = () => {
               <Button
                 size="small"
                 icon={<RiHammerLine size={14} />}
+                aria-label={t('settings.plugins.viewWorkshop')}
                 onClick={() => setWorkshopOpen(true)}
               />
             </Tooltip>
@@ -1380,23 +1557,23 @@ const PluginRepository: React.FC = () => {
             >
               {t('plugins.hub.installLocal')}
             </Button>
-            <Tooltip
-              title={
-                capabilities.importLocalDir
-                  ? t('plugins.hub.importLocalDir')
-                  : t('plugins.hub.import.unsupported')
-              }
+            <Dropdown
+              menu={{ items: publishMenuItems }}
+              trigger={['click']}
+              disabled={!loggedIn || uploadOpen}
             >
               <Button
                 size="small"
-                icon={<RiFolderOpenLine size={14} />}
-                loading={importing}
-                disabled={!loggedIn || !capabilities.importLocalDir}
-                onClick={() => void handleImportLocalDir()}
+                icon={<RiUploadCloud2Line size={14} />}
+                loading={publishing}
+                disabled={!loggedIn || uploadOpen}
               >
-                {t('plugins.hub.importLocalDir')}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  {t('plugins.hub.publishMenu')}
+                  <RiArrowDownSLine size={12} />
+                </span>
               </Button>
-            </Tooltip>
+            </Dropdown>
             {updatableCount > 0 && (
               <Button
                 size="small"
@@ -1408,42 +1585,21 @@ const PluginRepository: React.FC = () => {
                 {t('plugins.hub.updateAll.button', { n: updatableCount })}
               </Button>
             )}
-            <Button
-              size="small"
-              icon={<RiRefreshLine size={14} />}
-              loading={hubLoading}
-              disabled={!loggedIn}
-              onClick={() => void loadHub()}
-            >
-              {t('plugins.hub.refresh')}
-            </Button>
-            <Tooltip title={t('plugins.hub.uploadZipHint')}>
+            <Tooltip title={t('plugins.hub.refresh')}>
               <Button
                 size="small"
-                icon={<RiFileZipLine size={14} />}
-                aria-label={t('plugins.hub.uploadZipHint')}
-                loading={uploadingZip}
-                disabled={!loggedIn || uploadOpen}
-                onClick={() => void handleUploadZip()}
+                icon={<RiRefreshLine size={14} />}
+                aria-label={t('plugins.hub.refresh')}
+                loading={hubLoading}
+                disabled={!loggedIn}
+                onClick={() => void loadHub()}
               />
-            </Tooltip>
-            <Tooltip title={t('lattice.upload.publishActionDesc')}>
-              <Button
-                size="small"
-                icon={<RiUploadCloud2Line size={14} />}
-                loading={uploading}
-                disabled={!loggedIn || uploadOpen}
-                onClick={() => void handleUpload()}
-              >
-                {t('plugins.hub.upload')}
-              </Button>
             </Tooltip>
           </div>
         </div>
 
         {showContent && renderSyncBar()}
         {renderHubContent()}
-        {renderLocalSection()}
       </div>
 
       {/* 上传进度（发布到插件中心）：进度来自 lattice:upload-progress 推送 */}
@@ -1500,7 +1656,9 @@ const PluginRepository: React.FC = () => {
                       <>
                         {installed.length > 0 && (
                           <div style={{ marginBottom: failed.length > 0 ? 8 : 0 }}>
-                            <div style={{ fontSize: 11.5, color: token.colorSuccess, marginBottom: 4 }}>
+                            <div
+                              style={{ fontSize: 11.5, color: token.colorSuccess, marginBottom: 4 }}
+                            >
                               {t('sync.details.installedTitle', { n: installed.length })}
                             </div>
                             {installed.map((item) => (
@@ -1517,7 +1675,9 @@ const PluginRepository: React.FC = () => {
                         )}
                         {failed.length > 0 && (
                           <div>
-                            <div style={{ fontSize: 11.5, color: token.colorWarning, marginBottom: 4 }}>
+                            <div
+                              style={{ fontSize: 11.5, color: token.colorWarning, marginBottom: 4 }}
+                            >
                               {t('sync.details.failedTitle', { n: failed.length })}
                             </div>
                             {failed.map((item) => (

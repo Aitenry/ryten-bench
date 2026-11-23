@@ -7,6 +7,7 @@ import { distDir, draftDir, readJson, writeJson } from './paths'
 import { listDraftFiles, readDraftMeta, patchDraftMeta } from './store'
 import { compilePluginCss, missingClasses, scanDraftCandidates } from './css'
 import { isWorkshopConfigured, workshopHostOrNull } from './host'
+import { draftSourceHash } from './fingerprint'
 
 /**
  * 草稿 → 可安装插件包。
@@ -318,6 +319,18 @@ export async function buildDraft(
   const host = workshopHostOrNull()
   const specs: SpecCollector = { mainSpecs: new Set(), rendererSpecs: new Set() }
 
+  /**
+   * 源码指纹在**构建前**算：产物记的是「这次构建读到的源码」。
+   * 构建过程中若有人改文件，`isBuildStale` 重新计算会发现不一致——这是对的。
+   */
+  let sourceHash: string
+  try {
+    sourceHash = draftSourceHash(id, cssMode)
+  } catch (err) {
+    info.errors.push(`读取草稿源码失败：${(err as Error).message}`)
+    return finish()
+  }
+
   // 产物目录每次重建：残留的旧 chunk 会让「装上去的还是老界面」
   fs.rmSync(outDir, { recursive: true, force: true })
   fs.mkdirSync(outDir, { recursive: true })
@@ -478,6 +491,7 @@ export async function buildDraft(
   info.ok = true
   info.outDir = outDir
   info.at = Date.now()
+  info.sourceHash = sourceHash
   if (chunkRewrites > 0) {
     info.warnings.push(
       `已把 ${chunkRewrites} 处产物内相对说明符改写为 plugin://${id}/…（blob import 前提）`
@@ -488,7 +502,11 @@ export async function buildDraft(
   }
   if (files === 0) info.warnings.push('草稿里一个文件都没有（异常状态）')
 
-  patchDraftMeta(id, { builtAt: info.at })
+  // 只有写进正式产物目录才更新「产物指纹」：离线工装可能用临时 outDir 构建，
+  // 那种构建不代表 dist/<id> 已经更新（否则 isBuildStale 会把旧产物误判成最新）
+  if (path.resolve(outDir) === path.resolve(distDir(id))) {
+    patchDraftMeta(id, { builtAt: info.at, sourceHash })
+  }
   return finish()
 }
 

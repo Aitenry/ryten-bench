@@ -133,6 +133,15 @@ export function localizeWeather(data: Record<string, unknown>): Record<string, u
   }
 }
 
+/**
+ * 自动刷新最近一次失败原因。
+ *
+ * 天气接口依赖外网（离线 / 被墙 / 临时故障都很常见），失败不是应用错误：
+ * - 不写 `logger.error`（主进程日志里会带整段堆栈，像崩了一样）；
+ * - 同一个原因只记一次，失败持续期间不按刷新周期反复刷日志；成功一次后重置。
+ */
+let lastAutoRefreshError: string | null = null
+
 /** 天气自动刷新（创建主窗口后调用） */
 export function startWeatherAutoRefresh(): void {
   const ip = settingsStore.get('ip') as Record<string, unknown> | undefined
@@ -160,12 +169,18 @@ export function startWeatherAutoRefresh(): void {
     fetching = true
     try {
       const data = await fetchWeatherData(lat, lon, city)
+      lastAutoRefreshError = null
       const win = getMainWindow()
       if (win && !win.isDestroyed()) {
         safeSend(win.webContents, 'weather-update', localizeWeather(data))
       }
     } catch (err) {
-      logger.error('Weather auto-refresh failed:', err)
+      const reason = err instanceof Error ? err.message : String(err)
+      // 同一失败原因只记一条 warn（离线/被墙时天气接口不可达是常态，不该刷 error + 堆栈）
+      if (reason !== lastAutoRefreshError) {
+        lastAutoRefreshError = reason
+        logger.warn(`Weather auto-refresh failed (will retry later): ${reason}`)
+      }
     } finally {
       fetching = false
     }

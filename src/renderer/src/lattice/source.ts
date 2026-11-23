@@ -24,6 +24,7 @@ export type LatticeV2Capabilities = Record<LatticeV2CapabilityKey, boolean>
 
 /** 契约 v2 的六个方法名（顺序 = UI 上能力提示的顺序） */
 const V2_CAPABILITY_KEYS: LatticeV2CapabilityKey[] = [
+  'publishInstalled',
   'sourcePath',
   'localSource',
   'openSource',
@@ -59,6 +60,12 @@ export function isFolderFallback(
 /** `openSource` 结果是否真的开了插件会话（能拿到工作区 id） */
 export function isChatOpened(
   result: LatticeOpenSourceResult
-): result is { ok: true; workspaceId: number; topicId?: number; mode?: 'conversation'; path?: string } {
+): result is {
+  ok: true
+  workspaceId: number
+  topicId?: number
+  mode?: 'conversation'
+  path?: string
+} {
   return result.ok && 'workspaceId' in result && typeof result.workspaceId === 'number'
 }

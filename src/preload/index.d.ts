@@ -1,4 +1,4 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
+﻿import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
 import type { SystemSettings } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
@@ -190,13 +190,17 @@ interface Api {
     /** 插件目录（搜索 / 分类 / 排序 / 分页） */
     list: (query?: LatticeListQuery) => Promise<HubListResult>
     /** 插件详情（readme / 版本清单 / 我的安装记录） */
-    detail: (pluginId: string) => Promise<HubDetail>
+    detail: (pluginId: string) => Promise<HubDetail | null>
+    /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+    publishInstalled: (pluginId: string) => Promise<LatticeUploadResult>
     /** 弹目录选择框并发布；用户取消 → `{ok:true,canceled:true}` */
     pickAndUpload: () => Promise<LatticeUploadResult>
     /** 选 .zip 安装包发布 */
     pickAndUploadZip: () => Promise<LatticeUploadResult>
-    /** 按显式路径（插件包目录或 .zip）发布 */
-    uploadSource: (source: string) => Promise<LatticeUploadResult>
+    /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+    pickAndUploadWithSource: () => Promise<LatticeUploadResult>
+    /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 可选，给出时源码单独上传 */
+    uploadSource: (source: string, sourcePath?: string) => Promise<LatticeUploadResult>
     /** 下载并安装（或升级）；失败返回 `{ok:false,error}`，不抛错 */
     install: (pluginId: string, version?: string) => Promise<LatticeInstallResult>
     /** 本机已安装插件视图（本地口径，不联网） */

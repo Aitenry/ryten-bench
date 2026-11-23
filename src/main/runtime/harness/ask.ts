@@ -71,6 +71,23 @@ export class QuestionService {
   onAsk?: AskListener
 
   /**
+   * 挂起项已结算（用户回答 / 本轮中止）→ 通知界面「这条会话不再等人」。
+   *
+   * 与 onAsk 成对：一条提问的生命周期 = 提问广播（onAsk）→ 结算广播（这里）。
+   * 侧栏的「等待确认」黄点靠这两端翻转，缺了结算那一端就会一直亮着。
+   */
+  onResolved?: (topicId: number) => void
+
+  /** 结算广播：失败只意味着界面少一次状态翻转，不能影响挂起项本身的结算 */
+  private notifyResolved(topicId: number): void {
+    try {
+      this.onResolved?.(topicId)
+    } catch {
+      // 广播出口失效（窗口已销毁等）：忽略，结算已经完成
+    }
+  }
+
+  /**
    * 挂起等待用户回答。
    * signal 中止 → 抛 ASK_ABORTED（工具层捕获后返回取消文案）。
    */
@@ -83,6 +100,7 @@ export class QuestionService {
         const err = new Error(tr.ask.aborted)
         err.name = 'AskAbortedError'
         reject(err)
+        this.notifyResolved(topicId)
       }
       const record: PendingRecord = { topicId, requestId, questions, resolve, reject, signal }
       record.onAbort = onAbort
@@ -127,6 +145,7 @@ export class QuestionService {
     this.pending.delete(requestId)
     this.detach(record)
     record.resolve({ answers })
+    this.notifyResolved(record.topicId)
     logger.info(`[Ask] Question ${requestId} answered (${answers.length} items)`)
     return true
   }
@@ -144,6 +163,7 @@ export class QuestionService {
   /** 话题全部挂起提问中止（流取消时调用） */
   abortTopic(topicId: number): void {
     const tr = getFsToolTexts()
+    let settled = false
     for (const [id, record] of this.pending) {
       if (record.topicId !== topicId) continue
       this.pending.delete(id)
@@ -151,19 +171,24 @@ export class QuestionService {
       const err = new Error(tr.ask.aborted)
       err.name = 'AskAbortedError'
       record.reject(err)
+      settled = true
     }
+    if (settled) this.notifyResolved(topicId)
   }
 
   /** 全部挂起提问中止（应用级取消兜底） */
   abortAll(): void {
     const tr = getFsToolTexts()
+    const topics = new Set<number>()
     for (const [id, record] of this.pending) {
       this.pending.delete(id)
       this.detach(record)
       const err = new Error(tr.ask.aborted)
       err.name = 'AskAbortedError'
       record.reject(err)
+      topics.add(record.topicId)
     }
+    for (const topicId of topics) this.notifyResolved(topicId)
   }
 }
 

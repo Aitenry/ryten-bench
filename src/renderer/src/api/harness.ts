@@ -259,6 +259,17 @@ export const harnessApi = {
       invoke('harness:harness-question-answer', requestId, answers) as Promise<boolean>,
     getQuestion: (topicId: number) =>
       invoke('harness:harness-question-get', topicId) as Promise<PendingQuestionView | null>,
+    /**
+     * 某条会话「还要不要用户确认」的翻转广播（提问 / 审批挂起时 pending=true，
+     * 回答 / 允许 / 拒绝 / 中止时 false）。侧栏行首的黄色呼吸点据此切换，
+     * 不按当前话题过滤：别的会话挂起时，那一条也要亮起来。
+     */
+    onTopicPending: (
+      callback: (data: { topicId: number; pending: boolean }) => void
+    ): (() => void) =>
+      on('harness:harness-topic-pending', (data) =>
+        callback(data as { topicId: number; pending: boolean })
+      ),
 
     /* ── 沙箱权限（档位选择器 + 危险操作审批弹窗） ── */
     /** 当前档位与新会话默认值（切话题时拉一次） */
@@ -576,7 +587,7 @@ export const harnessApi = {
     state: () =>
       invoke('harness:workshop-state') as Promise<{
         ready: boolean
-        /** 是否已配置插件存放路径（用户设置，没有默认值） */
+        /** 是否已配置插件存放路径（首次启动按安装目录预置；用户主动清空后为 false） */
         configured: boolean
         /** 用户配置的插件存放路径（未配置时为空串） */
         pluginsPath: string
@@ -630,7 +641,8 @@ export const harnessApi = {
     openDir: (id: string) =>
       invoke('harness:workshop-open-dir', id) as Promise<WorkshopActionResult<string>>,
     /**
-     * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
+     * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录）。
+     * 首次启动已按安装目录预置；用户改地址时旧路径下的插件源码会迁到新路径。
      * 用户取消时返回 `{ canceled: true }`（取消不是失败）。
      */
     pickRoot: () =>

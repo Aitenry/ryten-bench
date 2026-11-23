@@ -102,7 +102,9 @@ async function restoreLatticeSessionOnStartup(): Promise<void> {
     await client.ensureLatticeAccessToken()
     const me = await client.fetchLatticeMe()
     lastError = null
-    logger.info(`[Lattice] Restored login state on startup: ${me.user.username} (${me.role || 'unknown role'})`)
+    logger.info(
+      `[Lattice] Restored login state on startup: ${me.user.username} (${me.role || 'unknown role'})`
+    )
     broadcastLatticeStatus()
     // 启动后 pull 一次（契约 §4）；push 由 plugin-state-changed 防抖触发
     await sync.syncLattice('pull')

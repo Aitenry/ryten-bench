@@ -141,7 +141,7 @@ const UserMessage: React.FC<UserMessageProps> = ({
   }
 
   return (
-    <div className="flex justify-end mb-6">
+    <div className="flex justify-end harness-message-body">
       {/* min-w-0：flex 子项默认 min-width:auto，长哈希/URL 这类不可断词会把气泡顶出 80% 上限 */}
       <div className="max-w-[80%] min-w-0">
         <div

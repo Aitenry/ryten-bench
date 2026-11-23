@@ -30,7 +30,8 @@ import type {
   LatticeRepublishResult,
   LatticeSourcePathResult,
   LatticeStatus,
-  LatticeSyncResult
+  LatticeSyncResult,
+  LatticeUploadResult
 } from '../../../main/lattice/types'
 
 export type {
@@ -118,6 +119,8 @@ export type LatticeLocalSourceResult = LatticeLocalSourcePathResult
  * 页面按结果禁用入口并提示，而不是运行期 `not a function`。
  */
 export interface LatticeV2Methods {
+  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  publishInstalled?: (pluginId: string) => Promise<LatticeUploadResult>
   /** 本机源码目录（path/version/managed） */
   sourcePath?: (pluginId: string) => Promise<LatticeSourcePathResult>
   /** 本机已安装插件包目录（userData/plugins/<id>） */

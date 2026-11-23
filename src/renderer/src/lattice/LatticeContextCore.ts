@@ -70,13 +70,17 @@ export interface LatticeContextValue {
   /** 保存「缺失插件自动补齐」开关（持久化；默认开启） */
   setAutoInstallMissing: (enabled: boolean) => Promise<LatticeAutoInstallSettingResult>
   listHub: (params?: LatticeListQuery) => Promise<HubListResultV2>
-  detailHub: (pluginId: string) => Promise<HubDetailV2>
+  detailHub: (pluginId: string) => Promise<HubDetailV2 | null>
   installFromHub: (pluginId: string, version?: string) => Promise<LatticeInstallResultV2>
+  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  publishInstalled: (pluginId: string) => Promise<LatticeUploadResult>
   pickAndUpload: () => Promise<LatticeUploadResult>
   /** 选 .zip 安装包发布（目录上传的补充入口） */
   pickAndUploadZip: () => Promise<LatticeUploadResult>
-  /** 按显式路径（插件包目录或 .zip）发布 */
-  uploadSource: (source: string) => Promise<LatticeUploadResult>
+  /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+  pickAndUploadWithSource: () => Promise<LatticeUploadResult>
+  /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 给出时源码单独上传 */
+  uploadSource: (source: string, sourcePath?: string) => Promise<LatticeUploadResult>
 
   // ---- 契约 v2：源码 / 重新发布 / 导入本地插件目录 ----
   /** 当前主进程支持哪些 v2 能力（false = 旧主进程，对应入口禁用并提示） */
@@ -118,14 +122,15 @@ const LATTICE_FALLBACK: LatticeContextValue = {
   syncDetails: async () => ({ last: null, conflicts: [], orphaned: [] }),
   setAutoInstallMissing: async () => ({ ok: false, enabled: true, error: LATTICE_BRIDGE_MISSING }),
   listHub: async () => EMPTY_HUB_LIST,
-  detailHub: async () => {
-    throw new Error(LATTICE_BRIDGE_MISSING)
-  },
+  detailHub: async () => null,
   installFromHub: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
+  publishInstalled: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
   pickAndUpload: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
   pickAndUploadZip: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
+  pickAndUploadWithSource: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
   uploadSource: async () => ({ ok: false, error: LATTICE_BRIDGE_MISSING }),
   capabilities: {
+    publishInstalled: false,
     sourcePath: false,
     openSource: false,
     republish: false,

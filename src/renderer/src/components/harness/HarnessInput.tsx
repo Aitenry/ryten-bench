@@ -165,6 +165,14 @@ interface HarnessInputProps {
    * null = 还没有会话（新对话第一轮），此时切换档位等同于改「新会话默认值」。
    */
   currentTopicId: number | null
+  /**
+   * 是否显示输入框右上角的助手形象（mascot）。
+   *
+   * 只在空白会话（欢迎页）里显示：那条形象是绝对定位、向上探出输入卡片的，
+   * 有对话内容时会压在消息 / 思考过程上（用户 2026-11-23 报的问题），
+   * 所以由页面按 `messages.length === 0` 传进来。
+   */
+  showMascot?: boolean
   isDarkMode: boolean
   colorBgLayout: string
   colorBorder: string
@@ -189,6 +197,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   groupedProviderOptions,
   modelSupportsVision,
   currentTopicId,
+  showMascot = false,
   isDarkMode,
   colorBgLayout,
   colorBorder,
@@ -1409,24 +1418,27 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)'
       }}
     >
-      {/* 助手形象：趴在输入框右上角（不拦截鼠标，纯装饰） */}
-      <img
-        src={mascot}
-        alt=""
-        aria-hidden
-        draggable={false}
-        style={{
-          position: 'absolute',
-          right: 22,
-          top: -67,
-          height: 96,
-          width: 'auto',
-          zIndex: 1,
-          pointerEvents: 'none',
-          userSelect: 'none',
-          filter: 'drop-shadow(0 8px 16px rgba(0, 0, 0, 0.28))'
-        }}
-      />
+      {/* 助手形象：只在空白会话里趴在输入框右上角；有对话内容就收起，
+          免得压在消息 / 思考过程上（不拦截鼠标，纯装饰） */}
+      {showMascot && (
+        <img
+          src={mascot}
+          alt=""
+          aria-hidden
+          draggable={false}
+          style={{
+            position: 'absolute',
+            right: 22,
+            top: -67,
+            height: 96,
+            width: 'auto',
+            zIndex: 1,
+            pointerEvents: 'none',
+            userSelect: 'none',
+            filter: 'drop-shadow(0 8px 16px rgba(0, 0, 0, 0.28))'
+          }}
+        />
+      )}
       <div
         className="rounded-2xl input-scrollbar"
         style={{

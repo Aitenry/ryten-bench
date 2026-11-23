@@ -1,8 +1,9 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import type { WorkshopPublishResult, WorkshopRendererProbe } from '../../shared/harness/workshop'
-import { distDir, draftDir, ensureDir, exportsRoot } from './paths'
+import { distDir, draftDir, ensureDir, exportsRoot, readJson } from './paths'
 import { hasBuild, isBuildStale, workshopHost } from './host'
+import { updateReportRenderer } from './verify'
 
 /**
  * 发布 / 卸载 / 导出。
@@ -29,6 +30,13 @@ function assertPublishable(id: string): { outDir: string } {
   if (!fs.existsSync(manifestFile)) {
     throw new Error(`产物缺少 plugin.json（${manifestFile}）`)
   }
+  // 产物可能被手工改过：id 不一致时装进去的是**另一个插件**，必须在落地前挡住
+  const manifest = readJson<{ id?: unknown }>(manifestFile)
+  if (typeof manifest?.id !== 'string' || manifest.id !== id) {
+    throw new Error(
+      `产物清单的 id（${String(manifest?.id)}）与草稿 '${id}' 不一致：重新 plugin_build，不要手改 dist 里的文件`
+    )
+  }
   return { outDir: distDir(id) }
 }
 
@@ -46,8 +54,56 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
   const host = workshopHost()
   const { outDir } = assertPublishable(id)
   const staleBuild = isBuildStale(id)
-  const info = host.installPackage(outDir)
-  host.enable(info.id)
+  /** 新装还是升级：决定失败时「回滚卸载」还是「保留已装但停用」 */
+  const wasInstalled = host.isInstalled(id)
+
+  let info: ReturnType<typeof host.installPackage>
+  try {
+    info = host.installPackage(outDir)
+  } catch (err) {
+    // 新装失败（拷贝中途出错/清单被拒）可能留下半份目录：清掉，别让面板出现装坏的插件
+    if (!wasInstalled) {
+      try {
+        host.uninstall(id)
+        host.notify()
+      } catch {
+        // 清不掉时下面如实报安装错误即可
+      }
+    }
+    throw new Error(`安装失败：${(err as Error).message}`)
+  }
+
+  /**
+   * 启用失败要**收敛状态**，不能把「装了但没启用」留给用户自己发现：
+   * - 升级：无法恢复旧版本（产物已被覆盖），保留新装目录并标成停用，提示用户重试；
+   * - 新装：整份回滚卸载，失败模式从「面板里多一个启用不了的插件」变成「一次带原因的安装失败」。
+   */
+  try {
+    host.enable(info.id)
+  } catch (err) {
+    try {
+      host.disable(info.id)
+    } catch {
+      // 停用也失败时，下面的报错已经足够让用户去面板处理
+    }
+    if (wasInstalled) {
+      host.notify()
+      throw new Error(
+        `已升级安装，但启用失败：${(err as Error).message}。` +
+          `插件现在是停用状态，请到 设置 → 插件 里重试启用（源码与产物都在，不需要重装）。`
+      )
+    }
+    try {
+      host.uninstall(info.id)
+      host.notify()
+    } catch (rollbackErr) {
+      throw new Error(
+        `启用失败，且自动回滚卸载也失败（请到 设置 → 插件 里手工卸载 '${info.id}'）：` +
+          `${(err as Error).message}；回滚错误：${(rollbackErr as Error).message}`
+      )
+    }
+    throw new Error(`启用失败，已自动回滚卸载：${(err as Error).message}`)
+  }
   host.notify()
 
   let rendererProbe: WorkshopRendererProbe | undefined
@@ -74,6 +130,9 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
           `常见原因是渲染入口顶层抛错、引了宿主 UI 表里没有的模块，或注册的组件一渲染就崩。`
       )
     }
+    // 复验结论回写最近一次验收报告：安装前这一项只能 SKIP（插件还没装），
+    // 装完立刻兑现的这次探针才是「界面真的能装载」的证据
+    updateReportRenderer(info.id, rendererProbe)
   }
 
   return {
@@ -93,6 +152,51 @@ export function disableDraft(id: string): void {
   const host = workshopHost()
   host.disable(id)
   host.notify()
+}
+
+/** 启用结果（面板/工具共用：启用了什么 + 渲染层复验结论） */
+export interface WorkshopEnableResult {
+  id: string
+  enabled: boolean
+  rendererProbe?: WorkshopRendererProbe
+}
+
+/**
+ * 启用一个**已经装好**的插件，并立刻在真界面上复验一次。
+ *
+ * 为什么单独一个动作：发布失败/用户手工装过之后，插件可能停在「已安装·停用」。
+ * 此前只能让用户去面板点开关——助手明明能把这件事做完。复验失败会**自动停用**
+ * （而不是留一个启用了但界面白屏的插件），把失败收敛成一次带原因的启用失败。
+ */
+export async function enableDraft(id: string): Promise<WorkshopEnableResult> {
+  const host = workshopHost()
+  if (!host.isInstalled(id)) {
+    throw new Error(`插件 '${id}' 还没安装：先 plugin_publish install（或让用户在插件面板里安装）`)
+  }
+  host.enable(id)
+  host.notify()
+
+  let rendererProbe: WorkshopRendererProbe | undefined
+  if (host.probeRenderer) {
+    try {
+      rendererProbe = await host.probeRenderer(id)
+    } catch (err) {
+      rendererProbe = { status: 'fail', detail: `探针异常：${(err as Error).message}` }
+    }
+    if (rendererProbe.status === 'fail') {
+      try {
+        host.disable(id)
+        host.notify()
+      } catch {
+        // 停用失败也要如实报探针原因（下面抛出的错误里带着）
+      }
+      throw new Error(
+        `启用后渲染层复验失败，已自动停用：${rendererProbe.detail ?? '未知原因'}。` +
+          `常见原因是渲染入口顶层抛错或引了宿主 UI 表里没有的模块——改完重新 plugin_verify 再发布。`
+      )
+    }
+  }
+  return { id, enabled: host.isEnabled(id), ...(rendererProbe ? { rendererProbe } : {}) }
 }
 
 /** 卸载：摘主模块 + 删 userData/plugins/<id>（数据保留，与面板卸载口径一致） */

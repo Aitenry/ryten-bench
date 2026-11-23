@@ -39,6 +39,58 @@ body {
 
 /* ======== 滚动条 ======== */
 
+/**
+ * 全应用统一的滚动条：6px 圆角细条、透明轨道、悬停加深，深色主题换成白色滑块。
+ *
+ * 这里写的是**全局兜底**（用户 2026-11-23：「需要优化这个滚动条样式，好丑不符合
+ * 整体的滚动条样式」——配图里「更多内容 → 记忆」页面右侧是一条带上下箭头的原生
+ * 白色滚动条）：此前滚动条只在个别容器上挂 `.custom-scrollbar` / `.harness-scrollbar`
+ * 等类名，谁漏写（页面级 `overflow-y:auto`、弹窗正文、textarea、第三方浮层）谁就掉回
+ * Chromium 原生样式，深色界面里是一条刺眼的白条。现在所有滚动容器默认就是这套细条，
+ * 类名只负责尺寸/颜色上的细微差别。
+ *
+ * ⚠️ 只写 `::-webkit-scrollbar`，**不要**同时写 `scrollbar-width` / `scrollbar-color`：
+ * Chromium 121+ 里标准属性一旦不是 `auto` 就会接管滚动条、让 `::-webkit-scrollbar` 全部
+ * 失效（项目里 `.harness-scrollbar` 两套都写，实际生效的是标准属性那套）。那等于把
+ * 原生箭头滚动条又带回来。
+ */
+:root {
+  --app-scrollbar-thumb: rgba(128, 128, 128, 0.32);
+  --app-scrollbar-thumb-hover: rgba(128, 128, 128, 0.52);
+}
+
+.dark {
+  --app-scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--app-scrollbar-thumb);
+  border-radius: 100px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--app-scrollbar-thumb-hover);
+}
+
+/* 原生上下/左右箭头按钮与转角：桌面端不需要，出现就说明滚动条掉回了系统样式 */
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-corner {
+  display: none;
+  background: transparent;
+}
+
+/* 常规滚动容器（弹窗正文、页面内容区…）：与全局默认同尺寸，显式声明便于阅读 */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -50,12 +102,12 @@ body {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(128, 128, 128, 0.3);
+  background-color: var(--app-scrollbar-thumb);
   border-radius: 100px;
 }
 
 .custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(128, 128, 128, 0.5);
+  background-color: var(--app-scrollbar-thumb-hover);
   border-radius: 100px;
 }
 
@@ -426,6 +478,39 @@ body.home-resizing * {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+}
+
+/**
+ * 插件详情页的「返回插件仓库」：合并进头部卡片的那一行。
+ *
+ * 常态是静音的文字按钮，hover 才浮出底色——避免它看起来比插件标题还重。
+ * 配色走页面下发的 CSS 变量（`PluginDetail` 的 pageVars），亮/暗主题都跟随 antd token。
+ */
+.plugin-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  margin-left: -6px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--plugin-detail-back-color, #8a8a93);
+  font-size: 11.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.plugin-detail-back:hover {
+  background: var(--plugin-detail-back-hover-bg, rgba(128, 128, 128, 0.12));
+  color: var(--plugin-detail-back-hover-color, #1f1f23);
+}
+.plugin-detail-back:focus-visible {
+  outline: 2px solid var(--plugin-detail-back-hover-color, #1f1f23);
+  outline-offset: 1px;
 }
 .shell-brand-logo {
   /* 20px：与右侧顶栏里 24~28px 的控件落在同一条视觉中线上，不再显得比顶栏“重” */

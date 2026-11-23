@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 登录 / 账号 / Lattice 插件中心 / 同步 词条。
  *
  * 命名空间按产品区域拆开（不在组件里写死任何文案）：
@@ -93,7 +93,7 @@ export const zhCNLattice = {
     },
     upload: {
       modalTitle: '发布到插件中心',
-      preparing: '请在系统对话框中选择插件包目录…',
+      preparing: '正在准备发布…',
       phaseZip: '正在打包插件',
       phaseMeta: '正在写入插件信息',
       phaseUpload: '正在上传插件包',
@@ -101,6 +101,7 @@ export const zhCNLattice = {
       bytes: '{{sent}} / {{total}}',
       keepOpen: '上传过程中请勿关闭窗口',
       success: '已发布 {{name}} v{{version}}',
+      submitted: '已提交 {{name}} v{{version}}，等待管理员审核通过',
       canceled: '已取消上传',
       fail: '上传失败',
       publishAction: '发布到插件中心',
@@ -116,8 +117,15 @@ export const zhCNLattice = {
       refresh: '刷新',
       upload: '上传',
       uploadZipHint: '上传 .zip 安装包',
+      uploadWithSourceHint: '发布安装包 + 源码目录（两份分开的 zip）',
+      /** 顶栏「发布」下拉：三种发布方式 + 导入本机目录收进一个菜单（不再并排 4 个按钮） */
+      publishMenu: '发布',
+      publishMenuTitle: '发布插件到插件中心',
+      publishDir: '发布插件目录…',
+      publishZip: '发布 .zip 安装包…',
+      publishWithSource: '发布安装包 + 源码目录…',
       installLocal: '本地安装',
-      importLocalDir: '导入目录',
+      importLocalDir: '导入本地插件目录…',
       total: '共 {{n}} 个插件',
       loading: '正在加载插件中心…',
       loadFail: '加载插件中心目录失败：{{reason}}',
@@ -211,7 +219,7 @@ export const zhCNLattice = {
         publishNewVersion: '发布新版本',
         publishNewVersionDesc: '读取本机源码目录，重新打包安装包与源码并发布到插件中心',
         publishLocal: '发布到插件中心',
-        publishLocalDesc: '把本机安装包上传到插件中心（安装包与源码一起上传）',
+        publishLocalDesc: '直接发布本机已安装的这个插件（自动带安装包与源码，无需选择目录）',
         notPublishedHint: '这个插件还没有发布到插件中心，发布的版本才会出现在插件目录里。',
         workflowTitle: '源码与发布',
         workflowDesc:
@@ -229,6 +237,7 @@ export const zhCNLattice = {
         changelogPlaceholder: '这次改了什么？（可选）',
         submit: '发布',
         success: '已发布 v{{version}}',
+        submitted: '已提交 v{{version}}，等待管理员审核通过',
         fail: '发布失败：{{reason}}'
       },
       /** 详情页/卡片「打开源码」 */

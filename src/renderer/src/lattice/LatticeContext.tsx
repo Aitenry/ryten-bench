@@ -274,11 +274,15 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
       EMPTY_HUB_LIST) as HubListResultV2
   }, [])
 
-  const detailHub = useCallback(async (pluginId: string): Promise<HubDetailV2> => {
+  /**
+   * 平台详情。`null` = 这个插件没有发布到平台（本机安装过 / 平台已删除）：
+   * 主进程已把 404 归一成 null，详情页按「尚未发布」渲染，不产生错误日志。
+   */
+  const detailHub = useCallback(async (pluginId: string): Promise<HubDetailV2 | null> => {
     const bridge = getLatticeBridge()
-    if (!bridge) throw new Error(LATTICE_BRIDGE_MISSING)
+    if (!bridge) return null
     // 契约 v2 在版本对象上补源码字段；主进程类型未合入前按局部类型（全 optional）兜底
-    return (await bridge.detail(pluginId)) as HubDetailV2
+    return (await bridge.detail(pluginId)) as HubDetailV2 | null
   }, [])
 
   const installFromHub = useCallback(
@@ -298,6 +302,20 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     },
     []
   )
+
+  /** 直接发布本机已安装插件（安装包 + 源码）：不弹目录选择框 */
+  const publishInstalled = useCallback(async (pluginId: string): Promise<LatticeUploadResult> => {
+    const bridge = getLatticeBridge()
+    if (!bridge) return { ok: false, error: LATTICE_BRIDGE_MISSING }
+    setUploadProgress(null)
+    try {
+      return (
+        (await bridge.publishInstalled(pluginId)) ?? { ok: false, error: LATTICE_BRIDGE_MISSING }
+      )
+    } catch (error) {
+      return { ok: false, error: latticeErrorMessage(error) }
+    }
+  }, [])
 
   const pickAndUpload = useCallback(async (): Promise<LatticeUploadResult> => {
     const bridge = getLatticeBridge()
@@ -321,16 +339,38 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [])
 
-  const uploadSource = useCallback(async (source: string): Promise<LatticeUploadResult> => {
+  /** 选「安装包目录 + 源码目录」发布：安装包与源码分开上传 */
+  const pickAndUploadWithSource = useCallback(async (): Promise<LatticeUploadResult> => {
     const bridge = getLatticeBridge()
     if (!bridge) return { ok: false, error: LATTICE_BRIDGE_MISSING }
     setUploadProgress(null)
     try {
-      return (await bridge.uploadSource(source)) ?? { ok: false, error: LATTICE_BRIDGE_MISSING }
+      return (
+        (await bridge.pickAndUploadWithSource()) ?? { ok: false, error: LATTICE_BRIDGE_MISSING }
+      )
     } catch (error) {
       return { ok: false, error: latticeErrorMessage(error) }
     }
   }, [])
+
+  const uploadSource = useCallback(
+    async (source: string, sourcePath?: string): Promise<LatticeUploadResult> => {
+      const bridge = getLatticeBridge()
+      if (!bridge) return { ok: false, error: LATTICE_BRIDGE_MISSING }
+      setUploadProgress(null)
+      try {
+        return (
+          (await bridge.uploadSource(source, sourcePath)) ?? {
+            ok: false,
+            error: LATTICE_BRIDGE_MISSING
+          }
+        )
+      } catch (error) {
+        return { ok: false, error: latticeErrorMessage(error) }
+      }
+    },
+    []
+  )
 
   // ---- 契约 v2 ----
 
@@ -440,8 +480,10 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
       listHub,
       detailHub,
       installFromHub,
+      publishInstalled,
       pickAndUpload,
       pickAndUploadZip,
+      pickAndUploadWithSource,
       uploadSource,
       capabilities,
       sourcePath: readSourcePath,
@@ -467,7 +509,10 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
       listHub,
       detailHub,
       installFromHub,
+      publishInstalled,
       pickAndUpload,
+      pickAndUploadZip,
+      pickAndUploadWithSource,
       uploadSource,
       capabilities,
       readSourcePath,

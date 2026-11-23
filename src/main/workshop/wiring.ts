@@ -17,10 +17,12 @@ import { hostRuntimeKeys } from '../plugins/runtime'
 import { hostUiExportKeys } from '../plugins/host-ui-bridge'
 import { settingsStore } from '../context'
 import type { HarnessSettings } from '../types/settings'
+import { isSamePath, migrateStorageDirectory } from '../storage/migration'
 import { probeRendererPlugin } from './probe'
 import { configureWorkshopHost, createNodeLoader } from './host'
 import { resolveLoaderBases } from './loader-bases'
 import { configurePluginsRoot } from './paths'
+import { migrateLegacyDrafts } from './service'
 
 /**
  * 工坊 ↔ 应用宿主的接线（**唯一**把工坊能力接到真实应用的地方）。
@@ -76,7 +78,8 @@ function usedNamespaces(exceptId?: string): string[] {
  * 工坊根目录（`<userData>/plugin-workshop`）。
  *
  * 只放**工坊自己的东西**：构建产物、验收报告、导出的 zip、旧版草稿目录（迁移用）。
- * 插件源码在用户配置的「插件存放路径」（`harness` 设置的 `pluginsPath`，没有默认值）里——
+ * 插件源码在用户配置的「插件存放路径」（`harness` 设置的 `pluginsPath`；首次启动按安装目录
+ * 预置为 `<安装目录>/data/plugins`，用户可改，改地址时数据跟着迁移）里——
  * 这个 userData 目录刻意不出现在设置页上（用户口径 2026-09-27「不要在设置页面显示这个目录」）。
  */
 export function workshopRootDir(): string {
@@ -103,11 +106,34 @@ function persistPluginsRoot(dir: string): void {
  * 导入后希望这些目录马上出现在「插件」模式里（可对话修改）。只写 settings 不够——
  * `configurePluginsRoot` 是启动时注入的模块状态，不重新注入的话本进程内一直是旧路径。
  * 由 `ipc/lattice.ts` 调用；持久化 + 运行时注入两件事都在这里，避免两处各写一半。
+ *
+ * 旧路径里的插件源码会先迁到新路径（用户主动改存储地址 = 数据跟着走）；
+ * 迁移失败就抛错，设置保持原值。
  */
-export function applyPluginsRoot(dir: string): void {
+export function applyPluginsRoot(dir: string): {
+  dir: string
+  /** 改地址前的插件根（供调用方把旧插件工作区行改到新根下） */
+  previousDir?: string
+} {
   const resolved = path.resolve(dir)
+  const previous = configuredPluginsRoot()
+  const changed = Boolean(previous) && !isSamePath(previous, resolved)
+  if (changed) {
+    const result = migrateStorageDirectory('plugins', previous, resolved)
+    logger.info(
+      `[Workshop] Plugins path changed: ${previous} -> ${resolved} ` +
+        `(${result.moved.length} top-level item(s) migrated, ${result.conflicts.length} conflict(s))`
+    )
+    for (const warning of result.warnings) logger.warn(`[Workshop] ${warning}`)
+    for (const conflict of result.conflicts) {
+      logger.warn(
+        `[Workshop] Plugins target already had "${conflict}"; kept it and preserved the old copy as *.migrated-*`
+      )
+    }
+  }
   persistPluginsRoot(resolved)
   configurePluginsRoot(resolved)
+  return { dir: resolved, ...(changed ? { previousDir: previous } : {}) }
 }
 
 /**
@@ -118,7 +144,7 @@ export function installWorkshopHost(): void {
   fs.mkdirSync(root, { recursive: true })
   const loader = createNodeLoader(loaderBases())
 
-  // 插件存放路径来自设置（没有默认值）：装载时就注入，未配置则草稿相关动作全部拒绝
+  // 插件存放路径来自设置（首次启动已按安装目录预置）：装载时就注入；用户清空后则草稿相关动作全部拒绝
   configurePluginsRoot(configuredPluginsRoot())
 
   configureWorkshopHost({
@@ -164,6 +190,23 @@ export function installWorkshopHost(): void {
       return probeRendererPlugin(id)
     }
   })
+
+  // 旧版把源码放在 userData/plugin-workshop/drafts/：现在 pluginsPath 可能由安装目录自动预置，
+  // 老用户不会再经过「手动选路径」那一步，启动时就顺手把历史草稿迁到当前插件存放路径。
+  const pluginsRoot = configuredPluginsRoot()
+  if (pluginsRoot) {
+    try {
+      const moved = migrateLegacyDrafts(pluginsRoot)
+      if (moved.length > 0) {
+        logger.info(
+          `[Workshop] Migrated ${moved.length} legacy draft(s) to plugins path: ${pluginsRoot}`
+        )
+      }
+    } catch (err) {
+      logger.warn('[Workshop] Failed to migrate legacy drafts (workshop still usable):', err)
+    }
+  }
+
   logger.info(
     `[Workshop] Plugin workshop wired: internal directory ${root}; plugins path ${configuredPluginsRoot() || '(not configured)'} ` +
       `(loader bases ${loaderBases().join(' / ')})`

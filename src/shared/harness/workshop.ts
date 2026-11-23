@@ -60,6 +60,13 @@ export interface WorkshopBuildInfo {
   /** 产物目录（dist/<id>），失败时为 undefined */
   outDir?: string
   at?: number
+  /**
+   * 本次产物对应的草稿源码指纹（构建成功时写入）。
+   *
+   * 与「当前源码指纹」不一致 = 产物比源码旧。**不再用 mtime 判定**：构建结束后
+   * 工坊还要回写 `workshop.json`，它永远比产物新，mtime 口径会让每次构建完都立刻「过期」。
+   */
+  sourceHash?: string
   durationMs: number
   files: { path: string; size: number }[]
   /** 致命错误（构不成包） */
@@ -111,6 +118,13 @@ export interface WorkshopReport {
   durationMs: number
   /** 全部致命检查通过 = true */
   ok: boolean
+  /**
+   * 验收时（构建后）的草稿源码指纹。
+   *
+   * 发布闸门据此判断「这份报告能代表当前源码吗」：报告通过后源码又被改过，
+   * 即使重新构建过（产物是新的）也必须重新验收——没验过的新代码不许装。
+   */
+  sourceHash?: string
   checks: WorkshopCheck[]
   build: WorkshopBuildInfo
   main?: WorkshopMainSmoke
@@ -136,6 +150,29 @@ export interface WorkshopDraftMeta {
   updatedAt: number
   /** 最近一次构建时间（构建成功后写入） */
   builtAt?: number
+  /**
+   * 当前 `dist/<id>` 是由哪份源码构建出来的（构建成功时写入的指纹）。
+   *
+   * 只用于「产物 vs 源码」；验收报告另带一份 `sourceHash`——两者都等于当前源码指纹
+   * 才允许发布（产物新但没重验，同样不许装）。
+   */
+  sourceHash?: string
+}
+
+/** 发布闸门的判定结果（工具/面板共用一套口径） */
+export interface WorkshopPublishGate {
+  /** true = 可以发布 */
+  ready: boolean
+  /** 不能发布的原因（稳定枚举，便于调用方做不同提示） */
+  reason?:
+    | 'no-report'
+    | 'report-failed'
+    | 'no-build'
+    | 'stale-report'
+    | 'sources-changed'
+    | 'stale-build'
+  /** 给模型/用户看的可执行说明（ready 时为空） */
+  detail: string
 }
 
 /** 草稿列表项（设置页列表 + 工具 list 动作共用） */
@@ -157,7 +194,8 @@ export interface WorkshopDraftSummary {
   /**
    * 用户配置的**插件存放路径**（所有插件源码的根目录，`<pluginsPath>/<插件 id>/`）。
    *
-   * 刻意没有默认值：没配置时工坊不列草稿也不能新建，界面入口会先去让用户选文件夹。
+   * 首次启动按安装目录预置为 `<安装目录>/data/plugins`（不可写时退回 `<userData>/data/plugins`），
+   * 用户可以在设置里改到别处（旧路径数据会迁过去）。用户主动清空后工坊不列草稿也不能新建。
    * 工坊自己的产物/报告目录（userData 下）不出现在界面上。
    */
   pluginsPath?: string

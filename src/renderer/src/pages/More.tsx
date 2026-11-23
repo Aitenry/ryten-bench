@@ -46,7 +46,7 @@ const More: React.FC = () => {
 
   return (
     <div
-      className="more-detail h-full flex-1"
+      className="more-detail h-full flex-1 custom-scrollbar"
       data-more-page="1"
       data-more-tab={active.tabKey}
       style={{

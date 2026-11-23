@@ -15,6 +15,7 @@ import { startWeatherAutoRefresh } from '../weather'
 import { listContributions } from '../plugins/contributions'
 import { APP_PRELOAD, type AppHook } from '../plugins/app-hooks'
 import { preloadHarness } from '../system/harness'
+import { migrateLegacyHarnessSettingsKey } from '../storage/layout'
 import { getMainWindow, markInitComplete } from './window-manager'
 
 /** 初始化进度快照：后挂载的启动页（主窗口渲染层）通过 `init-state` 先取一次当前状态 */
@@ -72,23 +73,12 @@ export function registerStartupIpc(): void {
 
 /**
  * 旧版本把 AI 助手这段配置存在 `chat` 键下，模块改名后统一用 `harness`。
- * 一次性搬迁：新键已存在就只删旧键，绝不会出现两份配置并存后互相覆盖。
  *
- * 注意：下面这个 'chat' 是**历史键名**，不能跟着模块一起改名——
- * 改了就再也读不到老用户已经存好的技能目录 / 工作区路径 / 记忆目录。
+ * 迁移实现在 `storage/layout.ts`（启动更早的 `bootstrapStorageLayout()` 已经调用过一次；
+ * 这里再调用是幂等的安全网，保证「初始化流程被单独调用」时也能读到老配置）。
  */
-function migrateHarnessSettingsKey(): void {
-  const legacy = settingsStore.get('chat') as HarnessSettings | undefined
-  if (legacy === undefined) return
-  if (settingsStore.get('harness') === undefined) {
-    settingsStore.set('harness', legacy)
-  }
-  settingsStore.delete('chat')
-  logger.info('[Init] Migrated legacy "chat" settings key to "harness"')
-}
-
 async function loadConfig(): Promise<void> {
-  migrateHarnessSettingsKey()
+  migrateLegacyHarnessSettingsKey()
   const ipConfig = settingsStore.get('ip')
   const lockPermission = settingsStore.get('lock')
   const graphConfig = settingsStore.get('graph')

@@ -4,6 +4,8 @@ import { createRequire } from 'node:module'
 import type { WorkshopRendererProbe } from '../../shared/harness/workshop'
 import type { ModuleLoader } from './css'
 import { configureWorkshopRoot, distDir, draftDir, isWorkshopReady } from './paths'
+import { draftSourceHash } from './fingerprint'
+import { readDraftMeta } from './store'
 
 /**
  * 工坊的**宿主接线**：服务本身不 import electron（离线工装才能跑全链路），
@@ -145,27 +147,59 @@ export function hasBuild(id: string): boolean {
 }
 
 /**
- * 产物是否落后于草稿源码（发布前据此提示「先重新构建」）。
+ * 当前草稿源码的指纹（读 `workshop.json` 的 css 模式后交给 `draftSourceHash`）。
  *
- * 比 mtime：草稿里任一源文件比产物的 `plugin.json` 新，就算过期。
+ * 这是发布闸门与构建写入的同一个口径：产物/报告里记的指纹与它不一致，就说明
+ * 源码在那之后变过（或产物不是这份源码构建出来的）。
+ */
+export function currentSourceHash(id: string): string {
+  const meta = readDraftMeta(id)
+  return draftSourceHash(id, meta?.css ?? 'auto')
+}
+
+/**
+ * 产物是否落后于草稿源码（发布/验收前据此提示「先重新构建」）。
+ *
+ * **比内容指纹，不比 mtime**：构建结束会回写 `workshop.json`，mtime 口径会让
+ * 每次构建完都立刻判成过期（`plugin_publish` 因此永久拒绝安装，2026-11-23 用户事故）。
+ *
+ * 没有记录指纹的老产物走 mtime 兜底（排除 `workshop.json`）——升级后第一次构建
+ * 就会写入指纹，之后一律走内容比对。
  */
 export function isBuildStale(id: string): boolean {
   try {
-    const out = path.join(distDir(id), 'plugin.json')
-    if (!fs.existsSync(out)) return false
-    const builtAt = fs.statSync(out).mtimeMs
-    let newest = 0
-    const walk = (dir: string): void => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (['node_modules', '.git', 'dist'].includes(entry.name)) continue
-        const full = path.join(dir, entry.name)
-        if (entry.isDirectory()) walk(full)
-        else newest = Math.max(newest, fs.statSync(full).mtimeMs)
-      }
+    if (!hasBuild(id)) return false
+    const meta = readDraftMeta(id)
+    if (typeof meta?.sourceHash === 'string' && meta.sourceHash !== '') {
+      return meta.sourceHash !== draftSourceHash(id, meta.css)
     }
-    walk(draftDir(id))
-    return newest > builtAt
+    return legacyMtimeStale(id)
   } catch {
+    // 读不到源码（目录被移走/权限）时不阻断：发布闸门会先因「没有验收报告/没有产物」拒绝
     return false
   }
+}
+
+/** 老产物（没有 sourceHash）的兜底：mtime 比对，但排除工坊自己回写的 workshop.json */
+function legacyMtimeStale(id: string): boolean {
+  const out = path.join(distDir(id), 'plugin.json')
+  if (!fs.existsSync(out)) return false
+  const builtAt = fs.statSync(out).mtimeMs
+  let newest = 0
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue
+      if (['node_modules', '.git', 'dist', '.cache', 'backups'].includes(entry.name)) continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      // 这个文件由工坊在构建之后回写（builtAt/updatedAt），不算源码变更
+      if (entry.name === 'workshop.json') continue
+      newest = Math.max(newest, fs.statSync(full).mtimeMs)
+    }
+  }
+  walk(draftDir(id))
+  return newest > builtAt
 }

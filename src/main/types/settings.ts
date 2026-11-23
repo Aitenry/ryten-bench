@@ -32,7 +32,11 @@ export interface HarnessContentRef {
 export type HarnessSidebarMode = 'work' | 'chat' | 'plugin'
 
 export interface HarnessSettings {
-  /** 技能（Skills）存储目录，空/未设置表示不启用；目录下每个含 SKILL.md 的子目录即一个技能 */
+  /**
+   * 技能（Skills）存储目录，空/未设置表示不启用；目录下每个含 SKILL.md 的子目录即一个技能。
+   * 首次启动会预置为 `<安装目录>/data/skills`（安装目录不可写时退回 `<userData>/data/skills`）；
+   * 用户改到别处时，旧目录里的技能会整体迁过去。
+   */
   skillsPath?: string
   /** 启用的技能 ID 列表，undefined 表示全部启用，[] 表示全部禁用 */
   enabledSkills?: string[]
@@ -56,16 +60,32 @@ export interface HarnessSettings {
   chatContent?: HarnessContentRef | null
   /** 插件模式当前那一条内容（含是哪份插件；没选过 = null） */
   pluginContent?: (HarnessContentRef & { pluginId: string }) | null
-  /** 记忆（Memory）存储根目录，空/未设置表示不启用；其下按工作区 ID 目录隔离（workspace-<id>/），每个工作区一套独立记忆 */
+  /**
+   * 记忆（Memory）存储根目录，空/未设置表示不启用；其下按工作区 ID 目录隔离
+   * （workspace-<id>/），每个工作区一套独立记忆。
+   * 首次启动会预置为 `<安装目录>/data/memory`（安装目录不可写时退回 `<userData>/data/memory`）；
+   * 用户改到别处时，旧目录里的全部记忆会整体迁过去。
+   */
   memoryPath?: string
   /**
    * **插件存放路径**（插件工坊里所有插件的源码根目录）。
    *
-   * 刻意**没有默认值**（用户口径 2026-09-27「不要有默认目录，需要配置所有插件的存放路径」）：
-   * 未配置时工坊不列草稿也不能新建，界面入口先去选文件夹。每个插件占一个子目录
-   * （`<pluginsPath>/<插件 id>/`），根目录本身永远不会被删。
+   * 首次启动会预置为 `<安装目录>/data/plugins`（安装目录不可写时退回
+   * `<userData>/data/plugins`），因此开箱即可用工坊；用户也可以改到任意可写目录，
+   * 改地址时旧路径下的插件源码会整体迁到新路径（同名文件保留目标那份，旧文件另存
+   * `*.migrated-*`，绝不覆盖）。
+   *
+   * 每个插件占一个子目录（`<pluginsPath>/<插件 id>/`），根目录本身永远不会被删。
    */
   pluginsPath?: string
+  /**
+   * 内部标记：**按安装目录预置默认存储布局**是否已执行过。
+   *
+   * 只写入一次。有了它，用户在设置里主动清空某个路径（= 停用该能力）后，
+   * 后续启动不会再把默认值强行塞回去；升级前的老用户若已配置记忆/技能目录，
+   * 也只会补上还空着的那几项，不会覆盖已有选择。
+   */
+  storageDefaultsApplied?: boolean
 }
 
 export type ThemeMode = 'light' | 'dark' | 'auto'

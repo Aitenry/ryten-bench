@@ -2,9 +2,16 @@ import { ipcMain, BrowserWindow } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
-import { clearEnabledOverride, clearUninstalled, setEnabledOverride } from '../plugins/store'
+import {
+  clearEnabledOverride,
+  clearUninstalled,
+  markInstallRemoved,
+  setEnabledOverride
+} from '../plugins/store'
 import { scanExternalPlugins } from '../plugins/scanner'
 import { installExternalPlugin, uninstallExternalPlugin } from '../plugins/lifecycle'
+import { emitAppEvent } from '../plugins/app-events'
+import { APP_EVENT_PLUGIN_DATA_PURGED } from '../plugins/app-hooks'
 import {
   isBundledPluginId,
   isEnabledPlugin,
@@ -247,19 +254,29 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
   // ① 清数据（插件自己实现；没贡献 purge 的插件跳过）。不清时留一句日志，
   //    免得日后看到「卸载了但库里还有行」时怀疑是 purge 没跑
   if (!purgeData) {
-    logger.info(`[Plugins] Uninstalling ${id} with data preserved: plugin code only; table records and managed files kept intact`)
+    logger.info(
+      `[Plugins] Uninstalling ${id} with data preserved: plugin code only; table records and managed files kept intact`
+    )
   } else {
     const purge = pluginPurge(id)
     if (purge) {
       try {
         await purge.run()
         logger.info(`[Plugins] ${id} data purged (${purge.label})`)
+        /**
+         * 本机数据（表行 / 托管文件）已清，但云端数据快照保留。通知插件中心丢掉本地
+         * `data_rev` 缓存：否则重新安装后 pull 会拿旧 rev 与云端比较，误判「已是最新」，
+         * 云端数据永远不回来（用户 2026-11-23：「不然以后的数据同步怎么办」）。
+         */
+        emitAppEvent(APP_EVENT_PLUGIN_DATA_PURGED, { pluginId: id })
       } catch (err) {
         // 清数据失败不阻断卸载：目录/通道该摘的仍要摘，否则会留下「装不了也卸不掉」的死状态
         logger.error(`[Plugins] Failed to purge ${id} data (continuing uninstall):`, err)
       }
     } else {
-      logger.warn(`[Plugins] ${id} has no plugin.purge contribution; data not purged (directory only)`)
+      logger.warn(
+        `[Plugins] ${id} has no plugin.purge contribution; data not purged (directory only)`
+      )
     }
   }
 
@@ -272,14 +289,32 @@ async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginLi
   // 早先这里不分来源一律调第三方的 `uninstallExternalPlugin`（只删目录、不记账），
   // 于是**卸载后重启会被 `ensureBundledPluginsInstalled()` 立刻铺回来**——「物理卸载」
   // 退化成「卸载后自动复活」（2026-09-26 工装实测：plugins.json 里没有 uninstalled）。
-  if (isBundledPluginId(id)) {
+  const bundled = isBundledPluginId(id)
+  if (bundled) {
     removeBundledPlugin(id)
     clearEnabledOverride(id)
   } else {
     uninstallExternalPlugin(id)
+    /**
+     * 外部插件额外记一笔「用户显式卸载」：插件中心按用户保存安装记录，
+     * pull 时发现本机缺包会**换机自动补齐**；没有这笔标记，刚卸载的插件会在
+     * 下次同步/重启时被装回来（用户 2026-11-23 反馈「卸载后状态对不上」）。
+     */
+    markInstallRemoved(id)
   }
 
-  logger.info(`[Plugins] Plugin uninstalled: ${id}`)
+  /**
+   * 卸载**只动本地**：云端安装记录与数据快照一律保留。
+   *
+   * 原因（用户 2026-11-23 明确口径）：「卸载不能把云存储的数据卸载了，只卸载本地的数据，
+   * 不然用户以后的数据同步怎么办」。云端是按用户的备份（换机/重装后恢复插件与设置），
+   * 挂在卸载的勾选框上会悄悄丢数据；「同时删除该插件的全部数据」只清**本机**表行与托管文件。
+   *
+   * 普通卸载后不会自动复活：本机的 `removedInstalls` 标记会让换机自动补齐跳过它，
+   * 插件仓库/详情按本机口径显示「未安装」；重新安装会清掉标记并继续用云端数据同步。
+   */
+
+  logger.info(`[Plugins] Plugin uninstalled: ${id} (cloud install record and data are kept)`)
   broadcastPluginStateChanged()
   return listEntries()
 }

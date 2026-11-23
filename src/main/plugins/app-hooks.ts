@@ -45,6 +45,20 @@ export const APP_RENDERER_MEMORY_DUMP = 'app.renderer-memory-dump'
  */
 export const APP_EVENT_WORKSPACE_CHANGED = 'app.workspace-changed'
 
+/**
+ * 卸载时用户勾选了「清除本机数据」，且插件的 `plugin.purge` 已执行。
+ *
+ * **只代表本机数据被清**：云端安装记录/数据快照保留（用户 2026-11-23 口径）。
+ * 插件中心（`lattice/sync`）借此丢掉本地 `data_rev` 缓存，这样下次 pull 才会
+ * 把云端数据重新写回本机（否则本地 rev 还停在旧值，会误以为「已经是最新」）。
+ */
+export const APP_EVENT_PLUGIN_DATA_PURGED = 'app.plugin-data-purged'
+
+/** `app.plugin-data-purged` 载荷 */
+export interface AppPluginDataPurgedPayload {
+  pluginId: string
+}
+
 /** `app.workspace-changed` 载荷：切换后的活动工作区（未配置时为 null） */
 export interface AppWorkspaceChangedPayload {
   /** 活动工作区 id（未配置 = null） */

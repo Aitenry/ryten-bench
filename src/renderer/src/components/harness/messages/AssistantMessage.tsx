@@ -2350,7 +2350,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       })
     }
     return (
-      <div className="flex mb-6">
+      <div className="flex harness-message-body">
         <div className="w-full">
           {renderBlocks()}
           {/* 流式静默指示：正文已出现但超过阈值无新 chunk（模型仍在生成大参数等）。

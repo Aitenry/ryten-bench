@@ -23,6 +23,8 @@ import type { AgentInjection } from '../../services/harness/types'
 import { formatOutput } from './fs-backend'
 import type { SpillStore } from './spill'
 import { invokeWithModelRecovery } from './model-recovery'
+// 防循环护栏：只看「同参数是否一直产出同结果」，不按累计次数误伤迭代式工作流
+import { RepeatGuard, repeatGuardMessage } from './repeat-guard'
 // 流式记录转换独立模块（可被测试脚本直接验证）：此处导入并兼容性重导出
 import { pushMessageRecords, pushRecord, type StreamMessageLike } from './stream-records'
 import { extractUsageMetadata, type ModelUsageRecord } from './usage'
@@ -187,10 +189,11 @@ function createToolRunner(
   const softWarnAt = Math.max(1, Math.floor(callLimit * SOFT_TOOL_CALL_WARN_RATIO))
 
   // 防循环护栏状态（每次图执行为一个实例，无跨请求泄漏）：
-  // - 同一 (工具, 参数) 累计调用 >= 3 次，或连续重复 >= 2 次 → 拦截并提示模型收尾，
-  //   避免模型卡死在重复调用中烧光递归预算（GraphRecursionError）。
-  const callCounts = new Map<string, number>()
-  let prevCallKey: string | undefined
+  // - 同一 (工具, 参数) 连续产出**相同结果** 3 次，或连续同调用 4 次 → 拦截并提示模型收尾；
+  // - 判据是「有没有进展」而不是「累计调用了几次」：插件工坊的 build/verify/publish
+  //   本来就会用同一组参数反复执行，旧的累计计数会在模型改完代码后把合法的下一步也拦死
+  //   （2026-11-23 用户事故：publish 被拒 → 重试两次 → 第三次直接不让调用）。
+  const repeatGuard = new RepeatGuard()
   // 总调用次数护栏：累计达到渐进阈值时温和提醒一次；超过 callLimit 后一律拦截
   let totalCalls = 0
   let warnedSoft = false
@@ -260,14 +263,11 @@ function createToolRunner(
         continue
       }
 
-      // 防循环护栏：识别重复调用（相同工具 + 完全相同参数），不执行并指示模型收尾
+      // 防循环护栏：同参数一直产出同结果 / 连续同调用才算死循环，不执行并指示模型收尾
       const key = toolCallKey(name, call.args)
-      const count = (callCounts.get(key) ?? 0) + 1
-      callCounts.set(key, count)
-      const isLoop = key === prevCallKey ? count >= 2 : count >= 3
-      prevCallKey = key
-      if (isLoop) {
-        const msg = `The tool "${name}" has already been called ${count} times with exactly the same arguments. Stop repeating this call and answer directly with the information you already have.`
+      const verdict = repeatGuard.check(key)
+      if (verdict.blocked) {
+        const msg = repeatGuardMessage(name, verdict)
         outputs.push(new ToolMessage({ content: msg, tool_call_id: callId }))
         if (push) {
           const record: ToolCallRecord = {
@@ -328,6 +328,8 @@ function createToolRunner(
       }
 
       const output = await outputPromise
+      // 记录「这次调用产出了什么」：下一次同参数调用据此判断是不是在做无用功
+      repeatGuard.record(key, output)
       outputs.push(new ToolMessage({ content: output, tool_call_id: callId }))
     }
 

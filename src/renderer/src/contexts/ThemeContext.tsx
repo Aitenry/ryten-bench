@@ -87,12 +87,21 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [themeMode, effectiveTheme, setThemeMode]
   )
 
+  /**
+   * 全局弹窗垂直居中（用户 2026-11-23：「页面所有的弹出框没有居中」）。
+   *
+   * antd 默认 `top: 100px`：窗口越高弹窗越贴上半区，设置弹窗这类高弹窗底部还会被
+   * 窗口裁掉一截。`centered` 走 wrap 的 inline-block + 垂直居中对齐，位置只跟窗口
+   * 高度有关；改在 ConfigProvider 一处，所有 `Modal`（含 `Modal.useModal()` 的
+   * confirm）一起生效——逐个组件补 `centered` 一定会漏，漏掉的那个就还原样贴顶。
+   */
   return (
     <ThemeContext.Provider value={contextValue}>
       <ConfigProvider
         locale={language === 'en-US' ? enUS : zhCN}
         theme={{ algorithm: isDark ? darkAlgorithm : defaultAlgorithm }}
         getPopupContainer={() => document.body}
+        modal={{ centered: true }}
       >
         {children}
       </ConfigProvider>

@@ -962,6 +962,8 @@ export async function verifyDraft(id: string, opts: VerifyOptions = {}): Promise
     at: Date.now(),
     durationMs: Date.now() - startedAt,
     ok,
+    // skipBuild 时用产物里记的那份指纹：报告只能代表「这份产物」，不能代表刚改过的源码
+    sourceHash: build.sourceHash ?? meta?.sourceHash,
     checks,
     build,
     main: smokeResult.smoke,
@@ -979,6 +981,40 @@ export function readReport(id: string): WorkshopReport | null {
   } catch {
     return null
   }
+}
+
+/** 探针状态 → 检查项状态（与验收电池里的映射同一口径） */
+function probeCheckStatus(probe: WorkshopRendererProbe): WorkshopCheck['status'] {
+  if (probe.status === 'pass') return 'pass'
+  if (probe.status === 'skip') return 'skip'
+  return 'fail'
+}
+
+/**
+ * 把**发布后**的渲染层复验结果写回最近一次验收报告。
+ *
+ * 为什么值得回写：安装前探针因为「插件还没装/没启用」只能 SKIP，报告上永远差这一项；
+ * 发布流程装完立刻在真界面里验了一遍，这个结论才是用户真正关心的。回写后面板与
+ * 后续读取报告的地方看到的是「装完且验证通过」，而不是过时的 SKIP。
+ *
+ * 报告不存在（用户直接从面板安装、没跑验收）时返回 null，不凭空造一份。
+ */
+export function updateReportRenderer(
+  id: string,
+  probe: WorkshopRendererProbe
+): WorkshopReport | null {
+  const report = readReport(id)
+  if (!report) return null
+  report.renderer = probe
+  const check = report.checks.find((item) => item.id === 'renderer.probe')
+  if (check) {
+    check.status = probeCheckStatus(probe)
+    check.detail = probe.detail
+    check.durationMs = probe.durationMs
+    if (check.status === 'pass') check.hint = undefined
+  }
+  writeJson(reportPath(id), report)
+  return report
 }
 
 /** 报告 → 给模型看的紧凑文本（工具返回值；面板走结构化数据） */

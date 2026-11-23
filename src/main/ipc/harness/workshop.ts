@@ -25,6 +25,7 @@ import {
   writeFile
 } from '../../workshop/service'
 import { configurePluginsRoot } from '../../workshop/paths'
+import { remapWorkspacePathsUnderRoot } from '../../storage/workspace-refs'
 import {
   ensurePluginWorkspace,
   listPluginWorkspaces,
@@ -203,7 +204,7 @@ export function workshopIpcHandlers(): IpcHandlerMap {
   )
 
   /**
-   * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录，没有默认值）。
+   * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录；首次启动已按安装目录预置）。
    *
    * 这个原生框没法被自动化点击，工装因此走 `workshop-set-root`（显式路径）。
    */
@@ -219,6 +220,9 @@ export function workshopIpcHandlers(): IpcHandlerMap {
           return { canceled: true as const }
         }
         const result = adoptPluginsRoot(picked.filePaths[0])
+        if (result.previousDir) {
+          await remapWorkspacePathsUnderRoot(result.previousDir, result.dir)
+        }
         broadcastWorkshopChanged()
         return { canceled: false as const, ...result }
       })
@@ -236,6 +240,9 @@ export function workshopIpcHandlers(): IpcHandlerMap {
           return { dir: '', moved: [] as string[] }
         }
         const result = adoptPluginsRoot(dir)
+        if (result.previousDir) {
+          await remapWorkspacePathsUnderRoot(result.previousDir, result.dir)
+        }
         broadcastWorkshopChanged()
         return result
       })
