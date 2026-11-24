@@ -909,13 +909,16 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
       }
     }
     logger.info(`[Lattice] Merge cloud data: ${merged} plugin(s) merged`)
-    if (merged === 0 && failures.length === 0 && summaries.length === 0) {
-      return { ok: false, error: '没有可合并的插件数据（未安装、插件不支持合并或云端没有数据）' }
+    if (merged === 0 && failures.length === 0) {
+      // 一个都没并、也没有失败：没装可合并的插件，或云端没有它们的快照。
+      // 不是错误——交给界面用「没有可合并的数据」提示，而不是弹「合并完成：0 个插件」。
+      return { ok: true, merged: 0, rows: 0, failed: 0, empty: true, summaries: [] }
     }
     return {
       ok: failures.length === 0,
       merged,
       rows: mergedRows,
+      failed: failures.length,
       summaries,
       ...(failures.length > 0 ? { error: failures.join('；') } : {})
     }

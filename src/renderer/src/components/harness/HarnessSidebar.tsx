@@ -69,7 +69,11 @@ interface HarnessSidebarProps {
   isLoadingMoreTopics: boolean
   /** 整表刷新中（区别于滚动分页） */
   isRefreshingTopics: boolean
-  onSelectTopic: (topic: HarnessTopicRow) => void
+  /**
+   * 打开一条会话。**会完成把内容放上屏幕这件事**（命中缓存则同步，否则等第一页消息读完），
+   * 所以返回 Promise：调用方要先 `await` 它、再切路由，见下面 `onOpenHarness` 的说明。
+   */
+  onSelectTopic: (topic: HarnessTopicRow) => void | Promise<void>
   onDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   onLoadMoreTopics: () => void
   /** 在当前工作区新建会话 */
@@ -81,6 +85,14 @@ interface HarnessSidebarProps {
    * 点「＋ 新建会话」之后，内容在对话页里，路由必须跟过去；否则界面看起来「没反应」
    * （用户口径 2026-11-21「打开其他界面……然后点击新建会话，都没有反应，页面不会回到
    * 新建会话这个页面」）。
+   *
+   * **调用时机：内容先就位，路由后跟过去**。`/harness` 一挂载就会画 Provider 里当前那份
+   * 会话，若先切路由、再等 IPC 把新内容准备好，中间那几帧画的还是**上一条**会话——用户看到
+   * 的就是「闪一下旧会话」。用户口径 2026-11-25「切换到插件仓库，然后选择新增会话，页面会
+   * 闪屏，从历史会话内容切到新会话内容，而不是一开始就是新会话内容」。因此本组件里所有
+   * 「用户点击 → 换会话内容」的入口都不在开头调它，而是等 `onNewHarness` / `onSelectTopic`
+   * 把内容换好之后、在同一个同步段/同一个 await 链末尾再调（空闲时路由更新立即生效，
+   * 人感觉不到等待，也不会再闪）。
    *
    * **只由用户动作调用**：启动恢复（restoreLastContent）走的是同一批回调，但恢复不该把
    * 从登录页 / 深链进来的人拽回对话页——那正是此前那个路由守卫要防的事，所以这里
@@ -1131,8 +1143,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
   const handleOpenTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
-      // 用户点的这条会话长在对话页上：人可能正停在资料库 / 插件仓库，先把路由带过去
-      onOpenHarness()
       const isPluginSession = pluginWorkspaceIds.has(workspaceId)
       const isChatSession = !isPluginSession && chatWorkspaceIds.has(workspaceId)
       setMode(isPluginSession ? 'plugin' : isChatSession ? 'chat' : 'work')
@@ -1162,6 +1172,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       }
       if (isPluginSession) setExpandedWorkspaceId(workspaceId)
       await onSelectTopic(topic)
+      // 这条会话已经画在屏幕上了，再把主内容区带回对话页（见 onOpenHarness 的说明：
+      // 顺序反过来的话，先挂载的 `/harness` 会先画上一条会话，闪一下）
+      onOpenHarness()
     },
     [
       activeWorkspaceId,
@@ -1183,8 +1196,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
   const handleCreateSession = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
-      // 工作区行的「＋ 新建会话」是用户动作：主内容区要跟着回到对话页
-      onOpenHarness()
       setExpandedWorkspaceId(ws.id)
       // 该工作区会话尚未加载过时先补一次，避免切换瞬间出现空列表
       if (!Object.prototype.hasOwnProperty.call(workspaceTopics, ws.id)) {
@@ -1197,6 +1208,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       rememberWork({ workspaceId: ws.id, topicId: null })
       if (mode !== 'work') setMode('work')
       onNewHarness()
+      // 空白会话已经就位：再把主内容区带回对话页（否则会先闪一下上一条会话，见 onOpenHarness）
+      onOpenHarness()
     },
     [
       activeWorkspaceId,
@@ -1222,9 +1235,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    *
    * @param options.topic 直接打开这条会话（切模式回来时用：那条会话还在，只是接着看）
    * @param options.focus 是否把光标送进输入框（点 ＋ 时为 true；切模式自动进入时为 false）
+   * @param options.navigate 内容就位后是否把主内容区带回对话页（只有用户点「＋」时为 true；
+   *   切模式 / 启动恢复不导航，见 onOpenHarness 的说明）
    */
   const handleChatSession = useCallback(
-    async (options?: { topic?: HarnessTopicRow; focus?: boolean }): Promise<void> => {
+    async (options?: {
+      topic?: HarnessTopicRow
+      focus?: boolean
+      navigate?: boolean
+    }): Promise<void> => {
       const topic = options?.topic
       // 目录 + 工作区行 + 活动工作区：主进程按话题 id 决定用根目录还是会话子目录
       const activated = await activateChatTopic(topic?.id)
@@ -1242,8 +1261,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           detail: { scope: 'chat', focus: options?.focus !== false }
         })
       )
+      // 空白会话 / 指定会话都已经在屏幕上了，最后才切路由（否则会先闪一下上一条会话）
+      if (options?.navigate) onOpenHarness()
     },
-    [activateChatTopic, onNewHarness, onSelectTopic, rememberChat]
+    [activateChatTopic, onNewHarness, onOpenHarness, onSelectTopic, rememberChat]
   )
 
   /**
@@ -1269,11 +1290,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * @param options.topic 直接打开这条会话（切模式回来时用：那条会话还在，只是接着看）
    * @param options.focus 是否把光标送进输入框（点 ＋ 时为 true；切模式自动进入时为 false——
    *   用户只是想看插件这一侧的内容，不该顺手抢走焦点）
+   * @param options.navigate 内容就位后是否把主内容区带回对话页（只有用户点插件行时为 true）
    */
   const handlePluginSession = useCallback(
     async (
       draft: { id: string },
-      options?: { topic?: HarnessTopicRow; focus?: boolean }
+      options?: { topic?: HarnessTopicRow; focus?: boolean; navigate?: boolean }
     ): Promise<void> => {
       // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
       const ensured = await harnessApi.workshop.ensureWorkspace(draft.id)
@@ -1325,8 +1347,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           new CustomEvent('harness-focus-input', { detail: { pluginId: draft.id, focus: false } })
         )
       }
+      // 内容（空白会话 / 指定会话）已经就位，最后才切路由——先切会让 `/harness` 先画上一条会话
+      if (options?.navigate) onOpenHarness()
     },
-    [loadDrafts, loadWorkspaces, onNewHarness, onSelectTopic, viewMessage, rememberPlugin]
+    [
+      loadDrafts,
+      loadWorkspaces,
+      onNewHarness,
+      onOpenHarness,
+      onSelectTopic,
+      viewMessage,
+      rememberPlugin
+    ]
   )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
@@ -1334,8 +1366,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     try {
       const dir = await harnessApi.harness.selectWorkspace()
       if (!dir) return
-      // 选了目录 = 用户要开工作区（新工作区落一条空白会话）：路由回到对话页
-      onOpenHarness()
       const name =
         dir
           .replace(/[/\\]$/, '')
@@ -1355,6 +1385,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       rememberWork({ workspaceId: id, topicId: null })
       if (mode !== 'work') setMode('work')
       onNewHarness()
+      // 空白会话已经就位，最后把主内容区带回对话页（先切路由会先闪一下上一条会话）
+      onOpenHarness()
       await loadWorkspaces()
     } catch (err) {
       console.error('Failed to create workspace:', err)
@@ -1582,8 +1614,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           }}
           onClick={() => {
             // 点插件行 = 针对这份插件开（或切到）一条会话：内容在对话页上
-            onOpenHarness()
-            void handlePluginSession(draft)
+            // （路由由 handlePluginSession 在内容就位后带回，见 onOpenHarness 的说明）
+            void handlePluginSession(draft, { navigate: true })
           }}
           title={t('harness.sidebar.pluginNewSession')}
           onMouseEnter={(e) => {
@@ -1684,8 +1716,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onOpenHarness()
-                  void handlePluginSession(draft)
+                  // 路由由 handlePluginSession 在内容就位后带回（先切会闪一下上一条会话）
+                  void handlePluginSession(draft, { navigate: true })
                 }}
                 title={t('harness.sidebar.pluginNewSession')}
                 className="flex items-center justify-center rounded"
@@ -2177,16 +2209,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (!detail?.pluginId) return
       const pluginId = detail.pluginId
       // 插件中心 →「在对话中修改」：这是用户动作，主内容区要跟到对话页
-      onOpenHarness()
+      // （navigate 交给 handlePluginSession 在内容就位后再切，先切会闪一下上一条会话）
       setMode('plugin')
       void (async () => {
         const topic = detail.topicId != null ? await fetchTopicRow(detail.topicId) : undefined
-        await handlePluginSession({ id: pluginId }, { topic: topic ?? undefined, focus: true })
+        await handlePluginSession(
+          { id: pluginId },
+          { topic: topic ?? undefined, focus: true, navigate: true }
+        )
       })()
     }
     window.addEventListener('lattice-open-source', handler)
     return () => window.removeEventListener('lattice-open-source', handler)
-  }, [fetchTopicRow, handlePluginSession, onOpenHarness])
+  }, [fetchTopicRow, handlePluginSession])
 
   /** 切到「工作」那一侧的内容：上次那条工作会话；没有就回到用户工作区的空白会话 */
   const enterWorkModeContent = useCallback(async (): Promise<void> => {
@@ -2542,8 +2577,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                         ? t('harness.sidebar.newSessionRunning')
                         : t('harness.sidebar.newSession'),
                       () => {
-                        onOpenHarness()
-                        void handleChatSession()
+                        // 空白会话备好之后由 handleChatSession 把路由带回对话页
+                        void handleChatSession({ navigate: true })
                       },
                       <RiAddLine size={14} />,
                       anyTopicRunning,

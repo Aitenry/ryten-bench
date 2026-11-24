@@ -75,9 +75,7 @@ const AssistantSidebar: React.FC = () => {
       hasMoreTopics={topicsHasMore}
       isLoadingMoreTopics={topicsLoading}
       isRefreshingTopics={topicsRefreshing}
-      onSelectTopic={(topic) => {
-        void handleSelectTopic(topic)
-      }}
+      onSelectTopic={handleSelectTopic}
       onDeleteTopic={handleDeleteTopic}
       onLoadMoreTopics={handleLoadMoreTopics}
       onNewHarness={handleNewHarness}

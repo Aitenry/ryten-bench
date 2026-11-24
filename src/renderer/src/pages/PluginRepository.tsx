@@ -755,19 +755,35 @@ const PluginRepository: React.FC = () => {
     await loadHub()
   }, [loadHub, message, openSyncDetails, syncLattice, t])
 
-  /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机，再推回云端 */
+  /**
+   * 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机，再推回云端。
+   *
+   * 提示是**和「同步完成：推送 X 个插件 / Y 条数据…」同构的一句话**（用户 2026-11-25：
+   * 「要和同步一样的简化提示」）：不再把每个插件的自述用「；」拼进来——插件一多就是
+   * 「全球时区: 两边一致，无需新增；个人记账台账: 两边一致，无需新增…」，而且「一致」
+   * 和「有新增」两种结果混在同一句里扫不出来。逐插件摘要仍由主进程 `summaries` 带回。
+   */
   const handleMergeCloud = useCallback(async (): Promise<void> => {
     setMergeBusy(true)
     try {
       const result = await window.api.lattice.mergeData()
-      if (!result.ok) {
+      const merged = result.merged ?? 0
+      const rows = result.rows ?? 0
+      const failed = result.failed ?? 0
+      if (!result.ok && failed === 0) {
+        // 前置失败（未登录 / 账号数据尚未就绪）：原因直接给用户，不进三态
         message.error(result.error || t('sync.error', { reason: '' }))
         return
       }
-      const summary = (result.summaries ?? []).filter(Boolean).join('；')
-      const rows = result.rows ?? 0
-      const base = summary || t('sync.merge.done')
-      message.success(rows > 0 ? `${base} · ${t('sync.merge.added', { n: rows })}` : base)
+      if (failed > 0 && merged > 0) {
+        message.warning(t('sync.merge.partial', { merged, rows, failed }))
+      } else if (failed > 0) {
+        message.error(t('sync.merge.failed', { failed }))
+      } else if (result.empty) {
+        message.warning(t('sync.merge.empty'))
+      } else {
+        message.success(t('sync.merge.success', { merged, rows }))
+      }
       await loadHub()
     } catch (err) {
       message.error(latticeErrorMessage(err))

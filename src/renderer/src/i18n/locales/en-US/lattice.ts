@@ -264,8 +264,10 @@ export const enUSLattice: typeof zhCNLattice = {
     now: 'Sync now',
     merge: {
       button: 'Merge cloud data',
-      done: 'Merged',
-      added: '{{n}} new record(s)',
+      success: 'Merge complete: {{merged}} plugin(s) / {{rows}} new record(s)',
+      partial: 'Merge complete: {{merged}} plugin(s) / {{rows}} new record(s), {{failed}} failed',
+      failed: 'Merge failed: {{failed}} plugin(s) were not merged',
+      empty: 'Nothing to merge (not installed, merging unsupported, or no cloud snapshot)',
       hint: 'Merge the cloud snapshots of all installed plugins into this device (local data is never overwritten: cloud-only rows are added and deduplicated by natural keys), then push the merged result back to the cloud.'
     },
     syncing: 'Syncing…',
