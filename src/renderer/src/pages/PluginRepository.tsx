@@ -12,6 +12,7 @@ import {
   RiErrorWarningLine,
   RiFileZipLine,
   RiFolderOpenLine,
+  RiGitMergeLine,
   RiHammerLine,
   RiInboxLine,
   RiLoader4Line,
@@ -126,6 +127,7 @@ const PluginRepository: React.FC = () => {
   const [conflicts, setConflicts] = useState<LatticeSyncConflict[]>([])
   const [conflictLoading, setConflictLoading] = useState(false)
   const [conflictBusy, setConflictBusy] = useState<string | null>(null)
+  const [mergeBusy, setMergeBusy] = useState(false)
   /** 「更新全部」批量升级进行中（逐个安装，失败不中断） */
   const [bulkUpdating, setBulkUpdating] = useState(false)
 
@@ -212,7 +214,7 @@ const PluginRepository: React.FC = () => {
 
   /** 显式解决一个冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
   const resolveConflict = useCallback(
-    async (pluginId: string, strategy: 'local' | 'cloud'): Promise<void> => {
+    async (pluginId: string, strategy: 'local' | 'cloud' | 'merge'): Promise<void> => {
       const key = `${pluginId}:${strategy}`
       setConflictBusy(key)
       try {
@@ -221,7 +223,11 @@ const PluginRepository: React.FC = () => {
           message.error(result.error || t('sync.error', { reason: '' }))
           return
         }
-        message.success(t('sync.resolve.done'))
+        if (strategy === 'merge' && result.summary) {
+          message.success(result.summary)
+        } else {
+          message.success(t('sync.resolve.done'))
+        }
         await loadConflicts()
         await loadHub()
         await refresh()
@@ -734,13 +740,41 @@ const PluginRepository: React.FC = () => {
       await openSyncDetails()
     } else if (autoInstalled > 0) {
       message.success(
-        `${t('sync.success', { pushed: result.pushed ?? 0, pulled: result.pulled ?? 0 })} · ${t('sync.autoInstall.done', { n: autoInstalled })}`
+        `${t('sync.success', { pushed: result.pushed ?? 0, pulled: result.pulled ?? 0, pushedRows: result.pushedRows ?? 0, pulledRows: result.pulledRows ?? 0 })} · ${t('sync.autoInstall.done', { n: autoInstalled })}`
       )
     } else {
-      message.success(t('sync.success', { pushed: result.pushed ?? 0, pulled: result.pulled ?? 0 }))
+      message.success(
+        t('sync.success', {
+          pushed: result.pushed ?? 0,
+          pulled: result.pulled ?? 0,
+          pushedRows: result.pushedRows ?? 0,
+          pulledRows: result.pulledRows ?? 0
+        })
+      )
     }
     await loadHub()
   }, [loadHub, message, openSyncDetails, syncLattice, t])
+
+  /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机，再推回云端 */
+  const handleMergeCloud = useCallback(async (): Promise<void> => {
+    setMergeBusy(true)
+    try {
+      const result = await window.api.lattice.mergeData()
+      if (!result.ok) {
+        message.error(result.error || t('sync.error', { reason: '' }))
+        return
+      }
+      const summary = (result.summaries ?? []).filter(Boolean).join('；')
+      const rows = result.rows ?? 0
+      const base = summary || t('sync.merge.done')
+      message.success(rows > 0 ? `${base} · ${t('sync.merge.added', { n: rows })}` : base)
+      await loadHub()
+    } catch (err) {
+      message.error(latticeErrorMessage(err))
+    } finally {
+      setMergeBusy(false)
+    }
+  }, [loadHub, message, t])
 
   /**
    * 顶栏「发布」下拉菜单（用户 2026-11-23：「按键太多，很多都是功能相似的」）。
@@ -1401,6 +1435,8 @@ const PluginRepository: React.FC = () => {
     const autoInstalled = syncSnapshot?.autoInstalled ?? 0
     const autoFailed = syncSnapshot?.autoInstallFailed ?? 0
     const orphanedCount = syncSnapshot?.orphaned ?? 0
+    const pushedRows = syncSnapshot?.pushedRows ?? 0
+    const pulledRows = syncSnapshot?.pulledRows ?? 0
     // 主进程缺省/旧主进程时按默认「开启」展示（与主进程 getLatticeAutoInstallMissing 默认一致）
     const autoInstallEnabled = latticeStatus.autoInstallMissing !== false
     return (
@@ -1409,6 +1445,11 @@ const PluginRepository: React.FC = () => {
         <span style={{ color: token.colorTextSecondary }}>
           {lastSyncTime ? t('sync.lastSync', { time: lastSyncTime }) : t('sync.never')}
         </span>
+        {(pushedRows > 0 || pulledRows > 0) && (
+          <span style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+            {t('sync.rowsSummary', { pushed: pushedRows, pulled: pulledRows })}
+          </span>
+        )}
         {conflictCount > 0 && (
           <Button
             size="small"
@@ -1498,6 +1539,18 @@ const PluginRepository: React.FC = () => {
         >
           {t('sync.now')}
         </Button>
+        <Tooltip title={t('sync.merge.hint')}>
+          <Button
+            size="small"
+            type="text"
+            icon={<RiGitMergeLine size={13} />}
+            loading={mergeBusy}
+            onClick={() => void handleMergeCloud()}
+            style={{ fontSize: 11 }}
+          >
+            {t('sync.merge.button')}
+          </Button>
+        </Tooltip>
       </div>
     )
   }
@@ -1822,6 +1875,7 @@ const PluginRepository: React.FC = () => {
           conflicts.map((conflict) => {
             const localKey = `${conflict.plugin_id}:local`
             const cloudKey = `${conflict.plugin_id}:cloud`
+            const mergeKey = `${conflict.plugin_id}:merge`
             return (
               <div
                 key={conflict.plugin_id}
@@ -1901,6 +1955,16 @@ const PluginRepository: React.FC = () => {
                   >
                     {t('sync.resolve.useCloud')}
                   </Button>
+                  {conflict.merge_supported === true && (
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={conflictBusy === mergeKey}
+                      onClick={() => void resolveConflict(conflict.plugin_id, 'merge')}
+                    >
+                      {t('sync.resolve.merge')}
+                    </Button>
+                  )}
                 </div>
               </div>
             )

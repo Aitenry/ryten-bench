@@ -188,7 +188,8 @@ props），只能靠这个单例对齐。两个读取方都按它调记忆通道
 ```
 
 - **按系统解析**：`app.getPath('userData')` 在 Win / macOS / Linux 分别是
-  `%APPDATA%` / `Application Support` / `~/.config` 下的应用目录，逻辑只有一处
+  `%APPDATA%` / `Application Support` / `~/.config` 下的应用目录（发布版 `ryten-bench`、
+  开发态 `ryten-bench-dev`，见 `src/main/environment/`），逻辑只有一处
   （`main/chat/workspace.ts` 的 `chatWorkspaceRoot()`），渲染层与工装都不自己拼路径；
 - **为什么不在「文档」目录**：应用刻意不自动创建用户可见的目录（历史上那个 Documents 下的
   「RytenBench 工作区」已被 `workspace-migration` 回滚掉），对话目录属于运行数据；

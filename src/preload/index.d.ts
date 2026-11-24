@@ -1,6 +1,11 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LlmProviderInput, LlmProviderConfig } from '../main/database/mapper/provider'
-import type { SystemSettings } from '../main/types/settings'
+import type {
+  LockCodeChangeResult,
+  LockScreenSnapshot,
+  LockUnlockResult,
+  SystemSettings
+} from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
 import type {
   HubDetail,
@@ -28,6 +33,7 @@ import type {
   LatticeSyncResult,
   LatticeSyncConflict,
   LatticeResolveConflictResult,
+  LatticeMergeDataResult,
   LatticeUploadProgress,
   LatticeUploadResult
 } from '../main/lattice/types'
@@ -65,9 +71,22 @@ interface Api {
     /** 取剪贴板/拖拽 File 的真实磁盘路径；无磁盘文件来源（如网页复制的图片）返回空串 */
     getPathForFile: (file: File) => string
   }
-  setting: {
-    getLockScreenCode: () => Promise<{ code: string; view: boolean }>
-    setLockScreenView: (open: boolean) => Promise<void>
+  lock: {
+    /** 主进程持有的锁屏快照（**不含**解锁码摘要） */
+    getState: () => Promise<LockScreenSnapshot>
+    /** 手动锁屏（Esc） */
+    lock: () => Promise<LockScreenSnapshot>
+    /** 解锁：校验在主进程完成 */
+    unlock: (code: string) => Promise<LockUnlockResult>
+    /** 开关 / 自动锁屏时长 */
+    configure: (patch: {
+      enabled?: boolean
+      autoLockMinutes?: number
+    }) => Promise<LockScreenSnapshot>
+    /** 改码：原密码由主进程校验 */
+    changeCode: (oldCode: string, newCode: string) => Promise<LockCodeChangeResult>
+    /** 锁屏状态推送（返回取消订阅函数） */
+    onChanged: (callback: (state: LockScreenSnapshot) => void) => () => void
   }
   providers: {
     getAll: () => Promise<LlmProviderConfig[]>
@@ -246,11 +265,13 @@ interface Api {
     setAutoInstallMissing: (enabled: boolean) => Promise<LatticeAutoInstallSettingResult>
     /** 未解决的插件数据冲突（含补拉的云端数据快照） */
     syncConflicts: () => Promise<LatticeSyncConflict[]>
-    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
+    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机；merge=两边合并（插件支持时） */
     resolveConflict: (
       pluginId: string,
-      strategy: 'local' | 'cloud'
+      strategy: 'local' | 'cloud' | 'merge'
     ) => Promise<LatticeResolveConflictResult>
+    /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机并推回云端 */
+    mergeData: () => Promise<LatticeMergeDataResult>
     /** 状态变化推送（返回取消订阅函数） */
     onStateChanged: (callback: (status: LatticeStatus) => void) => () => void
     /** 上传阶段进度推送（zip / meta / upload） */

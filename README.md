@@ -173,9 +173,14 @@ from the hub or from a local package, and both paths end in the same host instal
   personal ledger exports its settings plus its ten business tables); the app falls back to
   `userData/plugin-state/<id>.json` (≤ 256 KiB) when a plugin has no snapshot of its own. Plugins
   apply incoming snapshots with replace semantics, so syncing repeatedly never duplicates rows.
+  Plugins can also contribute a non-destructive `merge()`: when two machines edited the same
+  plugin independently, "Merge both sides" keeps local data and adds cloud-only rows
+  (deduplicated by the plugin's natural keys), then pushes the union back; "Merge cloud data"
+  in the sync bar does the same for every installed plugin on demand.
   Workspace files, chat history, notes and databases never leave the machine. The app pulls at
-  startup and after sign-in, pushes five seconds after a plugin changes, and offers a manual
-  "Sync now".
+  startup, after sign-in, every 60 seconds while signed in, and when the window regains focus;
+  it pushes five seconds after a plugin changes, and offers a manual "Sync now". Sync results
+  report both plugin counts and record counts (e.g. pushed 4 plugins / 37 records).
 - **Account-scoped local data** — plugin data and the plugin database live in a per-account
   container (`userData/profiles/<key>/`, where key = base URL + user id); the signed-in account's
   container is swapped into the root at startup. Signing in, signing out or changing the base URL
@@ -240,7 +245,16 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Localization** — Simplified Chinese and English, switchable at runtime without restart, and
   the main process renders tool output and progress text in the current language too.
 - **Theme** — light / dark / auto, where auto follows the time of day (light from 6:00 to 18:00).
-- **Lock screen** — an optional 6-digit passcode lock with a change-passcode flow.
+- **Lock screen** — an optional 6-digit passcode (salted scrypt, verified in the main process,
+  never exposed to the renderer) that locks on Esc, system idle, minimize or hide-to-tray. The
+  locked state lives in the main process, so a page reload or renderer crash does not unlock it;
+  the app content is blurred at 64px behind a full-screen frosted overlay and the window is
+  excluded from screen capture until unlocked. Changing the passcode verifies the old one in the
+  main process, and repeated failures back off exponentially.
+- **Settings safety net** — every settings change is copied to `settings.backup.json`. At startup
+  a missing or corrupt `settings.json` is restored from that backup (invalid files are archived,
+  not deleted); if the lock screen was enabled, a recovered settings file locks the app
+  immediately instead of starting unlocked.
 - **System tray** — closing the window can keep the app resident in the tray (restore or quit from
   the tray menu); single-instance behaviour focuses the existing window instead of starting a
   second copy.
@@ -723,11 +737,24 @@ flowchart LR
 
 ### Storage and isolation
 
+- **Two environments, two data directories** — a packaged build keeps its state under
+  `ryten-bench` in the per-user app-data directory (`%APPDATA%\ryten-bench` on Windows,
+  `~/Library/Application Support/ryten-bench` on macOS, `~/.config/ryten-bench` on Linux),
+  while development runs (`pnpm dev`, `pnpm start`, `electron .`) use the sibling
+  `ryten-bench-dev`. The split is applied in `src/main/environment/` before anything resolves
+  `userData`, so the settings, the PGlite cluster, plugin packages, account profiles, the
+  provider keystore, session files and logs are separate by construction — a development run
+  can never write into the installed app's data, and vice versa. Automation that passes
+  `--user-data-dir=...` keeps that directory and is never redirected. The packaged path is the
+  historical one, so upgrading an installed app keeps its data; a `ryten-bench` directory written
+  by a development run from before this split now belongs to the packaged environment — copy it to
+  `ryten-bench-dev` to bring that state back into development.
 - **Default storage layout** — on first launch the app provisions `data/memory`, `data/plugins`
   and `data/skills` next to the installation (the directory containing the executable; the
-  `.AppImage` location on Linux). If that location is not writable (Program Files, `/opt`, a
-  signed macOS `.app`) it falls back to `<userData>/data`; a packaged macOS build always
-  uses the user data directory. The three settings are prefilled once and can be changed
+  `.AppImage` location on Linux; in `pnpm dev` that resolves to the repository root, so
+  development storage lands in `<repo>/data`). If that location is not writable (Program Files,
+  `/opt`, a signed macOS `.app`) it falls back to `<userData>/data`; a packaged macOS build
+  always uses the user data directory. The three settings are prefilled once and can be changed
   later; changing a path migrates the existing contents to the new location (same-name files
   keep the target copy and preserve the old one as `*.migrated-*`) before the new setting is saved.
 - **Database** — a single PGlite cluster in `userData/RytenBenchDB`. The DDL single source of truth

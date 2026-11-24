@@ -148,6 +148,8 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
             at: snapshot.at,
             pushed: snapshot.pushed,
             pulled: snapshot.pulled,
+            pushedRows: snapshot.pushedRows ?? 0,
+            pulledRows: snapshot.pulledRows ?? 0,
             conflicts: snapshot.conflicts,
             autoInstalled: snapshot.autoInstall?.installed.length ?? prev.sync?.autoInstalled ?? 0,
             autoInstallFailed:

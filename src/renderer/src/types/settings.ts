@@ -1,6 +1,9 @@
 export type {
   AppLanguage,
   Lock,
+  LockCodeChangeResult,
+  LockScreenSnapshot,
+  LockUnlockResult,
   SystemSettings,
   GraphSettings,
   HarnessSettings,

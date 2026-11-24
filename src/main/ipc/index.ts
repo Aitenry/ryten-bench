@@ -1,4 +1,5 @@
 import { registerMiscIpc } from './misc'
+import { registerLockIpc } from './lock'
 import { registerSettingsIpc } from './settings'
 import { registerProviderIpc } from './provider'
 import { registerDialogIpc } from './dialog'
@@ -6,7 +7,7 @@ import { registerPluginsIpc } from './plugins'
 import { registerLatticeIpc } from './lattice'
 
 /**
- * core（外壳）IPC：窗口杂项 / 系统设置与锁屏 / 模型 Provider / 对话框 / 插件管理 /
+ * core（外壳）IPC：窗口杂项 / 系统设置 / 锁屏 / 模型 Provider / 对话框 / 插件管理 /
  * Lattice 插件中心（登录、目录、上传、下载安装、数据同步）。
  *
  * 归属边界：
@@ -24,6 +25,7 @@ import { registerLatticeIpc } from './lattice'
  */
 export function registerCoreIpc(): void {
   registerMiscIpc()
+  registerLockIpc()
   registerSettingsIpc()
   registerDialogIpc()
   registerProviderIpc()

@@ -42,6 +42,9 @@ export interface LatticeSyncSummary {
   at?: number
   pushed?: number
   pulled?: number
+  /** 推送/拉取的业务数据条数（同步状态条展示） */
+  pushedRows?: number
+  pulledRows?: number
   conflicts?: number
   /** 最近一次同步自动补齐（换机/重装后重新安装缺失插件）成功的数量 */
   autoInstalled?: number
@@ -164,6 +167,11 @@ export interface LatticeSyncOptions {
    * 不会中断其它插件，也不会把同步整体判失败。
    */
   installMissing?: boolean
+  /**
+   * 后台自动 pull：没有数据变化时界面不弹「同步完成」提示（状态条仍更新）。
+   * 用户手动同步不要传。
+   */
+  silent?: boolean
 }
 
 export type LatticeSyncInput = LatticeSyncOptions | LatticeSyncDirection
@@ -216,9 +224,15 @@ export interface LatticeSyncOrphanedItem {
 /** 一次同步的结果（`lattice:sync` 返回、`lattice:sync-state` 载荷） */
 export interface LatticeSyncResult {
   at: number
+  /** 推送/拉取的**插件**数 */
   pushed: number
   pulled: number
+  /** 推送/拉取的**业务数据条数**（插件通过 count() 统计；无 count 的插件计 0） */
+  pushedRows?: number
+  pulledRows?: number
   conflicts: number
+  /** 后台自动 pull（非用户手动触发）：没有数据变化时界面不弹提示 */
+  silent?: boolean
   error?: string
   /** 云端有安装记录、但本机没有插件包而**未自动安装**的插件 id（自动补齐关闭/不可用时） */
   pending?: string[]
@@ -253,12 +267,34 @@ export interface LatticeSyncConflict {
   local_data?: unknown
   /** 打开弹窗时补拉的云端数据快照（用于预览） */
   server_data?: unknown
+  /** 该插件是否提供 `merge()`（不支持的插件不应显示「合并两边」） */
+  merge_supported?: boolean
   at: number
 }
 
-export type LatticeResolveConflictStrategy = 'local' | 'cloud'
+export type LatticeResolveConflictStrategy = 'local' | 'cloud' | 'merge'
 
-export type LatticeResolveConflictResult = { ok: true } | { ok: false; error: string }
+export type LatticeResolveConflictResult =
+  | {
+      ok: true
+      /** 合并策略的结果摘要（只在使用「合并两边」时有值） */
+      summary?: string
+      /** 合并策略新加进来的数据条数 */
+      rows?: number
+    }
+  | { ok: false; error: string }
+
+/** 「合并云端数据」：逐个已安装插件把云端快照并进本机，再把合并结果推回云端 */
+export interface LatticeMergeDataResult {
+  ok: boolean
+  /** 实际完成了合并的插件数 */
+  merged?: number
+  /** 合并新加进来的数据条数 */
+  rows?: number
+  /** 每个插件的合并摘要（给界面 toast / 详情用） */
+  summaries?: string[]
+  error?: string
+}
 
 /** 上传阶段进度（`lattice:upload-progress` 载荷） */
 export interface LatticeUploadProgress {
@@ -528,6 +564,8 @@ export const LATTICE_IPC = {
   /** 同步详情：最近一次同步的自动补齐/孤儿记录明细（失败可查看原因） */
   syncDetails: 'lattice:sync-details',
   resolveConflict: 'lattice:resolve-conflict',
+  /** 逐个已安装插件把云端快照合并进本机（非破坏性并集），再推回云端 */
+  mergeData: 'lattice:merge-data',
   /** 缺失插件自动补齐开关（持久化设置；默认开启） */
   setAutoInstallMissing: 'lattice:set-auto-install-missing',
   stateChanged: 'lattice:state-changed',

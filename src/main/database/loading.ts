@@ -7,12 +7,15 @@ import logger from 'electron-log'
 logger.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}'
 logger.transports.file.fileName = 'database.log'
 
-// 定义数据库文件路径
-const dbDir = path.join(app.getPath('userData'), 'RytenBenchDB')
-
-/** 数据库数据目录（备份/重建时由启动流程使用） */
+/**
+ * 数据库数据目录（备份/重建时由启动流程使用）。
+ *
+ * 必须**每次现取**，不能在模块顶层算成常量：userData 由 `src/main/environment`
+ * 在启动最早期按环境改写（开发态 `ryten-bench-dev`、打包态 `ryten-bench`），
+ * 模块求值顺序一变，常量就会把路径钉在另一套环境的目录上。
+ */
 export function getDatabaseDir(): string {
-  return dbDir
+  return path.join(app.getPath('userData'), 'RytenBenchDB')
 }
 
 export class Database {
@@ -29,7 +32,8 @@ export class Database {
       return
     }
 
-    // 确保目录存在
+    // 确保目录存在（路径在这一刻才取，见 getDatabaseDir 的说明）
+    const dbDir = getDatabaseDir()
     await fs.mkdir(dbDir, { recursive: true })
 
     this.db = new PGlite(dbDir)

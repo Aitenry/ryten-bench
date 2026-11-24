@@ -110,14 +110,21 @@ export const zhCNSettings = {
     },
     lock: {
       sectionTitle: '锁屏设置',
+      sectionDescription: '按 Esc 立即锁屏；其余入口在下面配置',
       enableTitle: '启用锁屏',
-      enableDescription: '关闭后锁屏功能将失效',
+      enableDescription: '关闭后 Esc、自动锁屏与最小化锁屏都不再生效',
+      autoLockTitle: '自动锁屏',
+      autoLockDescription: '系统空闲超过该时长后自动锁屏；最小化或隐藏到托盘时也会立即锁定',
+      autoLockOff: '不自动锁屏',
+      autoLockMinutes: '{{minutes}} 分钟',
       passwordTitle: '锁屏密码',
-      passwordDescription: '6 位纯数字密码，修改后旧密码将失效',
-      changePassword: '修改密码'
+      passwordDescription: '6 位数字；仅保存加盐哈希，界面拿不到摘要',
+      changePassword: '修改密码',
+      defaultCodeWarning: '仍在使用初始密码 123456，等同于没有锁屏，请立即修改'
     },
     passwordModal: {
       title: '修改锁屏密码',
+      setTitle: '设置锁屏密码',
       oldPassword: '原密码',
       newPassword: '新密码',
       confirmPassword: '确认新密码',
@@ -126,7 +133,9 @@ export const zhCNSettings = {
       confirmPasswordRequired: '请再次输入新密码',
       sixDigits: '密码必须为 6 位纯数字',
       mismatch: '两次输入的密码不一致',
-      wrongOldPassword: '原密码错误'
+      wrongOldPassword: '原密码错误',
+      changeFailed: '修改失败，请稍后重试',
+      changeSuccess: '锁屏密码已更新'
     }
   }
 }

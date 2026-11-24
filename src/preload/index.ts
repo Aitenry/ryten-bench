@@ -31,6 +31,7 @@ import type {
   LatticeSyncResult,
   LatticeSyncConflict,
   LatticeResolveConflictResult,
+  LatticeMergeDataResult,
   LatticeUploadProgress,
   LatticeUploadResult
 } from '../main/lattice/types'
@@ -111,9 +112,29 @@ const api = {
       }
     }
   },
-  setting: {
-    getLockScreenCode: () => ipcRenderer.invoke('lock-screen-code'),
-    setLockScreenView: (open: boolean) => ipcRenderer.invoke('lock-screen-view', open)
+  lock: {
+    /** 主进程持有的锁屏快照（摘要永不下发） */
+    getState: () => ipcRenderer.invoke('lock-screen-state'),
+    /** 手动锁屏（Esc）；未启用 / 没有解锁码时主进程不会锁 */
+    lock: () => ipcRenderer.invoke('lock-screen-lock'),
+    /** 解锁：校验在主进程完成（加盐 scrypt + 退避） */
+    unlock: (code: string) => ipcRenderer.invoke('lock-screen-unlock', code),
+    /** 开关 / 自动锁屏时长（落盘也在主进程） */
+    configure: (patch: { enabled?: boolean; autoLockMinutes?: number }) =>
+      ipcRenderer.invoke('lock-screen-configure', patch),
+    /** 改码：原密码在主进程校验，成功后才写新摘要 */
+    changeCode: (oldCode: string, newCode: string) =>
+      ipcRenderer.invoke('lock-screen-change-code', oldCode, newCode),
+    /** 锁屏状态推送（自动锁屏 / 手动锁 / 解锁；返回取消订阅函数） */
+    onChanged: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => {
+        callback(state)
+      }
+      ipcRenderer.on('lock-screen-changed', listener)
+      return () => {
+        ipcRenderer.removeListener('lock-screen-changed', listener)
+      }
+    }
   },
   providers: {
     getAll: () => ipcRenderer.invoke('provider-get-all') as Promise<LlmProviderConfig[]>,
@@ -474,13 +495,15 @@ const api = {
     /** 未解决的插件数据冲突（含补拉的云端数据快照） */
     syncConflicts: () =>
       ipcRenderer.invoke(LATTICE_IPC.syncConflicts) as Promise<LatticeSyncConflict[]>,
-    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
-    resolveConflict: (pluginId: string, strategy: 'local' | 'cloud') =>
+    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机；merge=两边合并（插件支持时） */
+    resolveConflict: (pluginId: string, strategy: 'local' | 'cloud' | 'merge') =>
       ipcRenderer.invoke(
         LATTICE_IPC.resolveConflict,
         pluginId,
         strategy
       ) as Promise<LatticeResolveConflictResult>,
+    /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机并推回云端 */
+    mergeData: () => ipcRenderer.invoke(LATTICE_IPC.mergeData) as Promise<LatticeMergeDataResult>,
     /** 登录态/基址/同步摘要变化推送 */
     onStateChanged: (callback: (status: LatticeStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: LatticeStatus): void =>

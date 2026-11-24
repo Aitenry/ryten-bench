@@ -36,11 +36,16 @@ export const enUSShell: typeof zhCNShell = {
   },
   unlock: {
     title: 'Screen locked',
-    prompt: 'Enter your password to unlock',
-    hint: 'Enter the 6-digit code to unlock',
+    prompt: 'Enter your 6-digit passcode to continue',
+    hint: 'Six digits · unlocks automatically',
     success: 'Unlocked',
-    failed: 'Incorrect password',
-    verifyFailed: 'Unlock verification failed'
+    failed: 'Incorrect passcode, try again',
+    attemptsLeft: 'Incorrect passcode · {{n}} attempts left',
+    throttled: 'Too many attempts · try again in {{seconds}}s',
+    unavailable: 'Passcode unavailable — restart the app and try again',
+    verifying: 'Verifying…',
+    verifyFailed: 'Unlock verification failed, try again',
+    privacyNote: 'Verified locally only. Your passcode never leaves this device.'
   },
   errorBoundary: {
     eyebrow: 'RUNTIME ERROR',

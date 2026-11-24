@@ -136,7 +136,12 @@ const ShellUserArea: React.FC = () => {
       })
       return
     }
-    const base = t('sync.success', { pushed: result.pushed ?? 0, pulled: result.pulled ?? 0 })
+    const base = t('sync.success', {
+      pushed: result.pushed ?? 0,
+      pulled: result.pulled ?? 0,
+      pushedRows: result.pushedRows ?? 0,
+      pulledRows: result.pulledRows ?? 0
+    })
     message.success(
       autoInstalled > 0 ? `${base} · ${t('sync.autoInstall.done', { n: autoInstalled })}` : base
     )

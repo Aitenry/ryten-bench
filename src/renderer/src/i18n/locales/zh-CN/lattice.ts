@@ -269,8 +269,16 @@ export const zhCNLattice = {
     lastSync: '最近同步 {{time}}',
     never: '尚未同步',
     now: '立即同步',
+    merge: {
+      button: '合并云端数据',
+      done: '已合并',
+      added: '新增 {{n}} 条',
+      hint: '把所有已安装插件的云端快照合并进本机（本机数据不会被覆盖：云端独有的行按自然键去重后加进来），再把合并结果推回云端。适用于两台机器各记了一半账的情况。'
+    },
     syncing: '正在同步…',
-    success: '同步完成：推送 {{pushed}}，拉取 {{pulled}}',
+    success:
+      '同步完成：推送 {{pushed}} 个插件 / {{pushedRows}} 条数据，拉取 {{pulled}} 个插件 / {{pulledRows}} 条数据',
+    rowsSummary: '↑{{pushed}} 条 · ↓{{pulled}} 条',
     conflicts: '{{n}} 个数据冲突',
     conflictsShort: '{{n}} 个冲突',
     error: '同步失败：{{reason}}',
@@ -315,7 +323,7 @@ export const zhCNLattice = {
       button: '解决冲突（{{n}}）',
       title: '解决插件数据冲突',
       description:
-        '云端与本机都改过同一个插件的数据。请逐个选择保留哪一边；选择后会用它覆盖另一边（不会自动覆盖）。',
+        '云端与本机都改过同一个插件的数据。请逐个选择保留哪一边；支持合并的插件还可以「合并两边」（保留本机数据、把云端独有的行按自然键去重后加进来）。',
       localRev: '本机 rev {{n}}',
       serverRev: '云端 rev {{n}}',
       localData: '本机数据',
@@ -323,6 +331,7 @@ export const zhCNLattice = {
       noData: '（无数据）',
       useLocal: '用本机覆盖云端',
       useCloud: '用云端覆盖本机',
+      merge: '合并两边',
       done: '冲突已解决',
       empty: '没有待解决的冲突'
     },

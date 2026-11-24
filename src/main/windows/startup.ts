@@ -6,10 +6,13 @@ import { runMigrations } from '../database/orm'
 import { applyWorkspaceSettings } from '../database/workspace-settings'
 import { setDatabaseInstance, setInitializationPromise } from '../database/instance'
 import { initKeystore } from '../crypto/provider-key'
-import { settingsStore } from '../context'
+import { settingsStartupRecovery, settingsStore } from '../context'
 import { safeSend } from '../safe-send'
 import { mainMessages } from '../i18n'
 import { GraphSettings, HarnessSettings, TraySettings } from '../types/settings'
+import { hashLockCode } from '../lock/credentials'
+import { DEFAULT_AUTO_LOCK_MINUTES, DEFAULT_LOCK_CODE } from '../lock/constants'
+import { lockNow, refreshLockScreenState } from '../lock/service'
 import { getIp } from '../address'
 import { startWeatherAutoRefresh } from '../weather'
 import { listContributions } from '../plugins/contributions'
@@ -100,8 +103,15 @@ async function loadConfig(): Promise<void> {
   }
   if (!lockPermission) {
     configPromises.push(
-      Promise.resolve().then(() => {
-        settingsStore.set('lock', { code: 'e10adc3949ba59abbe56e057f20f883e', view: false })
+      Promise.resolve().then(async () => {
+        // 首次落盘就写成加盐 scrypt 摘要（旧版本这里写的是 MD5('123456')，见
+        // lock/credentials.ts 的说明）；默认码 123456 只用于开箱即可试用，
+        // 设置页会提示用户尽快修改。
+        settingsStore.set('lock', {
+          code: await hashLockCode(DEFAULT_LOCK_CODE),
+          view: false,
+          autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES
+        })
       })
     )
   }
@@ -204,7 +214,10 @@ async function offerDatabaseReset(
     await rename(getDatabaseDir(), backupDir)
     logger.warn(`[Init] Corrupt database directory archived: ${backupDir}`)
   } catch (renameErr) {
-    logger.error('[Init] Failed to archive corrupt directory (may be in use by another process):', renameErr)
+    logger.error(
+      '[Init] Failed to archive corrupt directory (may be in use by another process):',
+      renameErr
+    )
     return 'declined'
   }
   return 'recovered'
@@ -238,7 +251,25 @@ async function performInitializationTasks(): Promise<void> {
   const m = mainMessages()
   let database: Database | null = null
   const steps: { name: string; execute: () => Promise<void> | void }[] = [
-    { name: m.splash.stepLoadConfig, execute: async () => await loadConfig() },
+    {
+      name: m.splash.stepLoadConfig,
+      execute: async () => {
+        await loadConfig()
+        // 锁屏配置可能刚刚才首次落盘：刷新快照（默认码提示 / 开关状态）
+        refreshLockScreenState()
+        /**
+         * 设置文件丢失后从备份恢复：如果备份里锁屏是启用的，这次必须直接锁上。
+         * 否则「删掉 settings.json」仍然等于把锁屏绕过去（配置恢复了，但人已经能看到内容）。
+         */
+        if (settingsStartupRecovery.restoredFromBackup) {
+          const lock = settingsStore.get('lock') as { view?: boolean; code?: string } | undefined
+          if (lock?.view && lock.code) {
+            logger.warn('[LockScreen] Settings restored from backup; locking at startup')
+            lockNow('settings-recovered')
+          }
+        }
+      }
+    },
     {
       name: m.splash.stepInitKeystore,
       execute: async () => {

@@ -1,3 +1,8 @@
+// ⚠️ 必须是第一条 import：environment 在**模块求值阶段**就把「开发 / 打包」两套 userData
+// 定下来（开发 = <appData>/ryten-bench-dev，打包 = <appData>/ryten-bench）。
+// 下面的 ./plugins/host 会经由 ./context（electron-store）和数据库模块在求值时读
+// app.getPath('userData')；晚一步，设置/数据库/插件/账号/日志就会写进另一套环境。
+import { currentEnvironment, currentUserDataDir } from './environment'
 import { app, BrowserWindow, ipcMain, crashReporter } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import logger from 'electron-log'
@@ -12,10 +17,15 @@ import { setupWeather } from './weather'
 import { bootstrapStorageLayout } from './storage'
 import { initAccountProfile } from './profiles/runtime'
 
-// 单实例锁：防止多开，同时确保安装程序能正确检测和关闭进程
+// 单实例锁：防止多开，同时确保安装程序能正确检测和关闭进程。
+// 锁的键就是 userData：开发态（ryten-bench-dev）与打包态（ryten-bench）互不影响，
+// 各自都能开一个实例；同一套数据目录里的两个进程必须只有一个。
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
-  app.quit()
+  // 必须 app.exit 立即结束：app.quit() 只是排队退出，本模块后面的 whenReady 链仍会跑一遍
+  // ——PGlite 没有跨进程锁，两个进程同时打开同一个数据目录会写出坏库。
+  // （2026-11-24 实测：旧版安装包还开着时启动新包，第二实例会短暂初始化并打开同一个库。）
+  app.exit(0)
 } else {
   app.on('second-instance', () => {
     // 再次启动时恢复主窗口（包括隐藏在系统托盘中的情况）
@@ -74,6 +84,13 @@ function installDevToolsAccelerator(win: BrowserWindow): void {
 app
   .whenReady()
   .then(async () => {
+    // 环境名与 userData 落点先打一条日志：出问题时「哪套数据被读写」一眼可查。
+    const environment = currentEnvironment()
+    logger.info(
+      `[Environment] ${environment.name} | appName=${environment.appName} | ` +
+        `userData=${currentUserDataDir()}`
+    )
+
     electronApp.setAppUserModelId('com.ryten.bench')
 
     // 账号级本地数据空间：必须在**任何**数据库/插件/同步数据被读写之前完成对调。

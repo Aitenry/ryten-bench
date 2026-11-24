@@ -1,4 +1,8 @@
-import { Lock } from '@renderer/types/settings'
+import {
+  LockCodeChangeResult,
+  LockScreenSnapshot,
+  LockUnlockResult
+} from '@renderer/types/settings'
 import { LlmProviderInput, LlmProviderConfig } from '../../../main/database/mapper/provider'
 import { SystemSettings } from '@renderer/types/settings'
 
@@ -51,9 +55,21 @@ export interface Window {
       /** 取剪贴板/拖拽 File 的真实磁盘路径；无磁盘文件来源（如网页复制的图片）返回空串 */
       getPathForFile: (file: File) => string
     }
-    setting: {
-      getLockScreenCode: () => Promise<Lock>
-      setLockScreenView: (open: boolean) => void
+    lock: {
+      getState: () => Promise<LockScreenSnapshot>
+      /** 手动锁屏（Esc）；未启用/无解锁码时主进程不锁 */
+      lock: () => Promise<LockScreenSnapshot>
+      /** 解锁：校验在主进程（加盐 scrypt + 失败退避） */
+      unlock: (code: string) => Promise<LockUnlockResult>
+      /** 开关 / 自动锁屏时长 */
+      configure: (patch: {
+        enabled?: boolean
+        autoLockMinutes?: number
+      }) => Promise<LockScreenSnapshot>
+      /** 改码：原密码由主进程校验 */
+      changeCode: (oldCode: string, newCode: string) => Promise<LockCodeChangeResult>
+      /** 锁屏状态推送（返回取消订阅函数） */
+      onChanged: (callback: (state: LockScreenSnapshot) => void) => () => void
     }
     providers: {
       getAll: () => Promise<LlmProviderConfig[]>

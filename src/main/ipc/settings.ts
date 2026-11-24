@@ -3,6 +3,7 @@ import logger from 'electron-log'
 import { settingsStore } from '../context'
 import { awaitInitialized } from '../database/instance'
 import { HarnessSettings, SystemSettings } from '../types/settings'
+import { getPublicLockSettings } from '../lock/service'
 import { syncTrayState } from '../tray'
 import { emitAppEvent } from '../plugins/app-events'
 import { APP_EVENT_WORKSPACE_CHANGED, type AppWorkspaceChangedPayload } from '../plugins/app-hooks'
@@ -20,41 +21,17 @@ function workspaceChangedPayload(): AppWorkspaceChangedPayload {
   }
 }
 
-/** 系统设置 + 锁屏 IPC */
+/** 系统设置 IPC（锁屏走专用通道，见 ipc/lock.ts：摘要不能经通用设置通道下发/改写） */
 export function registerSettingsIpc(): void {
-  ipcMain.handle('lock-screen-code', async () => {
-    try {
-      await awaitInitialized()
-      // 返回完整 lock 对象 { code, view }（修复：此前 `as string` 类型谎言,
-      // 运行时返回对象而类型声明与 preload d.ts 互相矛盾）
-      return settingsStore.get('lock')
-    } catch (error) {
-      console.error('Error in lock-screen-code:', error)
-      throw error
-    }
-  })
-
-  ipcMain.handle('lock-screen-view', async (_event, open: boolean) => {
-    try {
-      const lock = settingsStore.get('lock') as { code: string; view: boolean } | undefined
-      if (lock) {
-        lock.view = open
-        settingsStore.set('lock', lock)
-      }
-    } catch (error) {
-      console.error('Error in lock-screen-view:', error)
-      throw error
-    }
-  })
-
   ipcMain.handle('system-settings-get-all', async () => {
     try {
       await awaitInitialized()
       const all = settingsStore.store
-      // 不暴露 provider-keystore 内部数据给前端
+      // 不暴露 provider-keystore 内部数据给前端；
+      // 锁屏只给「开关 + 自动锁屏时长」——解锁码摘要留在主进程（见 ipc/lock.ts）
       return {
         ip: all.ip,
-        lock: all.lock,
+        lock: getPublicLockSettings(),
         graph: all.graph,
         harness: all.harness,
         defaultModelId: all.defaultModelId,
@@ -79,7 +56,6 @@ export function registerSettingsIpc(): void {
       // 或把 lock/harness/graph 整键写成非对象,下游读取无兜底）
       const ALLOWED_KEYS: Array<keyof SystemSettings> = [
         'ip',
-        'lock',
         'graph',
         'harness',
         'defaultModelId',
@@ -93,6 +69,13 @@ export function registerSettingsIpc(): void {
         'weatherData'
       ]
       const nextUpdates: Partial<SystemSettings> = { ...updates }
+
+      // 锁屏**不走通用设置通道**：走这里等于允许渲染层随意改 `lock.code`（原实现就是如此，
+      // 改密码时连原密码都不必知道）。开关/自动锁屏/改码各有专用通道（见 ipc/lock.ts）。
+      if ('lock' in nextUpdates) {
+        logger.warn('[Settings] Rejected lock settings through generic update channel')
+        delete nextUpdates.lock
+      }
 
       // 存储路径（记忆 / 插件 / 技能）变更：先把旧目录的数据迁到新目录，成功了才落设置。
       // 失败时抛错、设置保持原值——绝不出现「设置指向新目录，数据还在旧目录」。

@@ -262,8 +262,16 @@ export const enUSLattice: typeof zhCNLattice = {
     lastSync: 'Last sync {{time}}',
     never: 'Never synced',
     now: 'Sync now',
+    merge: {
+      button: 'Merge cloud data',
+      done: 'Merged',
+      added: '{{n}} new record(s)',
+      hint: 'Merge the cloud snapshots of all installed plugins into this device (local data is never overwritten: cloud-only rows are added and deduplicated by natural keys), then push the merged result back to the cloud.'
+    },
     syncing: 'Syncing…',
-    success: 'Sync complete: pushed {{pushed}}, pulled {{pulled}}',
+    success:
+      'Sync complete: pushed {{pushed}} plugin(s) / {{pushedRows}} record(s), pulled {{pulled}} plugin(s) / {{pulledRows}} record(s)',
+    rowsSummary: '↑{{pushed}} · ↓{{pulled}} records',
     conflicts: '{{n}} data conflicts',
     conflictsShort: '{{n}} conflicts',
     error: 'Sync failed: {{reason}}',
@@ -308,7 +316,7 @@ export const enUSLattice: typeof zhCNLattice = {
       button: 'Resolve conflicts ({{n}})',
       title: 'Resolve plugin data conflicts',
       description:
-        'The same plugin was changed on both this device and the cloud. Choose which side to keep for each conflict; the chosen side overwrites the other (never automatically).',
+        'The same plugin was changed on both this device and the cloud. Pick a side for each conflict, or merge both sides (plugins that support merging: local data is kept and cloud-only rows are added, deduplicated by natural keys).',
       localRev: 'Local rev {{n}}',
       serverRev: 'Cloud rev {{n}}',
       localData: 'Local data',
@@ -316,6 +324,7 @@ export const enUSLattice: typeof zhCNLattice = {
       noData: '(no data)',
       useLocal: 'Keep local (overwrite cloud)',
       useCloud: 'Keep cloud (overwrite local)',
+      merge: 'Merge both sides',
       done: 'Conflict resolved',
       empty: 'No unresolved conflicts'
     },

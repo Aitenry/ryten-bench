@@ -11,6 +11,7 @@ import { listContributions } from '../plugins/contributions'
 import { APP_RENDERER_MEMORY_DUMP, type AppHook } from '../plugins/app-hooks'
 import { dumpHarnessMemory } from '../system/harness'
 import { syncWindowBorderColor } from './dwm-border'
+import { attachLockScreen, isLockScreenLocked } from '../lock/service'
 
 /** 各窗口的最大化状态（主窗口与 mermaid 预览窗口共用；随窗口销毁清理） */
 const windowMaxStates = new Map<
@@ -187,6 +188,10 @@ function registerWindowControlIpcOnce(): void {
 
   // 应用菜单命令（自绘标题栏的「应用 / 编辑」下拉）：只做窗口内动作，不暴露任意 IPC
   ipcMain.on('window-reload', (event) => {
+    // 锁屏期间禁止刷新：刷新会重新加载页面，而「锁屏只是渲染层状态」的旧实现
+    // 一刷新就解锁了。现在 locked 在主进程，刷新后仍会锁回去；这里再堵一道，
+    // 避免刷新瞬间闪出内容（macOS 自绘标题栏的菜单仍可点到）。
+    if (isLockScreenLocked()) return
     winFromEvent(event)?.webContents.reload()
   })
   ipcMain.on('app-quit', () => {
@@ -269,6 +274,9 @@ export function createMainWindow(): void {
     }
   })
   setMainWindow(win)
+  // 锁屏状态机接管：页面每次加载完成补发锁屏状态（刷新/崩溃重建不会解锁）、
+  // 最小化/隐藏即锁、锁屏期间拦截刷新与开发者工具快捷键。
+  attachLockScreen(win)
 
   if (isWindows) {
     // 原生标题栏：去掉菜单栏；标题固定为应用名（页面 document.title 的回写不覆盖它）。
@@ -329,7 +337,9 @@ export function createMainWindow(): void {
       details.reason === 'launch-failed' ||
       details.reason === 'integrity-failure'
     ) {
-      logger.warn('[Window] Renderer process exited abnormally, recreating main window in 300ms to recover...')
+      logger.warn(
+        '[Window] Renderer process exited abnormally, recreating main window in 300ms to recover...'
+      )
       setTimeout(() => {
         // 应用正在退出时不再自愈（退出清理会关闭数据库，重建的窗口加载必失败）
         if (isQuittingNow()) return
@@ -414,7 +424,9 @@ export function createMainWindow(): void {
     const allowed = devOrigin ? url.startsWith(devOrigin) : url.startsWith('file://')
     if (!allowed) {
       event.preventDefault()
-      shell.openExternal(url).catch((err) => logger.warn('[Window] Failed to open external link:', err))
+      shell
+        .openExternal(url)
+        .catch((err) => logger.warn('[Window] Failed to open external link:', err))
     }
   })
 

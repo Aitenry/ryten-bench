@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
 import { settingsStore } from '../context'
+import { hasUserDataDirOverride } from '../environment/resolve'
 import type { HarnessSettings } from '../types/settings'
 import {
   STORAGE_DIR_NAMES,
@@ -28,6 +29,10 @@ import {
  * - Linux：AppImage 用 `.AppImage` 文件所在目录，deb 用可执行文件所在目录；
  * - macOS：`.app` 是签名包，**不往包里写**，直接用 `userData/data`（`~/Library/Application Support/...`）；
  * - 安装目录不可写（Program Files / /opt / 只读盘）时自动退回 `userData/data`。
+ *
+ * 注意这里的 `<userData>` 已经是**按环境分开的**（规则见 `src/main/environment/`）：
+ * 开发态是 `<appData>/ryten-bench-dev`、打包态是 `<appData>/ryten-bench`，
+ * 所以「安装目录不可写 → 退回 userData」这条兜底在两套环境里也不会互相踩。
  *
  * 这些路径只在**首次**装配时写入设置（`storageDefaultsApplied` 标记）。
  * 用户之后把某个路径清空（= 停用该能力）或改到别处，后续启动不会再把默认值塞回去；
@@ -192,11 +197,8 @@ export function discoverStorageLayoutOptions(): StorageLayoutOptions {
     appImagePath: process.env.APPIMAGE,
     userDataDir: app.getPath('userData'),
     // 自动化（test/probe-*.mjs）都用 `--user-data-dir=...` 隔离；这类进程不该动安装目录，
-    // 否则一次工装就可能把开发机仓库里的 data/ 搬到临时目录。
-    useInstallDirectory: !(
-      process.argv.some((arg) => arg.startsWith('--user-data-dir')) ||
-      app.commandLine?.hasSwitch?.('user-data-dir')
-    )
+    // 否则一次工装就可能把开发机仓库里的 data/ 搬到临时目录（判定逻辑与 environment 共用）。
+    useInstallDirectory: !hasUserDataDirOverride(process.argv, app.commandLine)
   }
 }
 

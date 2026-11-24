@@ -1,5 +1,6 @@
 import type React from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
+import type { LockUnlockResult } from './settings'
 
 /**
  * core 共享的组件 props / 上下文类型。
@@ -48,7 +49,8 @@ export interface TableOfContentsProps {
 /* ── Lock Screen ── */
 
 export interface LockScreenProps {
-  onUnlock: (password: string) => void
+  /** 提交 6 位解锁码；校验在主进程完成（加盐 scrypt + 失败退避），返回失败原因/剩余尝试次数 */
+  onUnlock: (password: string) => Promise<LockUnlockResult>
 }
 
 /* ── Sidebar ── */

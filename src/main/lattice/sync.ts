@@ -19,6 +19,7 @@ import type {
   LatticeInstallSummary,
   LatticeRemoteInstall,
   LatticeResolveConflictResult,
+  LatticeMergeDataResult,
   LatticeSyncAutoInstallFailure,
   LatticeSyncAutoInstallItem,
   LatticeSyncAutoInstallResult,
@@ -89,6 +90,14 @@ interface LatticeSyncCacheFile {
    * 一旦观察到某插件贡献过快照就记下来，卸载/停用后仍然记得。
    */
   snapshotPlugins?: Record<string, true>
+  /**
+   * 已经成功上传过「插件自述快照」的插件（**只**在带数据的 push 成功后标记）。
+   *
+   * 与 `snapshotPlugins`（口径标记，pull 导入时也会写）分开：首次从「设置文件口径」
+   * 切到「快照口径」时必须先上传一次整本数据，否则云端永远停在旧设置快照。
+   * 用这个标记判断「还没推过快照」，而不是 `snapshotPlugins`。
+   */
+  snapshotPushed?: Record<string, true>
   /**
    * 本机有**还没推上去**的数据改动（插件写库后经 `ctx.requestSync()` 标记）。
    *
@@ -184,6 +193,7 @@ function loadSyncCache(): LatticeSyncCacheFile {
   const revs: Record<string, number> = {}
   const sources: Record<string, LatticeSourceCacheEntry> = {}
   const snapshotPlugins: Record<string, true> = {}
+  const snapshotPushed: Record<string, true> = {}
   const dirty: Record<string, true> = {}
   const orphaned: LatticeSyncOrphanedItem[] = []
   const conflicts: LatticeSyncConflict[] = []
@@ -258,6 +268,12 @@ function loadSyncCache(): LatticeSyncCacheFile {
         if (value === true && pluginId.trim() !== '') dirty[pluginId] = true
       }
     }
+    const rawSnapshotPushed = asRecord(record?.snapshotPushed)
+    if (rawSnapshotPushed) {
+      for (const [pluginId, value] of Object.entries(rawSnapshotPushed)) {
+        if (value === true && pluginId.trim() !== '') snapshotPushed[pluginId] = true
+      }
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | null)?.code
     if (code !== 'ENOENT')
@@ -270,6 +286,7 @@ function loadSyncCache(): LatticeSyncCacheFile {
     ...(orphaned.length > 0 ? { orphaned } : {}),
     ...(Object.keys(sources).length > 0 ? { sources } : {}),
     ...(Object.keys(snapshotPlugins).length > 0 ? { snapshotPlugins } : {}),
+    ...(Object.keys(snapshotPushed).length > 0 ? { snapshotPushed } : {}),
     ...(Object.keys(dirty).length > 0 ? { dirty } : {})
   }
   return cache
@@ -312,6 +329,21 @@ function saveSyncCache(): void {
   }
 }
 
+/**
+ * 统计一份快照里的业务数据条数（插件提供 `count()` 时才有；失败按 0 计，不影响同步）。
+ */
+async function countSnapshotRows(pluginId: string, data: unknown): Promise<number> {
+  const counter = pluginSyncSnapshot(pluginId)?.count
+  if (!counter) return 0
+  try {
+    const value = Number(await counter(data))
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+  } catch (err) {
+    logger.warn(`[Lattice] ${pluginId}: count() failed, rows will show as 0:`, err)
+    return 0
+  }
+}
+
 /** 记下「这个插件的同步载荷由插件自己提供」——停用后仍要记得，避免回退到设置文件 */
 function markSnapshotPlugin(pluginId: string): void {
   const store = loadSyncCache()
@@ -323,6 +355,19 @@ function markSnapshotPlugin(pluginId: string): void {
 /** 该插件是否使用插件自述快照（曾经贡献过 `PLUGIN_SYNC_SNAPSHOT`） */
 function isSnapshotPlugin(pluginId: string): boolean {
   return loadSyncCache().snapshotPlugins?.[pluginId] === true
+}
+
+/** 该插件是否已经成功上传过一次自述快照（只有带数据的 push 成功才会置位） */
+function isSnapshotPushed(pluginId: string): boolean {
+  return loadSyncCache().snapshotPushed?.[pluginId] === true
+}
+
+/** 记下「某插件的自述快照已经成功上传过」——之后不带 dirty 的 push 无需再传整本数据 */
+function markSnapshotPushed(pluginId: string): void {
+  const store = loadSyncCache()
+  if (store.snapshotPushed?.[pluginId]) return
+  store.snapshotPushed = { ...(store.snapshotPushed ?? {}), [pluginId]: true }
+  saveSyncCache()
 }
 
 /** 插件写库后标记「本机有未推送的修改」（`ctx.requestSync()` 带插件 id 进来） */
@@ -641,6 +686,8 @@ export async function listLatticeSyncConflictsDetailed(): Promise<
       const item = items.find((i) => i.plugin_id === conflict.plugin_id)
       return {
         ...conflict,
+        // 没实现 merge() 的插件：界面不显示「合并两边」（点了也只能报不支持）
+        merge_supported: typeof pluginSyncSnapshot(conflict.plugin_id)?.merge === 'function',
         server_rev: item?.data_rev ?? conflict.server_rev,
         ...(item && item.data !== undefined ? { server_data: item.data } : {})
       }
@@ -660,9 +707,12 @@ export async function listLatticeSyncConflictsDetailed(): Promise<
  *
  * 两种选择都必须是用户显式点击（不静默覆盖），与 ⑤ §12.7 的冲突模型一致。
  */
+/** 冲突处理策略：用本机 / 用云端 / 两边合并 */
+export type LatticeConflictStrategy = 'local' | 'cloud' | 'merge'
+
 export async function resolveLatticeSyncConflict(
   pluginId: string,
-  strategy: 'local' | 'cloud'
+  strategy: LatticeConflictStrategy
 ): Promise<LatticeResolveConflictResult> {
   const id = String(pluginId ?? '').trim()
   if (!id) return { ok: false, error: '缺少插件 id' }
@@ -672,6 +722,8 @@ export async function resolveLatticeSyncConflict(
   const plugin = scanExternalPlugins().find((p) => p.id === id)
   if (!plugin) return { ok: false, error: '本机未安装这个插件，无法解决冲突' }
 
+  let summary: string | undefined
+  let mergedRows = 0
   try {
     if (strategy === 'local') {
       const dataInfo = await readPluginData(id)
@@ -689,6 +741,10 @@ export async function resolveLatticeSyncConflict(
         { method: 'PUT', body, query: { force: '1' } }
       )
       if (typeof record?.data_rev === 'number') store.revs[id] = record.data_rev
+      if (dataInfo) {
+        clearPluginDirty(id)
+        markSnapshotPushed(id)
+      }
     } else {
       const raw = await latticeRequest<unknown>('/v1/hub/installs', {
         query: { include_data: '1' }
@@ -697,28 +753,63 @@ export async function resolveLatticeSyncConflict(
       const items = Array.isArray(record.items) ? record.items.map(mapRemoteInstall) : []
       const item = items.find((i) => i.plugin_id === id)
       if (!item) return { ok: false, error: '云端没有这个插件的安装记录' }
-      if (item.data !== undefined && item.data !== null) {
-        if (!(await applyRemoteData(id, item.data, item.data_rev ?? conflict.server_rev))) {
-          return {
-            ok: false,
-            error: isSnapshotPlugin(id)
-              ? '本机插件未启用或快照导入失败，无法应用云端数据（启用插件后重试）'
-              : '写入本机插件数据失败'
+
+      if (strategy === 'merge') {
+        const merger = pluginSyncSnapshot(id)?.merge
+        if (!merger) {
+          return { ok: false, error: '当前插件版本不支持合并，请先把插件更新到带合并能力的版本' }
+        }
+        if (item.data === undefined || item.data === null) {
+          return { ok: false, error: '云端没有可合并的数据' }
+        }
+        // 合并会改本机数据：先标脏，保证合并期间/推送失败时后续 pull 不会覆盖合并结果
+        markLatticePluginDirty(id)
+        const merged = await merger(item.data)
+        summary = merged?.summary
+        mergedRows = Number(merged?.rows ?? 0) || 0
+        const dataInfo = await readPluginData(id)
+        if (!dataInfo) return { ok: false, error: '合并完成，但读取合并后的本机快照失败' }
+        const pushed = await latticeRequest<LatticeRemoteInstall>(
+          `/v1/hub/installs/${encodeURIComponent(id)}`,
+          {
+            method: 'PUT',
+            body: {
+              version: plugin.manifest.version,
+              enabled: isEnabledPlugin(id),
+              device_id: getLatticeDeviceId() ?? undefined,
+              data: dataInfo.data,
+              data_rev: item.data_rev ?? conflict.server_rev
+            },
+            query: { force: '1' }
+          }
+        )
+        if (typeof pushed?.data_rev === 'number') store.revs[id] = pushed.data_rev
+        clearPluginDirty(id)
+        markSnapshotPushed(id)
+      } else {
+        if (item.data !== undefined && item.data !== null) {
+          if (!(await applyRemoteData(id, item.data, item.data_rev ?? conflict.server_rev))) {
+            return {
+              ok: false,
+              error: isSnapshotPlugin(id)
+                ? '本机插件未启用或快照导入失败，无法应用云端数据（启用插件后重试）'
+                : '写入本机插件数据失败'
+            }
+          }
+        } else if (!isSnapshotPlugin(id)) {
+          // 云端没有数据：本机也清空，避免下次 push 又把旧数据推回去。
+          // 自述快照插件不走这条：`plugin-state/<id>.json` 是它的设置文件，删掉会丢设置。
+          try {
+            fs.rmSync(pluginStatePath(id), { force: true })
+          } catch (err) {
+            logger.warn(`[Lattice] Failed to clear local plugin data: ${id}`, err)
           }
         }
-      } else if (!isSnapshotPlugin(id)) {
-        // 云端没有数据：本机也清空，避免下次 push 又把旧数据推回去。
-        // 自述快照插件不走这条：`plugin-state/<id>.json` 是它的设置文件，删掉会丢设置。
-        try {
-          fs.rmSync(pluginStatePath(id), { force: true })
-        } catch (err) {
-          logger.warn(`[Lattice] Failed to clear local plugin data: ${id}`, err)
-        }
+        store.revs[id] = item.data_rev ?? conflict.server_rev
       }
-      store.revs[id] = item.data_rev ?? conflict.server_rev
     }
     store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
-    // 两条路（用本机 / 用云端）都把本机与云端对齐了：不再有未同步修改
+    // 三条路（用本机 / 用云端 / 合并）都把本机与云端对齐了：不再有未同步修改
     clearPluginDirty(id)
     saveSyncCache()
     try {
@@ -727,9 +818,15 @@ export async function resolveLatticeSyncConflict(
       logger.warn('[Lattice] Error in state callback after conflict resolution:', err)
     }
     logger.info(
-      `[Lattice] Conflict resolved: ${id} -> ${strategy === 'local' ? 'use local' : 'use cloud'}`
+      `[Lattice] Conflict resolved: ${id} -> ${
+        strategy === 'local' ? 'use local' : strategy === 'cloud' ? 'use cloud' : 'merge'
+      }${summary ? ` (${summary})` : ''}`
     )
-    return { ok: true }
+    return {
+      ok: true,
+      ...(summary ? { summary } : {}),
+      ...(mergedRows > 0 ? { rows: mergedRows } : {})
+    }
   } catch (err) {
     const message = latticeErrorMessage(err)
     logger.warn(`[Lattice] Failed to resolve conflict: ${id} -> ${strategy}: ${message}`)
@@ -738,6 +835,94 @@ export async function resolveLatticeSyncConflict(
 }
 
 // ---------- push / pull ----------
+
+/**
+ * 「合并云端数据」：把每个**已安装且支持合并**的插件的云端快照并进本机，再把合并后的
+ * 本机快照强制推回云端。
+ *
+ * 语义是**非破坏性并集**：本机数据一条不丢，云端独有的行按插件自己的自然键去重后加进来；
+ * 不依赖「先有冲突」——用户可以在同步详情里直接点，用来把两台各自记了一半账的机器并起来。
+ *
+ * 失败按插件隔离：某个插件失败不影响其它插件；已成功的插件仍会推回云端。
+ */
+export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResult> {
+  if (!isLatticeLoggedIn()) return { ok: false, error: '未登录插件中心，请先登录' }
+  const guard = profileSyncGuard()
+  if (guard) return { ok: false, error: guard }
+
+  try {
+    const raw = await latticeRequest<unknown>('/v1/hub/installs', {
+      query: { include_data: '1' }
+    })
+    const record = asRecord(raw) ?? {}
+    const items = Array.isArray(record.items) ? record.items.map(mapRemoteInstall) : []
+    const store = loadSyncCache()
+    const summaries: string[] = []
+    const failures: string[] = []
+    let merged = 0
+    let mergedRows = 0
+
+    for (const plugin of scanExternalPlugins()) {
+      const contribution = pluginSyncSnapshot(plugin.id)
+      if (!contribution?.merge) continue
+      const item = items.find((i) => i.plugin_id === plugin.id)
+      if (!item || item.data === undefined || item.data === null) continue
+      try {
+        // 先标脏：合并过程中/推送失败时，后续 pull 不得覆盖合并结果
+        markLatticePluginDirty(plugin.id)
+        const result = await contribution.merge(item.data)
+        const dataInfo = await readPluginData(plugin.id)
+        if (!dataInfo) throw new Error('读取合并后的本机快照失败')
+        const pushed = await latticeRequest<LatticeRemoteInstall>(
+          `/v1/hub/installs/${encodeURIComponent(plugin.id)}`,
+          {
+            method: 'PUT',
+            body: {
+              version: plugin.manifest.version,
+              enabled: isEnabledPlugin(plugin.id),
+              device_id: getLatticeDeviceId() ?? undefined,
+              data: dataInfo.data,
+              data_rev: item.data_rev ?? 0
+            },
+            query: { force: '1' }
+          }
+        )
+        if (typeof pushed?.data_rev === 'number') store.revs[plugin.id] = pushed.data_rev
+        clearPluginDirty(plugin.id)
+        markSnapshotPushed(plugin.id)
+        store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== plugin.id)
+        merged += 1
+        mergedRows += Number(result?.rows ?? 0) || 0
+        summaries.push(`${plugin.manifest.name || plugin.id}: ${result?.summary ?? '已合并'}`)
+      } catch (err) {
+        failures.push(`${plugin.id}: ${latticeErrorMessage(err)}`)
+        logger.warn(`[Lattice] Merge cloud data failed for ${plugin.id}:`, err)
+      }
+    }
+
+    saveSyncCache()
+    if (merged > 0) {
+      try {
+        hooks.onStateChanged?.()
+      } catch (err) {
+        logger.warn('[Lattice] Error in state callback after merge:', err)
+      }
+    }
+    logger.info(`[Lattice] Merge cloud data: ${merged} plugin(s) merged`)
+    if (merged === 0 && failures.length === 0 && summaries.length === 0) {
+      return { ok: false, error: '没有可合并的插件数据（未安装、插件不支持合并或云端没有数据）' }
+    }
+    return {
+      ok: failures.length === 0,
+      merged,
+      rows: mergedRows,
+      summaries,
+      ...(failures.length > 0 ? { error: failures.join('；') } : {})
+    }
+  } catch (err) {
+    return { ok: false, error: latticeErrorMessage(err) }
+  }
+}
 
 /** push 遇到「平台已删除」类错误（404/410） */
 function isOrphanedPushError(err: unknown): err is LatticeApiError {
@@ -753,12 +938,15 @@ function isOrphanedPushError(err: unknown): err is LatticeApiError {
  */
 async function pushInstallRecords(): Promise<{
   pushed: number
+  /** 这次真正上传的业务数据条数（插件 count() 统计） */
+  rows: number
   conflicts: number
   orphaned: LatticeSyncOrphanedItem[]
 }> {
   const store = loadSyncCache()
   const deviceId = getLatticeDeviceId() ?? undefined
   let pushed = 0
+  let rows = 0
   let conflicts = 0
   for (const plugin of scanExternalPlugins()) {
     // 自述快照插件只在「本机有未同步修改」「还没推过」或「第一次从文件口径切到快照口径」时
@@ -766,9 +954,13 @@ async function pushInstallRecords(): Promise<{
     const contribution = pluginSyncSnapshot(plugin.id)
     const snapshotMode = contribution !== null || isSnapshotPlugin(plugin.id)
     const firstPush = !(plugin.id in store.revs)
-    const firstSnapshotPush = contribution !== null && !isSnapshotPlugin(plugin.id)
+    // 注意用 snapshotPushed（只在带数据 push 成功后置位），不能用 snapshotPlugins：
+    // pull 导入（哪怕是旧的「只有设置」快照）也会把 snapshotPlugins 置位，用它判断会让
+    // 「升级后首次上传整本账」永远不触发。
+    const firstSnapshotPush = contribution !== null && !isSnapshotPushed(plugin.id)
     const withData = !snapshotMode || firstPush || firstSnapshotPush || isPluginDirty(plugin.id)
     const dataInfo = withData ? await readPluginData(plugin.id) : null
+    const uploadedRows = dataInfo ? await countSnapshotRows(plugin.id, dataInfo.data) : 0
     const body: LatticeInstallPutBody = {
       version: plugin.manifest.version,
       enabled: isEnabledPlugin(plugin.id),
@@ -784,8 +976,12 @@ async function pushInstallRecords(): Promise<{
         { method: 'PUT', body }
       )
       if (typeof record?.data_rev === 'number') store.revs[plugin.id] = record.data_rev
-      // 数据已随这次 push 上传 → 本机不再有「未同步修改」
-      if (dataInfo) clearPluginDirty(plugin.id)
+      // 数据已随这次 push 上传 → 本机不再有「未同步修改」，且「首次快照」已完成
+      if (dataInfo) {
+        clearPluginDirty(plugin.id)
+        markSnapshotPushed(plugin.id)
+        rows += uploadedRows
+      }
       // 成功推送说明该插件已无冲突（例如用户选了"用本机覆盖"后重试成功）
       if (store.conflicts?.some((c) => c.plugin_id === plugin.id)) {
         store.conflicts = store.conflicts.filter((c) => c.plugin_id !== plugin.id)
@@ -836,12 +1032,12 @@ async function pushInstallRecords(): Promise<{
     }
   }
   saveSyncCache()
-  return { pushed, conflicts, orphaned: listLatticeSyncOrphaned() }
+  return { pushed, rows, conflicts, orphaned: listLatticeSyncOrphaned() }
 }
 
 /** 自动补齐一个插件的单向结果（成功带恢复信息，失败带可读原因） */
 type AutoInstallOutcome =
-  | { ok: true; item: LatticeSyncAutoInstallItem }
+  | { ok: true; item: LatticeSyncAutoInstallItem; rows: number }
   | { ok: false; failure: LatticeSyncAutoInstallFailure }
 
 /**
@@ -892,8 +1088,10 @@ async function autoInstallMissingPlugin(
     }
     // 数据：补齐后本机没有数据，沿用 pull 口径应用云端 rev 更大的数据
     const serverRev = item.data_rev ?? 0
+    let dataRows = 0
     if (serverRev > (store.revs[pluginId] ?? 0)) {
       if (item.data !== undefined && item.data !== null) {
+        dataRows = await countSnapshotRows(pluginId, item.data)
         if (await applyRemoteData(pluginId, item.data, serverRev)) store.revs[pluginId] = serverRev
       } else {
         store.revs[pluginId] = serverRev
@@ -909,7 +1107,8 @@ async function autoInstallMissingPlugin(
         version: result.version,
         ...(result.sourcePath ? { sourcePath: result.sourcePath } : {}),
         ...(result.sourceError ? { sourceError: result.sourceError } : {})
-      }
+      },
+      rows: dataRows
     }
   } catch (err) {
     const message = latticeErrorMessage(err)
@@ -930,6 +1129,8 @@ async function autoInstallMissingPlugin(
  */
 async function pullInstallRecords(installMissing: boolean): Promise<{
   pulled: number
+  /** 这次真正应用下来的业务数据条数（插件 count() 统计） */
+  rows: number
   pending: string[]
   autoInstall: LatticeSyncAutoInstallResult
   orphaned: LatticeSyncOrphanedItem[]
@@ -945,6 +1146,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
   const appliedEnabled: string[] = []
   const autoInstall: LatticeSyncAutoInstallResult = { attempted: 0, installed: [], failed: [] }
   let pulled = 0
+  let rows = 0
 
   for (const item of items) {
     if (!item.plugin_id) continue
@@ -981,6 +1183,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
         const outcome = await autoInstallMissingPlugin(item, store)
         if (outcome.ok) {
           autoInstall.installed.push(outcome.item)
+          rows += outcome.rows
           localIds.add(item.plugin_id)
         } else {
           autoInstall.failed.push(outcome.failure)
@@ -1007,18 +1210,34 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
       }
     }
 
-    // ② 数据：只应用更新的版本；本机有未推送修改时不覆盖（记冲突，让用户选）
+    // ② 数据：只应用更新的版本；本机有未推送修改/从未推过快照且本机有数据时不覆盖
     const serverRev = item.data_rev ?? 0
     const localRev = store.revs[item.plugin_id] ?? 0
     if (serverRev > localRev) {
-      if (isPluginDirty(item.plugin_id)) {
-        // 静默导入会丢掉本机未同步的编辑 → 交给「解决冲突」显式选择
+      let protectLocal = isPluginDirty(item.plugin_id)
+      if (!protectLocal && !isSnapshotPushed(item.plugin_id)) {
+        const contribution = pluginSyncSnapshot(item.plugin_id)
+        if (contribution?.hasData) {
+          try {
+            protectLocal = (await contribution.hasData()) === true
+          } catch (err) {
+            logger.warn(
+              `[Lattice] ${item.plugin_id}: hasData() failed, treating local as empty:`,
+              err
+            )
+          }
+        }
+      }
+      if (protectLocal) {
+        // 静默导入会丢掉本机未同步的编辑/从未上传过的整本账 → 交给「解决冲突」显式选择（含合并）
         recordPullConflict(item.plugin_id, localRev, serverRev)
       } else if (item.data !== undefined && item.data !== null) {
+        const cloudRows = await countSnapshotRows(item.plugin_id, item.data)
         if (await applyRemoteData(item.plugin_id, item.data, serverRev)) {
           store.revs[item.plugin_id] = serverRev
           clearPluginDirty(item.plugin_id)
           pulled += 1
+          rows += cloudRows
         }
       } else {
         store.revs[item.plugin_id] = serverRev
@@ -1047,7 +1266,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
     }
   }
   saveSyncCache()
-  return { pulled, pending, autoInstall, orphaned: listLatticeSyncOrphaned() }
+  return { pulled, rows, pending, autoInstall, orphaned: listLatticeSyncOrphaned() }
 }
 
 function finishSync(result: LatticeSyncResult): LatticeSyncResult {
@@ -1072,7 +1291,15 @@ async function runSync(
   direction: LatticeSyncDirection,
   options: LatticeSyncOptions = {}
 ): Promise<LatticeSyncResult> {
-  const result: LatticeSyncResult = { at: Date.now(), pushed: 0, pulled: 0, conflicts: 0 }
+  const result: LatticeSyncResult = {
+    at: Date.now(),
+    pushed: 0,
+    pulled: 0,
+    pushedRows: 0,
+    pulledRows: 0,
+    conflicts: 0,
+    ...(options.silent ? { silent: true } : {})
+  }
   if (!isLatticeLoggedIn()) {
     result.error = '未登录插件中心，请先登录'
     return finishSync(result)
@@ -1096,6 +1323,7 @@ async function runSync(
     if (direction === 'pull' || direction === 'both') {
       const pulled = await pullInstallRecords(installMissing)
       result.pulled = pulled.pulled
+      result.pulledRows = pulled.rows
       if (pulled.pending.length > 0) result.pending = pulled.pending
       if (pulled.autoInstall.attempted > 0) result.autoInstall = pulled.autoInstall
       if (pulled.orphaned.length > 0) result.orphaned = pulled.orphaned
@@ -1103,6 +1331,7 @@ async function runSync(
     if (direction === 'push' || direction === 'both') {
       const pushed = await pushInstallRecords()
       result.pushed = pushed.pushed
+      result.pushedRows = pushed.rows
       result.conflicts = pushed.conflicts
       if (pushed.orphaned.length > 0) result.orphaned = pushed.orphaned
     }
@@ -1228,6 +1457,14 @@ function forgetLocalPluginDataRev(pluginId: string): void {
   const hadRev = id in store.revs
   if (hadRev) delete store.revs[id]
   if (store.dirty?.[id]) clearPluginDirty(id)
+  // 本机数据被清掉后，下一次有数据时仍需完整上传一次
+  if (store.snapshotPushed?.[id]) {
+    const next = { ...store.snapshotPushed }
+    delete next[id]
+    if (Object.keys(next).length > 0) store.snapshotPushed = next
+    else delete store.snapshotPushed
+    saveSyncCache()
+  }
   const hadConflict = (store.conflicts ?? []).some((c) => c.plugin_id === id)
   if (hadConflict) store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
   if (!hadRev && !hadConflict) return

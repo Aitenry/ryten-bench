@@ -121,6 +121,23 @@ export interface PluginSyncSnapshotContribution {
   export: () => unknown | Promise<unknown>
   /** 应用云端快照（**替换 + 幂等**；未实现时宿主拒绝把快照写进 plugin-state） */
   import?: (data: unknown) => void | Promise<void>
+  /**
+   * 合并：把云端快照并入本机（不覆盖本机独有数据，按插件的自然键去重）。
+   *
+   * 返回摘要文本供界面提示；宿主合并成功后会再把「合并后的本机快照」强制推回云端，
+   * 所以插件只需要保证本地是「两边并集」，不必自己调网络。
+   */
+  merge?: (data: unknown) => void | Promise<{ summary?: string; rows?: number }>
+  /**
+   * 本机是否已有业务数据（可选；宿主用它判断「还没推过快照、本机又有数据」时
+   * 不能直接拿云端覆盖，必须先记冲突让用户选择/合并）。
+   */
+  hasData?: () => boolean | Promise<boolean>
+  /**
+   * 统计一份快照里有多少条业务数据（可选；用于同步结果/界面展示「拉取/推送了多少条」）。
+   * 返回数字，插件自己决定怎么算（例如十张表行数之和）。
+   */
+  count?: (data: unknown) => number | Promise<number>
   /** 说明文字，仅用于日志/排障 */
   label?: string
 }
@@ -137,6 +154,9 @@ export function pluginSyncSnapshot(id: string): PluginSyncSnapshotContribution |
   return {
     export: value.export,
     ...(typeof value.import === 'function' ? { import: value.import } : {}),
+    ...(typeof value.merge === 'function' ? { merge: value.merge } : {}),
+    ...(typeof value.hasData === 'function' ? { hasData: value.hasData } : {}),
+    ...(typeof value.count === 'function' ? { count: value.count } : {}),
     ...(typeof value.label === 'string' ? { label: value.label } : {})
   }
 }

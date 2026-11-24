@@ -114,14 +114,23 @@ export const enUSSettings: typeof zhCNSettings = {
     },
     lock: {
       sectionTitle: 'Lock screen',
+      sectionDescription: 'Press Esc to lock now; the other entry points are configured below',
       enableTitle: 'Enable lock screen',
-      enableDescription: 'Turning this off disables the lock screen entirely',
+      enableDescription: 'When off, Esc, auto-lock and lock-on-minimize are all disabled',
+      autoLockTitle: 'Auto-lock',
+      autoLockDescription:
+        'Locks once the system has been idle for this long; minimizing or hiding to the tray also locks immediately',
+      autoLockOff: 'Never',
+      autoLockMinutes: '{{minutes}} min',
       passwordTitle: 'Lock screen passcode',
-      passwordDescription: 'A 6-digit numeric passcode; changing it invalidates the old one',
-      changePassword: 'Change passcode'
+      passwordDescription: 'Six digits; only a salted hash is stored and the UI never sees it',
+      changePassword: 'Change passcode',
+      defaultCodeWarning:
+        'Still using the default passcode 123456 — that is as good as no lock. Change it now.'
     },
     passwordModal: {
       title: 'Change lock screen passcode',
+      setTitle: 'Set lock screen passcode',
       oldPassword: 'Current passcode',
       newPassword: 'New passcode',
       confirmPassword: 'Confirm new passcode',
@@ -130,7 +139,9 @@ export const enUSSettings: typeof zhCNSettings = {
       confirmPasswordRequired: 'Please enter the new passcode again',
       sixDigits: 'The passcode must be exactly 6 digits',
       mismatch: 'The two passcodes do not match',
-      wrongOldPassword: 'The current passcode is incorrect'
+      wrongOldPassword: 'The current passcode is incorrect',
+      changeFailed: 'Could not change the passcode, try again later',
+      changeSuccess: 'Lock screen passcode updated'
     }
   }
 }

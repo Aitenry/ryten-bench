@@ -45,7 +45,8 @@ const CHAT_DIR_NAME = 'chat'
  * `app.getPath('userData')` 在各平台分别是
  * `%APPDATA%\ryten-bench`（Win）/ `~/Library/Application Support/ryten-bench`（mac）/
  * `~/.config/ryten-bench`（Linux）——本函数是这条规则的**唯一**出口，别处一律用它，
- * 免得渲染层/工装各拼一份路径。
+ * 免得渲染层/工装各拼一份路径。开发态目录名是 `ryten-bench-dev`（规则见
+ * `src/main/environment/`），所以 dev 的对话目录不会和打包版混在一起。
  */
 export function chatWorkspaceRoot(): string {
   return path.join(app.getPath('userData'), CHAT_DIR_NAME)

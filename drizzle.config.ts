@@ -25,6 +25,9 @@ import { join } from 'path'
  * 因此默认给一个**独立的草稿目录**；确需连真实库时显式传 DRIZZLE_DB_DIR，并先退出应用：
  *
  *   DRIZZLE_DB_DIR="C:\Users\<you>\AppData\Roaming\ryten-bench\RytenBenchDB" pnpm drizzle-kit studio
+ *
+ * 注意目录随环境不同（见 `src/main/environment/`）：发布版是 `...\Roaming\ryten-bench\RytenBenchDB`，
+ * `pnpm dev` / `electron .` 写的是 `...\Roaming\ryten-bench-dev\RytenBenchDB`，别连错那一个。
  */
 export default defineConfig({
   dialect: 'postgresql',

@@ -28,6 +28,7 @@ import {
   type LatticeLoginInput,
   type LatticeLoginResult,
   type LatticeLocalSourcePathResult,
+  type LatticeMergeDataResult,
   type LatticeOpenSourceResult,
   type LatticeRepublishInput,
   type LatticeRepublishResult,
@@ -641,10 +642,19 @@ export function registerLatticeIpc(): void {
       strategyRaw: unknown
     ): Promise<LatticeResolveConflictResult> => {
       const pluginId = typeof pluginIdRaw === 'string' ? pluginIdRaw.trim() : ''
-      const strategy = strategyRaw === 'local' || strategyRaw === 'cloud' ? strategyRaw : null
+      const strategy =
+        strategyRaw === 'local' || strategyRaw === 'cloud' || strategyRaw === 'merge'
+          ? strategyRaw
+          : null
       if (!pluginId || !strategy) return { ok: false, error: '参数不合法' }
       return await sync.resolveLatticeSyncConflict(pluginId, strategy)
     }
+  )
+
+  /** 把每个已安装且支持合并的插件的云端快照并进本机（非破坏性），再推回云端 */
+  ipcMain.handle(
+    LATTICE_IPC.mergeData,
+    async (): Promise<LatticeMergeDataResult> => await sync.mergeAllLatticePluginData()
   )
 
   // 通道注册完再初始化：启动恢复/后台 pull 不会跑到未注册的 IPC 上

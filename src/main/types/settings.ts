@@ -1,6 +1,51 @@
+/**
+ * 锁屏设置（落盘形态）。
+ *
+ * `code` 是**解锁码摘要**，只在主进程使用：渲染层通过 `lock-screen-*` 通道拿到的是
+ * `LockScreenSnapshot`（只有 hasCode，没有摘要本身），因此无法离线爆破
+ * （见 `src/main/lock/credentials.ts`）。
+ *
+ * `code` 仍保持可选是为了兼容「升级前从未初始化过锁屏」的旧设置文件；读不到就按未设置处理。
+ */
 export interface Lock {
-  code: string
+  /** `scrypt$N$r$p$salt$hash`；旧版本是 6 位数字的裸 MD5，首次校验成功后自动升级 */
+  code?: string
+  /** 是否启用锁屏（Esc 手动锁屏 / 空闲自动锁屏） */
   view: boolean
+  /** 系统空闲多少分钟后自动锁屏；0 = 关闭，未设置按 5 分钟（见 lock/constants.ts） */
+  autoLockMinutes?: number
+}
+
+/** 渲染层可读的锁屏快照（**绝不含**解锁码摘要） */
+export interface LockScreenSnapshot {
+  /** 设置里的「启用锁屏」开关（只表示用户意愿，不表示当前已锁） */
+  enabled: boolean
+  /** 是否已经设置过解锁码（没设置时不允许锁屏，否则会把人锁在进不去的界面里） */
+  hasCode: boolean
+  /** 是否仍在使用出厂默认码 123456（设置页据此提示尽快修改） */
+  usingDefaultCode: boolean
+  /** 自动锁屏时长（分钟），0 = 关闭；取值见 lock/constants.ts */
+  autoLockMinutes: number
+  /** 当前是否处于锁屏状态（由主进程持有，刷新/崩溃重建窗口都不会丢） */
+  locked: boolean
+}
+
+export type LockUnlockFailure = 'invalid' | 'throttled' | 'unavailable'
+
+export interface LockUnlockResult {
+  ok: boolean
+  reason?: LockUnlockFailure
+  /** reason=throttled 时还要等多久（毫秒） */
+  retryAfterMs?: number
+  /** 本次失败后还剩几次「不等待」的尝试机会 */
+  attemptsLeft?: number
+}
+
+export type LockCodeChangeFailure = 'wrong-old' | 'invalid-new' | 'unavailable'
+
+export interface LockCodeChangeResult {
+  ok: boolean
+  reason?: LockCodeChangeFailure
 }
 
 export interface GraphSettings {

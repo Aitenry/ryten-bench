@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import logger from 'electron-log'
 import * as client from './client'
 import * as hub from './hub'
@@ -57,6 +57,8 @@ export function getLatticeStatus(): LatticeStatus {
       at: lastSync.at,
       pushed: lastSync.pushed,
       pulled: lastSync.pulled,
+      pushedRows: lastSync.pushedRows ?? 0,
+      pulledRows: lastSync.pulledRows ?? 0,
       conflicts: lastSync.conflicts,
       autoInstalled: lastSync.autoInstall?.installed.length ?? 0,
       autoInstallFailed: lastSync.autoInstall?.failed.length ?? 0,
@@ -180,5 +182,32 @@ export function initLattice(): void {
     sync.scheduleLatticePush()
   })
 
+  initAutoPull()
   void resumeLatticeSession('startup')
+}
+
+/** 像 IM 一样「自动拉取」：登录期间每 60s pull 一次，窗口重新聚焦时也补一次（5s 防抖） */
+const AUTO_PULL_INTERVAL_MS = 60_000
+const FOCUS_PULL_DEBOUNCE_MS = 5_000
+let autoPullTimer: NodeJS.Timeout | null = null
+let focusPullTimer: NodeJS.Timeout | null = null
+
+function pullIfLoggedIn(): void {
+  if (!session.hasLatticeSession()) return
+  // 后台自动 pull：没有数据变化时不弹提示（silent），避免每 60s 打扰
+  void sync.syncLattice({ direction: 'pull', silent: true })
+}
+
+function initAutoPull(): void {
+  if (autoPullTimer) return
+  autoPullTimer = setInterval(pullIfLoggedIn, AUTO_PULL_INTERVAL_MS)
+  autoPullTimer.unref?.()
+  app.on('browser-window-focus', () => {
+    if (!session.hasLatticeSession() || focusPullTimer) return
+    focusPullTimer = setTimeout(() => {
+      focusPullTimer = null
+      pullIfLoggedIn()
+    }, FOCUS_PULL_DEBOUNCE_MS)
+    focusPullTimer.unref?.()
+  })
 }

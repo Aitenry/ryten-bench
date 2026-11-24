@@ -39,11 +39,16 @@ export const zhCNShell = {
   },
   unlock: {
     title: '系统已锁屏',
-    prompt: '请输入密码解锁',
-    hint: '输入 6 位数字解锁',
+    prompt: '输入 6 位锁屏密码继续',
+    hint: '输入 6 位数字 · 输满自动解锁',
     success: '解锁成功',
-    failed: '解锁密码错误',
-    verifyFailed: '解锁验证失败'
+    failed: '密码错误，请重新输入',
+    attemptsLeft: '密码错误，还可尝试 {{n}} 次',
+    throttled: '尝试过于频繁，请 {{seconds}} 秒后重试',
+    unavailable: '锁屏码不可用，请重启应用后再试',
+    verifying: '正在验证…',
+    verifyFailed: '解锁验证失败，请重试',
+    privacyNote: '密码仅在本机校验，不会上传到任何服务器'
   },
   errorBoundary: {
     eyebrow: 'RUNTIME ERROR',

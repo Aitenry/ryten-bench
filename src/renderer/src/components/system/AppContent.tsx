@@ -1,94 +1,64 @@
 // AppContent.tsx
-import React, { useState, useEffect, useCallback, useSyncExternalStore } from 'react'
+import React, { useEffect, useCallback } from 'react'
 import AppShell from '@renderer/components/system/shell/AppShell'
 import LockScreen from '@renderer/components/system/LockScreen'
-import CryptoJS from 'crypto-js'
-import { Window } from '../../../resource/types/window'
 import { MessageProvider } from '@renderer/providers/MessageProvider'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import {
-  getLockScreenState,
-  setLockScreenState,
-  subscribeLockScreenState
+  installLockScreenBridge,
+  requestLock,
+  requestUnlock,
+  useLockScreenState
 } from './lock-screen-state'
+import type { LockUnlockResult } from '@renderer/types/settings'
 
+/**
+ * 应用内容层：外壳 + 锁屏。
+ *
+ * 锁屏状态不再由这里的 `useState` 持有（旧实现刷新页面就解锁）：
+ * `locked` 来自主进程快照（`lock-screen-state.ts`），验证/退避/自动锁屏也在主进程
+ * （`src/main/lock/service.ts`）。这里只负责两件事：
+ * - Esc 请求锁屏；
+ * - 把解锁码转交主进程校验，并把失败结果交还锁屏界面展示。
+ */
 const AppContent: React.FC = () => {
   const { viewMessage } = useMessage()
   const { t } = useTranslation()
-  const [isLocked, setIsLocked] = useState(false)
-  /**
-   * 锁屏开关 / 解锁码来自**模块级共享快照**（见 lock-screen-state.ts）：
-   * 设置页打开「启用锁屏」时立刻生效，不必等外壳重挂（那正是「开关打开后按 ESC 没反应」的根因）。
-   */
-  const { enabled: lockEnabled, code: lockCode } = useSyncExternalStore(
-    subscribeLockScreenState,
-    getLockScreenState
-  )
+  const { enabled, hasCode, locked } = useLockScreenState()
 
   /**
-   * 挂载时从主进程读一次**真源**（electron-store 的 `lock`）；此后与设置页通过共享快照同步。
-   * 读失败按「不启用」兜底：解锁码未知时锁屏等于把人锁在进不去的界面里。
+   * 挂主进程的锁屏推送 + 首次拉取。StrictMode 下会挂载两次，桥内部按引用计数
+   * 只保留一个 IPC 监听，不会重复处理事件。
    */
-  useEffect(() => {
-    let cancelled = false
-    const initializeLockScreen = async (): Promise<void> => {
-      try {
-        const result = await (window as unknown as Window).api.setting.getLockScreenCode()
-        if (cancelled) return
-        setLockScreenState({ enabled: result?.view ?? false, code: result?.code ?? null })
-      } catch (error) {
-        console.error('Failed to initialize lock screen:', error)
-        if (!cancelled) setLockScreenState({ enabled: false })
-      }
-    }
+  useEffect(() => installLockScreenBridge(), [])
 
-    initializeLockScreen().then()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  // Update lock screen status locally (runtime state only)
-  const updateLockStatus = useCallback((locked: boolean): void => {
-    setIsLocked(locked)
-  }, [])
-
-  // Handle lock screen action
+  // Esc 手动锁屏：未启用 / 还没设置解锁码时主进程不会锁（宁可 Esc 没反应，也不能锁出
+  // 一个进不去的界面）
   const handleLockScreen = useCallback((): void => {
-    // 开关关着、或还没拿到解锁码时不锁屏（宁可 ESC 没反应，也不能锁出一个进不去的界面）
-    if (!lockEnabled || !lockCode) return
-    updateLockStatus(true)
-  }, [updateLockStatus, lockEnabled, lockCode])
+    if (!enabled || !hasCode) return
+    void requestLock().catch((error) => {
+      console.error('[lock-screen] Failed to request lock:', error)
+    })
+  }, [enabled, hasCode])
 
-  // Verify password against stored hash
-  const verifyPassword = async (inputPassword: string): Promise<boolean> => {
-    if (!lockCode) return false
-
-    const encryptedPassword = CryptoJS.MD5(inputPassword).toString()
-    return encryptedPassword === lockCode
-  }
-
-  // Handle unlock process
-  const handleUnlock = async (password: string): Promise<void> => {
-    try {
-      const isValid = await verifyPassword(password)
-
-      if (isValid) {
-        updateLockStatus(false)
-        viewMessage('unlock-success', 'success', t('shell.unlock.success'))
-      } else {
-        viewMessage('unlock-error', 'error', t('shell.unlock.failed'))
+  // 解锁：校验在主进程（scrypt + 失败退避）；失败原因交给 LockScreen 就地展示
+  const handleUnlock = useCallback(
+    async (password: string): Promise<LockUnlockResult> => {
+      try {
+        const result = await requestUnlock(password)
+        if (result.ok) {
+          viewMessage('unlock-success', 'success', t('shell.unlock.success'))
+        }
+        return result
+      } catch (error) {
+        console.error('[lock-screen] Unlock verification failed:', error)
+        viewMessage('unlock-error', 'error', t('shell.unlock.verifyFailed'))
+        return { ok: false, reason: 'unavailable' }
       }
-    } catch (error) {
-      console.error('Unlock verification failed:', error)
-      viewMessage('unlock-error', 'error', t('shell.unlock.verifyFailed'))
-    }
-  }
-
-  // 侧栏高亮不再需要「与路由同步」的 effect：current 本身就是 location 的派生值
-  // （此前是 useState + 同步 effect，重挂后会丢状态）
+    },
+    [viewMessage, t]
+  )
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent): void => {
@@ -108,7 +78,7 @@ const AppContent: React.FC = () => {
   return (
     <MessageProvider>
       <AppShell />
-      {isLocked && <LockScreen onUnlock={handleUnlock} />}
+      {locked && <LockScreen onUnlock={handleUnlock} />}
     </MessageProvider>
   )
 }
