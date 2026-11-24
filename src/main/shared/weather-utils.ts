@@ -41,29 +41,26 @@ export async function geocodeLocation(
   // 结果会作为地名渲染在工具卡片上，所以 language 跟随界面语言而不是写死 zh
   const lang = getMainLanguage() === 'en-US' ? 'en' : 'zh'
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=5&language=${lang}&format=json`
-  try {
-    const res = await fetch(url)
-    if (!res.ok) return []
-    const json = await res.json()
-    if (!json.results?.length) return []
-    return json.results.map(
-      (r: {
-        latitude: number
-        longitude: number
-        name: string
-        admin1?: string
-        country: string
-      }) => ({
-        lat: r.latitude,
-        lon: r.longitude,
-        name: r.name,
-        admin1: r.admin1,
-        country: r.country
-      })
-    )
-  } catch {
-    return []
-  }
+  // 网络/HTTP 错误交给调用方转成可读文案；只有「确实没匹配」才返回空数组
+  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) })
+  if (!res.ok) throw new Error(`geocoding HTTP ${res.status}`)
+  const json = await res.json()
+  if (!json.results?.length) return []
+  return json.results.map(
+    (r: {
+      latitude: number
+      longitude: number
+      name: string
+      admin1?: string
+      country: string
+    }) => ({
+      lat: r.latitude,
+      lon: r.longitude,
+      name: r.name,
+      admin1: r.admin1,
+      country: r.country
+    })
+  )
 }
 
 /** Date → "YYYY-MM-DD" */

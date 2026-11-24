@@ -154,6 +154,12 @@ export async function listItems() {
   `withOrm` 会等库就绪，所以装载期调用它是安全的，但**别在装载期同步等它**、也别「先读库再导出同步状态」；
 - **应用数据进表**（可查询、AI 工具能读），**设置进 JSON**（`userData/plugin-state/${vars.id}.json`）；
   用户的工作区是他的项目目录，**任何数据都不要写进去**。
+- **有业务表的插件要自己给云同步快照**：宿主默认只把 `plugin-state/${vars.id}.json` 当同步载荷，
+  它只有设置——表里的数据不会跨设备。需要同步就在 `install(ctx)` 里
+  `ctx.contribute(PLUGIN_SYNC_SNAPSHOT, { export, import })`：`export()` 返回「设置 + 自己的表」的
+  JSON（≤256KiB，超了宿主整份跳过、不截断）；`import()` 必须是**替换 + 幂等**（清空自己的表再按原
+  id 插入，重复应用不产生重复行）；写库之后调 `ctx.requestSync()` 让宿主 5s 防抖 push。
+  只贡献 `export` 不实现 `import` 的插件，云端数据无法写回本机。
 
 ## 5c. 词条（界面上要显示的文字）
 

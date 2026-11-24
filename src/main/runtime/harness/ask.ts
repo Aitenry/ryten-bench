@@ -41,7 +41,7 @@ export interface AskQuestion {
   abandonLabel?: string
 }
 
-/** 答案（单选取第一个；多选为数组；带 custom 为补充文本） */
+/** 答案（单选取第一个；多选为数组；selected 为空而带 custom = 用户自行输入，即「其他」） */
 export interface AskAnswer {
   answers: Array<{ id: string; selected: string[]; custom?: string }>
 }
@@ -237,7 +237,7 @@ export function buildAskUserTool(fallbackTopicId = 0): StructuredToolInterface {
     {
       name: 'ask_user_question',
       description:
-        'Ask the user one or more questions and wait for the answers within the same turn (the conversation does not end). Use it when you cannot continue without user input: choosing between approaches, confirming a permission or a destructive action, or filling in missing critical information. Ask several questions at once when they belong together. Put the recommended option first and append "(Recommended)" to its label. The answers arrive as JSON: { answers: [{ id, selected: string[], custom? }] } (a single-choice answer has exactly one element in selected).',
+        'Ask the user one or more questions and wait for the answers within the same turn (the conversation does not end). Use it when you cannot continue without user input: choosing between approaches, confirming a permission or a destructive action, or filling in missing critical information. Ask several questions at once when they belong together. Put the recommended option first and append "(Recommended)" to its label. For choice questions the UI appends an extra "Other" choice that lets the user type their own answer, so do not add your own "Other" option. The answers arrive as JSON: { answers: [{ id, selected: string[], custom? }] }. For a choice question selected normally holds one element (single) or the checked ones (multi); when the user typed a free-form / "Other" answer, selected may be empty and custom holds the typed text instead.',
       schema: z.object({
         questions: z
           .array(askQuestionSchema)

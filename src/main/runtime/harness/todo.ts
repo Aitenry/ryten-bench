@@ -46,6 +46,16 @@ export class TodoStore {
   clear(topicId: number): void {
     this.itemsByTopic.delete(topicId)
   }
+
+  /**
+   * 丢弃全部清单（账号数据空间切换时用）。
+   *
+   * topicId 在每个账号的库里各自自增，换库后同一个 id 可能指向另一个话题；
+   * 不清掉会把上一个账号的计划显示到新账号的对话上。
+   */
+  reset(): void {
+    this.itemsByTopic.clear()
+  }
 }
 
 /** 进程级单例：跨请求共享，供 Runtime 与主进程广播使用 */

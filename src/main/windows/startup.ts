@@ -3,7 +3,7 @@ import { rename } from 'fs/promises'
 import logger from 'electron-log'
 import { createDatabase, getDatabaseDir, type Database } from '../database/loading'
 import { runMigrations } from '../database/orm'
-import { migrateWorkspaceData } from '../database/workspace-migration'
+import { applyWorkspaceSettings } from '../database/workspace-settings'
 import { setDatabaseInstance, setInitializationPromise } from '../database/instance'
 import { initKeystore } from '../crypto/provider-key'
 import { settingsStore } from '../context'
@@ -260,36 +260,7 @@ async function performInitializationTasks(): Promise<void> {
     {
       name: m.splash.stepInitWorkspace,
       execute: async () => {
-        const result = await migrateWorkspaceData(
-          database!.getDatabase(),
-          () => {
-            const harness = settingsStore.get('harness') as HarnessSettings | undefined
-            return harness?.activeWorkspaceId
-          },
-          // 插件存放路径：分类历史上的插件工作区（kind='plugin'）用，没配就跳过那一步
-          (settingsStore.get('harness') as HarnessSettings | undefined)?.pluginsPath
-        )
-        // 把迁移确定的活动工作区写回设置（id 与路径一起同步）
-        const harness = settingsStore.get('harness') as HarnessSettings | undefined
-        const next: HarnessSettings = { ...(harness ?? ({} as HarnessSettings)) }
-        if (result.activeWorkspaceId == null) {
-          // 没有任何工作区：清掉残留配置，回到「未配置」，由对话页引导用户选择目录
-          if (next.activeWorkspaceId != null || next.workspacePath) {
-            delete next.activeWorkspaceId
-            next.workspacePath = ''
-            settingsStore.set('harness', next)
-          }
-        } else if (
-          next.activeWorkspaceId !== result.activeWorkspaceId ||
-          next.workspacePath !== result.activeWorkspacePath
-        ) {
-          next.activeWorkspaceId = result.activeWorkspaceId
-          next.workspacePath = result.activeWorkspacePath ?? ''
-          settingsStore.set('harness', next)
-        }
-        logger.info(
-          `[Init] Workspace migration done, active workspace=${result.activeWorkspaceId ?? 'none'}`
-        )
+        await applyWorkspaceSettings(database!.getDatabase())
       }
     }
   ]

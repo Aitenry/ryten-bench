@@ -8,6 +8,7 @@ import {
 import { listContributions } from '../../plugins/contributions'
 import { settingsStore } from '../../context'
 import {
+  canonicalToolName,
   expandMcpServerGroups,
   isSelectableMainAgentTool,
   type MainAgentConfig
@@ -38,6 +39,7 @@ type ToolFactory = () => StructuredToolInterface
  * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
  * （插件源码的 `main/tools.ts`），由插件 `install(ctx)` 经
  * `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)` 注册，这里在组装时拉取。
+ * 其中 notes 的四个资料域已归一成 `manage_materials`（内置注册，见 system/notes.ts）。
  */
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
@@ -104,7 +106,7 @@ function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[
 }
 
 /**
- * 内置功能的工具（资料库的 4 个）：随应用编译进来，不经插件注册表。
+ * 内置功能的工具（资料整理 1 个）：随应用编译进来，不经插件注册表。
  *
  * 第三方插件仍走 `harness.tool` 贡献点（`listContributions`），两者在 `toolSources()`
  * 合并成同一份清单——对模型与设置页来说没有区别，只是来源不同。
@@ -186,7 +188,8 @@ export function listAvailableTools(): ToolInfo[] {
 /** Build AI tool instances from selected tool names */
 export function buildTools(toolNames: string[]): StructuredToolInterface[] {
   const registry = resolveToolBuilders()
-  return toolNames.filter((name) => name in registry).map((name) => registry[name]())
+  const canonicalNames = Array.from(new Set(toolNames.map((name) => canonicalToolName(name))))
+  return canonicalNames.filter((name) => name in registry).map((name) => registry[name]())
 }
 
 /** 为智能体构建实际的工具实例 */
@@ -198,7 +201,8 @@ export function buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInte
    * 子智能体只是引用那份清单，因此这里每次都现读，MCP 页改了立即生效。
    */
   const selected = expandMcpServerGroups(subAgent.tools, enabledMcpToolNames())
-  return selected.filter((name) => name in registry).map((name) => registry[name]())
+  const canonicalNames = Array.from(new Set(selected.map((name) => canonicalToolName(name))))
+  return canonicalNames.filter((name) => name in registry).map((name) => registry[name]())
 }
 
 /** MCP 页当前勾选给模型的工具名（`mainAgent.mcpTools`，读不到就当没有） */

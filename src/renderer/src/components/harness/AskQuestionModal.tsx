@@ -16,8 +16,11 @@ import { useTopicPending } from '../../hooks/harness/useTopicPending'
  * （取数逻辑见 hooks/useTopicPending）。
  *
  * - 单选（Radio）/ 多选（Checkbox）/ 自由文本（Input → custom）；
- * - 无跳过按钮（DSH 语义：无超时、必须回答）；用户点「停止生成」中止整条流，
- *   挂起提问随之取消（主进程 questionService.abortTopic），本组件在 done/error 时收起；
+ * - 选择式提问**末尾固定补一项「其他」**：选中后出现输入框，自填内容走 custom，
+ *   伪选项不写进 selected（模型拿到 [{selected:[], custom:"…"}]，不会以为「其他」是它给的选项）；
+ * - 无跳过（DSH 语义：无超时、必须回答）；弹窗挡住输入框的「停止生成」，所以自带一个
+ *   「取消」按钮走同一条中止路径（onCancelTurn → cancelStream → questionService.abortTopic），
+ *   挂起提问随之取消，本组件在 done/error 时收起；
  * - 提交 → harnessApi.harness.answerQuestion(requestId, answers) → 主进程回写 → 模型继续。
  */
 
@@ -26,7 +29,30 @@ interface AnswerDraft {
   custom?: string
 }
 
-const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ currentTopicId }) => {
+/**
+ * 「其他」伪选项的哨兵值。
+ *
+ * 模型的选项是 label 字符串，而「其他」不是模型给的选项，只活在表单里：
+ * 选中它 → 下面出现输入框；提交时把它从 selected 里剥掉，输入的内容放进 `custom`
+ * （与 DSH 的「custom 覆盖/补充 selected」一致，模型拿到的是 [{selected:[], custom:"…"}]）。
+ * 用控制字符开头，避免和真实选项 label 撞名。
+ */
+const OTHER_VALUE = '\u0000ask-other'
+
+/** 选择式提问（有 options）才补「其他」；纯文本提问本身就是自由输入 */
+const hasChoices = (q: PendingQuestionView['questions'][number]): boolean =>
+  Boolean(q.options && q.options.length > 0)
+
+const AskQuestionModal: React.FC<{
+  currentTopicId: number | null
+  /**
+   * 「取消」按钮：与输入框的「停止生成」同一个动作（中止本轮并拒绝挂起的提问）。
+   *
+   * 弹窗盖住了输入框，用户在等回答时点不到「停止生成」；只留「提交回答」等于逼用户
+   * 在四个选项里选一个（用户口径 2026-11-24「没有取消按钮」）。这里把停止动作搬进弹窗。
+   */
+  onCancelTurn: () => void
+}> = ({ currentTopicId, onCancelTurn }) => {
   const { token } = theme.useToken()
   const { t } = useTranslation()
 
@@ -57,9 +83,13 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
     if (!pending) return false
     return pending.questions.every((q) => {
       const d = drafts[q.id]
-      const hasSelection = (d?.selected.length ?? 0) > 0
+      const selected = d?.selected ?? []
       const hasCustom = Boolean(d?.custom && d.custom.trim())
-      return hasSelection || hasCustom
+      if (hasChoices(q)) {
+        // 选了「其他」就必须把内容填上，否则这个答案没有信息量
+        return selected.includes(OTHER_VALUE) ? hasCustom : selected.length > 0
+      }
+      return hasCustom
     })
   }
 
@@ -67,16 +97,33 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
     if (!pending || submitting) return
     setSubmitting(true)
     try {
-      const answers = pending.questions.map((q) => ({
-        id: q.id,
-        selected: drafts[q.id]?.selected ?? [],
-        custom: drafts[q.id]?.custom?.trim() || undefined
-      }))
+      const answers = pending.questions.map((q) => {
+        const draft = drafts[q.id]
+        const selected = draft?.selected ?? []
+        const choseOther = hasChoices(q) && selected.includes(OTHER_VALUE)
+        return {
+          id: q.id,
+          // 「其他」是表单伪选项，不进答案；自填内容走 custom
+          selected: selected.filter((value) => value !== OTHER_VALUE),
+          custom:
+            !hasChoices(q) || choseOther ? draft?.custom?.trim() || undefined : undefined
+        }
+      })
       await harnessApi.harness.answerQuestion(pending.requestId, answers)
       clearPending()
     } finally {
       setSubmitting(false)
     }
+  }
+
+  /**
+   * 取消提问 = 中止本轮（与「停止生成」同一条路径，主进程 cancelStream 会拒绝挂起的提问）。
+   * 先收起弹窗再中止：abort 之后主进程不再广播这条提问，留着弹窗会让人以为还在等回答。
+   */
+  const handleCancel = (): void => {
+    if (!pending || submitting) return
+    clearPending()
+    onCancelTurn()
   }
 
   if (!pending) return null
@@ -93,10 +140,14 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
       closable={false}
       // antd 6：maskClosable 已弃用，改用 mask.closable
       mask={{ closable: false }}
+      // Esc 不当中止：取消本轮不可撤销，只认显式点「取消」，避免误触把整轮生成掐掉
+      keyboard={false}
       okText={t('harness.askQuestion.okText')}
-      cancelButtonProps={{ style: { display: 'none' } }}
+      cancelText={t('harness.askQuestion.cancelText')}
+      cancelButtonProps={{ disabled: submitting }}
       okButtonProps={{ disabled: !canSubmit(), loading: submitting }}
       onOk={() => void handleSubmit()}
+      onCancel={handleCancel}
       width={520}
       styles={{ body: { maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' } }}
       classNames={{ body: 'custom-scrollbar' }}
@@ -110,44 +161,68 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
                 {q.header && <span style={{ color: token.colorTextSecondary }}>{q.header} · </span>}
                 {qi + 1}. {q.question}
               </div>
-              {q.options && q.options.length > 0 ? (
-                q.multi_select ? (
-                  <Checkbox.Group
-                    value={draft?.selected ?? []}
-                    onChange={(values) => updateDraft(q.id, { selected: values as string[] })}
-                    style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
-                  >
-                    {q.options.map((opt, oi) => (
-                      <Checkbox key={oi} value={opt.label}>
-                        <span style={{ fontSize: 13 }}>{opt.label}</span>
-                        {opt.description && (
-                          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                            {' '}
-                            — {opt.description}
-                          </span>
-                        )}
+              {hasChoices(q) ? (
+                <>
+                  {q.multi_select ? (
+                    <Checkbox.Group
+                      value={draft?.selected ?? []}
+                      onChange={(values) => updateDraft(q.id, { selected: values as string[] })}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                    >
+                      {q.options!.map((opt, oi) => (
+                        <Checkbox key={oi} value={opt.label}>
+                          <span style={{ fontSize: 13 }}>{opt.label}</span>
+                          {opt.description && (
+                            <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                              {' '}
+                              — {opt.description}
+                            </span>
+                          )}
+                        </Checkbox>
+                      ))}
+                      {/* 默认补一项「其他」：模型的选项列不全时，用户不必被迫选一个近似项 */}
+                      <Checkbox value={OTHER_VALUE}>
+                        <span style={{ fontSize: 13 }}>
+                          {t('harness.askQuestion.otherOption')}
+                        </span>
                       </Checkbox>
-                    ))}
-                  </Checkbox.Group>
-                ) : (
-                  <Radio.Group
-                    value={draft?.selected?.[0]}
-                    onChange={(e) => updateDraft(q.id, { selected: [e.target.value as string] })}
-                    style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
-                  >
-                    {q.options.map((opt, oi) => (
-                      <Radio key={oi} value={opt.label}>
-                        <span style={{ fontSize: 13 }}>{opt.label}</span>
-                        {opt.description && (
-                          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                            {' '}
-                            — {opt.description}
-                          </span>
-                        )}
+                    </Checkbox.Group>
+                  ) : (
+                    <Radio.Group
+                      value={draft?.selected?.[0]}
+                      onChange={(e) => updateDraft(q.id, { selected: [e.target.value as string] })}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                    >
+                      {q.options!.map((opt, oi) => (
+                        <Radio key={oi} value={opt.label}>
+                          <span style={{ fontSize: 13 }}>{opt.label}</span>
+                          {opt.description && (
+                            <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                              {' '}
+                              — {opt.description}
+                            </span>
+                          )}
+                        </Radio>
+                      ))}
+                      <Radio value={OTHER_VALUE}>
+                        <span style={{ fontSize: 13 }}>
+                          {t('harness.askQuestion.otherOption')}
+                        </span>
                       </Radio>
-                    ))}
-                  </Radio.Group>
-                )
+                    </Radio.Group>
+                  )}
+                  {draft?.selected.includes(OTHER_VALUE) ? (
+                    <Input.TextArea
+                      /* 选中「其他」就把手放到输入框里：少一次点击，也提示这里要填内容 */
+                      autoFocus
+                      autoSize={{ minRows: 2, maxRows: 4 }}
+                      placeholder={t('harness.askQuestion.customPlaceholder')}
+                      value={draft?.custom ?? ''}
+                      onChange={(e) => updateDraft(q.id, { custom: e.target.value })}
+                      style={{ marginTop: 8 }}
+                    />
+                  ) : null}
+                </>
               ) : (
                 <Input.TextArea
                   autoSize={{ minRows: 2, maxRows: 4 }}
@@ -156,7 +231,6 @@ const AskQuestionModal: React.FC<{ currentTopicId: number | null }> = ({ current
                   onChange={(e) => updateDraft(q.id, { custom: e.target.value })}
                 />
               )}
-              {!q.options && draft?.selected?.[0] && null}
             </div>
           )
         })}

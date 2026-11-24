@@ -130,12 +130,12 @@ export const zhCN = {
   },
   /** 工具下拉（AgentSettings「默认工具」）的展示名与说明；键就是工具 name，与工具给模型看的 description 无关 */
   tools: {
-    get_weather: { label: '天气查询', description: '查询当前实况和未来天气预报' },
+    get_weather: { label: '天气查询', description: '查询当前实况、逐小时与未来天气预报' },
     get_time: { label: '时间查询', description: '获取当前日期和时间' },
-    manage_todos: { label: '待办管理', description: '查看、创建、更新和删除待办事项' },
-    manage_docs: { label: '文档管理', description: '搜索、查看、创建、编辑和删除文档' },
-    manage_wikis: { label: '知识库', description: '浏览和管理知识库、目录、文档归档' },
-    search_graph: { label: '图谱搜索', description: '在知识图谱中搜索实体' },
+    manage_materials: {
+      label: '资料整理',
+      description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
+    },
     // 工坊这 4 个是**模式工具**：不进下拉（插件模式自动挂载，见 harness 的
     // shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`）。文案留作兜底：别处按名字列工具时仍能出中文名。
     plugin_draft: { label: '插件草稿', description: '新建插件草稿、读写草稿里的文件' },
@@ -253,18 +253,16 @@ export const enUS: typeof zhCN = {
     emptyModelResponse: 'The model returned no content. Check the logs or try again.'
   },
   tools: {
-    get_weather: { label: 'Weather', description: 'Current conditions and forecast' },
+    get_weather: {
+      label: 'Weather',
+      description: 'Current conditions with hourly and daily forecasts'
+    },
     get_time: { label: 'Time', description: 'Current date and time' },
-    manage_todos: { label: 'To-dos', description: 'View, create, update and delete to-dos' },
-    manage_docs: {
-      label: 'Documents',
-      description: 'Search, view, create, edit and delete documents'
+    manage_materials: {
+      label: 'Materials',
+      description:
+        'Organize documents, to-dos, knowledge bases and graph entities; documents support line/range edits'
     },
-    manage_wikis: {
-      label: 'Knowledge base',
-      description: 'Browse and manage knowledge bases, folders and archived documents'
-    },
-    search_graph: { label: 'Graph search', description: 'Search entities in the knowledge graph' },
     // Mode tools (plugin workshop): never listed in the tool picker - auto-mounted in plugin mode
     // (see the harness plugin's shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`). Kept as fallback labels.
     plugin_draft: {

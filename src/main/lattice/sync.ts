@@ -3,12 +3,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
 import { broadcastPluginStateChanged, onPluginStateChanged } from '../ipc/plugins'
+import { pluginSyncSnapshot } from '../plugins/contributions'
 import { isEnabledPlugin, loadExternalMain, unloadExternalMain } from '../plugins/host'
 import { isInstallRemoved, setEnabledOverride } from '../plugins/store'
 import { scanExternalPlugins } from '../plugins/scanner'
 import { onAppEvent } from '../plugins/app-events'
 import { APP_EVENT_PLUGIN_DATA_PURGED, type AppPluginDataPurgedPayload } from '../plugins/app-hooks'
 import { LatticeApiError, isLatticeLoggedIn, latticeErrorMessage, latticeRequest } from './client'
+import { profileSyncGuard } from '../profiles/runtime'
 import { getLatticeAutoInstallMissing } from './settings'
 import { getLatticeDeviceId } from './session'
 import type {
@@ -29,19 +31,25 @@ import type {
 } from './types'
 
 /**
- * 安装记录 + 插件数据（`userData/plugin-state/<id>.json`）的双向同步。
+ * 安装记录 + 插件数据的双向同步。
  *
  * 口径（契约 §4 / PL-18）：
- * - **本地视图** = `scanExternalPlugins()` + `isEnabledPlugin()`；数据 = `userData/plugin-state/<id>.json`
- *   （存在且 ≤256KiB 才带）；
+ * - **本地视图** = `scanExternalPlugins()` + `isEnabledPlugin()`；数据 = 插件贡献的
+ *   `PLUGIN_SYNC_SNAPSHOT`（设置 + 业务表，新口径），没有贡献时回退到
+ *   `userData/plugin-state/<id>.json`（存在且 ≤256KiB 才带）；
  * - **push**：逐插件 `PUT /v1/hub/installs/{id}`，`data_rev` 取本地缓存（`userData/lattice-sync.json`
  *   的 `revs`）；`409 data_conflict` **记冲突不覆盖**（不静默 force）；平台 410/404（插件已被删除）→
  *   **保留本地插件目录与数据**，只把安装记录标记为 `orphaned`（同步详情可见，不自动删除用户数据）；
- * - **pull**：`GET /v1/hub/installs?include_data=1`，只写回 `data_rev` 更大的数据、应用云端启用态；
+ * - **pull**：`GET /v1/hub/installs?include_data=1`，只应用 `data_rev` 更大的数据、应用云端启用态；
  *   **换机自动补齐**：平台有安装记录而本机没有插件包时（换机/重装/用户删了目录），按设置项
  *   （默认开启）自动调用安装、恢复安装包 + 源码，返回 `{installed,failed}` 明细；失败逐个可见、
  *   不中断其它插件；关闭时只把缺失项放进 `pending`。整个插件被平台删除的记录标记 `orphaned`；
- * - **触发**：启动/登录后 pull；插件状态变化（`plugin-state-changed`）后 5s 防抖 push。
+ * - **触发**：启动/登录后 pull；插件状态变化（`plugin-state-changed`）后 5s 防抖 push；
+ *   插件写业务表后调 `ctx.requestSync()` 也会触发同一条防抖 push。
+ *
+ * 快照的**应用**必须幂等：`import` 由插件实现为替换语义，重复 pull / 冲突重放都不会产生重复行。
+ * 使用快照贡献的插件不再读写 `plugin-state/<id>.json` 作为同步载荷（那里只有设置）；
+ * 插件停用期间收到的快照先存内存，启用后由 `flushPendingSnapshots()` 补应用。
  *
  * `lattice-sync.json` 同时缓存最近一次同步结果：状态卡/设置页冷启动也能显示「上次同步」。
  */
@@ -72,6 +80,23 @@ interface LatticeSyncCacheFile {
    * 这份记录用于排障与「冷启动后快速知道上次源码在哪」。
    */
   sources?: Record<string, LatticeSourceCacheEntry>
+  /**
+   * 使用**插件自述快照**（`PLUGIN_SYNC_SNAPSHOT` 贡献）同步的插件。
+   *
+   * 这些插件的数据不在 `plugin-state/<id>.json` 里（那里只有设置），所以：
+   * - push 只认插件 `export()` 的结果，不再回退到那个文件（否则会把云端数据覆盖成设置）；
+   * - pull 时插件未装载（停用）→ 快照先不落盘，等它启用后由 `requestSync` 再同步。
+   * 一旦观察到某插件贡献过快照就记下来，卸载/停用后仍然记得。
+   */
+  snapshotPlugins?: Record<string, true>
+  /**
+   * 本机有**还没推上去**的数据改动（插件写库后经 `ctx.requestSync()` 标记）。
+   *
+   * pull 的保护：`serverRev > localRev` 且本机脏时**不导入**（否则云端的更新会覆盖掉
+   * 本机未同步的修改，属于静默丢数据），改为记一条冲突，由用户在「解决冲突」里显式选
+   * 用本机还是用云端；push 成功 / 选云端后才清掉。
+   */
+  dirty?: Record<string, true>
 }
 
 /** 一次未解决的插件数据冲突（`data_rev` 不一致） */
@@ -117,6 +142,13 @@ let running: Promise<LatticeSyncResult> | null = null
 let debounceTimer: NodeJS.Timeout | null = null
 /** pull 应用云端启用态时会广播 plugin-state-changed：抑制由此触发的防抖 push */
 let suppressPush = false
+/**
+ * 账号数据空间切换期间挂起同步（见 `pauseLatticeSync`）。
+ *
+ * 切换要对调 `plugin-state/` 与 `lattice-sync.json`——同步流程正好在读写这两处，
+ * 必须在切换窗口里彻底停手，否则要么 rename 失败，要么把上一个账号的快照推进新空间。
+ */
+let paused = false
 
 /** 由 `lattice/index.ts` 在启动时接线（避免 sync → index 的循环依赖） */
 export function configureLatticeSync(next: LatticeSyncHooks): void {
@@ -151,6 +183,8 @@ function loadSyncCache(): LatticeSyncCacheFile {
   let last: LatticeSyncResult | undefined
   const revs: Record<string, number> = {}
   const sources: Record<string, LatticeSourceCacheEntry> = {}
+  const snapshotPlugins: Record<string, true> = {}
+  const dirty: Record<string, true> = {}
   const orphaned: LatticeSyncOrphanedItem[] = []
   const conflicts: LatticeSyncConflict[] = []
   try {
@@ -212,6 +246,18 @@ function loadSyncCache(): LatticeSyncCacheFile {
         }
       }
     }
+    const rawSnapshotPlugins = asRecord(record?.snapshotPlugins)
+    if (rawSnapshotPlugins) {
+      for (const [pluginId, value] of Object.entries(rawSnapshotPlugins)) {
+        if (value === true && pluginId.trim() !== '') snapshotPlugins[pluginId] = true
+      }
+    }
+    const rawDirty = asRecord(record?.dirty)
+    if (rawDirty) {
+      for (const [pluginId, value] of Object.entries(rawDirty)) {
+        if (value === true && pluginId.trim() !== '') dirty[pluginId] = true
+      }
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | null)?.code
     if (code !== 'ENOENT')
@@ -222,7 +268,9 @@ function loadSyncCache(): LatticeSyncCacheFile {
     last,
     ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(orphaned.length > 0 ? { orphaned } : {}),
-    ...(Object.keys(sources).length > 0 ? { sources } : {})
+    ...(Object.keys(sources).length > 0 ? { sources } : {}),
+    ...(Object.keys(snapshotPlugins).length > 0 ? { snapshotPlugins } : {}),
+    ...(Object.keys(dirty).length > 0 ? { dirty } : {})
   }
   return cache
 }
@@ -264,8 +312,103 @@ function saveSyncCache(): void {
   }
 }
 
-/** 读插件数据文件（不存在 / 非法 JSON / 超过 256KiB 都视为「无数据」） */
-function readPluginData(pluginId: string): { data: unknown; bytes: number } | null {
+/** 记下「这个插件的同步载荷由插件自己提供」——停用后仍要记得，避免回退到设置文件 */
+function markSnapshotPlugin(pluginId: string): void {
+  const store = loadSyncCache()
+  if (store.snapshotPlugins?.[pluginId]) return
+  store.snapshotPlugins = { ...(store.snapshotPlugins ?? {}), [pluginId]: true }
+  saveSyncCache()
+}
+
+/** 该插件是否使用插件自述快照（曾经贡献过 `PLUGIN_SYNC_SNAPSHOT`） */
+function isSnapshotPlugin(pluginId: string): boolean {
+  return loadSyncCache().snapshotPlugins?.[pluginId] === true
+}
+
+/** 插件写库后标记「本机有未推送的修改」（`ctx.requestSync()` 带插件 id 进来） */
+export function markLatticePluginDirty(pluginId: string): void {
+  const id = String(pluginId ?? '').trim()
+  if (!id) return
+  const store = loadSyncCache()
+  if (store.dirty?.[id]) return
+  store.dirty = { ...(store.dirty ?? {}), [id]: true }
+  saveSyncCache()
+}
+
+function isPluginDirty(pluginId: string): boolean {
+  return loadSyncCache().dirty?.[pluginId] === true
+}
+
+function clearPluginDirty(pluginId: string): void {
+  const store = loadSyncCache()
+  if (!store.dirty?.[pluginId]) return
+  const next = { ...store.dirty }
+  delete next[pluginId]
+  if (Object.keys(next).length > 0) store.dirty = next
+  else delete store.dirty
+  saveSyncCache()
+}
+
+/**
+ * 记一条「本机有未同步修改、云端也有更新」的冲突（pull 侧）。
+ *
+ * 与 push 的 409 冲突共用同一份 `conflicts` 列表和同一个「解决冲突」弹窗：
+ * 用户选「用本机」= force push，选「用云端」= 导入；两条路都会清掉 dirty。
+ */
+function recordPullConflict(pluginId: string, localRev: number, serverRev: number): void {
+  const store = loadSyncCache()
+  const existing = store.conflicts?.find((c) => c.plugin_id === pluginId)
+  if (existing && existing.local_rev === localRev && existing.server_rev === serverRev) return
+  store.conflicts = [
+    ...(store.conflicts ?? []).filter((c) => c.plugin_id !== pluginId),
+    { plugin_id: pluginId, local_rev: localRev, server_rev: serverRev, at: Date.now() }
+  ]
+  saveSyncCache()
+  logger.warn(
+    `[Lattice] ${pluginId}: local data has unsynced changes (dirty, local_rev=${localRev}) ` +
+      `while the cloud moved to data_rev=${serverRev}; not importing (would drop local edits)`
+  )
+}
+
+/**
+ * 读同步载荷。
+ *
+ * 优先级：
+ * 1. 插件贡献了 `PLUGIN_SYNC_SNAPSHOT` → 用它的 `export()`（设置 + 业务表的完整快照）。
+ *    这条路径**失败/超限就返回 null、不回退文件**：`plugin-state/<id>.json` 只是设置，
+ *    拿它当快照上传会把云端数据覆盖成设置；
+ * 2. 否则按老口径读 `plugin-state/<id>.json`（不存在 / 非法 JSON / 超 256KiB 都视为无数据）。
+ */
+async function readPluginData(pluginId: string): Promise<{ data: unknown; bytes: number } | null> {
+  const snapshot = pluginSyncSnapshot(pluginId)
+  if (snapshot) {
+    try {
+      const data = await snapshot.export()
+      if (data === undefined) return null
+      const bytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
+      if (bytes > DATA_MAX_BYTES) {
+        logger.error(
+          `[Lattice] plugin snapshot for ${pluginId} is ${bytes}B, over 256KiB, skipping sync ` +
+            '(not truncated to avoid losing user data; shrink the snapshot or raise the platform limit)'
+        )
+        return null
+      }
+      markSnapshotPlugin(pluginId)
+      return { data, bytes }
+    } catch (err) {
+      logger.error(
+        `[Lattice] Plugin snapshot export failed for ${pluginId}; cloud data is left untouched:`,
+        err
+      )
+      // 不标记 snapshotPlugins：让下一次 push 继续重试导出（标记了就会因为「不脏」而永远跳过）
+      return null
+    }
+  }
+
+  // 已知使用自述快照、但当前没装载（停用/装载失败）：**不能**回退到设置文件——
+  // 那会把云端快照覆盖成一份设置。只同步 version/enabled，数据等插件启用后再推。
+  if (isSnapshotPlugin(pluginId)) return null
+
   const file = pluginStatePath(pluginId)
   try {
     const stat = fs.statSync(file)
@@ -286,8 +429,52 @@ function readPluginData(pluginId: string): { data: unknown; bytes: number } | nu
   }
 }
 
+/**
+ * 插件停用期间收到的云端快照（内存暂存）：等插件重新装载后再应用。
+ *
+ * 不能直接写 `plugin-state/<id>.json`——那是设置文件，写进去以后 push 会把
+ * 设置当成快照推回云端（覆盖真数据）。所以这里只存内存，`plugin-state-changed`
+ * 时尝试应用。
+ */
+const pendingSnapshots = new Map<string, { data: unknown; rev: number }>()
+
+/**
+ * 把云端快照应用到本机。
+ *
+ * - 插件装载中且实现了 `import` → 交给插件（**替换 + 幂等**，重复应用不产生重复行）；
+ * - 使用自述快照的插件但当前未装载 → **不落盘**，暂存内存等启用后再应用（返回 false，rev 不前移）；
+ * - 其余插件保持老口径：写回 `plugin-state/<id>.json`。
+ */
+async function applyRemoteData(pluginId: string, data: unknown, rev: number): Promise<boolean> {
+  const snapshot = pluginSyncSnapshot(pluginId)
+  if (snapshot?.import) {
+    try {
+      await snapshot.import(data)
+      pendingSnapshots.delete(pluginId)
+      markSnapshotPlugin(pluginId)
+      logger.info(`[Lattice] Applied cloud snapshot via plugin: ${pluginId} (data_rev=${rev})`)
+      return true
+    } catch (err) {
+      logger.error(
+        `[Lattice] Plugin snapshot import failed for ${pluginId}; keeping local data and data_rev:`,
+        err
+      )
+      return false
+    }
+  }
+  if (snapshot || isSnapshotPlugin(pluginId)) {
+    pendingSnapshots.set(pluginId, { data, rev })
+    logger.info(
+      `[Lattice] Plugin ${pluginId} is not loaded (or has no importer); cloud snapshot kept in memory ` +
+        `(data_rev=${rev}) until the plugin is enabled`
+    )
+    return false
+  }
+  return writePluginStateFile(pluginId, data)
+}
+
 /** 写回云端数据（原子写；超过 256KiB 的异常数据拒绝落盘） */
-function writePluginData(pluginId: string, data: unknown): boolean {
+function writePluginStateFile(pluginId: string, data: unknown): boolean {
   let text: string
   try {
     text = JSON.stringify(data)
@@ -468,8 +655,8 @@ export async function listLatticeSyncConflictsDetailed(): Promise<
  * 解决一个 `data_rev` 冲突。
  *
  * - `strategy='local'`：用本机数据覆盖云端（`PUT ...?force=1`，语义即「最后写入者赢」）；
- * - `strategy='cloud'`：用云端数据覆盖本机（写回 `plugin-state/<id>.json` 并对齐 rev；
- *   云端无数据时清空本机数据，保持"两边一致"）。
+ * - `strategy='cloud'`：用云端数据覆盖本机（自述快照插件交给它的 `import`，其余写回
+ *   `plugin-state/<id>.json`，并对齐 rev；云端无数据时保持两边一致）。
  *
  * 两种选择都必须是用户显式点击（不静默覆盖），与 ⑤ §12.7 的冲突模型一致。
  */
@@ -487,7 +674,7 @@ export async function resolveLatticeSyncConflict(
 
   try {
     if (strategy === 'local') {
-      const dataInfo = readPluginData(id)
+      const dataInfo = await readPluginData(id)
       const body: LatticeInstallPutBody = {
         version: plugin.manifest.version,
         enabled: isEnabledPlugin(id),
@@ -511,11 +698,17 @@ export async function resolveLatticeSyncConflict(
       const item = items.find((i) => i.plugin_id === id)
       if (!item) return { ok: false, error: '云端没有这个插件的安装记录' }
       if (item.data !== undefined && item.data !== null) {
-        if (!writePluginData(id, item.data)) {
-          return { ok: false, error: '写入本机插件数据失败' }
+        if (!(await applyRemoteData(id, item.data, item.data_rev ?? conflict.server_rev))) {
+          return {
+            ok: false,
+            error: isSnapshotPlugin(id)
+              ? '本机插件未启用或快照导入失败，无法应用云端数据（启用插件后重试）'
+              : '写入本机插件数据失败'
+          }
         }
-      } else {
-        // 云端没有数据：本机也清空，避免下次 push 又把旧数据推回去
+      } else if (!isSnapshotPlugin(id)) {
+        // 云端没有数据：本机也清空，避免下次 push 又把旧数据推回去。
+        // 自述快照插件不走这条：`plugin-state/<id>.json` 是它的设置文件，删掉会丢设置。
         try {
           fs.rmSync(pluginStatePath(id), { force: true })
         } catch (err) {
@@ -525,6 +718,8 @@ export async function resolveLatticeSyncConflict(
       store.revs[id] = item.data_rev ?? conflict.server_rev
     }
     store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
+    // 两条路（用本机 / 用云端）都把本机与云端对齐了：不再有未同步修改
+    clearPluginDirty(id)
     saveSyncCache()
     try {
       hooks.onStateChanged?.()
@@ -566,7 +761,14 @@ async function pushInstallRecords(): Promise<{
   let pushed = 0
   let conflicts = 0
   for (const plugin of scanExternalPlugins()) {
-    const dataInfo = readPluginData(plugin.id)
+    // 自述快照插件只在「本机有未同步修改」「还没推过」或「第一次从文件口径切到快照口径」时
+    // 导出并上传数据：避免每次启停 / 别的插件变更都把 data_rev 顶一格，也避免其它设备无谓地重复导入。
+    const contribution = pluginSyncSnapshot(plugin.id)
+    const snapshotMode = contribution !== null || isSnapshotPlugin(plugin.id)
+    const firstPush = !(plugin.id in store.revs)
+    const firstSnapshotPush = contribution !== null && !isSnapshotPlugin(plugin.id)
+    const withData = !snapshotMode || firstPush || firstSnapshotPush || isPluginDirty(plugin.id)
+    const dataInfo = withData ? await readPluginData(plugin.id) : null
     const body: LatticeInstallPutBody = {
       version: plugin.manifest.version,
       enabled: isEnabledPlugin(plugin.id),
@@ -582,6 +784,8 @@ async function pushInstallRecords(): Promise<{
         { method: 'PUT', body }
       )
       if (typeof record?.data_rev === 'number') store.revs[plugin.id] = record.data_rev
+      // 数据已随这次 push 上传 → 本机不再有「未同步修改」
+      if (dataInfo) clearPluginDirty(plugin.id)
       // 成功推送说明该插件已无冲突（例如用户选了"用本机覆盖"后重试成功）
       if (store.conflicts?.some((c) => c.plugin_id === plugin.id)) {
         store.conflicts = store.conflicts.filter((c) => c.plugin_id !== plugin.id)
@@ -686,11 +890,11 @@ async function autoInstallMissingPlugin(
         )
       }
     }
-    // 数据：补齐后本机没有数据，沿用 pull 口径写回云端 rev 更大的数据
+    // 数据：补齐后本机没有数据，沿用 pull 口径应用云端 rev 更大的数据
     const serverRev = item.data_rev ?? 0
     if (serverRev > (store.revs[pluginId] ?? 0)) {
       if (item.data !== undefined && item.data !== null) {
-        if (writePluginData(pluginId, item.data)) store.revs[pluginId] = serverRev
+        if (await applyRemoteData(pluginId, item.data, serverRev)) store.revs[pluginId] = serverRev
       } else {
         store.revs[pluginId] = serverRev
       }
@@ -803,13 +1007,17 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
       }
     }
 
-    // ② 数据：只写回更新的版本
+    // ② 数据：只应用更新的版本；本机有未推送修改时不覆盖（记冲突，让用户选）
     const serverRev = item.data_rev ?? 0
     const localRev = store.revs[item.plugin_id] ?? 0
     if (serverRev > localRev) {
-      if (item.data !== undefined && item.data !== null) {
-        if (writePluginData(item.plugin_id, item.data)) {
+      if (isPluginDirty(item.plugin_id)) {
+        // 静默导入会丢掉本机未同步的编辑 → 交给「解决冲突」显式选择
+        recordPullConflict(item.plugin_id, localRev, serverRev)
+      } else if (item.data !== undefined && item.data !== null) {
+        if (await applyRemoteData(item.plugin_id, item.data, serverRev)) {
           store.revs[item.plugin_id] = serverRev
+          clearPluginDirty(item.plugin_id)
           pulled += 1
         }
       } else {
@@ -867,6 +1075,17 @@ async function runSync(
   const result: LatticeSyncResult = { at: Date.now(), pushed: 0, pulled: 0, conflicts: 0 }
   if (!isLatticeLoggedIn()) {
     result.error = '未登录插件中心，请先登录'
+    return finishSync(result)
+  }
+  // 账号数据空间与登录身份不一致（刚登录/登出、还没重启）→ 暂停同步，避免串号
+  const profileGuard = profileSyncGuard()
+  if (profileGuard) {
+    result.error = profileGuard
+    return finishSync(result)
+  }
+  // 正在原地切换账号数据空间：此刻目录会被对调，任何同步都不能写盘
+  if (paused) {
+    result.error = '账号数据空间正在切换，已暂停同步'
     return finishSync(result)
   }
   // 未显式传 installMissing 时跟设置项走（默认开启）：启动/登录后的后台 pull 也能换机自动补齐
@@ -927,6 +1146,7 @@ export async function syncLattice(
 /** 5s 防抖 push（插件启用态/安装态变化后触发；登录态变化时由调用方再触发一次） */
 export function scheduleLatticePush(delayMs = PUSH_DEBOUNCE_MS): void {
   if (suppressPush) return
+  if (paused) return
   if (!isLatticeLoggedIn()) return
   if (debounceTimer) {
     clearTimeout(debounceTimer)
@@ -952,6 +1172,47 @@ export function cancelPendingLatticePush(): void {
 }
 
 /**
+ * 切换账号数据空间前调用：挂起同步，并等正在跑的那一次收尾。
+ *
+ * 不中断网络请求（中断只会留下半截写入），只是**等它写完**再让调用方去改目录；
+ * 超时上限避免网络卡死把切号永远挂住（超时后仍然继续切，最坏情况是那次同步报错）。
+ */
+export async function pauseLatticeSync(timeoutMs = 5000): Promise<void> {
+  paused = true
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+  }
+  if (!running) return
+  await Promise.race([
+    running.catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+  ])
+}
+
+/** 切换完成（或失败回滚）后恢复同步 */
+export function resumeLatticeSync(): void {
+  paused = false
+}
+
+/**
+ * 账号数据空间换过之后重新读 `lattice-sync.json`。
+ *
+ * 与 `resetLatticeSyncCache()` 的区别：**不清空、也不写文件**——新空间里那份缓存
+ * （revs / conflicts / 上次同步结果）才是当前账号的；丢掉会退化成 rev=0 覆盖云端数据。
+ */
+export function reloadLatticeSyncCache(): void {
+  cache = null
+  lastResult = null
+  pendingSnapshots.clear()
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+  }
+  logger.info('[Lattice] Sync cache reloaded for the switched account data space')
+}
+
+/**
  * 本机插件数据被清（卸载勾选「删除全部数据」）后，丢掉该插件的 `data_rev` 缓存。
  *
  * 云端安装记录与数据快照**保留**；本地 rev 若还停在旧值，重新安装后的 pull 会拿
@@ -962,9 +1223,11 @@ export function cancelPendingLatticePush(): void {
 function forgetLocalPluginDataRev(pluginId: string): void {
   const id = String(pluginId ?? '').trim()
   if (!id) return
+  pendingSnapshots.delete(id)
   const store = loadSyncCache()
   const hadRev = id in store.revs
   if (hadRev) delete store.revs[id]
+  if (store.dirty?.[id]) clearPluginDirty(id)
   const hadConflict = (store.conflicts ?? []).some((c) => c.plugin_id === id)
   if (hadConflict) store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
   if (!hadRev && !hadConflict) return
@@ -975,9 +1238,34 @@ function forgetLocalPluginDataRev(pluginId: string): void {
   )
 }
 
-/** 启动接线：旁听 `plugin-state-changed`（安装/卸载/启停/数据文件变化统一走这条广播） */
+/**
+ * 插件装载后补应用「停用期间收到的云端快照」。
+ *
+ * 停用时不能把快照写进 `plugin-state/<id>.json`（那是设置，会被下次 push 当快照推回云端），
+ * 所以 pull 先存内存；插件启用（`plugin-state-changed`）后在这里补应用，成功后对齐 rev。
+ */
+async function flushPendingSnapshots(): Promise<void> {
+  if (pendingSnapshots.size === 0) return
+  const store = loadSyncCache()
+  let applied = 0
+  for (const [pluginId, pending] of [...pendingSnapshots]) {
+    if (!pluginSyncSnapshot(pluginId)?.import) continue
+    if (await applyRemoteData(pluginId, pending.data, pending.rev)) {
+      store.revs[pluginId] = pending.rev
+      applied += 1
+    }
+  }
+  if (applied > 0) {
+    saveSyncCache()
+    logger.info(`[Lattice] Applied ${applied} pending cloud snapshot(s) after plugin load`)
+    scheduleLatticePush()
+  }
+}
+
+/** 启动接线：旁听 `plugin-state-changed`（安装/卸载/启停统一走这条广播） */
 export function initLatticeSync(): void {
   onPluginStateChanged(() => {
+    void flushPendingSnapshots()
     scheduleLatticePush()
   })
   onAppEvent(APP_EVENT_PLUGIN_DATA_PURGED, (payload) => {
@@ -992,6 +1280,7 @@ export function initLatticeSync(): void {
 export function resetLatticeSyncCache(): void {
   cache = { revs: {} }
   lastResult = null
+  pendingSnapshots.clear()
   if (debounceTimer) {
     clearTimeout(debounceTimer)
     debounceTimer = null

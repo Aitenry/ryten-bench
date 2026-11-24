@@ -208,7 +208,10 @@ async function deleteWiki(id: number): Promise<boolean> {
           await db.delete(images).where(eq(images.id, wikiImageId))
         } catch (err) {
           // 仍被别的插件（如音乐的封面）引用：外键拒绝删除，留这条图片行即可
-          logger.info(`[notes] Cover ${wikiImageId} still referenced by other plugins, kept (not deleted)`, err)
+          logger.info(
+            `[notes] Cover ${wikiImageId} still referenced by other plugins, kept (not deleted)`,
+            err
+          )
         }
       }
     }
@@ -225,6 +228,18 @@ async function getDirectoriesByWikiId(wikiId: number): Promise<WikiDirectoryRow[
       .from(wiki_directories)
       .where(eq(wiki_directories.wiki_id, wikiId))
       .orderBy(asc(wiki_directories.sort_order), asc(wiki_directories.id))
+  })
+}
+
+/** 按 ID 取目录（移动文档时校验源/目标目录存在且同库） */
+async function getDirectoryById(id: number): Promise<WikiDirectoryRow | null> {
+  return withOrm('getDirectoryById', async (db) => {
+    const rows = await db
+      .select()
+      .from(wiki_directories)
+      .where(eq(wiki_directories.id, id))
+      .limit(1)
+    return rows[0] ?? null
   })
 }
 
@@ -357,6 +372,7 @@ export {
   updateWiki,
   deleteWiki,
   getDirectoriesByWikiId,
+  getDirectoryById,
   addDirectory,
   updateDirectory,
   deleteDirectory,

@@ -112,6 +112,9 @@ function contextFacade(record: RecordingContext): Record<string, unknown> {
     },
     contributions() {
       return []
+    },
+    requestSync() {
+      /* 冒烟用例不接插件中心：同步请求按未登录口径静默忽略 */
     }
   }
 }

@@ -9,6 +9,9 @@ import * as hub from '../lattice/hub'
 import * as session from '../lattice/session'
 import * as settings from '../lattice/settings'
 import * as sync from '../lattice/sync'
+import { ANONYMOUS_PROFILE, deriveProfileKey } from '../profiles/manager'
+import { getActiveProfileKey, isAccountProfileReady } from '../profiles/runtime'
+import { switchAccountProfile } from '../profiles/live'
 import {
   broadcastLatticeStatus,
   getLatticeStatus,
@@ -157,7 +160,8 @@ function applyLoginBaseUrl(baseUrl: string): string | null {
   if (normalized !== previous) {
     const hadSession = session.hasLatticeSession()
     session.clearLatticeSession()
-    sync.resetLatticeSyncCache()
+    // 不清 lattice-sync.json：账号级数据空间按「基址+用户」分容器，
+    // 旧账号的 rev 缓存留在旧容器里，换服务器不会污染新账号；切空间在重启时完成。
     logger.info(
       `[Lattice] Base URL switched before login: ${previous} -> ${normalized}${hadSession ? ' (old session cleared)' : ''}`
     )
@@ -236,9 +240,40 @@ export function registerLatticeIpc(): void {
       const result = await client.loginLattice(input.username, input.password)
       setLatticeLastError(null)
       broadcastLatticeStatus()
+      logger.info(`[Lattice] IPC login succeeded: ${result.user.username}`)
+
+      // 换号（包括未登录 → 登录、A → B）：本机数据空间要按新账号换一套。
+      // 现在可以**原地切换**（不重启应用）：先悬停/对调/重连，再刷新主窗口；
+      // 条件不满足（初始化还没完成）或切换失败时，live.ts 内部会回退成 app.relaunch()。
+      const nextKey = deriveProfileKey({
+        loggedIn: true,
+        userId: result.user.id,
+        username: result.user.username,
+        baseUrl: settings.getLatticeBaseUrl()
+      })
+      if (isAccountProfileReady() && nextKey !== getActiveProfileKey()) {
+        logger.info(
+          `[Lattice] Account data space switches in place: ${getActiveProfileKey() ?? 'null'} -> ${nextKey}`
+        )
+        const switched = await switchAccountProfile({
+          reason: `login ${result.user.username}`,
+          targetKey: nextKey
+        })
+        // 正在切换（并发登录）等罕见情况：如实报错，别让界面以为已经换好号了
+        if (!switched.ok && !switched.restarted) {
+          return { ok: false, error: switched.error ?? '账号数据空间切换失败' }
+        }
+        return {
+          ok: true,
+          user: result.user,
+          ...(result.role ? { role: result.role } : {}),
+          restarting: switched.restarted === true,
+          switching: switched.ok
+        }
+      }
+
       // 登录后 pull 一次（后台执行；结果通过 lattice:sync-state 广播）
       void sync.syncLattice('pull')
-      logger.info(`[Lattice] IPC login succeeded: ${result.user.username}`)
       return {
         ok: true,
         user: result.user,
@@ -263,6 +298,16 @@ export function registerLatticeIpc(): void {
     sync.cancelPendingLatticePush()
     setLatticeLastError(null)
     broadcastLatticeStatus()
+    // 登出 = 回未登录的本地空间（anonymous）：原地对调 + 刷新界面，不重启应用。
+    // 切换失败/条件不满足时 live.ts 回退成重启（旧行为）。
+    const active = getActiveProfileKey()
+    if (isAccountProfileReady() && active !== null && active !== ANONYMOUS_PROFILE) {
+      const switched = await switchAccountProfile({
+        reason: 'logout -> anonymous',
+        targetKey: ANONYMOUS_PROFILE
+      })
+      return { ok: true as const, restarting: switched.restarted === true, switching: switched.ok }
+    }
     return { ok: true as const }
   })
 
@@ -280,7 +325,11 @@ export function registerLatticeIpc(): void {
     }
   })
 
-  ipcMain.handle(LATTICE_IPC.setBaseUrl, (_event, raw: unknown): LatticeSetBaseUrlResult => {
+  /**
+   * 基址变更会连带切回 anonymous 数据空间（可能 await 原地切换），所以单独声明并标注返回类型，
+   * 注册处只做一次转发（超长签名会让 ipcMain.handle 那行被格式化拆成三行）。
+   */
+  const handleSetBaseUrl = async (raw: unknown): Promise<LatticeSetBaseUrlResult> => {
     if (typeof raw !== 'string' || raw.trim() === '') {
       return { ok: false, error: '基址不能为空', status: getLatticeStatus() }
     }
@@ -290,11 +339,22 @@ export function registerLatticeIpc(): void {
       if (normalized !== previous) {
         const hadSession = session.hasLatticeSession()
         if (hadSession) session.clearLatticeSession()
-        sync.resetLatticeSyncCache()
+        // 账号级数据空间按「基址+用户」分容器：旧账号的数据/rev 留在旧容器里，
+        // 这里原地回到 anonymous 空间（不重启应用），随后刷新主窗口。
         setLatticeLastError(null)
         logger.info(
           `[Lattice] Base URL switched: ${previous} -> ${normalized}${hadSession ? ' (old session cleared)' : ''}`
         )
+        const active = getActiveProfileKey()
+        if (isAccountProfileReady() && active !== null && active !== ANONYMOUS_PROFILE) {
+          const switched = await switchAccountProfile({
+            reason: 'base url changed -> anonymous',
+            targetKey: ANONYMOUS_PROFILE
+          })
+          if (switched.restarted) {
+            return { ok: true, status: getLatticeStatus(), restarting: true }
+          }
+        }
       }
       broadcastLatticeStatus()
       if (settings.isLatticeBaseUrlLockedByEnv()) {
@@ -313,7 +373,8 @@ export function registerLatticeIpc(): void {
       broadcastLatticeStatus()
       return { ok: false, error: message, status: getLatticeStatus() }
     }
-  })
+  }
+  ipcMain.handle(LATTICE_IPC.setBaseUrl, (_event, raw: unknown) => handleSetBaseUrl(raw))
 
   ipcMain.handle(LATTICE_IPC.hubList, async (_event, raw: unknown) => {
     const query = normalizeListQuery(raw)

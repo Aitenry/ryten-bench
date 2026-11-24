@@ -168,10 +168,23 @@ from the hub or from a local package, and both paths end in the same host instal
   writes a `source.json` marker and backs up user-modified source before replacing it. "Edit in
   chat" opens that folder as a plugin workspace and conversation so the model can modify the
   plugin; when a chat cannot be created it opens the folder and reports that instead.
-- **Cross-device sync** — install records (version, enabled state) and each plugin's state file
-  (`userData/plugin-state/<id>.json`, up to 256 KiB) sync with the platform; workspace files, chat
-  history, notes and databases never leave the machine. The app pulls at startup and after
-  sign-in, pushes five seconds after a plugin changes, and offers a manual "Sync now".
+- **Cross-device sync** — install records (version, enabled state) and each plugin's data snapshot
+  sync with the platform. A plugin that contributes a sync snapshot decides what goes in it (the
+  personal ledger exports its settings plus its ten business tables); the app falls back to
+  `userData/plugin-state/<id>.json` (≤ 256 KiB) when a plugin has no snapshot of its own. Plugins
+  apply incoming snapshots with replace semantics, so syncing repeatedly never duplicates rows.
+  Workspace files, chat history, notes and databases never leave the machine. The app pulls at
+  startup and after sign-in, pushes five seconds after a plugin changes, and offers a manual
+  "Sync now".
+- **Account-scoped local data** — plugin data and the plugin database live in a per-account
+  container (`userData/profiles/<key>/`, where key = base URL + user id); the signed-in account's
+  container is swapped into the root at startup. Signing in, signing out or changing the base URL
+  swaps containers **in place** — the app pauses sync and streaming, closes the database, moves the
+  directories, reopens the account's database, reloads plugins and refreshes the window, without
+  restarting the process. Only when that is not possible (during very early startup) or fails (a
+  file still held open by another process) does it fall back to `app.relaunch()`. Signed-out usage
+  gets its own `anonymous` container and is never merged into an account implicitly. So two accounts
+  on one machine never see or upload each other's plugin data.
 - **Auto-restore** — the default-on "Auto-restore plugins" switch makes a pull reinstall plugins
   the account has install records for but this machine is missing (a new machine, a reinstall, a
   deleted folder). Per-plugin failures are itemised instead of aborting the rest, and switching it
@@ -733,8 +746,9 @@ flowchart LR
   `lattice-sources.json` (source index). Downloaded source lives under the plugin workshop's
   storage path or `userData/plugin-sources/<id>/<version>/`, marked by a `source.json` and backed up
   into `plugin-source-backups/` before user-modified source is replaced, while plugin packages stay
-  in `userData/plugins/<id>/`. Only install records and `userData/plugin-state/<id>.json` (≤ 256 KiB)
-  are synced; workspace files, chat history and notes are not.
+  in `userData/plugins/<id>/`. Only install records and plugin data snapshots (plugin-provided
+  JSON, or `userData/plugin-state/<id>.json` when a plugin contributes none; ≤ 256 KiB) are synced;
+  workspace files, chat history and notes are not.
 - **Uninstall scope** — a plugin's tables live in the shared database, so removing plugin code and
   removing its data are always two separate decisions.
 - **Secrets** — API keys are stored encrypted with AES-256-GCM under a machine-specific key; the

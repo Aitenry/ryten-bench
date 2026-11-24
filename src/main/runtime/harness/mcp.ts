@@ -361,6 +361,9 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
               rawName: item.rawName,
               serverName: config.name,
               description: item.description,
+              // 服务器声明的参数契约必须下发给模型：缺了它，模型只看到「无参数的工具」，
+              // 必填参数（如 PubMed 的 query）就会以空对象调用并被服务器拒绝
+              inputSchema: item.inputSchema,
               caller: client,
               timeoutMs: config.timeoutMs
             })

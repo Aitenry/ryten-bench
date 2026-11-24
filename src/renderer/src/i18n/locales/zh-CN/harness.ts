@@ -379,8 +379,10 @@ export const harnessZhCN = {
     askQuestion: {
       title: '需要你的确认',
       okText: '提交回答',
+      cancelText: '取消',
+      otherOption: '其他',
       customPlaceholder: '输入你的回答…',
-      footerHint: '提交后模型将在本轮对话中继续执行；点「停止生成」可取消提问并中止本轮。'
+      footerHint: '提交后模型将在本轮对话中继续执行；点「取消」会取消提问并中止本轮。'
     },
     modelRecovery: {
       title: '模型请求失败',

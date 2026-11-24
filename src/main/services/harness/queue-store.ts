@@ -95,6 +95,19 @@ class HarnessQueueStore {
     return this.active.has(topicId)
   }
 
+  /**
+   * 清空全部队列与回合状态（账号数据空间切换时用）。
+   *
+   * topicId 是**各账号库各自的自增 id**：换库后同一个 id 可能属于另一个话题，
+   * 不清掉就会把上一个账号的排队插话/插话缓冲挂到新账号的话题上。
+   */
+  reset(): void {
+    this.pending.clear()
+    this.injections.clear()
+    this.holds.clear()
+    this.active.clear()
+  }
+
   private nextId(): string {
     this.seq += 1
     return `q_${Date.now().toString(36)}_${this.seq}`

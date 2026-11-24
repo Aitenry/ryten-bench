@@ -276,7 +276,22 @@ export interface LatticeLoginInput {
 
 /** 登录结果：失败不抛错，返回 `{ok:false,error}` 由界面展示平台 message */
 export type LatticeLoginResult =
-  { ok: true; user: LatticeUser; role?: string } | { ok: false; error: string }
+  | {
+      ok: true
+      user: LatticeUser
+      role?: string
+      /**
+       * 换号成功，数据空间已**原地切换**（不重启应用）：主窗口会在几十毫秒后整页刷新，
+       * 刷新后即按新账号的数据/云端快照运行，界面不需要自己处理后续。
+       */
+      switching?: boolean
+      /**
+       * 换号成功，但本机数据空间需要**重启应用**才能切换（代价最小的回退路径）：
+       * 只会在初始化尚未完成或原地切换失败时出现，应用会在几百毫秒后自动重启。
+       */
+      restarting?: boolean
+    }
+  | { ok: false; error: string }
 
 /** 上传结果。用户取消选择框不是失败（`canceled:true`） */
 export type LatticeUploadResult =
@@ -428,6 +443,10 @@ export interface LatticeSetBaseUrlResult {
   ok: boolean
   status: LatticeStatus
   error?: string
+  /** 数据空间已原地切回 anonymous，主窗口即将整页刷新 */
+  switching?: boolean
+  /** 原地切换不可用，应用即将重启 */
+  restarting?: boolean
 }
 
 /** `lattice:me` 返回 */

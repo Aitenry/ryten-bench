@@ -17,7 +17,39 @@ import {
 } from '../../database/mapper/harness/agent'
 import { getAllWorkspaces } from '../../database/mapper/harness/harness'
 import type { MainAgentConfig } from '../../../shared/harness/mcp'
-import { isSelectableMainAgentTool } from '../../../shared/harness/mcp'
+import { canonicalToolName, isSelectableMainAgentTool } from '../../../shared/harness/mcp'
+
+/**
+ * 旧资料工具名（manage_docs/manage_todos/manage_wikis/search_graph）在 2026-11 合并成
+ * manage_materials。子智能体配置把 tools 存成 JSON 字符串，这里读时顺手迁移，
+ * 免得界面上「上次勾过的工具」显示为未选中。
+ */
+function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
+  if (!row.tools) return row
+  try {
+    const parsed: unknown = JSON.parse(row.tools)
+    if (Array.isArray(parsed)) {
+      return {
+        ...row,
+        tools: JSON.stringify(parsed.map((name) => canonicalToolName(String(name))))
+      }
+    }
+  } catch {
+    // 历史脏数据保持原样，交给上层展示
+  }
+  return row
+}
+
+/** 写入前的工具名归一（旧名迁移 + 去重） */
+function normalizeToolList(tools: string[] | null | undefined): string[] | null {
+  if (!tools) return null
+  const out: string[] = []
+  for (const name of tools) {
+    const canonical = canonicalToolName(String(name))
+    if (!out.includes(canonical)) out.push(canonical)
+  }
+  return out
+}
 
 /**
  * 智能体（子代理）配置 + 主智能体默认配置 IPC（harness 插件的第 5 个域）。
@@ -39,7 +71,7 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle('agent-get-all', async (workspaceId: number) => {
     try {
-      return await getAllAgents(workspaceId)
+      return (await getAllAgents(workspaceId)).map(normalizeAgentRow)
     } catch (error) {
       logger.error('Error in agent-get-all:', error)
       throw error
@@ -48,7 +80,8 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle('agent-get-paginated', async (workspaceId: number, page: number, pageSize: number) => {
     try {
-      return await getAgentsPaginated(workspaceId, page, pageSize)
+      const result = await getAgentsPaginated(workspaceId, page, pageSize)
+      return { ...result, items: result.items.map(normalizeAgentRow) }
     } catch (error) {
       logger.error('Error in agent-get-paginated:', error)
       throw error
@@ -57,7 +90,8 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle('agent-get-by-id', async (workspaceId: number, id: number) => {
     try {
-      return await getAgentById(workspaceId, id)
+      const agent = await getAgentById(workspaceId, id)
+      return agent ? normalizeAgentRow(agent) : agent
     } catch (error) {
       logger.error('Error in agent-get-by-id:', error)
       throw error
@@ -72,7 +106,7 @@ export function agentIpcHandlers(): IpcHandlerMap {
       if (!input.workspace_id || !workspaces.some((w) => w.id === input.workspace_id)) {
         throw new Error(mainMessages().error.workspaceNotConfigured)
       }
-      const id = await createAgent(input)
+      const id = await createAgent({ ...input, tools: normalizeToolList(input.tools) })
       clearAgentCache()
       return id
     } catch (error) {
@@ -85,7 +119,11 @@ export function agentIpcHandlers(): IpcHandlerMap {
     'agent-update',
     async (workspaceId: number, id: number, updates: Partial<AgentConfigInput>) => {
       try {
-        const result = await updateAgent(workspaceId, id, updates)
+        const normalized =
+          updates.tools !== undefined
+            ? { ...updates, tools: normalizeToolList(updates.tools) }
+            : updates
+        const result = await updateAgent(workspaceId, id, normalized)
         clearAgentCache()
         return result
       } catch (error) {
@@ -135,7 +173,9 @@ export function agentIpcHandlers(): IpcHandlerMap {
     // 通道管理），渲染层直接展示，不做二次过滤。
     return {
       ...config,
-      tools: (config.tools ?? []).filter(isSelectableMainAgentTool),
+      tools: Array.from(
+        new Set((config.tools ?? []).map((name) => canonicalToolName(name)))
+      ).filter(isSelectableMainAgentTool),
       skills: config.skills ?? [],
       mcpTools: config.mcpTools ?? []
     }
@@ -150,8 +190,10 @@ export function agentIpcHandlers(): IpcHandlerMap {
   handle('main-agent-update', (config: { tools?: string[]; skills?: string[] }) => {
     const current = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {}
     // 写入前在主进程收敛：MCP 工具/分组项、插件模式工具都不属于这份清单
-    // （MCP 走 mcp-tools-set，模式工具按插件模式自动挂载）。
-    const tools = (config?.tools ?? []).filter(isSelectableMainAgentTool)
+    // （MCP 走 mcp-tools-set，模式工具按插件模式自动挂载）；旧资料工具名迁移到统一入口。
+    const tools = Array.from(
+      new Set((config?.tools ?? []).map((name) => canonicalToolName(name)))
+    ).filter(isSelectableMainAgentTool)
     settingsStore.set('mainAgent', {
       ...current,
       tools,

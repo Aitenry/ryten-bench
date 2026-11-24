@@ -31,6 +31,20 @@ export function channelNamespace(id: string): string {
  */
 const namespaceOwners = new Map<string, string>()
 
+/**
+ * 「请求一次云同步」的宿主接线（`lattice/index.ts` 注入 `scheduleLatticePush`）。
+ *
+ * 用注入而不是直接 import `lattice/sync`：sync → plugins/host → 本文件，
+ * 静态 import 会成环（CJS 打包下先求值的一侧拿到半初始化的导出）。
+ * 未接线（单元测试、未启用插件中心）时静默忽略，插件写入不受影响。
+ */
+let syncRequester: ((pluginId: string) => void) | null = null
+
+/** 由 `lattice/index.ts` 在启动时接线（传 null 解绑） */
+export function setPluginSyncRequester(fn: ((pluginId: string) => void) | null): void {
+  syncRequester = fn
+}
+
 function claimNamespace(id: string, namespace: string): void {
   const owner = namespaceOwners.get(namespace)
   if (owner && owner !== id) {
@@ -83,6 +97,14 @@ export interface MainPluginContext {
 
   /** 读取某贡献点的全部贡献（宿主/注册表所有者用，例如 harness 读 'harness.tool'） */
   contributions<T>(key: string): T[]
+
+  /**
+   * 请求宿主安排一次云同步（本插件的数据已落库）。
+   *
+   * 宿主按**5 秒防抖**合并成一次 push；未登录插件中心 / 未接线时静默忽略。
+   * 典型用法：写业务表之后调一次，别每次循环里都调（防抖只吸收短时间内的重复请求）。
+   */
+  requestSync(): void
 }
 
 export class MainPluginContextImpl implements MainPluginContext {
@@ -194,6 +216,16 @@ export class MainPluginContextImpl implements MainPluginContext {
 
   contributions<T>(key: string): T[] {
     return listContributions<T>(key)
+  }
+
+  requestSync(): void {
+    if (this.disposed) return
+    try {
+      syncRequester?.(this.id)
+    } catch (err) {
+      // 同步请求失败绝不能影响插件的写入结果
+      logger.warn(`[Plugins] ${this.id} requestSync failed:`, err)
+    }
   }
 
   /** 回滚本插件全部效果与通道（幂等） */

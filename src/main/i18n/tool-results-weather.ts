@@ -18,23 +18,46 @@ export const zhCNWeatherToolTexts = {
   /** 首选地点显示名：中文用全角顿号与括号，英文用半角逗号与括号 */
   locationWithAdmin: '{{name}}，{{admin1}}（{{country}}）',
   location: '{{name}}（{{country}}）',
-  /** 其他匹配地点（原本就是半角逗号，中英同形） */
-  otherLocations: '\n**其他匹配地点：**',
-  otherLocationWithAdmin: '  - {{name}}, {{admin1}}, {{country}}',
-  otherLocation: '  - {{name}}, {{country}}',
+  coordinatesLabel: '经纬度 {{lat}}, {{lon}}',
+  currentLocation: '当前位置',
+  locationIndexOutOfRange: 'location_index={{index}} 超出范围（可用 1–{{count}}）。',
+  locationRequired: '请提供地点名称、经纬度，或先让应用获取到本机位置。',
+  invalidCoordinates: '经纬度不合法：必须同时提供 latitude（-90~90）与 longitude（-180~180）。',
+  apiError: '天气服务请求失败：{{reason}}。请稍后重试。',
+  invalidDate: 'hourly_date 必须是 YYYY-MM-DD 格式。',
+  noSections: 'include_current / include_daily / include_hourly 不能同时为 false。',
+  noCurrent: '天气服务没有返回当前实况。',
+  noDaily: '天气服务没有返回逐日预报。',
+  noHourly: '天气服务没有返回逐小时预报。',
+  hourlyUnavailable: '指定日期没有可用的逐小时数据（预报范围最长 16 天）。',
+  /** 其他匹配地点（用 location_index 选择） */
+  otherLocations: '\n**匹配地点（用 location_index 选择）：**',
+  otherLocationWithAdmin: '  [{{index}}] {{name}}, {{admin1}}, {{country}}',
+  otherLocation: '  [{{index}}] {{name}}, {{country}}',
 
   // ----- 当前实况 -----
+  timezoneLine: '时区：{{timezone}}（UTC{{offset}}） · 观测时间：{{observedAt}}',
+  timezoneLineNoObservation: '时区：{{timezone}}（UTC{{offset}}）',
   currentHeader: '**当前实况**',
   condition: '  天气：{{condition}}',
   temperature: '  气温：{{temp}}°C（体感 {{apparent}}°C）',
   humidity: '  湿度：{{humidity}}%',
-  wind: '  风速：{{speed}} km/h {{direction}}',
+  wind: '  风：{{direction}} {{speed}} km/h（阵风 {{gust}} km/h）',
+  precipitation: '  降水：{{precip}} mm（雨 {{rain}} mm / 阵雨 {{showers}} mm / 雪 {{snow}} cm）',
+  cloudPressure: '  云量：{{cloud}}% · 气压：{{pressure}} hPa',
 
   // ----- 未来预报 -----
   forecastHeader: '**未来 {{days}} 天预报**\n',
   today: '今天',
   daily:
-    '  **{{date}} {{label}}**：{{condition}}，{{min}}～{{max}}°C（体感 {{feelsMin}}～{{feelsMax}}°C），降水量 {{precip}}mm（概率 {{prob}}%），风速 {{speed}}km/h {{direction}}',
+    '  **{{date}} {{label}}**：{{condition}}，{{min}}～{{max}}°C（体感 {{feelsMin}}～{{feelsMax}}°C）',
+  dailyDetails:
+    '    降水 {{precip}}mm（概率 {{prob}}%，{{hours}} 小时） · 风 {{speed}}km/h {{direction}}（阵风 {{gust}}km/h）',
+  dailyAstronomy: '    紫外线 {{uv}} · 日出 {{sunrise}} · 日落 {{sunset}}',
+  hourlyHeaderHours: '**逐小时预报（未来 {{hours}} 小时）**',
+  hourlyHeaderDate: '**逐小时预报（{{date}}）**',
+  hourly:
+    '  {{time}} {{condition}}，{{temp}}°C，降水概率 {{prob}}% / {{precip}}mm，风 {{speed}}km/h {{direction}}',
 
   /** 天气码不在词表里时的兜底（weatherCodeLabel 用） */
   unknownCode: '天气码 {{code}}',
@@ -107,20 +130,47 @@ export const enUSWeatherToolTexts: typeof zhCNWeatherToolTexts = {
   notFound: 'No weather information found for "{{location}}".',
   locationWithAdmin: '{{name}}, {{admin1}} ({{country}})',
   location: '{{name}} ({{country}})',
-  otherLocations: '\n**Other matching locations:**',
-  otherLocationWithAdmin: '  - {{name}}, {{admin1}}, {{country}}',
-  otherLocation: '  - {{name}}, {{country}}',
+  coordinatesLabel: 'latitude {{lat}}, longitude {{lon}}',
+  currentLocation: 'current location',
+  locationIndexOutOfRange: 'location_index={{index}} is out of range (available: 1–{{count}}).',
+  locationRequired:
+    'Provide a location name or latitude/longitude, or let the app resolve the current IP-based location first.',
+  invalidCoordinates:
+    'Invalid coordinates: provide both latitude (-90..90) and longitude (-180..180).',
+  apiError: 'Weather service request failed: {{reason}}. Please try again later.',
+  invalidDate: 'hourly_date must use the YYYY-MM-DD format.',
+  noSections: 'include_current / include_daily / include_hourly cannot all be false.',
+  noCurrent: 'The weather service did not return current conditions.',
+  noDaily: 'The weather service did not return a daily forecast.',
+  noHourly: 'The weather service did not return an hourly forecast.',
+  hourlyUnavailable:
+    'No hourly data is available for that date (the forecast range is at most 16 days).',
+  otherLocations: '\n**Matching locations (choose with location_index):**',
+  otherLocationWithAdmin: '  [{{index}}] {{name}}, {{admin1}}, {{country}}',
+  otherLocation: '  [{{index}}] {{name}}, {{country}}',
 
+  timezoneLine: 'Timezone: {{timezone}} (UTC{{offset}}) · Observed: {{observedAt}}',
+  timezoneLineNoObservation: 'Timezone: {{timezone}} (UTC{{offset}})',
   currentHeader: '**Current conditions**',
   condition: '  Condition: {{condition}}',
   temperature: '  Temperature: {{temp}}°C (feels like {{apparent}}°C)',
   humidity: '  Humidity: {{humidity}}%',
-  wind: '  Wind: {{speed}} km/h {{direction}}',
+  wind: '  Wind: {{direction}} {{speed}} km/h (gusts {{gust}} km/h)',
+  precipitation:
+    '  Precipitation: {{precip}} mm (rain {{rain}} mm / showers {{showers}} mm / snow {{snow}} cm)',
+  cloudPressure: '  Cloud cover: {{cloud}}% · Pressure: {{pressure}} hPa',
 
   forecastHeader: '**{{days}}-day forecast**\n',
   today: 'Today',
   daily:
-    '  **{{date}} {{label}}**: {{condition}}, {{min}}-{{max}}°C (feels like {{feelsMin}}-{{feelsMax}}°C), precipitation {{precip}}mm ({{prob}}% chance), wind {{speed}}km/h {{direction}}',
+    '  **{{date}} {{label}}**: {{condition}}, {{min}}-{{max}}°C (feels like {{feelsMin}}-{{feelsMax}}°C)',
+  dailyDetails:
+    '    Precipitation {{precip}}mm ({{prob}}% chance, {{hours}} h) · Wind {{speed}}km/h {{direction}} (gusts {{gust}}km/h)',
+  dailyAstronomy: '    UV {{uv}} · Sunrise {{sunrise}} · Sunset {{sunset}}',
+  hourlyHeaderHours: '**Hourly forecast (next {{hours}} hours)**',
+  hourlyHeaderDate: '**Hourly forecast ({{date}})**',
+  hourly:
+    '  {{time}} {{condition}}, {{temp}}°C, precipitation {{prob}}% / {{precip}}mm, wind {{speed}}km/h {{direction}}',
 
   unknownCode: 'Weather code {{code}}',
 

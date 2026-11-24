@@ -6,7 +6,12 @@ import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
 import { onAppEvent } from '../plugins/app-events'
 import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
-import { preloadHarnessData } from '../services/harness/preload-cache'
+import { preloadHarnessData, clearAgentCache } from '../services/harness/preload-cache'
+import { clearProviderCache } from '../provider/cache'
+import { todoStore } from '../runtime/harness/todo'
+import { goalStore } from '../runtime/harness/goal'
+import { harnessQueue } from '../services/harness/queue-store'
+import { goalRoundDriver } from '../services/harness/goal-driver'
 import { dumpRendererMemory } from '../services/harness/renderer-memory'
 import { closeAllMnemon } from '../services/harness/mnemon-singleton'
 import { syncWorkspaceWatcher, stopWorkspaceWatcher } from '../workspace'
@@ -151,6 +156,27 @@ export function stopHarness(): void {
 /** 加载页预取：初始化完成后、主窗口交接前，把常用数据读进缓存 */
 export function preloadHarness(): Promise<void> {
   return preloadHarnessData()
+}
+
+/**
+ * 丢掉全部**按账号数据**缓存的内存状态（运行中切换账号数据空间时调用）。
+ *
+ * 为什么必须清：这些单例按 `topicId` / `workspaceId` 这类**数据库自增 id** 索引，
+ * 而每个账号的库是独立的——换库后同一个 id 可能指向另一个账号的数据。不清掉会出现
+ * 「新账号的话题显示上一个账号的待办 / 目标 / 排队消息」，属于串号（只是发生在内存里）。
+ *
+ * 只清缓存、不落盘：真实数据都在各自账号的数据库里，清掉后按需重新读即可。
+ * 记忆组件（Mnemon）与 MCP 子进程不在这些缓存里，由切换流程（`profiles/live.ts`）
+ * 单独关闭后重新按新库装载。
+ */
+export function resetHarnessAccountState(): void {
+  clearAgentCache()
+  clearProviderCache()
+  todoStore.reset()
+  goalStore.reset()
+  harnessQueue.reset()
+  goalRoundDriver.reset()
+  logger.info('[Harness] Account-scoped in-memory state cleared for profile switch')
 }
 
 /** 渲染进程异常退出时落诊断快照（未启动/无 dump 目录时静默） */

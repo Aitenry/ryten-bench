@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { theme, Button, Switch, Modal, Form, Input, Select, Pagination, App } from 'antd'
 import {
   PlusOutlined,
@@ -27,6 +27,7 @@ import type {
   McpServerView
 } from '../../../../../shared/harness/types'
 import {
+  canonicalToolName,
   isMcpToolName,
   isPluginModeTool,
   mcpNamespace,
@@ -451,7 +452,7 @@ const AgentSettings: React.FC = () => {
         if (Array.isArray(item.tools) && item.tools.length > 0) {
           const normalized = item.tools.map((name) => {
             const parsed = isMcpToolName(name) ? parseMcpToolName(name) : null
-            return parsed ? mcpServerGroupValue(parsed.server) : name
+            return parsed ? mcpServerGroupValue(parsed.server) : canonicalToolName(name)
           })
           const removed = normalized.filter((t) => !validToolNames.has(t))
           filteredTools = Array.from(new Set(normalized.filter((t) => validToolNames.has(t))))

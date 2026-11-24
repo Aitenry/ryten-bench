@@ -15,8 +15,8 @@ import { notesToolContributions } from '../tools/notes'
  *
  * - **通道表**：5 个域（todo / document / wiki / node-position / graph），
  *   一个域一个文件，通道名一律 `notes:*`；
- * - **AI 工具**：`manage_todos` / `manage_docs` / `manage_wikis` / `search_graph`
- *   （实现见 `tools/notes/**`）注册进 harness 的工具注册表，模型因此能读写资料库；
+ * - **AI 工具**：`manage_materials`（资料整理）一个入口覆盖文档 / 待办 / 知识库 /
+ *   图谱（实现见 `tools/notes/**`），注册进 harness 的工具注册表，模型因此能读写资料库；
  *   与第三方插件走同一个 `harness.tool` 消费点，只是这里是随应用编译进来的内置来源；
  * - **图谱事件**：`notes:graph-build-{progress,complete,error}` 由主进程广播、
  *   渲染层 `BuildProgressProvider` 订阅，通道名前缀由 preload 系统桥放行。

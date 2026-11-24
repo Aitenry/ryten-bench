@@ -382,9 +382,11 @@ export const harnessEnUS: typeof harnessZhCN = {
     askQuestion: {
       title: 'Your confirmation is needed',
       okText: 'Submit answer',
+      cancelText: 'Cancel',
+      otherOption: 'Other',
       customPlaceholder: 'Type your answer…',
       footerHint:
-        'After submitting, the model continues in this turn; click "Stop generating" to cancel the question and abort the turn.'
+        'After submitting, the model continues in this turn; "Cancel" dismisses the question and stops the turn.'
     },
     modelRecovery: {
       title: 'Model request failed',

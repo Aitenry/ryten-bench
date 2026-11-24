@@ -134,6 +134,18 @@ async function getAllDocs(
   })
 }
 
+/** 按 ID 批量取标题（图谱来源文档展示用：只查 title，不加载正文） */
+async function getDocTitlesByIds(ids: number[]): Promise<Map<number, string>> {
+  if (ids.length === 0) return new Map()
+  return withOrm('getDocTitlesByIds', async (db) => {
+    const rows = await db
+      .select({ id: documents.id, title: documents.title })
+      .from(documents)
+      .where(inArray(documents.id, ids))
+    return new Map(rows.map((row) => [row.id, row.title]))
+  })
+}
+
 async function getDocPage(
   query: string,
   page: number = 1,
@@ -381,6 +393,7 @@ async function deleteDocsByTimeRange(startTime: string, endTime: string): Promis
 export {
   getDocById,
   getAllDocs,
+  getDocTitlesByIds,
   getDocPage,
   addDoc,
   updateDoc,

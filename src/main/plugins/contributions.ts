@@ -94,3 +94,49 @@ export function pluginPurge(id: string): PluginPurgeContribution | null {
   if (!value || typeof value.run !== 'function') return null
   return { run: value.run, label: typeof value.label === 'string' ? value.label : id }
 }
+
+/**
+ * 贡献点键：**云同步快照**（`plugin.sync.snapshot`）。
+ *
+ * 背景：`lattice/sync` 原先只同步 `userData/plugin-state/<id>.json`，而按宿主约定
+ * （见 WORKSHOP「应用数据进表、设置进 JSON」）业务数据在插件自己的表里——于是云端只有设置。
+ * 这个贡献点让插件自己决定「同步什么」：
+ *
+ * 契约：
+ * - 插件在 `install(ctx)` 里 `ctx.contribute(PLUGIN_SYNC_SNAPSHOT, { export, import })`；
+ * - `export()` 返回**可 JSON 序列化**的对象（平台上限 256KiB，宿主超限时整份跳过、不截断），
+ *   内容由插件自己定义：设置 + 业务表的合并快照都行；
+ * - `import(data)` 必须是**替换语义、幂等**：重复应用同一份快照不得产生重复行
+ *   （宿主在 pull / 冲突选「用云端」时可能多次调用）；抛错即视为失败，宿主不会前移 `data_rev`；
+ * - 贡献存在时，宿主**不再**读写 `plugin-state/<id>.json` 作为同步载荷（那个文件只是设置，
+ *   拿它当快照会把云端数据覆盖成设置）；插件未装载（停用）时云端数据只保留、不落盘，
+ *  待插件重新启用后再应用（`requestSync` 会触发一次同步）；
+ * - `label` 只用于日志/排障。
+ */
+export const PLUGIN_SYNC_SNAPSHOT = 'plugin.sync.snapshot'
+
+/** `plugin.sync.snapshot` 贡献的值 */
+export interface PluginSyncSnapshotContribution {
+  /** 导出当前可同步数据（设置 + 业务表），宿主序列化后上传 */
+  export: () => unknown | Promise<unknown>
+  /** 应用云端快照（**替换 + 幂等**；未实现时宿主拒绝把快照写进 plugin-state） */
+  import?: (data: unknown) => void | Promise<void>
+  /** 说明文字，仅用于日志/排障 */
+  label?: string
+}
+
+/**
+ * 取某插件的同步快照贡献（未贡献 / 插件未装载时返回 null）。
+ *
+ * 与 `pluginPurge` 一样的「末项生效」规则；`export` 必需，`import` 可选。
+ */
+export function pluginSyncSnapshot(id: string): PluginSyncSnapshotContribution | null {
+  const all = (registry.get(PLUGIN_SYNC_SNAPSHOT) ?? []).filter((entry) => entry.pluginId === id)
+  const value = all[all.length - 1]?.value as Partial<PluginSyncSnapshotContribution> | undefined
+  if (!value || typeof value.export !== 'function') return null
+  return {
+    export: value.export,
+    ...(typeof value.import === 'function' ? { import: value.import } : {}),
+    ...(typeof value.label === 'string' ? { label: value.label } : {})
+  }
+}

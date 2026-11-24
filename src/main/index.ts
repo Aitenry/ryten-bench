@@ -10,6 +10,7 @@ import { registerMermaidPreviewIpc } from './windows/mermaid-preview'
 import { createTray } from './tray'
 import { setupWeather } from './weather'
 import { bootstrapStorageLayout } from './storage'
+import { initAccountProfile } from './profiles/runtime'
 
 // 单实例锁：防止多开，同时确保安装程序能正确检测和关闭进程
 const gotTheLock = app.requestSingleInstanceLock()
@@ -74,6 +75,10 @@ app
   .whenReady()
   .then(async () => {
     electronApp.setAppUserModelId('com.ryten.bench')
+
+    // 账号级本地数据空间：必须在**任何**数据库/插件/同步数据被读写之前完成对调。
+    // （未登录 = anonymous 容器；换账号后重启，由这里把上一账号的数据换进 profiles/）
+    if (!initAccountProfile()) return
 
     // plugin:// 协议处理器（外部插件静态文件；需在 ready 后注册）
     registerPluginProtocolHandler()

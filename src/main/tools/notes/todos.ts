@@ -1,100 +1,173 @@
-// 本工具（manage_todos）归属 notes 插件：待办数据全部走本插件的 mapper，不再跨插件直读。
-// 经 harness 的**工具贡献点**（HARNESS_TOOL_CONTRIBUTION，契约见
-// src/main/plugins/tool-contract.ts）注册给 AI：插件未启用时 harness 拉不到这条贡献，
-// 工具自然不出现在模型面前。
-import { tool } from '../../ai/tools'
-import type { StructuredToolInterface } from '../../ai/tools'
-import * as z from 'zod/v4'
+// 待办域处理器（统一由 manage_materials 工具调度）。
+//
+// 2026-11 资料整理改造：
+// - 列表过滤改在内存里做（旧实现按 status 查库会漏掉 status 为 NULL 的历史行，
+//   且 page=1 时忽略 pageSize 返回全量）；支持 category / 关键字 / 是否含已完成；
+// - 新增 todo.get：列表只给摘要，看正文/时间戳用 get，避免一次列全部正文；
+// - 新增 todo.bulk_update：一次改多项的状态/优先级/截止日/分类；
+// - 优先级口径与界面一致：0=P0（最高）… 7=P7（最低），不再把 1 当最高。
 import { mainFormat, mainPlural } from '../../i18n'
 import { getTodoToolTexts } from '../../i18n/tool-results-todos'
-import type { PluginToolContribution } from '../../plugins/tool-contract'
+
+const MIN_PRIORITY = 0
+const MAX_PRIORITY = 7
+const MAX_PAGE_SIZE = 100
+
+function priorityText(priority: number | null | undefined): string {
+  return mainFormat(getTodoToolTexts().todos.priorityValue, { priority: priority ?? 0 })
+}
+
+function validPriority(priority: number): boolean {
+  return Number.isInteger(priority) && priority >= MIN_PRIORITY && priority <= MAX_PRIORITY
+}
+
+function validStatus(status: number): boolean {
+  return status === 0 || status === 1 || status === 2
+}
+
+function validDueDate(due: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return false
+  const [year, month, day] = due.split('-').map((part) => Number(part))
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  )
+}
 
 // ============================================================================
-// Todo Handlers
+// 查询
 // ============================================================================
 
-async function listTodosHandler(params: {
+export async function listTodosHandler(params: {
   status?: number
   priority?: number
+  category?: string
+  query?: string
+  includeDone?: boolean
   page?: number
   pageSize?: number
 }): Promise<string> {
   const tr = getTodoToolTexts()
-  const { getAllTodoItems, getTodoItemsPaginated, getTodoItemsByStatus, getTodoItemsByPriority } =
-    await import('../../database/mapper/notes/todo')
-  const { page = 1, pageSize = 20, status, priority } = params
-  const safePage = Math.max(1, Math.floor(page))
-  const safePageSize = Math.max(1, Math.floor(pageSize))
-  let items: Array<{
-    id: number
-    title: string
-    status: number | null
-    priority: number | null
-    due_date: string | null
-    category: string | null
-  }>
-  if (status !== undefined) {
-    // 修复：此前「先分页后客户端过滤」只扫第一页,命中项在后续页即漏报；
-    // 且分页 SQL 恒排除已完成(status!=2),查「已完成」永远为空。
-    // 改为按状态全量查询后在内存分页（口径与不带过滤的 list 一致,含已完成）
-    const rows = await getTodoItemsByStatus(status)
-    items = rows.slice((safePage - 1) * safePageSize, safePage * safePageSize)
-  } else if (priority !== undefined) {
-    const rows = await getTodoItemsByPriority(priority)
-    items = rows.slice((safePage - 1) * safePageSize, safePage * safePageSize)
-  } else if (safePage > 1) {
-    const result = await getTodoItemsPaginated(safePage, safePageSize)
-    items = result.items
-  } else {
-    items = await getAllTodoItems()
+  const { getAllTodoItems } = await import('../../database/mapper/notes/todo')
+  const all = await getAllTodoItems()
+
+  const includeDone = params.includeDone ?? true
+  const query = params.query?.trim().toLowerCase()
+  const category = params.category?.trim()
+  const filtered = all.filter((item) => {
+    const status = item.status ?? 0
+    if (!includeDone && status === 2) return false
+    if (params.status !== undefined && status !== params.status) return false
+    if (params.priority !== undefined && (item.priority ?? 0) !== params.priority) return false
+    if (category && (item.category ?? '') !== category) return false
+    if (query) {
+      const haystack = [item.title, item.content, item.category]
+        .filter((part): part is string => typeof part === 'string')
+        .join('\n')
+        .toLowerCase()
+      if (!haystack.includes(query)) return false
+    }
+    return true
+  })
+
+  const total = filtered.length
+  if (total === 0) return tr.todos.empty
+  const page = Math.max(1, Math.floor(params.page ?? 1))
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(params.pageSize ?? 20)))
+  const items = filtered.slice((page - 1) * pageSize, page * pageSize)
+  if (items.length === 0) {
+    return mainFormat(tr.todos.pageEmpty, { page, total })
   }
-  if (!items.length) return tr.todos.empty
+
   const statusLabels = [
     tr.todos.statusLabels.todo,
     tr.todos.statusLabels.inProgress,
     tr.todos.statusLabels.done
   ]
-  const priorityLabels = [
-    tr.todos.priorityLabels.none,
-    tr.todos.priorityLabels.p0,
-    tr.todos.priorityLabels.p1,
-    tr.todos.priorityLabels.p2,
-    tr.todos.priorityLabels.p3
-  ]
-  const lines = [mainPlural(tr.todos.listHeader_one, tr.todos.listHeader_other, items.length)]
+  const lines = [mainPlural(tr.todos.listHeader_one, tr.todos.listHeader_other, total)]
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+  if (pages > 1) {
+    lines.push(mainFormat(tr.todos.listPage, { page, pages, total }))
+  }
   for (const t of items) {
-    // 两列在库里有 DEFAULT 0，只有历史脏数据才可能为 null；null 一律按默认值（待办 / 无优先级）呈现
     const status = t.status ?? 0
     const priority = t.priority ?? 0
     const s = statusLabels[status] ?? mainFormat(tr.todos.statusLabels.unknown, { status })
-    const p = priorityLabels[priority] ?? `P${priority}`
-    lines.push(`  [${t.id}] ${t.title}`)
     const meta: string[] = [
       mainFormat(tr.todos.meta.status, { status: s }),
-      mainFormat(tr.todos.meta.priority, { priority: p })
+      mainFormat(tr.todos.meta.priority, { priority: priorityText(priority) })
     ]
     if (t.due_date) meta.push(mainFormat(tr.todos.meta.due, { dueDate: t.due_date }))
     if (t.category) meta.push(mainFormat(tr.todos.meta.category, { category: t.category }))
+    lines.push(`  [${t.id}] ${t.title}`)
     lines.push(`    ${meta.join(' | ')}`)
     lines.push('')
   }
   return lines.join('\n')
 }
 
-async function addTodoHandler(params: {
+export async function getTodoHandler(params: { todoId: number }): Promise<string> {
+  const tr = getTodoToolTexts()
+  const { getTodoItemById } = await import('../../database/mapper/notes/todo')
+  const rows = await getTodoItemById(params.todoId)
+  if (!rows.length) return mainFormat(tr.todos.notFound, { id: params.todoId })
+  const todo = rows[0]
+
+  const statusLabels = [
+    tr.todos.statusLabels.todo,
+    tr.todos.statusLabels.inProgress,
+    tr.todos.statusLabels.done
+  ]
+  const status = todo.status ?? 0
+  const priority = todo.priority ?? 0
+  const meta = [
+    mainFormat(tr.todos.meta.status, {
+      status: statusLabels[status] ?? mainFormat(tr.todos.statusLabels.unknown, { status })
+    }),
+    mainFormat(tr.todos.meta.priority, { priority: priorityText(priority) }),
+    mainFormat(tr.todos.meta.created, { createdAt: todo.created_at ?? '—' }),
+    mainFormat(tr.todos.meta.updated, { updatedAt: todo.updated_at ?? '—' })
+  ]
+  if (todo.due_date) meta.push(mainFormat(tr.todos.meta.due, { dueDate: todo.due_date }))
+  if (todo.category) meta.push(mainFormat(tr.todos.meta.category, { category: todo.category }))
+  if (todo.started_at) meta.push(mainFormat(tr.todos.meta.started, { startedAt: todo.started_at }))
+  if (todo.completed_at) {
+    meta.push(mainFormat(tr.todos.meta.completed, { completedAt: todo.completed_at }))
+  }
+
+  return [
+    mainFormat(tr.todos.getHeader, { todoId: todo.id, title: todo.title }),
+    meta.join(' | '),
+    '',
+    '---',
+    todo.content?.trim() ? todo.content : tr.todos.noContent,
+    '---'
+  ].join('\n')
+}
+
+// ============================================================================
+// 写操作
+// ============================================================================
+
+export async function addTodoHandler(params: {
   title: string
   content?: string
   priority?: number
-  due_date?: string
-  category?: string
+  due_date?: string | null
+  category?: string | null
 }): Promise<string> {
   const tr = getTodoToolTexts()
+  if (!params.title?.trim()) return tr.todos.titleRequired
+  const priority = params.priority ?? 2
+  if (!validPriority(priority)) return tr.todos.invalidPriority
+  if (params.due_date && !validDueDate(params.due_date)) return tr.todos.invalidDueDate
+
   const { addTodoItem, getTodoItemById } = await import('../../database/mapper/notes/todo')
   const newId = await addTodoItem({
     title: params.title,
     content: params.content || '',
     due_date: params.due_date || null,
-    priority: params.priority ?? 2,
+    priority,
     status: 0,
     category: params.category || null,
     completed_at: null,
@@ -110,115 +183,95 @@ async function addTodoHandler(params: {
   })
 }
 
-async function updateTodoHandler(params: {
-  id: number
+export async function updateTodoHandler(params: {
+  todoId: number
   title?: string
   content?: string
   status?: number
   priority?: number
   due_date?: string | null
-  category?: string
+  category?: string | null
 }): Promise<string> {
   const tr = getTodoToolTexts()
+  if (params.title !== undefined && !params.title.trim()) return tr.todos.titleRequired
+  if (params.priority !== undefined && !validPriority(params.priority)) {
+    return tr.todos.invalidPriority
+  }
+  if (params.status !== undefined && !validStatus(params.status)) return tr.todos.invalidStatus
+  if (typeof params.due_date === 'string' && !validDueDate(params.due_date)) {
+    return tr.todos.invalidDueDate
+  }
+
   const { updateTodoItem, getTodoItemById } = await import('../../database/mapper/notes/todo')
-  const rows = await getTodoItemById(params.id)
-  if (!rows.length) return mainFormat(tr.todos.notFound, { id: params.id })
+  const rows = await getTodoItemById(params.todoId)
+  if (!rows.length) return mainFormat(tr.todos.notFound, { id: params.todoId })
   const existing = rows[0]
+
   const updates: Record<string, unknown> = {}
   if (params.title !== undefined) updates.title = params.title
   if (params.content !== undefined) updates.content = params.content
   if (params.status !== undefined) updates.status = params.status
   if (params.priority !== undefined) updates.priority = params.priority
-  if (params.due_date !== undefined) updates.due_date = params.due_date
-  if (params.category !== undefined) updates.category = params.category
+  if (params.due_date !== undefined) updates.due_date = params.due_date || null
+  if (params.category !== undefined) updates.category = params.category || null
+  if (Object.keys(updates).length === 0) return tr.todos.noFieldsToUpdate
+
   updates.updated_at = new Date().toISOString()
-  await updateTodoItem(params.id, updates as Parameters<typeof updateTodoItem>[1])
-  return mainFormat(tr.todos.updated, { id: params.id, title: params.title ?? existing.title })
+  await updateTodoItem(params.todoId, updates as Parameters<typeof updateTodoItem>[1])
+  return mainFormat(tr.todos.updated, {
+    id: params.todoId,
+    title: params.title ?? existing.title
+  })
 }
 
-async function deleteTodoHandler(params: { id: number }): Promise<string> {
+export async function bulkUpdateTodosHandler(params: {
+  ids: number[]
+  status?: number
+  priority?: number
+  due_date?: string | null
+  category?: string | null
+}): Promise<string> {
+  const tr = getTodoToolTexts()
+  if (!params.ids.length) return tr.todos.idsRequired
+  if (params.priority !== undefined && !validPriority(params.priority)) {
+    return tr.todos.invalidPriority
+  }
+  if (params.status !== undefined && !validStatus(params.status)) return tr.todos.invalidStatus
+  if (typeof params.due_date === 'string' && !validDueDate(params.due_date)) {
+    return tr.todos.invalidDueDate
+  }
+
+  const updates: Record<string, unknown> = {}
+  if (params.status !== undefined) updates.status = params.status
+  if (params.priority !== undefined) updates.priority = params.priority
+  if (params.due_date !== undefined) updates.due_date = params.due_date || null
+  if (params.category !== undefined) updates.category = params.category || null
+  if (Object.keys(updates).length === 0) return tr.todos.noFieldsToUpdate
+  updates.updated_at = new Date().toISOString()
+
+  const { updateTodoItem, getTodoItemById } = await import('../../database/mapper/notes/todo')
+  const missing: number[] = []
+  let updated = 0
+  for (const id of params.ids) {
+    const rows = await getTodoItemById(id)
+    if (!rows.length) {
+      missing.push(id)
+      continue
+    }
+    await updateTodoItem(id, updates as Parameters<typeof updateTodoItem>[1])
+    updated++
+  }
+  const missingText = missing.length
+    ? mainFormat(tr.todos.bulkMissing, { ids: missing.join(', ') })
+    : ''
+  return mainFormat(tr.todos.bulkUpdated, { count: updated, missing: missingText })
+}
+
+export async function deleteTodoHandler(params: { todoId: number }): Promise<string> {
   const tr = getTodoToolTexts()
   const { deleteTodoItem, getTodoItemById } = await import('../../database/mapper/notes/todo')
-  const rows = await getTodoItemById(params.id)
-  if (!rows.length) return mainFormat(tr.todos.notFound, { id: params.id })
-  await deleteTodoItem(params.id)
-  return mainFormat(tr.todos.deleted, { id: params.id, title: rows[0].title })
+  const rows = await getTodoItemById(params.todoId)
+  if (!rows.length) return mainFormat(tr.todos.notFound, { id: params.todoId })
+  await deleteTodoItem(params.todoId)
+  return mainFormat(tr.todos.deleted, { id: params.todoId, title: rows[0].title })
 }
-
-// ============================================================================
-// Tool Builder
-// ============================================================================
-
-export function buildManageTodosTool(): StructuredToolInterface {
-  return tool(
-    async ({ command, ...params }) => {
-      switch (command) {
-        case 'list':
-          return listTodosHandler(params as Parameters<typeof listTodosHandler>[0])
-        case 'add':
-          return addTodoHandler(params as Parameters<typeof addTodoHandler>[0])
-        case 'update':
-          return updateTodoHandler(params as Parameters<typeof updateTodoHandler>[0])
-        case 'delete':
-          return deleteTodoHandler(params as Parameters<typeof deleteTodoHandler>[0])
-        default:
-          return mainFormat(getTodoToolTexts().common.unknownCommand, {
-            command,
-            supported: 'list, add, update, delete'
-          })
-      }
-    },
-    {
-      name: 'manage_todos',
-      description:
-        'Manage todo items.\n' +
-        '  Commands:\n' +
-        '    list - List todos; optional status (0=todo/1=in progress/2=done), priority (1=urgent/2=high/3=medium/4=low), page, pageSize\n' +
-        '    add - Create a todo; requires title, optional content (Markdown body), priority, due_date (YYYY-MM-DD), category\n' +
-        '    update - Update a todo; requires id, optional title, content, status, priority, due_date, category\n' +
-        '    delete - Delete a todo; requires id',
-      schema: z.object({
-        command: z.enum(['list', 'add', 'update', 'delete']).describe('Operation type'),
-        // list 参数
-        status: z
-          .number()
-          .optional()
-          .describe('[list] Filter by status: 0=todo, 1=in progress, 2=done'),
-        priority: z
-          .number()
-          .optional()
-          .describe('[list/add/update] Priority: 1=urgent, 2=high, 3=medium, 4=low'),
-        page: z.number().optional().default(1).describe('[list] Page number'),
-        pageSize: z.number().optional().default(20).describe('[list] Number of items per page'),
-        // add/update 参数
-        id: z.number().optional().describe('[update/delete] Todo ID'),
-        title: z.string().optional().describe('[add/update] Todo title'),
-        content: z.string().optional().describe('[add/update] Body content (Markdown)'),
-        due_date: z.string().optional().describe('[add/update] Due date, format YYYY-MM-DD'),
-        category: z
-          .string()
-          .optional()
-          .describe('[add/update] Category label, e.g. "work", "personal"')
-      })
-    }
-  )
-}
-
-// ============================================================================
-// Harness 工具贡献
-// ============================================================================
-
-/** 本插件贡献给 harness 的 AI 工具（由 main/index.ts 经 ctx.contribute 注册） */
-export const todoToolContributions: PluginToolContribution[] = [
-  {
-    name: 'manage_todos',
-    info: {
-      name: 'manage_todos',
-      label: 'To-dos',
-      description: 'View, create, update and delete to-dos',
-      icon: 'RiListCheck3',
-      color: '#fa8c16'
-    },
-    build: buildManageTodosTool
-  }
-]

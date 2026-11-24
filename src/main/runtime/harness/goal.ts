@@ -324,6 +324,18 @@ export class GoalStore {
   disarm(topicId: number): void {
     this.armedTopics.delete(topicId)
   }
+
+  /**
+   * 丢弃全部内存态（缓存 + 武装态），下次访问重新从数据库读。
+   *
+   * 账号数据空间切换时用：topicId 是**每个账号库各自的自增 id**，换库后同一 id 可能属于
+   * 另一个账号的话题——不清掉就会把上一个账号的目标/武装态套到新账号的话题上。
+   * 口径与「进程重启」一致：换号后一律 disarmed。
+   */
+  reset(): void {
+    this.cache.clear()
+    this.armedTopics.clear()
+  }
 }
 
 /** 进程级单例：跨请求共享（与 todoStore 同一模式） */

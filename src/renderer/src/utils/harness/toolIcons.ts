@@ -4,6 +4,7 @@ import {
   RiEye2Line,
   RiFileEditLine,
   RiFolderOpenLine,
+  RiFoldersLine,
   RiListCheck,
   RiPencilLine,
   RiPlug2Line,
@@ -43,6 +44,8 @@ export const TOOL_IN_PROGRESS_ICONS: Record<
   execute: RiTerminalBoxLine,
   write_todos: RiListCheck,
   read_todos: RiListCheck,
+  // 资料整理（文档/待办/知识库/图谱统一入口）
+  manage_materials: RiFoldersLine,
   // 前缀兜底：MCP 外部工具（插头）与 Mnemon 记忆工具（大脑）——名字运行期才知道
   [MCP_TOOL_ICON_KEY]: RiPlug2Line,
   [MNEMON_TOOL_ICON_KEY]: RiBrain4Line

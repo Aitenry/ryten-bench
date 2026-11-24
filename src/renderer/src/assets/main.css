@@ -1006,19 +1006,22 @@ button.shell-nav-item {
   );
   transform: translateX(-130%);
   mix-blend-mode: screen;
-  animation: startup-sheen 4.2s cubic-bezier(0.3, 0, 0.2, 1) 0.55s infinite;
+  /* 0.2s 就开始第一道扫光：窗口若在 1s 左右才显示，用户仍能看见亮片扫过 */
+  animation: startup-sheen 4.2s cubic-bezier(0.3, 0, 0.2, 1) 0.2s infinite;
   will-change: transform;
   pointer-events: none;
 }
 
 /* 星芒（亮片）：四角星形，出现时机跟着高光一起走。
-   形状放在伪元素上：clip-path 会把 drop-shadow 一起裁掉，光晕留在外层才不会丢。 */
+   形状放在伪元素上：clip-path 会把 drop-shadow 一起裁掉，光晕留在外层才不会丢。
+   常态保留 30% 亮度：星星是 logo 周围不动的装饰，不该只在动画的「亮」区间里存在——
+   动画被系统动效设置关掉时，用户也应该看得见它们（见文件末尾的 reduced-motion 段）。 */
 .startup-splash-spark {
   position: absolute;
   width: 20px;
   height: 20px;
   filter: drop-shadow(0 0 7px var(--startup-spark-glow, rgba(217, 160, 31, 0.5)));
-  opacity: 0;
+  opacity: 0.3;
   animation: startup-sparkle 4.2s ease-in-out infinite;
   pointer-events: none;
 }
@@ -1032,21 +1035,21 @@ button.shell-nav-item {
 .startup-splash-spark-a {
   top: 2%;
   right: -3%;
-  animation-delay: 1.25s;
+  animation-delay: 1s;
 }
 .startup-splash-spark-b {
   bottom: 5%;
   left: -6%;
   width: 13px;
   height: 13px;
-  animation-delay: 0.45s;
+  animation-delay: 0.25s;
 }
 .startup-splash-spark-c {
   top: 38%;
   left: -9%;
   width: 10px;
   height: 10px;
-  animation-delay: 0.75s;
+  animation-delay: 0.5s;
 }
 
 @keyframes startup-logo-in {
@@ -1149,21 +1152,21 @@ button.shell-nav-item {
 }
 @keyframes startup-sparkle {
   0% {
-    opacity: 0;
-    transform: scale(0.3) rotate(0deg);
+    opacity: 0.3;
+    transform: scale(0.6) rotate(0deg);
   }
   8% {
     opacity: 1;
     transform: scale(1) rotate(25deg);
   }
   16% {
-    opacity: 0.7;
+    opacity: 0.75;
     transform: scale(0.9) rotate(40deg);
   }
   26%,
   100% {
-    opacity: 0;
-    transform: scale(0.4) rotate(55deg);
+    opacity: 0.3;
+    transform: scale(0.6) rotate(55deg);
   }
 }
 
@@ -1178,12 +1181,14 @@ button.shell-nav-item {
   color: var(--startup-error, #b42318);
 }
 
+/* 降低动效（Windows「动画效果」关闭 / prefers-reduced-motion: reduce）：
+   只停「位移 / 缩放 / 漂移」这类容易让人不适的动效，**不能把亮片和星芒整块隐藏**——
+   它们是不动的装饰，不是动画本身。此前这里把 sheen / spark 的 opacity 归零，于是这类
+   机器上启动页只剩一个死板的方块图标（用户 2026-11-24 反馈「亮片和周围的星星没有了」）。 */
 @media (prefers-reduced-motion: reduce) {
   .startup-splash-logo,
   .startup-splash-logo-float,
   .startup-splash-logo-glow,
-  .startup-splash-logo-sheen,
-  .startup-splash-spark,
   .startup-splash-orb,
   .startup-splash-grid,
   .startup-splash-mote {
@@ -1192,10 +1197,20 @@ button.shell-nav-item {
   .startup-splash-logo-glow {
     opacity: 0.7;
   }
-  .startup-splash-logo-sheen,
-  .startup-splash-spark,
+  /* 亮片停在徽章中部：像一块固定的高光，而不是扫过的高光 */
+  .startup-splash-logo-sheen {
+    animation: none;
+    transform: translateX(0);
+    opacity: 0.5;
+  }
+  /* 星芒静止地亮在 logo 四周（不旋转、不缩放、不闪） */
+  .startup-splash-spark {
+    animation: none;
+    opacity: 0.95;
+  }
+  /* 浮尘变成固定的小光点，背景仍有层次 */
   .startup-splash-mote {
-    opacity: 0;
+    opacity: 0.5;
   }
 }
 

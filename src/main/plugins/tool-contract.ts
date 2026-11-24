@@ -13,7 +13,7 @@ import type { StructuredToolInterface } from '../ai/tools'
  * 插件在 `install(ctx)` 里 `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, 工具项)`，
  * harness 组装工具集时 `listContributions<PluginToolContribution>(HARNESS_TOOL_CONTRIBUTION)`。
  *
- * 内置功能的工具（资料库的 4 个）不走这里：它们由 `src/main/system/notes.ts` 直接调
+ * 内置功能的工具（资料整理的 1 个）不走这里：它们由 `src/main/system/notes.ts` 直接调
  * `registerBuiltinHarnessTools()` 注册，随应用编译、随应用退出。
  */
 export const HARNESS_TOOL_CONTRIBUTION = 'harness.tool'

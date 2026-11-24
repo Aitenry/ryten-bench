@@ -262,6 +262,41 @@ function initExternalMains(): void {
 }
 
 /**
+ * 运行中切换账号数据空间前：把所有插件主模块摘掉（**不删代码、不删数据**）。
+ *
+ * 为什么必须摘：`plugin-state/` 里是各账号自己的设置与数据，插件主模块在装载期就可能
+ * 打开文件 / 建库 / 起监听；带着它们对调目录，轻则 rename 失败（Windows 句柄占用），
+ * 重则插件继续把上一个账号的状态写进新账号的空间。摘掉 = 回到「刚启动、还没装载插件」
+ * 的状态，切换完成后由 `reloadAllExternalMains()` 按磁盘上的包重新装载。
+ *
+ * @returns 实际摘掉的插件 id（顺序即装载顺序，便于日志核对）
+ */
+export function unloadAllExternalMains(): string[] {
+  const ids = [...externalMains.keys()]
+  for (const id of ids) {
+    try {
+      unloadExternalMain(id)
+    } catch (err) {
+      logger.warn(`[Plugins] Failed to unload '${id}' before profile switch:`, err)
+    }
+  }
+  if (ids.length > 0) {
+    logger.info(`[Plugins] Unloaded ${ids.length} plugin main module(s) for profile switch`)
+  }
+  return ids
+}
+
+/**
+ * 切换完成后重新装载已启用的插件主模块（与启动期完全同一条路径）。
+ *
+ * 用 `initExternalMains()` 而不是「只装回刚才那几个」：切换前后启用态可能已经变化
+ * （云端 pull 会写启用覆写），以磁盘 + 启用态为准才不会漏装。
+ */
+export function reloadAllExternalMains(): void {
+  initExternalMains()
+}
+
+/**
  * 已安装插件的最终启用态：**显式覆写优先，未覆写即停用**。
  *
  * 应用不分发插件（没有任何内置插件），所以「没被用户显式启用过的插件」一律不装载——

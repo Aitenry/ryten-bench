@@ -83,7 +83,12 @@ async function searchEntities(wikiId: number, query: string): Promise<GraphEntit
       .where(
         and(
           eq(graph_entities.wiki_id, wikiId),
-          or(ilike(graph_entities.name, pattern), ilike(graph_entities.aliases, pattern))
+          or(
+            ilike(graph_entities.name, pattern),
+            ilike(graph_entities.aliases, pattern),
+            // 也搜描述：用户常记得「那个做 RAG 的公司」，不一定记得实体名
+            ilike(graph_entities.description, pattern)
+          )
         )
       )
       .orderBy(asc(graph_entities.name))

@@ -34,6 +34,16 @@ export class GoalRoundDriver {
     return this.running.has(topicId)
   }
 
+  /**
+   * 清空「正在自动续跑」的话题集合（账号数据空间切换时用）。
+   *
+   * 正常路径由 `maybeDrive` 的 finally 自行释放；这里兜住「切换那一刻正好在跑」的残留，
+   * 否则新账号里同 id 的话题会被误判成「已在续跑」而永远不派发自动轮。
+   */
+  reset(): void {
+    this.running.clear()
+  }
+
   /** 轮次结束后调度：满足条件则自动发起下一轮（循环派发直至停止条件） */
   async maybeDrive(topicId: number, drive: DriveTurnFn): Promise<void> {
     if (this.running.has(topicId)) return

@@ -1,13 +1,7 @@
-// 本工具（manage_wikis）归属 notes 插件：知识库/目录/归档文档全部走本插件的 wiki 与
-// document mapper，不再跨插件直读。经 harness 的**工具贡献点**（HARNESS_TOOL_CONTRIBUTION，
-// 契约见 src/main/plugins/tool-contract.ts）注册给 AI：插件未启用时 harness 拉不到这条贡献，
-// 工具自然不出现在模型面前。
-import { tool } from '../../ai/tools'
-import type { StructuredToolInterface } from '../../ai/tools'
-import * as z from 'zod/v4'
+// 知识库域处理器（统一由 manage_materials 工具调度）：知识库/目录/归档文档全部走
+// notes 自己的 wiki 与 document mapper，不再跨域直读。
 import { mainFormat, mainPlural } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
-import type { PluginToolContribution } from '../../plugins/tool-contract'
 
 // ============================================================================
 // Wiki Handlers — 渐进式披露：列表 → 目录 → 文档
@@ -16,12 +10,23 @@ import type { PluginToolContribution } from '../../plugins/tool-contract'
 
 // ── 查询 ──
 
-async function listWikisHandler(): Promise<string> {
+export async function listWikisHandler(
+  params: {
+    page?: number
+    pageSize?: number
+  } = {}
+): Promise<string> {
   const { getAllWikis } = await import('../../database/mapper/notes/wiki')
-  const result = await getAllWikis()
+  const page = Math.max(1, Math.floor(params.page ?? 1))
+  const pageSize = Math.min(100, Math.max(1, Math.floor(params.pageSize ?? 20)))
+  const result = await getAllWikis(page, pageSize)
   const tr = getDocsToolTexts()
   if (!result.items.length) return tr.wikis.listEmpty
-  const lines = [mainFormat(tr.wikis.listHeader, { count: result.items.length })]
+  const lines = [mainFormat(tr.wikis.listHeader, { count: result.total })]
+  const pages = Math.max(1, Math.ceil(result.total / pageSize))
+  if (pages > 1) {
+    lines.push(mainFormat(tr.wikis.listPage, { page, pages, total: result.total }))
+  }
   for (const wiki of result.items) {
     lines.push(`  [${wiki.id}] **${wiki.title}**`)
     if (wiki.tags) {
@@ -37,7 +42,7 @@ async function listWikisHandler(): Promise<string> {
   return lines.join('\n')
 }
 
-async function getWikiHandler(params: { wikiId: number }): Promise<string> {
+export async function getWikiHandler(params: { wikiId: number }): Promise<string> {
   const { getWikiById } = await import('../../database/mapper/notes/wiki')
   const wiki = await getWikiById(params.wikiId)
   const tr = getDocsToolTexts()
@@ -58,7 +63,7 @@ async function getWikiHandler(params: { wikiId: number }): Promise<string> {
   })}\n${mainFormat(tr.wikis.updatedAtLabel, { updatedAt: wiki.updated_at })}`
 }
 
-async function getWikiDirectoriesHandler(params: { wikiId: number }): Promise<string> {
+export async function getWikiDirectoriesHandler(params: { wikiId: number }): Promise<string> {
   const { getWikiById, getDirectoriesByWikiId, getDocsByDirectoryId } =
     await import('../../database/mapper/notes/wiki')
   const wiki = await getWikiById(params.wikiId)
@@ -136,7 +141,7 @@ async function getWikiDirectoriesHandler(params: { wikiId: number }): Promise<st
   return lines.join('\n')
 }
 
-async function getDirectoryDocsHandler(params: { directoryId: number }): Promise<string> {
+export async function getDirectoryDocsHandler(params: { directoryId: number }): Promise<string> {
   const { getDocsByDirectoryId } = await import('../../database/mapper/notes/wiki')
   const { getDocById } = await import('../../database/mapper/notes/document')
   const docRefs = await getDocsByDirectoryId(params.directoryId)
@@ -163,7 +168,7 @@ async function getDirectoryDocsHandler(params: { directoryId: number }): Promise
 
 // ── Wiki CRUD ──
 
-async function createWikiHandler(params: {
+export async function createWikiHandler(params: {
   title: string
   summary?: string
   tags?: string
@@ -178,7 +183,7 @@ async function createWikiHandler(params: {
   return mainFormat(getDocsToolTexts().wikis.created, { id, title: params.title })
 }
 
-async function updateWikiHandler(params: {
+export async function updateWikiHandler(params: {
   wikiId: number
   title?: string
   summary?: string
@@ -200,7 +205,7 @@ async function updateWikiHandler(params: {
   return mainFormat(tr.wikis.updated, { wikiId: params.wikiId, title: wiki.title })
 }
 
-async function deleteWikiHandler(params: { wikiId: number }): Promise<string> {
+export async function deleteWikiHandler(params: { wikiId: number }): Promise<string> {
   const { deleteWiki, getWikiById } = await import('../../database/mapper/notes/wiki')
   const wiki = await getWikiById(params.wikiId)
   const tr = getDocsToolTexts()
@@ -211,7 +216,7 @@ async function deleteWikiHandler(params: { wikiId: number }): Promise<string> {
 
 // ── 目录 CRUD ──
 
-async function createDirectoryHandler(params: {
+export async function createDirectoryHandler(params: {
   wikiId: number
   parentId?: number
   name: string
@@ -248,7 +253,7 @@ async function createDirectoryHandler(params: {
   })
 }
 
-async function updateDirectoryHandler(params: {
+export async function updateDirectoryHandler(params: {
   directoryId: number
   name: string
 }): Promise<string> {
@@ -260,7 +265,7 @@ async function updateDirectoryHandler(params: {
   })
 }
 
-async function deleteDirectoryHandler(params: { directoryId: number }): Promise<string> {
+export async function deleteDirectoryHandler(params: { directoryId: number }): Promise<string> {
   const { deleteDirectory } = await import('../../database/mapper/notes/wiki')
   await deleteDirectory(params.directoryId)
   return mainFormat(getDocsToolTexts().wikis.directoryDeleted, { directoryId: params.directoryId })
@@ -268,12 +273,13 @@ async function deleteDirectoryHandler(params: { directoryId: number }): Promise<
 
 // ── 文档归档 / 移除 ──
 
-async function archiveDocsHandler(params: {
+export async function archiveDocsHandler(params: {
   directoryId: number
   docIds: number[]
 }): Promise<string> {
   const { addDocToDirectory } = await import('../../database/mapper/notes/wiki')
   const tr = getDocsToolTexts()
+  if (!params.docIds.length) return tr.wikis.archiveEmpty
   const results: string[] = []
   for (const docId of params.docIds) {
     try {
@@ -286,7 +292,10 @@ async function archiveDocsHandler(params: {
   return mainFormat(tr.wikis.archiveDone, { results: results.join('\n') })
 }
 
-async function removeDocHandler(params: { directoryId: number; docId: number }): Promise<string> {
+export async function removeDocHandler(params: {
+  directoryId: number
+  docId: number
+}): Promise<string> {
   const { removeDocFromDirectory } = await import('../../database/mapper/notes/wiki')
   const ok = await removeDocFromDirectory(params.directoryId, params.docId)
   const tr = getDocsToolTexts()
@@ -301,132 +310,53 @@ async function removeDocHandler(params: { directoryId: number; docId: number }):
       })
 }
 
-// ============================================================================
-// Tool Builder
-// ============================================================================
-
-export function buildManageWikisTool(): StructuredToolInterface {
-  return tool(
-    async ({ command, ...params }) => {
-      switch (command) {
-        // 查询
-        case 'list':
-          return listWikisHandler()
-        case 'get':
-          return getWikiHandler(params as Parameters<typeof getWikiHandler>[0])
-        case 'directories':
-          return getWikiDirectoriesHandler(
-            params as unknown as Parameters<typeof getWikiDirectoriesHandler>[0]
-          )
-        case 'docs':
-          return getDirectoryDocsHandler(
-            params as unknown as Parameters<typeof getDirectoryDocsHandler>[0]
-          )
-        // Wiki CRUD
-        case 'create':
-          return createWikiHandler(params as unknown as Parameters<typeof createWikiHandler>[0])
-        case 'update':
-          return updateWikiHandler(params as unknown as Parameters<typeof updateWikiHandler>[0])
-        case 'delete':
-          return deleteWikiHandler(params as unknown as Parameters<typeof deleteWikiHandler>[0])
-        // 目录 CRUD
-        case 'create_directory':
-          return createDirectoryHandler(
-            params as unknown as Parameters<typeof createDirectoryHandler>[0]
-          )
-        case 'update_directory':
-          return updateDirectoryHandler(
-            params as unknown as Parameters<typeof updateDirectoryHandler>[0]
-          )
-        case 'delete_directory':
-          return deleteDirectoryHandler(
-            params as unknown as Parameters<typeof deleteDirectoryHandler>[0]
-          )
-        // 归档 / 移除
-        case 'archive':
-          return archiveDocsHandler(params as unknown as Parameters<typeof archiveDocsHandler>[0])
-        case 'remove_doc':
-          return removeDocHandler(params as unknown as Parameters<typeof removeDocHandler>[0])
-        default:
-          return mainFormat(getDocsToolTexts().wikis.unknownCommand, { command })
-      }
-    },
-    {
-      name: 'manage_wikis',
-      description:
-        'Manage wikis (progressive browsing + CRUD).\n' +
-        '  Browsing commands:\n' +
-        '    list - List all wikis (id, title, tags, description, document count)\n' +
-        '    get - Get the details of one wiki; requires wikiId\n' +
-        '    directories - Get the hierarchical directory tree of a wiki (id, name, document count); requires wikiId\n' +
-        '    docs - List the documents in a directory (id, title, tags, description); requires directoryId\n' +
-        '  Wiki CRUD:\n' +
-        '    create - Create a wiki; requires title, optional summary, tags\n' +
-        '    update - Update a wiki; requires wikiId, optional title, summary, tags\n' +
-        '    delete - Delete a wiki; requires wikiId\n' +
-        '  Directory CRUD:\n' +
-        '    create_directory - Create a directory; requires wikiId, name, optional parentId (parent directory ID)\n' +
-        '    update_directory - Rename a directory; requires directoryId, name\n' +
-        '    delete_directory - Delete a directory; requires directoryId\n' +
-        '  Document management:\n' +
-        '    archive - Archive documents into a directory; requires directoryId, docIds (array of document IDs)\n' +
-        '    remove_doc - Remove a document from a directory (the document itself is kept); requires directoryId, docId\n' +
-        '  Typical workflow: list → get → directories → docs, then use the manage_docs tool with the returned docId to read document content.',
-      schema: z.object({
-        command: z
-          .enum([
-            'list',
-            'get',
-            'directories',
-            'docs',
-            'create',
-            'update',
-            'delete',
-            'create_directory',
-            'update_directory',
-            'delete_directory',
-            'archive',
-            'remove_doc'
-          ])
-          .describe('Operation type'),
-        wikiId: z.number().optional().describe('[get/directories/create_directory] Wiki ID'),
-        directoryId: z
-          .number()
-          .optional()
-          .describe('[docs/archive/remove_doc/update_directory/delete_directory] Directory ID'),
-        title: z.string().optional().describe('[create/update] Wiki title'),
-        summary: z.string().optional().describe('[create/update] Wiki description'),
-        tags: z
-          .string()
-          .optional()
-          .describe('[create/update] Wiki tags (JSON array string, e.g. \'["tag1","tag2"]\')'),
-        name: z.string().optional().describe('[create_directory/update_directory] Directory name'),
-        parentId: z
-          .number()
-          .optional()
-          .describe('[create_directory] Parent directory ID (used when creating a subdirectory)'),
-        docIds: z.array(z.number()).optional().describe('[archive] Document IDs to archive'),
-        docId: z.number().optional().describe('[remove_doc] Document ID to remove')
-      })
-    }
-  )
-}
-
-// ============================================================================
-// Harness 工具贡献
-// ============================================================================
-
-/** 本插件贡献给 harness 的 AI 工具（由 main/index.ts 经 ctx.contribute 注册） */
-export const wikiToolContributions: PluginToolContribution[] = [
-  {
-    name: 'manage_wikis',
-    info: {
-      name: 'manage_wikis',
-      label: 'Knowledge base',
-      description: 'Browse and manage knowledge bases, folders and archived documents',
-      icon: 'RiBook2Line',
-      color: '#13c2c2'
-    },
-    build: buildManageWikisTool
+/**
+ * 把文档从一个目录移动到另一个目录（同一知识库内）。
+ *
+ * 组合 remove + archive 两个原子操作：目标写入失败时把源关联补回去，
+ * 避免「源已移除、目标没写进」导致文档从知识库里消失。
+ */
+export async function moveDocHandler(params: {
+  docId: number
+  fromDirectoryId: number
+  toDirectoryId: number
+}): Promise<string> {
+  const { getDirectoryById, removeDocFromDirectory, addDocToDirectory } =
+    await import('../../database/mapper/notes/wiki')
+  const tr = getDocsToolTexts()
+  const [from, to] = await Promise.all([
+    getDirectoryById(params.fromDirectoryId),
+    getDirectoryById(params.toDirectoryId)
+  ])
+  if (!from || !to) {
+    return mainFormat(tr.wikis.directoryNotFound, {
+      ids: [from ? '' : params.fromDirectoryId, to ? '' : params.toDirectoryId]
+        .filter(Boolean)
+        .join(', ')
+    })
   }
-]
+  if (from.wiki_id !== to.wiki_id) return tr.wikis.moveCrossWiki
+
+  const removed = await removeDocFromDirectory(params.fromDirectoryId, params.docId)
+  if (!removed) {
+    return mainFormat(tr.wikis.moveNotInSource, {
+      docId: params.docId,
+      fromDirectoryId: params.fromDirectoryId
+    })
+  }
+  try {
+    await addDocToDirectory(params.toDirectoryId, params.docId)
+  } catch {
+    // 目标写入失败（通常是目标已存在同文档）：把源关联补回去
+    await addDocToDirectory(params.fromDirectoryId, params.docId).catch(() => undefined)
+    return mainFormat(tr.wikis.moveFailed, {
+      docId: params.docId,
+      toDirectoryId: params.toDirectoryId
+    })
+  }
+  return mainFormat(tr.wikis.moved, {
+    docId: params.docId,
+    fromDirectoryId: params.fromDirectoryId,
+    toDirectoryId: params.toDirectoryId
+  })
+}

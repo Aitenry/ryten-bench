@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
  *
  * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
@@ -290,6 +290,32 @@ export const PLUGIN_MODE_TOOL_NAMES = [
 export function isPluginModeTool(name: string): boolean {
   return (PLUGIN_MODE_TOOL_NAMES as readonly string[]).includes(name)
 }
+
+/**
+ * 「资料整理」统一工具的正式名字。
+ *
+ * 2026-11 把原 manage_docs / manage_todos / manage_wikis / search_graph 四个工具
+ * 合并成一个入口；旧配置（设置页勾选、子智能体配置、旧话题快照）里仍可能是旧名字，
+ * 读写时统一经 `canonicalToolName` 迁移，避免升级后「明明勾过工具却全消失」。
+ */
+export const MATERIALS_TOOL_NAME = 'manage_materials'
+
+/** 归一前的四个工具名（只用于迁移，不再注册） */
+export const LEGACY_MATERIAL_TOOL_NAMES = [
+  'manage_docs',
+  'manage_todos',
+  'manage_wikis',
+  'search_graph'
+] as const
+
+const LEGACY_TOOL_ALIASES: Record<string, string> = Object.fromEntries(
+  LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_NAME])
+)
+
+/** 旧工具名 → 现行工具名；其余名字原样返回 */
+export function canonicalToolName(name: string): string {
+  return LEGACY_TOOL_ALIASES[name] ?? name
+}
 /**
  * 主智能体「工具」选择里可保存的真实工具名：系统内置 + 已加载插件贡献的工具。
  *
@@ -342,9 +368,10 @@ export function effectiveMainAgentTools(
   const push = (names?: string[]): void => {
     for (const name of names ?? []) {
       if (typeof name !== 'string' || !name) continue
-      if (isMcpToolGroup(name) || isMcpServerGroup(name)) continue
-      if (isPluginModeTool(name)) continue
-      if (!out.includes(name)) out.push(name)
+      const canonical = canonicalToolName(name)
+      if (isMcpToolGroup(canonical) || isMcpServerGroup(canonical)) continue
+      if (isPluginModeTool(canonical)) continue
+      if (!out.includes(canonical)) out.push(canonical)
     }
   }
   push(config?.tools)
