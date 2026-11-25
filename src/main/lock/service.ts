@@ -333,12 +333,29 @@ function checkIdleLock(): void {
   }
 }
 
+/**
+ * 启动锁屏（应用每次启动调用一次，且在窗口创建之前）。
+ *
+ * 为什么必须有：`locked` 只是主进程的内存态，进程一退出就归零——旧行为下
+ * 「锁着屏 → 托盘退出 / 关掉应用 → 重新打开」就能直接看到全部内容，这个锁屏
+ * 被一步操作就绕过了，等于没有。只要用户启用了锁屏且存在解锁码，每次启动的
+ * 第一帧就应该是锁屏界面。
+ *
+ * 放在窗口创建之前调用：主窗口 `attachLockScreen` 在首次 `did-finish-load`
+ * 补发的快照已经是 `locked=true`，界面不会先闪一下正文再被蒙层盖住。
+ */
+export function lockOnStartup(): boolean {
+  return lockNow('startup')
+}
+
 /** 启动自动锁屏监听（幂等；registerLockIpc 在 app ready 后调用一次） */
 export function startLockScreenWatcher(): void {
   if (watcherStarted) return
   watcherStarted = true
 
   probeDefaultCode()
+  // 每次启动都先锁上：否则「退出应用再打开」就是绕过锁屏的捷径
+  lockOnStartup()
 
   idleTimer = setInterval(checkIdleLock, IDLE_TICK_MS)
   // 不阻止进程退出

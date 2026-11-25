@@ -112,6 +112,36 @@ body {
   border-radius: 100px;
 }
 
+/* ======== 6 位数字输入（antd Input.OTP） ======== */
+
+/**
+ * 让 OTP 的每个格子均分容器宽度。
+ *
+ * antd 的 OTP 根节点是 `inline-flex`，每个格子包在 `.ant-otp-input-wrapper` 里、输入框本身
+ * 只按 `htmlSize={1}` 撑出 50px 左右——设置弹窗里 6 个格子只占左半边，右边留一大片空白。
+ * 锁屏卡片与改密码弹窗共用这一套口径：根节点吃满宽度，格子 `flex: 1` 均分，输入框再回填。
+ */
+.otp-fill {
+  width: 100%;
+}
+
+.otp-fill .ant-otp-input-wrapper {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.otp-fill .ant-otp-input {
+  width: 100%;
+}
+
+/* 改密码弹窗：格子比 antd 默认（32px 高）更适合鼠标点选，也与锁屏界面的观感接近 */
+.settings-password-otp .ant-otp-input {
+  height: 42px;
+  font-size: 18px;
+  font-weight: 600;
+  border-radius: 10px;
+}
+
 /* ======== 锁屏（全窗口毛玻璃） ======== */
 
 /**
@@ -266,19 +296,12 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
 }
 
 .lock-screen-otp {
-  width: 100%;
   display: flex;
   justify-content: center;
   column-gap: 8px;
 }
 
-.lock-screen-otp .ant-otp-input-wrapper {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
 .lock-screen-otp .ant-otp-input {
-  width: 100%;
   height: 52px;
   font-size: 20px;
   font-weight: 600;

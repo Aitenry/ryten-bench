@@ -246,15 +246,15 @@ from the hub or from a local package, and both paths end in the same host instal
   the main process renders tool output and progress text in the current language too.
 - **Theme** — light / dark / auto, where auto follows the time of day (light from 6:00 to 18:00).
 - **Lock screen** — an optional 6-digit passcode (salted scrypt, verified in the main process,
-  never exposed to the renderer) that locks on Esc, system idle, minimize or hide-to-tray. The
-  locked state lives in the main process, so a page reload or renderer crash does not unlock it;
-  the app content is blurred at 64px behind a full-screen frosted overlay and the window is
-  excluded from screen capture until unlocked. Changing the passcode verifies the old one in the
-  main process, and repeated failures back off exponentially.
+  never exposed to the renderer) that locks on app launch, on Esc, on minimize or hide-to-tray
+  and after the configured system idle period. The locked state lives in the main process, so a
+  page reload, a renderer crash or an app restart cannot unlock it; the digits are masked in
+  every passcode field, the app content is blurred at 64px behind a full-screen frosted overlay
+  and the window is excluded from screen capture until unlocked. Changing the passcode verifies
+  the old one in the main process, and repeated failures back off exponentially.
 - **Settings safety net** — every settings change is copied to `settings.backup.json`. At startup
   a missing or corrupt `settings.json` is restored from that backup (invalid files are archived,
-  not deleted); if the lock screen was enabled, a recovered settings file locks the app
-  immediately instead of starting unlocked.
+  not deleted), so deleting the settings file cannot silently disable the lock screen.
 - **System tray** — closing the window can keep the app resident in the tray (restore or quit from
   the tray menu); single-instance behaviour focuses the existing window instead of starting a
   second copy.

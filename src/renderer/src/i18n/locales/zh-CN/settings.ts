@@ -113,9 +113,9 @@ export const zhCNSettings = {
     },
     lock: {
       sectionTitle: '锁屏设置',
-      sectionDescription: '按 Esc 立即锁屏；其余入口在下面配置',
+      sectionDescription: '按 Esc 立即锁屏；每次启动、最小化都会锁定，系统空闲时按下方时长自动锁定',
       enableTitle: '启用锁屏',
-      enableDescription: '关闭后 Esc、自动锁屏与最小化锁屏都不再生效',
+      enableDescription: '关闭后启动锁屏、Esc、自动锁屏与最小化锁屏都不再生效',
       autoLockTitle: '自动锁屏',
       autoLockDescription: '系统空闲超过该时长后自动锁屏；最小化或隐藏到托盘时也会立即锁定',
       autoLockOff: '不自动锁屏',

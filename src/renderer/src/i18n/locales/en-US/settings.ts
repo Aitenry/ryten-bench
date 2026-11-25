@@ -117,9 +117,11 @@ export const enUSSettings: typeof zhCNSettings = {
     },
     lock: {
       sectionTitle: 'Lock screen',
-      sectionDescription: 'Press Esc to lock now; the other entry points are configured below',
+      sectionDescription:
+        'Press Esc to lock now; the app also locks on launch, when minimized and after the idle duration below',
       enableTitle: 'Enable lock screen',
-      enableDescription: 'When off, Esc, auto-lock and lock-on-minimize are all disabled',
+      enableDescription:
+        'When off, the lock on startup, Esc, auto-lock and lock-on-minimize are all disabled',
       autoLockTitle: 'Auto-lock',
       autoLockDescription:
         'Locks once the system has been idle for this long; minimizing or hiding to the tray also locks immediately',

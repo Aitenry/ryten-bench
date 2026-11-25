@@ -21,6 +21,22 @@ import {
   useLockScreenState
 } from '../lock-screen-state'
 
+/**
+ * 改密码弹窗里 6 位数字格子的公共属性。
+ *
+ * - `type="password"`：格子内容必须隐藏。antd 6.5.1 的 `mask` 布尔值有 bug（会把原始
+ *   数字画在格子上层，6.5.3 才修复），这里用原生密码输入框，与锁屏界面同一口径；
+ * - `otp-fill`：6 个格子均分弹窗宽度（antd 默认每格约 50px，只占左半边，见 assets/main.css）。
+ */
+const PASSCODE_OTP_PROPS = {
+  length: 6,
+  className: 'otp-fill settings-password-otp',
+  formatter: (value: string) => value.replace(/\D/g, ''),
+  type: 'password',
+  inputMode: 'numeric',
+  autoComplete: 'off'
+} satisfies React.ComponentProps<typeof Input.OTP>
+
 const GeneralSettings: React.FC = () => {
   const { t } = useTranslation()
   const { viewMessage } = useMessage()
@@ -325,11 +341,7 @@ const GeneralSettings: React.FC = () => {
                 { pattern: /^\d{6}$/, message: t('settings.general.passwordModal.sixDigits') }
               ]}
             >
-              <Input.OTP
-                length={6}
-                formatter={(str) => str.replace(/\D/g, '')}
-                inputMode="numeric"
-              />
+              <Input.OTP {...PASSCODE_OTP_PROPS} />
             </Form.Item>
           )}
           <Form.Item
@@ -340,7 +352,7 @@ const GeneralSettings: React.FC = () => {
               { pattern: /^\d{6}$/, message: t('settings.general.passwordModal.sixDigits') }
             ]}
           >
-            <Input.OTP length={6} formatter={(str) => str.replace(/\D/g, '')} inputMode="numeric" />
+            <Input.OTP {...PASSCODE_OTP_PROPS} />
           </Form.Item>
           <Form.Item
             name="confirmPassword"
@@ -361,7 +373,7 @@ const GeneralSettings: React.FC = () => {
               })
             ]}
           >
-            <Input.OTP length={6} formatter={(str) => str.replace(/\D/g, '')} inputMode="numeric" />
+            <Input.OTP {...PASSCODE_OTP_PROPS} />
           </Form.Item>
         </Form>
       </Modal>

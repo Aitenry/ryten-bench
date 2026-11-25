@@ -190,16 +190,18 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
         </div>
 
         <div className={`lock-screen-otp-wrap${error ? ' lock-screen-otp-wrap--error' : ''}`}>
+          {/* `type="password"` 而不是 antd 的 `mask`：6.5.1 的布尔 mask 会把原始数字画在
+              格子上层（6.5.3 才修），锁屏内容等于没隐藏。原生 password 在所有版本都生效。 */}
           <Input.OTP
             ref={otpRef}
-            className="lock-screen-otp"
+            className="lock-screen-otp otp-fill"
             length={6}
             size="large"
             value={code}
             onChange={handleChange}
             onKeyUp={handleKeyUp}
             formatter={(str) => str.replace(/\D/g, '')}
-            mask
+            type="password"
             autoFocus
             inputMode="numeric"
             autoComplete="off"

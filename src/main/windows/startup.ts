@@ -6,13 +6,13 @@ import { runMigrations } from '../database/orm'
 import { applyWorkspaceSettings } from '../database/workspace-settings'
 import { setDatabaseInstance, setInitializationPromise } from '../database/instance'
 import { initKeystore } from '../crypto/provider-key'
-import { settingsStartupRecovery, settingsStore } from '../context'
+import { settingsStore } from '../context'
 import { safeSend } from '../safe-send'
 import { mainMessages } from '../i18n'
 import { GraphSettings, HarnessSettings, TraySettings } from '../types/settings'
 import { hashLockCode } from '../lock/credentials'
 import { DEFAULT_AUTO_LOCK_MINUTES, DEFAULT_LOCK_CODE } from '../lock/constants'
-import { lockNow, refreshLockScreenState } from '../lock/service'
+import { refreshLockScreenState } from '../lock/service'
 import { getIp } from '../address'
 import { startWeatherAutoRefresh } from '../weather'
 import { listContributions } from '../plugins/contributions'
@@ -255,19 +255,11 @@ async function performInitializationTasks(): Promise<void> {
       name: m.splash.stepLoadConfig,
       execute: async () => {
         await loadConfig()
-        // 锁屏配置可能刚刚才首次落盘：刷新快照（默认码提示 / 开关状态）
+        // 锁屏配置可能刚刚才首次落盘：刷新快照（默认码提示 / 开关状态）。
+        // 「启动即锁屏」由 startLockScreenWatcher() 统一完成（早于窗口创建）；设置文件
+        // 从备份恢复的场景也在它之前发生（恢复在 context 模块求值时），因此这里不再
+        // 单独补一次 lockNow —— 两处都做会让「锁屏到底由谁触发」变得难查。
         refreshLockScreenState()
-        /**
-         * 设置文件丢失后从备份恢复：如果备份里锁屏是启用的，这次必须直接锁上。
-         * 否则「删掉 settings.json」仍然等于把锁屏绕过去（配置恢复了，但人已经能看到内容）。
-         */
-        if (settingsStartupRecovery.restoredFromBackup) {
-          const lock = settingsStore.get('lock') as { view?: boolean; code?: string } | undefined
-          if (lock?.view && lock.code) {
-            logger.warn('[LockScreen] Settings restored from backup; locking at startup')
-            lockNow('settings-recovered')
-          }
-        }
       }
     },
     {
