@@ -354,6 +354,11 @@ export const harnessZhCN = {
       callsValue: '{{count}} 次',
       tokensValue: '{{value}} tok'
     },
+    usageMeter: {
+      tokens: '{{value}} tok',
+      cacheHit: '缓存命中 {{percent}}%',
+      contextAria: '上下文占用 {{percent}}%（当前模型窗口 {{window}} token）'
+    },
     goalBar: {
       phaseActive: '进行中',
       phasePaused: '已暂停',

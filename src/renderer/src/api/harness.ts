@@ -99,12 +99,26 @@ export interface SubagentSessionOutputView {
 /** 本轮流式结束载荷（harness-stream-done） */
 export interface StreamDoneResult {
   topicId: number
+  /** 本轮回合 id（渲染端据此丢弃不属于当前回合的过期收尾事件） */
+  turnId?: number
   userDialogueId?: number
   assistantDialogueId?: number
   /** 助手段落表（无插话时只有一段）：messageId 对应一段助手气泡 */
   segments?: { messageId: string; dialogueId?: number }[]
   /** 本轮终局标记（最终答复边界 + 目标是否收口） */
   turnFinal?: TurnFinal
+}
+
+/** 话题的回合状态（主进程为真源：渲染端不再自己推断「是不是在生成」） */
+export interface TurnStateResult {
+  active: boolean
+  turnId: number | null
+}
+
+/** 发起一轮的结果：started=false & queued=true 表示主进程判定上一轮还在跑，这条已收进队列 */
+export interface StartTurnResult {
+  started: boolean
+  queued?: boolean
 }
 
 type AskAnswerItem = AskAnswer['answers'][number]
@@ -128,8 +142,13 @@ export const harnessApi = {
       }
     ) => {
       // harness-start-stream 已从 ipcMain.on 改成 invoke 通道（见插件 main/index.ts）
-      void invoke('harness:harness-start-stream', message, options)
+      return invoke('harness:harness-start-stream', message, options) as Promise<
+        StartTurnResult | undefined
+      >
     },
+    /** 话题当前有没有回合在跑（主进程真源；渲染端发送前先问一句，避免两个回合并发） */
+    getTurnState: (topicId: number) =>
+      invoke('harness:harness-turn-state', topicId) as Promise<TurnStateResult>,
 
     // ── 生成中的插话队列 ──────────────────────────────────────────────
     /** 生成中发消息：主进程裁决——有回合在跑则入队（queued=true），否则直接开新一轮 */
@@ -171,9 +190,11 @@ export const harnessApi = {
       on('harness:harness-stream-chunk', (chunk) => callback(chunk as Record<string, unknown>)),
     onStreamDone: (callback: (result: StreamDoneResult) => void): (() => void) =>
       on('harness:harness-stream-done', (result) => callback(result as StreamDoneResult)),
-    onStreamError: (callback: (error: { error: string; topicId?: number }) => void): (() => void) =>
+    onStreamError: (
+      callback: (error: { error: string; topicId?: number; turnId?: number }) => void
+    ): (() => void) =>
       on('harness:harness-stream-error', (error) =>
-        callback(error as { error: string; topicId?: number })
+        callback(error as { error: string; topicId?: number; turnId?: number })
       ),
 
     /**

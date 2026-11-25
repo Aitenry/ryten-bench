@@ -39,6 +39,7 @@ import { TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import FileRef from './FileRefNode'
+import HarnessUsageMeter from './HarnessUsageMeter'
 import { useTranslation } from '@renderer/i18n'
 import mascot from '@renderer/assets/mascot.png'
 
@@ -173,6 +174,11 @@ interface HarnessInputProps {
    * 所以由页面按 `messages.length === 0` 传进来。
    */
   showMascot?: boolean
+  /**
+   * 当前模型的上下文窗口（供应商档案 metadata.context_window）。
+   * 底栏右侧的上下文圆环按它算百分比；null = 档案没填，圆环不画（不猜窗口大小）。
+   */
+  modelContextWindow?: number | null
   isDarkMode: boolean
   colorBgLayout: string
   colorBorder: string
@@ -198,6 +204,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   modelSupportsVision,
   currentTopicId,
   showMascot = false,
+  modelContextWindow = null,
   isDarkMode,
   colorBgLayout,
   colorBorder,
@@ -1880,6 +1887,13 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         }}
       >
         {inputSelectors}
+        {/* 会话用量状态条：靠右（与工具 / 技能同一行，右侧留白与左侧对称）。
+            数据全部来自 harness_dialogue_usage，拿不到的项目不画。 */}
+        <HarnessUsageMeter
+          topicId={currentTopicId}
+          contextWindow={modelContextWindow}
+          streaming={isLoading}
+        />
       </div>
     </div>
   )

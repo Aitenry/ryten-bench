@@ -887,10 +887,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     void loadMnemonSnapshot()
   }, [memoryScope, memoryExpanded, loadMnemonSnapshot])
 
-  // 打开系统设置记忆页
-  const handleOpenMemorySettings = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('open-system-settings', { detail: { tab: 'memory' } }))
-  }, [])
+  /**
+   * 打开「更多内容 → 记忆」页（`/more/memory`），不是设置弹窗。
+   *
+   * 助手设置（智能体 / 技能 / 记忆 / MCP）在 2026-11-21 从设置弹窗搬到了「更多内容」独立
+   * 页面：旧实现发 `open-system-settings` 只带 `{ tab: 'memory' }`、不带 `scope: 'assistant'`，
+   * AppShell 便按「非助手设置」打开弹窗；而弹窗里已经没有记忆页签，`memory` 解析不到又
+   * 回落到首个页签（通用）——用户点的「管理记忆」看起来就成了不相干的设置页。
+   * 这里直接按路由跳转（与同一组件里的 `/plugins` 一致），不再绕设置弹窗那条链。
+   */
+  const handleOpenMemoryPage = useCallback(() => {
+    void navigate('/more/memory')
+  }, [navigate])
 
   // 监听记忆变更事件（对话中模型写记忆后刷新概览）
   useEffect(() => {
@@ -2852,7 +2860,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                   {t('harness.sidebar.memoryNotConfigured')}
                 </p>
                 <button
-                  onClick={handleOpenMemorySettings}
+                  onClick={handleOpenMemoryPage}
                   className="flex items-center justify-center gap-1 w-full py-2 rounded text-xs transition-colors"
                   style={{ color: '#1677ff', background: colorFillAlter }}
                 >
@@ -2944,7 +2952,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
                 {/* 管理入口 */}
                 <button
-                  onClick={handleOpenMemorySettings}
+                  onClick={handleOpenMemoryPage}
                   className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
                   style={{ color: '#1677ff', background: colorFillAlter }}
                 >

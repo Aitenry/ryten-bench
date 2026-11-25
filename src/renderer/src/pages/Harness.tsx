@@ -253,6 +253,17 @@ const Harness: React.FC = () => {
   const inputScrollbarThumbColor = isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
   const inputScrollbarThumbHoverColor = isDarkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)'
   /**
+   * 当前模型的上下文窗口：输入框底栏的占用圆环按它算百分比。
+   *
+   * 唯一来源是供应商档案的 `metadata.context_window`（设置里可手填、从模型档案带出）；
+   * 没填就返回 null，底栏只显示 token 与缓存命中，不画圆环——不猜窗口大小。
+   */
+  const modelContextWindow = useMemo(() => {
+    const provider = providers.find((item) => item.id === selectedProviderId)
+    const contextWindow = provider?.metadata?.context_window
+    return typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : null
+  }, [providers, selectedProviderId])
+  /**
    * 空白会话（还没有任何消息）：把「欢迎语 + 输入框」当成一组整体垂直居中。
    *
    * 用户 2026-11-19 口径「对话窗口的输入框应该垂直居中和标语一样垂直居中」——
@@ -322,6 +333,7 @@ const Harness: React.FC = () => {
           currentTopicId={currentTopicId}
           /* 助手形象只在空白会话里出现：有对话内容时会压住消息/思考过程 */
           showMascot={isWelcomeMode}
+          modelContextWindow={modelContextWindow}
           isDarkMode={isDarkMode}
           colorBgLayout={colorBgLayout}
           colorBorder={colorBorder}

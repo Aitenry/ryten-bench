@@ -19,6 +19,7 @@ import {
   supportsCapability,
   supportsReasoningEffort
 } from '@renderer/utils/providerMeta'
+import { createTurnGuard } from '@renderer/utils/harness/turn-guard'
 import type {
   HarnessTopicRow,
   MessageBlock,
@@ -269,6 +270,11 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   conversationVisibleRef.current = conversationVisible
   /** messages React 状态实际属于哪个话题——用于检测 handleSelectTopic 异步间隙中的跨话题污染 */
   const messagesBelongToTopicRef = useRef<number | null>(null)
+  // 用 ref 持有最新消息快照（修复：handleDeleteMessagePair 此前依赖 [messages],流式期间
+  // 每个 chunk 重建回调,作为 onDelete 传给全部消息组件击穿 React.memo → 每 chunk 全量重渲染历史消息）。
+  // 声明在靠前位置：主进程发起轮次的挂载（mountExternalTurn）也要读它兜底会话缓存。
+  const messagesSnapshotRef = useRef<Message[]>([])
+  messagesSnapshotRef.current = messages
   const [topics, setTopics] = useState<HarnessTopicRow[]>([])
   /** topics 当前属于哪个工作区（切换工作区时用于避免把旧列表挂到新工作区下） */
   const [topicsWorkspaceId, setTopicsWorkspaceId] = useState<number | null>(null)
@@ -1073,12 +1079,20 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
   // ── 开始流式监听（每个 topic 独立） ──
 
+  /**
+   * @param expectedTurnId 本轮流监听的回合 id（主进程下发）。给了就只处理它的事件；
+   *   不给（本地发起的轮次在注册时还不知道 id）就锁在**第一条到达的 chunk** 的回合上，
+   *   之后属于别的回合的 chunk / done / error 一律丢弃——同话题两轮串台会让输出错乱。
+   */
   const startStreamListener = useCallback(
-    (topicId: number, aiMessageId: string): void => {
+    (topicId: number, aiMessageId: string, expectedTurnId?: number): void => {
       // 清理旧的监听器
       chunkCleanupsRef.current.get(topicId)?.()
       doneCleanupsRef.current.get(topicId)?.()
       errorCleanupsRef.current.get(topicId)?.()
+
+      /** 回合守卫：丢弃不属于本轮的 chunk / done / error（见 utils/harness/turn-guard） */
+      const matchesTurn = createTurnGuard(expectedTurnId)
 
       // 本轮助手消息的前端临时 id：整轮流式都写进这一条气泡
       assistantIdByTopicRef.current.set(topicId, aiMessageId)
@@ -1144,6 +1158,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       const chunkCleanup = harnessApi.harness.onStreamChunk((chunk: StreamChunk) => {
         // topicId 守卫：只处理属于本话题的 chunk（Set 分发机制会使所有 handler 收到所有 chunk）
         if (chunk.__topicId !== topicId) return
+        // 回合守卫：不属于本轮的 chunk（上一轮的迟到事件 / 另一轮并发）直接丢弃
+        if (!matchesTurn(chunk.__turnId)) return
         if (!sessionsRef.current.get(topicId)) return
         pendingChunks.push(chunk)
         scheduleFlush()
@@ -1155,9 +1171,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       })
 
       const doneCleanup = harnessApi.harness.onStreamDone(
-        ({ topicId: doneTopicId, assistantDialogueId, userDialogueId, segments, turnFinal }) => {
+        ({
+          topicId: doneTopicId,
+          turnId: doneTurnId,
+          assistantDialogueId,
+          userDialogueId,
+          segments,
+          turnFinal
+        }) => {
           // 守卫：只处理本 topic 的完成事件（Set 分发可能导致旧 handler 收到其他 topic 的事件）
           if (doneTopicId !== topicId) return
+          // 回合守卫：别的回合的收尾事件不能拿来收这一轮（否则会把还在跑的轮次提前切断）
+          if (!matchesTurn(doneTurnId)) return
 
           // 先落完积压 chunk：done 事件可能与最后一批 chunk 同 tick 到达，
           // 若不先排空，末尾正文会丢在积压队列里（随后会话缓存被清理）
@@ -1252,9 +1277,11 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
       // 注册流错误监听：模型不存在 / 被禁用等启动阶段的错误
       const errorCleanup = harnessApi.harness.onStreamError(
-        ({ error: errMsg, topicId: errorTopicId }) => {
+        ({ error: errMsg, topicId: errorTopicId, turnId: errorTurnId }) => {
           // 守卫：只处理本 topic 的错误
           if (errorTopicId !== topicId) return
+          // 回合守卫：别的回合的报错不能覆盖这一轮的内容
+          if (!matchesTurn(errorTurnId)) return
 
           // 先落完积压 chunk，再整体替换为错误信息，避免与最后一批正文竞态
           applyPendingChunks()
@@ -1289,26 +1316,26 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     [applyChunkToMessages, syncLoadingTopics]
   )
 
-  // ── 目标自动续跑轮监听（常驻，不随普通轮的 done 清理）──
-  // 目标轮次驱动器在主进程发起新轮时先下发 goalRound 标记 chunk：
-  // 挂载「自动续跑」用户消息 + 助手占位，并为本轮注册流监听（普通用户轮由 handleSend 挂载）。
+  // ── 主进程自行发起的轮次监听（常驻，不随普通轮的 done 清理）──
+  //
+  // 两类轮次用户都没有「点发送」这个动作，渲染端没有本地占位：
+  // - goalRound：目标自动续跑轮；
+  // - queueTurn：排队消息在上一轮结束后被自动接续发出的轮次。
+  // 主进程在流首下发标记 chunk，这里据此挂上用户消息 + 助手占位并注册本轮流监听——
+  // 少了这一步，消息在跑而界面上什么都没有（旧版「排队消息没发送」的直接原因）。
   useEffect(() => {
-    const cleanup = harnessApi.harness.onStreamChunk((chunk: StreamChunk) => {
-      if (!chunk.goalRound) return
-      const topicId = chunk.__topicId ?? 0
-      if (!topicId) return
-      const { round, objective } = chunk.goalRound
-
-      const userMessage: Message = {
-        id: `goal-user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        role: 'user',
-        content: objective,
-        blocks: [{ type: 'goalRound', round, objective }],
-        timestamp: Date.now()
-      }
-      const aiMessageId = `goal-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    /**
+     * 挂载一条主进程发起的轮次：用户消息 + 助手占位 + 加载态 + 流监听。
+     * 两种标记共用（区别只在用户消息的展示块与临时 id 前缀）。
+     */
+    const mountExternalTurn = (
+      topicId: number,
+      userMessage: Message,
+      assistantId: string,
+      turnId?: number
+    ): void => {
       const initialAiMessage: Message = {
-        id: aiMessageId,
+        id: assistantId,
         role: 'assistant',
         content: '',
         blocks: [],
@@ -1318,7 +1345,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       }
 
       // 标记加载状态（停止按钮可用、侧边栏转圈）
-      // 目标自动续跑轮也是「这一轮真的开跑了」：清掉上一轮可能残留的绿点 / 黄点
+      // 这一轮真的开跑了：清掉上一轮可能残留的绿点 / 黄点
       beginTopicTurn(topicId)
       isLoadingMapRef.current.set(topicId, true)
       syncLoadingTopics()
@@ -1328,17 +1355,61 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       }
 
       // 更新会话缓存并启动本轮监听（后续 chunk 由本轮监听器处理）
+      // 缓存可能在上一轮 done 时被清掉：当前正显示这个话题时用 React 里的列表兜底，
+      // 否则本轮第一个 chunk 会把界面上的历史消息整片替换掉
       const session = sessionsRef.current.get(topicId)
-      const base = session?.messages ?? []
+      const base =
+        session?.messages ??
+        (currentTopicIdRef.current === topicId ? messagesSnapshotRef.current : [])
       sessionsRef.current.set(topicId, {
         messages: [...base, userMessage, initialAiMessage],
         inputValue: session?.inputValue ?? '',
         attachments: session?.attachments ?? [],
-        sessionId: aiMessageId
+        sessionId: assistantId
       })
-      currentSessionIdRef.current = aiMessageId
-      assistantIdByTopicRef.current.set(topicId, aiMessageId)
-      startStreamListener(topicId, aiMessageId)
+      currentSessionIdRef.current = assistantId
+      assistantIdByTopicRef.current.set(topicId, assistantId)
+      startStreamListener(topicId, assistantId, turnId)
+    }
+
+    const cleanup = harnessApi.harness.onStreamChunk((chunk: StreamChunk) => {
+      const topicId = chunk.__topicId ?? 0
+      if (!topicId) return
+
+      if (chunk.goalRound) {
+        const { round, objective } = chunk.goalRound
+        mountExternalTurn(
+          topicId,
+          {
+            id: `goal-user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            role: 'user',
+            content: objective,
+            blocks: [{ type: 'goalRound', round, objective }],
+            timestamp: Date.now()
+          },
+          `goal-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chunk.__turnId
+        )
+        return
+      }
+
+      if (chunk.queueTurn) {
+        const { text, attachments } = chunk.queueTurn
+        // 排队轮次没有 dataURL（附件正文只在主进程队列里）：这里按文件名列出来即可，
+        // 气泡只负责说明「这条消息是什么」，真正的附件随请求下发
+        mountExternalTurn(
+          topicId,
+          {
+            id: `queue-user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            role: 'user',
+            content: text,
+            blocks: attachments.map((name) => ({ type: 'document' as const, fileName: name })),
+            timestamp: Date.now()
+          },
+          `queue-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chunk.__turnId
+        )
+      }
     })
     return cleanup
   }, [startStreamListener, syncLoadingTopics, beginTopicTurn])
@@ -1631,11 +1702,6 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
   }, [])
 
-  // 用 ref 持有最新消息快照（修复：handleDeleteMessagePair 此前依赖 [messages],流式期间
-  // 每个 chunk 重建回调,作为 onDelete 传给全部消息组件击穿 React.memo → 每 chunk 全量重渲染历史消息）
-  const messagesSnapshotRef = useRef<Message[]>([])
-  messagesSnapshotRef.current = messages
-
   /**
    * 一轮问答的公共管线：乐观上屏 → 确保话题 → 加载态 → 流监听 → 会话缓存 → 发起流。
    *
@@ -1742,9 +1808,6 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         syncLoadingTopics()
         setIsLoading(true)
 
-        // 启动流监听（独立于当前对话窗口，持续更新缓存）
-        startStreamListener(topicId, aiMessageId)
-
         // 缓存当前会话——使用 messagesBelongToTopicRef 防止跨话题污染：
         // 如果 handleSelectTopic 的异步 DB 加载尚未完成，messages 仍属于旧话题，
         // 此时应丢弃旧消息，从新对话开始（否则会把 A 的历史混入 B 的会话缓存）
@@ -1766,7 +1829,12 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         // 同步 React 状态
         setMessages(currentMessages)
 
-        harnessApi.harness.startMessageStream(userMessage.content, {
+        // 先问主进程「这一轮到底起没起来」，再挂流监听：
+        //  - started=true → 正常挂监听（监听器按第一条 chunk 锁定回合 id）；
+        //  - queued=true  → 上一轮还在跑（极小概率的竞态），这条已被收进队列，
+        //    撤掉刚上屏的乐观气泡，避免出现一条永远转圈的幽灵消息。
+        // 之所以不在 await 之前挂监听：那会在竞态路径上把真正在跑的那一轮的监听覆盖掉。
+        const startResult = await harnessApi.harness.startMessageStream(userMessage.content, {
           images: currentImages.length > 0 ? currentImages : undefined,
           documents: currentDocuments.length > 0 ? currentDocuments : undefined,
           topicId,
@@ -1778,6 +1846,28 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           reuseUserDialogueId:
             replaceIndex != null ? (resolveDialogueId(userMessage) ?? undefined) : undefined
         })
+
+        if (startResult?.queued) {
+          const session = sessionsRef.current.get(topicId)
+          if (session) {
+            sessionsRef.current.set(topicId, {
+              ...session,
+              messages: session.messages.filter(
+                (msg) => msg.id !== aiMessageId && msg.id !== userMessage.id
+              )
+            })
+          }
+          setMessages((prev) =>
+            prev.filter((msg) => msg.id !== aiMessageId && msg.id !== userMessage.id)
+          )
+          isLoadingMapRef.current.delete(topicId)
+          syncLoadingTopics()
+          if (currentTopicIdRef.current === topicId) setIsLoading(false)
+          return
+        }
+
+        // 启动流监听（独立于当前对话窗口，持续更新缓存）
+        startStreamListener(topicId, aiMessageId)
       } catch (error) {
         console.error('Error sending message:', error)
         const errorMessage: Message = {
@@ -1835,30 +1925,33 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
 
     // 生成中（本话题有回合在跑）：不打断当前回合，消息进插话队列等用户点「立即插话」
-    // 或等本轮跑完自动接续。是否在跑由主进程裁决（多窗口/多话题下前端判断会失准）。
-    // 新话题（还没有 topicId）必然没有回合在跑，走本地起轮路径。
+    // 或等本轮跑完自动接续。**是否在跑一律问主进程**——本地 isLoading 在主进程自行接续
+    // 排队消息 / 目标自动续跑的轮次上会滞后，据此判断会并发起第二个回合（输出错乱的根因）。
     const topicId = currentTopicIdRef.current
-    if (topicId != null && isLoadingMapRef.current.get(topicId)) {
-      try {
-        const { queued } = await harnessApi.harness.enqueueMessage({
-          topicId,
-          text: userMessage.content,
-          attachments: {
-            images: currentAttachments.filter((a) => a.isImage).map((a) => a.dataUrl),
-            documents: currentAttachments
-              .filter((a) => !a.isImage)
-              .map((a) => ({ fileName: a.fileName, filePath: a.dataUrl }))
+    if (topicId != null) {
+      const turnState = await harnessApi.harness.getTurnState(topicId).catch(() => null)
+      if (turnState?.active) {
+        try {
+          const { queued } = await harnessApi.harness.enqueueMessage({
+            topicId,
+            text: userMessage.content,
+            attachments: {
+              images: currentAttachments.filter((a) => a.isImage).map((a) => a.dataUrl),
+              documents: currentAttachments
+                .filter((a) => !a.isImage)
+                .map((a) => ({ fileName: a.fileName, filePath: a.dataUrl }))
+            }
+          })
+          if (queued) {
+            // 已入队（按队列行显示在输入框上方），清空输入区。
+            // 注意：不能直接 setInputValue('') —— 入队是异步的，期间用户可能又打了新内容；
+            // 与本次入队内容一致才清，避免误删新草稿。
+            setInputValue((prev) => (prev.trim() === userMessage.content ? '' : prev))
+            return
           }
-        })
-        if (queued) {
-          // 已入队（按队列行显示在输入框上方），清空输入区。
-          // 注意：不能直接 setInputValue('') —— 入队是异步的，期间用户可能又打了新内容；
-          // 与本次入队内容一致才清，避免误删新草稿。
-          setInputValue((prev) => (prev.trim() === userMessage.content ? '' : prev))
-          return
+        } catch (err) {
+          console.error('Failed to enqueue message:', err)
         }
-      } catch (err) {
-        console.error('Failed to enqueue message:', err)
       }
     }
 

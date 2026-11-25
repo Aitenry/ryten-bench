@@ -32,8 +32,16 @@ export interface AgentInjection {
 
 /** 本轮来源元信息（经图 configurable 注入工具层，供目标工具做执行期权限校验） */
 export interface TurnMeta {
-  /** 来源：user=用户直接发起的轮次（缺省）；goal-round=目标自动续跑轮 */
-  source?: 'user' | 'goal-round'
+  /**
+   * 来源：
+   * - user = 用户直接发起的轮次（缺省）；
+   * - goal-round = 目标自动续跑轮；
+   * - queue = 排队消息在上一轮结束后被主进程自动接续发出的轮次（前端无本地占位，
+   *   需靠流首的 `queueTurn` 标记挂载气泡）。
+   */
+  source?: 'user' | 'goal-round' | 'queue'
+  /** queue 轮次对应的排队条目 id（前端据此把队列行抹掉并挂用户气泡） */
+  queueItemId?: string
   /** goal-round 时携带的目标身份（精确匹配当前目标轮才有 complete/blocked 权威） */
   goalId?: string
   goalRevision?: number
@@ -179,13 +187,25 @@ export interface StructuredMessage {
   }
 }
 
-/** IPC 发送的流式 chunk（StructuredMessage + 主进程注入的 topicId） */
+/** IPC 发送的流式 chunk（StructuredMessage + 主进程注入的 topicId / 回合 id） */
 export interface StreamChunk extends StructuredMessage {
   __topicId?: number
+  /**
+   * 本轮回合 id（`harnessQueue.beginTurn` 的值）。
+   *
+   * 同一话题上有可能出现「上一轮的收尾事件与新一轮的流」在渲染端交错到达；
+   * 渲染端按这个 id 丢弃不属于当前回合的 chunk / done / error。
+   */
+  __turnId?: number
   /** 本轮终局标记（仅 `harness-stream-done` 载荷使用，见 service/answer-boundary.ts） */
   turnFinal?: TurnFinal
   /** 目标自动续跑轮的起始标记（流首 chunk；前端据此挂载新的用户消息与助手占位） */
   goalRound?: { round: number; objective: string }
+  /**
+   * 排队消息接续轮的起始标记（流首 chunk；前端据此挂载用户消息与助手占位）。
+   * 用户当时并没有点发送，本地没有占位，所以必须由主进程告知。
+   */
+  queueTurn?: { itemId: string | null; text: string; attachments: string[] }
 }
 
 /** 智能体定义 */

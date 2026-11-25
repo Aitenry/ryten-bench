@@ -5,7 +5,8 @@ import logger from 'electron-log'
 import { isSenderAlive, safeSend } from '../../safe-send'
 import { mainMessages } from '../../i18n'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
-import { harnessQueue } from '../../services/harness/queue-store'
+import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
+import { drainPendingTurns } from '../../services/harness/turn-drain'
 import { registerIpcHandlers, type EffectScope, type IpcHandlerMap } from '../register'
 import type { ToolInfo } from '../../services/harness/types'
 import { effectiveMainAgentTools, type MainAgentConfig } from '../../../shared/harness/mcp'
@@ -113,10 +114,18 @@ function primarySender(): Electron.WebContents | null {
   return win ? win.webContents : null
 }
 
-/** 单轮对话执行参数（用户轮与目标自动轮共用 runHarnessTurn 管线） */
+/** 单轮对话执行参数（用户轮 / 队列接续轮 / 目标自动轮共用 runHarnessTurn 管线） */
 interface RunHarnessTurnParams {
   event: HarnessSenderEvent
   question: string
+  /**
+   * 本轮回合 id（`harnessQueue.beginTurn` 的值）。
+   *
+   * launchTurn 在为**已存在的话题**起轮时先登记并传进来；新话题（首条消息）由
+   * runHarnessTurn 建完话题后再登记。这个 id 随每个 chunk / done / error 下发，
+   * 渲染端据此丢弃过期回合的事件（同话题两轮串台是「输出错乱」的根因）。
+   */
+  turnId?: number
   options?: {
     topicId?: number
     providerId?: number
@@ -229,17 +238,17 @@ async function persistTurnUsage(params: {
 
 /**
  * 执行一轮完整对话：建模型 → 建话题 → 存用户消息 → 流式 → 存 AI 回复 → 通知前端。
- * 返回 { topicId, cancelled }（cancelled=true 表示用户点了停止）。
+ * 返回 { topicId, cancelled, turnId }（cancelled=true 表示用户点了停止）。
  */
 async function runHarnessTurn(
   params: RunHarnessTurnParams
-): Promise<{ topicId: number; cancelled: boolean }> {
+): Promise<{ topicId: number; cancelled: boolean; turnId: number }> {
   const { event, question, options } = params
 
   // 渲染进程已失效（崩溃/窗口关闭）时跳过本轮：不再创建模型、不保存消息、不向死帧发送
   if (!isSenderAlive(event.sender)) {
     logger.warn(`[Harness] Renderer process is gone (senderId=${event.sender.id}), skipping this turn`)
-    return { topicId: options?.topicId ?? 0, cancelled: true }
+    return { topicId: options?.topicId ?? 0, cancelled: true, turnId: 0 }
   }
 
   // 加载主智能体默认配置（electron-store）
@@ -301,6 +310,18 @@ async function runHarnessTurn(
     }
   }
 
+  // 1.5 本轮回合 id：已存在的话题由 launchTurn 先登记并传入（这样「另一个窗口/另一次点击
+  //     抢在起轮前」就能被忙检查挡住）；新话题此时才建好，在这里补登记。
+  const turnId = params.turnId || (topicId ? harnessQueue.beginTurn(topicId) : 0)
+
+  /** 向渲染进程推一条 chunk：统一带上话题与回合 id（渲染端按回合 id 丢弃过期事件） */
+  const sendChunk = (payload: Record<string, unknown>): boolean =>
+    safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
+      ...payload,
+      __topicId: topicId,
+      __turnId: turnId
+    })
+
   // 2. 保存用户消息（含图片、文档与目标自动续跑标记）。
   // 提前到模型创建之前（修复：模型创建失败时直接 return,用户消息不落库,重载后丢失）
   // 记下返回的行 id：流式结束后随 harness-stream-done 回传，前端删这轮时才找得到用户那一行
@@ -347,12 +368,12 @@ async function runHarnessTurn(
   }
 
   // 对话轮次失败统一收尾：通知前端错误并复位加载态（保证任何阶段失败前端都能停止反应）
-  const failTurn = (error: unknown): { topicId: number; cancelled: boolean } => {
+  const failTurn = (error: unknown): { topicId: number; cancelled: boolean; turnId: number } => {
     const errMsg = error instanceof Error ? error.message : String(error)
     logger.error('[Harness] Turn failed:', error)
-    safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId })
-    safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId })
-    return { topicId, cancelled: false }
+    safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
+    safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
+    return { topicId, cancelled: false, turnId }
   }
 
   // 模型创建可能因供应商不存在、被禁用、模型名称为空等原因失败，需要捕获并通知前端
@@ -413,14 +434,27 @@ async function runHarnessTurn(
 
   // 2.5. 历史对话上下文由 HarnessService 内部从数据库加载（超长自动压缩）
 
-  // 2.6. 目标自动续跑轮：流首先下发标记 chunk，前端据此挂载「自动续跑」用户消息 +
-  // 助手占位并启动本轮流监听（普通用户轮由前端在发送时自行挂载）
+  // 2.6. 主进程自行发起的轮次：流首下发标记 chunk，前端据此挂载用户消息 + 助手占位并
+  // 启动本轮流监听（普通用户轮由前端在发送时自行挂载）。
+  //  - goalRound：目标自动续跑轮；
+  //  - queueTurn：排队消息在上轮结束后被自动接续发出的轮次（用户没有当场点发送，
+  //    前端没有本地占位，缺了这条标记就会「消息消失了但什么都没发生」）。
   if (options?.turnMeta?.source === 'goal-round' && options.turnMeta.goalRound != null) {
-    safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
-      __topicId: topicId,
+    sendChunk({
       goalRound: {
         round: options.turnMeta.goalRound,
         objective: options.turnMeta.objective ?? ''
+      }
+    })
+  }
+  if (options?.turnMeta?.source === 'queue') {
+    sendChunk({
+      queueTurn: {
+        itemId: options.turnMeta.queueItemId ?? null,
+        text: question,
+        attachments: (options.documents ?? [])
+          .map((doc) => doc.fileName)
+          .concat((options.images ?? []).map((_, index) => `image-${index + 1}`))
       }
     })
   }
@@ -487,7 +521,7 @@ async function runHarnessTurn(
     const next = answerTrailingCount(acc.blocks)
     // 从「有答复」变回「没答复」：显式撤回，否则渲染端已经把那段内容摆到折叠外了
     if (next === 0 && answerHas) {
-      safeSend(event.sender, HARNESS_EVENTS.streamChunk, { answer: false, __topicId: topicId })
+      sendChunk({ answer: false })
     }
     answerBlocks = next
     answerHas = next > 0
@@ -525,18 +559,12 @@ async function runHarnessTurn(
       // 摘要压缩开始：立即推送「压缩中」过渡 chunk（不落库，结果由流尾 historyCompacted 携带，
       // 渲染进程收到结果块后原地替换过渡块，形成「压缩中 → 压缩结果」的转变）
       onCompactionStart: () => {
-        safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
-          historyCompacting: true,
-          __topicId: topicId
-        })
+        sendChunk({ historyCompacting: true })
       },
       // 摘要压缩模型请求自动重试：推送「正在重试（第 N/2 次）」过渡 chunk（不落库），
       // 压缩模型失败与正文模型同款恢复——重试耗尽后经 ModelRecoveryModal 换模型在原位置继续压缩
       onCompactionRetry: (attempt, retries) => {
-        safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
-          retrying: { attempt, retries },
-          __topicId: topicId
-        })
+        sendChunk({ retrying: { attempt, retries } })
       },
       // 回合内插话（steering）：**纯注入**——把文字并进模型上下文，不落库、不产生对话内容。
       // 调用点有两个（见 runtime/agent.ts）：模型节点调用前（主路径，长回答途中插话也能生效）、
@@ -546,10 +574,7 @@ async function runHarnessTurn(
         if (items.length === 0) return null
         logger.info(`[HarnessQueue] Draining ${items.length} queued message(s) for injection (topic=${topicId})`)
         return items.map((item) => {
-          safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
-            steered: { text: item.text },
-            __topicId: topicId
-          })
+          sendChunk({ steered: { text: item.text } })
           // 队列已摘除该条：广播给所有窗口（含发起窗口）抹掉队列行
           harnessQueue.notifyConsumed(topicId, { item })
           return { text: item.text }
@@ -579,7 +604,8 @@ async function runHarnessTurn(
         logger.error('[Harness] Stream failed (partial output already produced):', chunk.streamError.message)
         safeSend(event.sender, HARNESS_EVENTS.streamError, {
           error: chunk.streamError.message,
-          topicId
+          topicId,
+          turnId
         })
       }
       // 本轮热记忆注入：置于消息块最顶部（首个 chunk 到达，仅累积一次，随 blocks 持久化）
@@ -918,7 +944,7 @@ async function runHarnessTurn(
       // 发送失败（渲染帧已失效）时中止流，避免持续向死帧发送。
       // 统一走 safeSend（修复：裸 send 在帧失效窗口期不抛异常、try/catch 是死代码，
       // 且违反项目「主进程推送统一走 safeSend」约定）
-      if (!safeSend(event.sender, HARNESS_EVENTS.streamChunk, { ...chunk, __topicId: topicId })) {
+      if (!sendChunk({ ...chunk })) {
         logger.warn('[Harness] Failed to send stream chunk (renderer disposed)')
         senderDead = true
         abortController.abort()
@@ -929,12 +955,12 @@ async function runHarnessTurn(
     if ((error as Error)?.name !== 'AbortError') {
       logger.error('Error in harness stream:', error)
       const errMsg = error instanceof Error ? error.message : String(error)
-      safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId })
+      safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
       // 流异常中断时不保存不完整的 AI 回复，直接跳到清理
       streamAbortControllers.delete(event.sender.id)
       stopMemSampling()
-      safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId })
-      return { topicId, cancelled: false }
+      safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
+      return { topicId, cancelled: false, turnId }
     }
   } finally {
     // 流结束（正常/取消/异常/渲染进程失效）后移除失效跟踪监听
@@ -1032,6 +1058,8 @@ async function runHarnessTurn(
   streamAbortControllers.delete(event.sender.id)
   safeSend(event.sender, HARNESS_EVENTS.streamDone, {
     topicId,
+    // 本轮回合 id：渲染端据此丢弃「不属于当前回合」的过期收尾事件
+    turnId,
     // 本轮两条对话行的库内 id：前端据此把临时 id 换成真 id（删除这一轮、关联用量都要用）
     userDialogueId: userDialogueId ?? undefined,
     assistantDialogueId: assistantDialogueId ?? undefined,
@@ -1044,7 +1072,7 @@ async function runHarnessTurn(
     // 终局标记（含最终答复边界）：渲染端只读不猜
     turnFinal
   })
-  return { topicId, cancelled: abortController.signal.aborted }
+  return { topicId, cancelled: abortController.signal.aborted, turnId }
 }
 
 /** 广播插话队列当前状态（所有窗口；前端按 topicId 过滤） */
@@ -1127,69 +1155,114 @@ async function resolveTurnMemoryScope(
   return parseMemoryScope(fallback, workspaceId)
 }
 
-/** 启动一轮用户对话并跟踪其生命周期（退 Application 前会等待它落库） */
+/** 一轮对话的结局（turnId 用于把收尾事件对回它所属的回合） */
+interface TurnOutcome {
+  topicId: number
+  cancelled: boolean
+  turnId: number
+}
+
+/**
+ * 启动一轮对话并跟踪其生命周期（退 Application 前会等待它落库）。
+ *
+ * 三个入口共用它：用户发送（harness-start-stream）、排队接续（drainPendingQueue）、
+ * 目标自动续跑（goalRoundDriver）。回合登记（beginTurn / endTurn）也收在这一个地方，
+ * 任何入口起的轮次都会让 `isTurnActive` 为真——这样「生成中再发一条」不会被当成空闲。
+ */
 function launchTurn(
   event: HarnessSenderEvent,
   question: string,
   options: StartStreamOptions | undefined,
-  trackTurn: (p: Promise<{ topicId: number; cancelled: boolean }>) => Promise<{
-    topicId: number
-    cancelled: boolean
-  }>
-): Promise<{ topicId: number; cancelled: boolean }> {
-  const topicId = options?.topicId
-  if (topicId != null) {
-    // 标记话题进行中：生成中新发来的消息据此走排队而不是插一轮
-    harnessQueue.setTurnActive(topicId, true)
-    senderTopic.set(event.sender.id, topicId)
-  }
-  return trackTurn(runHarnessTurn({ event, question, options })).finally(() => {
-    if (topicId != null) {
-      harnessQueue.setTurnActive(topicId, false)
-      // 本轮点了插话却没等到注入边界的条目放回队列（见 releaseHolds 的说明）：
-      // 它们既不落库也不进对话流，必须让用户还看得见，否则等于内容凭空消失
-      harnessQueue.releaseHolds(topicId)
+  trackTurn: (p: Promise<TurnOutcome>) => Promise<TurnOutcome>
+): Promise<TurnOutcome> {
+  const requestedTopicId = options?.topicId
+  // 已存在的话题：先登记本轮回合 id 再起轮（渲染进程的忙检查据此判断「有没有回合在跑」）
+  const turnId = requestedTopicId != null ? harnessQueue.beginTurn(requestedTopicId) : 0
+  if (requestedTopicId != null) senderTopic.set(event.sender.id, requestedTopicId)
+
+  let outcome: TurnOutcome | null = null
+  return trackTurn(runHarnessTurn({ event, question, options, turnId }))
+    .then((result) => {
+      outcome = result
+      return result
+    })
+    .finally(() => {
+      // 新话题（首条消息）的 id 由 runHarnessTurn 建出来后带回，收尾统一按它登记
+      const settledTopicId = outcome?.topicId ?? requestedTopicId ?? 0
+      if (settledTopicId > 0) {
+        harnessQueue.endTurn(settledTopicId, outcome?.turnId ?? turnId)
+        // 本轮点了插话却没等到注入边界的条目放回队列（见 releaseHolds 的说明）：
+        // 它们既不落库也不进对话流，必须让用户还看得见，否则等于内容凭空消失
+        harnessQueue.releaseHolds(settledTopicId)
+      }
       // 只在本帧没有别的在跑话题时删掉映射（同帧切话题同时开两轮的情况很罕见，保守处理）
-      if (senderTopic.get(event.sender.id) === topicId) senderTopic.delete(event.sender.id)
-    }
-  })
+      if (requestedTopicId != null && senderTopic.get(event.sender.id) === requestedTopicId) {
+        senderTopic.delete(event.sender.id)
+      }
+    })
 }
 
 /**
- * 回合结束后的队列处置。
+ * 回合结束后的队列处置：把排队中的消息**逐条**当作新一轮接续发出（FIFO），直到队列空。
  *
- * 排队中的消息（用户明确要发的下一轮提问）在这里作为**新一轮**接续发出，FIFO。
- * 注意与插话分开：点了「立即插话」的条目走纯注入，不产生对话内容；只有排队区里
- * 还没点插话的消息才会被接续成轮次。目标自动续跑仍在跑时不抢跑，交给最后一轮收尾后接续。
+ * 以前的实现只接一条（接续轮自己的收尾不会再次触发这里），队列里第二条起永远发不出去。
+ * 现在整段循环交给 turn-drain（纯函数、有单测），这里只负责把「起一轮 + 目标续跑」接上去。
+ *
+ * 终止条件：队列空 / 目标驱动器在跑（不抢跑）/ 用户中止了某一轮（剩下的留在队列里，
+ * 由用户下一次发送再决定）/ 起轮失败（记日志，不再无限重试）。
  */
-function drainPendingQueue(
+async function drainPendingQueue(
   event: HarnessSenderEvent,
   topicId: number,
   options: StartStreamOptions | undefined,
-  trackTurn: (p: Promise<{ topicId: number; cancelled: boolean }>) => Promise<{
-    topicId: number
-    cancelled: boolean
-  }>
-): void {
-  if (harnessQueue.isTurnActive(topicId)) return
-  if (goalRoundDriver.isRunning(topicId)) return
-  const item = harnessQueue.shift(topicId)
-  if (!item) return
-  logger.info(`[HarnessQueue] Turn ended, continuing with queued message: ${item.text.slice(0, 40)}`)
-  launchTurn(
-    event,
-    item.text,
-    {
-      ...options,
-      topicId,
-      // 接续轮不继承「编辑重发」目标行与旧消息 id
-      reuseUserDialogueId: undefined,
-      messageId: undefined,
-      images: item.images,
-      documents: item.documents
+  trackTurn: (p: Promise<TurnOutcome>) => Promise<TurnOutcome>
+): Promise<void> {
+  const drained = await drainPendingTurns({
+    isTurnActive: () => harnessQueue.isTurnActive(topicId),
+    isGoalRunning: () => goalRoundDriver.isRunning(topicId),
+    hasPending: () => harnessQueue.hasPending(topicId),
+    shift: () => harnessQueue.shift(topicId),
+    onContinue: (item) =>
+      logger.info(
+        `[HarnessQueue] Turn ended, continuing with queued message: ${item.text.slice(0, 40)}`
+      ),
+    runTurn: async (item) => {
+      const outcome = await launchTurn(
+        event,
+        item.text,
+        {
+          ...options,
+          topicId,
+          // 接续轮不继承「编辑重发」目标行与旧消息 id
+          reuseUserDialogueId: undefined,
+          messageId: undefined,
+          images: item.images,
+          documents: item.documents,
+          // 标记来源：runHarnessTurn 据此在流首下发 queueTurn 标记，
+          // 渲染进程才知道「这一轮是排队消息接续出来的」并挂上用户气泡
+          turnMeta: { source: 'queue', queueItemId: item.id }
+        },
+        trackTurn
+      )
+      if (!outcome.cancelled) {
+        // 目标续跑：接续轮结束后同样交给驱动器，跑完再继续下一条排队消息
+        await goalRoundDriver.maybeDrive(topicId, (p) =>
+          launchTurn(
+            event,
+            p.question,
+            { ...options, topicId: p.topicId, turnMeta: p.turnMeta },
+            trackTurn
+          )
+        )
+      }
+      return outcome
     },
-    trackTurn
-  ).catch((err) => logger.error('[HarnessQueue] Failed to continue with queued message:', err))
+    onError: (error) =>
+      logger.error('[HarnessQueue] Failed to continue with queued message:', error)
+  })
+  if (drained > 0) {
+    logger.info(`[HarnessQueue] Drained ${drained} queued message(s) for topic ${topicId}`)
+  }
 }
 
 /**
@@ -1210,6 +1283,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
   // 权限闸门接线：档位来源（electron-store）+ 工作区根目录 + 界面语言文案
   wirePermissionGate()
+  // 队列是纯状态机（不依赖 electron，便于 tests/ 直接跑断言），日志出口在这里注入
+  setHarnessQueueLogger(logger)
   // 沙箱层不 import electron（要能在任意 node 环境跑：工装 / 容器验证），日志由这里注入
   setSandboxLogger(logger)
 
@@ -1362,52 +1437,76 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  handle('harness-start-stream', (question: string, options?: StartStreamOptions) => {
-    // 原 ipcMain.on('harness-start-stream') 的 event.sender：新契约不透传事件对象
-    const sender = primarySender()
-    if (!sender) return
-    const event: HarnessSenderEvent = { sender }
-    // 跟踪进行中的流：应用退出时统一中止并等待数据保存完成。
-    // 用户轮次完成后触发目标轮次驱动器（自动续跑轮由驱动器内部递归调度）
-    // 每个轮次（含目标驱动器派发的自动轮）都登记进 activeHarnessStreams，
-    // 退出时 lifecycle 才能拦截并等待落库（修复：此前只跟踪首轮，自动轮运行中退出会丢回复）
-    const trackTurn = (
-      p: Promise<{ topicId: number; cancelled: boolean }>
-    ): Promise<{ topicId: number; cancelled: boolean }> => {
-      activeHarnessStreams.add(p)
-      p.finally(() => activeHarnessStreams.delete(p))
-      return p
-    }
-    const streamPromise = launchTurn(event, question, options, trackTurn)
-      .then(async ({ topicId, cancelled }) => {
-        if (options?.turnMeta?.source === 'goal-round') return
-        if (cancelled) {
-          // 用户停止本轮：disarm 目标并跳过自动续跑调度（修复：此前 cancelled 被丢弃，
-          // 停止后立即白烧一轮自动轮；目标保持 active，用户要求「继续」时经 resume 重新武装）
-          logger.info('[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation')
-          goalStore.disarm(topicId)
-          return
-        }
-        await goalRoundDriver.maybeDrive(topicId, (p) =>
-          trackTurn(
-            runHarnessTurn({
-              event,
-              question: p.question,
-              options: { ...options, topicId: p.topicId, turnMeta: p.turnMeta }
-            })
-          )
+  handle(
+    'harness-start-stream',
+    (
+      question: string,
+      options?: StartStreamOptions
+    ): { started: boolean; queued?: boolean } => {
+      // 原 ipcMain.on('harness-start-stream') 的 event.sender：新契约不透传事件对象
+      const sender = primarySender()
+      if (!sender) return { started: false }
+      const event: HarnessSenderEvent = { sender }
+      // 同一话题已有回合在跑：绝不并发起第二轮。
+      //
+      // 并发会让两轮的 chunk 都带着同一个 __topicId 进同一个助手气泡（「输出错乱」），
+      // 所以这里把这次发送收进队列，由当前回合结束后的 drainPendingQueue 接续。
+      // 返回 queued=true，渲染进程据此撤掉自己刚挂的乐观气泡（那条消息不会丢，在队列里）。
+      const requestedTopicId = options?.topicId
+      if (requestedTopicId != null && harnessQueue.isTurnActive(requestedTopicId)) {
+        logger.info(
+          `[HarnessQueue] Topic ${requestedTopicId} already running, queueing the new message instead of starting a second turn`
         )
-        // 目标续跑全部结束后再处置队列：排队中的插话作为新一轮发出
-        drainPendingQueue(event, topicId, options, trackTurn)
-      })
-      .catch((err) => logger.error('[Harness] Error executing turn:', err))
-    activeHarnessStreams.add(streamPromise)
-    streamPromise.finally(() => activeHarnessStreams.delete(streamPromise))
-  })
+        harnessQueue.enqueue({
+          topicId: requestedTopicId,
+          senderId: sender.id,
+          text: question,
+          attachments: { images: options?.images, documents: options?.documents }
+        })
+        return { started: false, queued: true }
+      }
+      // 跟踪进行中的流：应用退出时统一中止并等待数据保存完成。
+      // 用户轮次完成后触发目标轮次驱动器（自动续跑轮由驱动器内部递归调度）
+      // 每个轮次（含目标驱动器派发的自动轮）都登记进 activeHarnessStreams，
+      // 退出时 lifecycle 才能拦截并等待落库（修复：此前只跟踪首轮，自动轮运行中退出会丢回复）
+      const trackTurn = (p: Promise<TurnOutcome>): Promise<TurnOutcome> => {
+        activeHarnessStreams.add(p)
+        p.finally(() => activeHarnessStreams.delete(p))
+        return p
+      }
+      const streamPromise = launchTurn(event, question, options, trackTurn)
+        .then(async ({ topicId, cancelled }) => {
+          if (options?.turnMeta?.source === 'goal-round') return
+          if (cancelled) {
+            // 用户停止本轮：disarm 目标并跳过自动续跑调度（修复：此前 cancelled 被丢弃，
+            // 停止后立即白烧一轮自动轮；目标保持 active，用户要求「继续」时经 resume 重新武装）
+            logger.info('[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation')
+            goalStore.disarm(topicId)
+            return
+          }
+          await goalRoundDriver.maybeDrive(topicId, (p) =>
+            launchTurn(
+              event,
+              p.question,
+              { ...options, topicId: p.topicId, turnMeta: p.turnMeta },
+              trackTurn
+            )
+          )
+          // 目标续跑全部结束后再处置队列：排队中的消息逐条作为新一轮发出
+          await drainPendingQueue(event, topicId, options, trackTurn)
+        })
+        .catch((err) => logger.error('[Harness] Error executing turn:', err))
+      activeHarnessStreams.add(streamPromise)
+      streamPromise.finally(() => activeHarnessStreams.delete(streamPromise))
+      return { started: true }
+    }
+  )
 
   /**
-   * 生成中发消息：当前话题有回合在跑 → 收进插话队列；没有在跑 → 直接发起新一轮。
-   * 渲染进程不再自己判断（多窗口/多话题下判断会失准），一律由主进程裁决。
+   * 生成中发消息：当前话题有回合在跑 → 收进插话队列；没有在跑 → 交给渲染进程走正常发送。
+   *
+   * 这里**故意不再自己起轮**（旧实现会起一轮，而渲染进程拿到 queued=false 后也会起一轮，
+   * 同一句话于是跑成两个回合、库里出现两条用户行）。主进程只裁决「排队还是没排队」。
    */
   handle(
     'harness-queue-enqueue',
@@ -1424,42 +1523,25 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       // 原 event.sender.id（队列按发送帧记账）：新契约用主窗口的 webContents
       const sender = primarySender()
       if (!sender) return { queued: false }
-      const event: HarnessSenderEvent = { sender }
-      if (harnessQueue.isTurnActive(topicId)) {
-        harnessQueue.enqueue({ topicId, senderId: event.sender.id, text, attachments })
-        return { queued: true }
-      }
-      // 没有在跑的回合：直接开一轮（与普通发送同一条管线）
-      const trackTurn = (
-        p: Promise<{ topicId: number; cancelled: boolean }>
-      ): Promise<{ topicId: number; cancelled: boolean }> => {
-        activeHarnessStreams.add(p)
-        p.finally(() => activeHarnessStreams.delete(p))
-        return p
-      }
-      void trackTurn(
-        runHarnessTurn({
-          event,
-          question: text,
-          options: {
-            topicId,
-            // 队列接续轮沿用默认模型与主智能体默认工具集
-            images: attachments.images,
-            documents: attachments.documents,
-            turnMeta: { source: 'user' }
-          }
-        })
-      )
-        .then(() => {
-          drainPendingQueue(event, topicId, { topicId }, trackTurn)
-        })
-        .catch((err) => logger.error('[HarnessQueue] Error starting turn directly:', err))
-      return { queued: false }
+      if (!harnessQueue.isTurnActive(topicId)) return { queued: false }
+      harnessQueue.enqueue({ topicId, senderId: sender.id, text, attachments })
+      return { queued: true }
     }
   )
 
   /** 队列查询（窗口/话题重新挂载时拉取当前队列） */
   handle('harness-queue-list', (topicId: number) => harnessQueue.view(topicId))
+
+  /**
+   * 话题当前回合状态（渲染端发送前问一句）。
+   *
+   * 主进程是「有没有回合在跑」的唯一真源：渲染端自己的 loading 状态在「主进程自行接续
+   * 排队消息」「目标自动续跑」这类轮次上会滞后，据此判断就会并发起第二个回合。
+   */
+  handle('harness-turn-state', (topicId: number) => ({
+    active: Number.isInteger(topicId) && harnessQueue.isTurnActive(topicId),
+    turnId: Number.isInteger(topicId) ? harnessQueue.currentTurnId(topicId) : null
+  }))
 
   /** 删除一条排队消息 */
   handle('harness-queue-remove', (payload: { topicId: number; itemId: string }) => {

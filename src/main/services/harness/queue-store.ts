@@ -1,5 +1,3 @@
-import logger from 'electron-log'
-
 /**
  * 对话插话队列（按话题隔离）——生成中发消息时不打断当前回合，先把消息收进队列，
  * 由用户在队列条上点「立即插话」把它并入**正在运行**的回合（工具节点边界注入模型上下文），
@@ -54,6 +52,24 @@ export interface ConsumedSteer {
   item: QueuedMessage
 }
 
+/**
+ * 队列日志出口：默认静默。
+ *
+ * 队列本身是纯状态机（不含 electron 依赖），由 IPC 层在装配时把 electron-log 注进来——
+ * 这样 `tests/` 下的 Node 回归脚本可以直接 import 这个模块跑状态断言。
+ */
+export interface QueueLogger {
+  info: (message: string) => void
+  warn: (message: string) => void
+}
+
+let logger: QueueLogger = { info: () => {}, warn: () => {} }
+
+/** 注入日志出口（IPC 层注册时调用；测试不调用即为静默） */
+export function setHarnessQueueLogger(next: QueueLogger): void {
+  logger = next
+}
+
 /** 队列变更事件（enqueue / remove / update / 消费 / 回合结束回退） */
 export interface QueueChangeEvent {
   topicId: number
@@ -81,18 +97,35 @@ class HarnessQueueStore {
   onConsumed: ((event: SteerConsumedEvent) => void) | null = null
 
   /**
-   * 话题是否正有回合在跑（IPC 层维护）。生成中的消息走排队，不打断当前回合；
+   * 话题当前是否有回合在跑（IPC 层维护）。生成中的消息走排队，不打断当前回合；
    * 没有回合在跑时直接发起新一轮，不排进队列。
+   *
+   * 存的是**回合 id** 而不是布尔：同一话题上的两个回合（例如用户抢跑 + 队列接续）
+   * 混在一起时，渲染端要能按 id 丢掉过期事件（见 StreamChunk.__turnId）。
    */
-  private readonly active = new Set<number>()
+  private readonly turnByTopic = new Map<number, number>()
+  /** 回合 id 自增（进程内单调；只用于区分回合，不落库） */
+  private turnSeq = 0
 
-  setTurnActive(topicId: number, active: boolean): void {
-    if (active) this.active.add(topicId)
-    else this.active.delete(topicId)
+  /** 开始一轮：登记话题当前的回合 id，返回它 */
+  beginTurn(topicId: number): number {
+    this.turnSeq += 1
+    this.turnByTopic.set(topicId, this.turnSeq)
+    return this.turnSeq
+  }
+
+  /** 结束一轮：只有「当前登记的仍是这一轮」才清，避免旧回合的收尾清掉新回合 */
+  endTurn(topicId: number, turnId: number): void {
+    if (this.turnByTopic.get(topicId) === turnId) this.turnByTopic.delete(topicId)
+  }
+
+  /** 话题当前回合 id；没有回合在跑时为 null */
+  currentTurnId(topicId: number): number | null {
+    return this.turnByTopic.get(topicId) ?? null
   }
 
   isTurnActive(topicId: number): boolean {
-    return this.active.has(topicId)
+    return this.turnByTopic.has(topicId)
   }
 
   /**
@@ -105,7 +138,7 @@ class HarnessQueueStore {
     this.pending.clear()
     this.injections.clear()
     this.holds.clear()
-    this.active.clear()
+    this.turnByTopic.clear()
   }
 
   private nextId(): string {

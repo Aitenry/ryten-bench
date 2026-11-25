@@ -359,6 +359,11 @@ export const harnessEnUS: typeof harnessZhCN = {
       callsValue: '{{count}} calls',
       tokensValue: '{{value}} tok'
     },
+    usageMeter: {
+      tokens: '{{value}} tok',
+      cacheHit: 'Cache hit {{percent}}%',
+      contextAria: 'Context used {{percent}}% (current model window {{window}} tok)'
+    },
     goalBar: {
       phaseActive: 'Active',
       phasePaused: 'Paused',
