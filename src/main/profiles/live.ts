@@ -7,11 +7,13 @@ import {
   type ApplyProfileResult
 } from './manager'
 import {
+  clearAccountScopedContentSelections,
   getActiveProfileKey,
   isAccountProfileReady,
   logApplyResult,
   requestProfileRestart,
-  setActiveProfileKey
+  setActiveProfileKey,
+  setProfileSwitchInProgress
 } from './runtime'
 import { createDatabase } from '../database/loading'
 import { getDatabaseRef, setDatabaseInstance } from '../database/instance'
@@ -19,6 +21,7 @@ import { runMigrations } from '../database/orm'
 import { applyWorkspaceSettings } from '../database/workspace-settings'
 import { activeHarnessStreams, streamAbortControllers } from '../context'
 import { reloadAllExternalMains, unloadAllExternalMains } from '../plugins/host'
+import { waitForPluginOperations } from '../plugins/operation-lock'
 import { closeAllMcp } from '../runtime/harness/mcp'
 import { closeAllMnemon } from '../services/harness/mnemon-singleton'
 import { startSystemModules, stopSystemModules } from '../system'
@@ -125,8 +128,24 @@ async function quiesceForSwitch(): Promise<void> {
     await withTimeout(Promise.allSettled([...activeHarnessStreams]), 5000)
   }
 
-  // 同步层：挂起防抖 push，并等正在跑的那一次同步收尾（它会写 plugin-state / lattice-sync.json）
-  await sync.pauseLatticeSync()
+  // 同步层：挂起防抖 push，并等正在跑的那一次同步收尾（它会在切完前写 plugin-state /
+  // lattice-sync.json）。超时仍没结束就**放弃本次对调**：正在跑的同步持有旧账号缓存，
+  // 路径却已经指向新空间，继续切会把上一个账号的数据写进新账号（串号）。
+  const syncSettled = await sync.pauseLatticeSync(15_000)
+  if (!syncSettled) {
+    throw new Error('云同步仍在进行（网络较慢），本次账号切换已取消；请等同步结束后重试')
+  }
+
+  /**
+   * 进行中的插件安装/卸载会写 `userData/plugins`、`plugin-state` 与 `lattice-sync.json`，
+   * 还会在收尾时 reload 插件主模块（那时数据库可能已经关了）。等它们收尾；超时就放弃
+   * 本次切换（宁可让用户重试，也不要把目录对调顶成半完成状态）。
+   * 新操作在切换开始后会被 `isProfileSwitchInProgress()` 拒绝，不会无限冒出来。
+   */
+  const pluginsSettled = await waitForPluginOperations(15_000)
+  if (!pluginsSettled) {
+    throw new Error('插件安装/卸载仍在进行，本次账号切换已取消；请稍后重试')
+  }
 
   // 系统功能（AI 助手 / 资料库）：摘 IPC、停工作区监听与工坊、关 MCP 客户端
   try {
@@ -175,12 +194,18 @@ async function reconnectDatabase(): Promise<void> {
 function restoreRuntimeAfterSwitch(): void {
   // 先清掉按账号数据索引的内存缓存（topicId 是各账号库的自增 id，不清会串号）
   resetHarnessAccountState()
+  // 机器级设置里记的「上次看的那条会话」同样是账号库 id：不参与新空间恢复
+  clearAccountScopedContentSelections()
+  /**
+   * 同步缓存必须在**插件重载之前**换成新空间的：插件 `install()` 里可能立刻调
+   * `ctx.requestSync()` → `markLatticePluginDirty()`；此时若内存里还是上一个账号的
+   * cache，它会把旧账号的 revs/conflicts 整体写进新空间的 `lattice-sync.json`。
+   */
+  sync.reloadLatticeSyncCache()
   // 与启动期同序：系统功能（AI 助手的工具表）→ 第三方插件
   startSystemModules()
   reloadAllExternalMains()
 
-  // 新空间的 lattice-sync.json 才是当前账号的缓存（revs / 冲突 / 上次结果）
-  sync.reloadLatticeSyncCache()
   sync.resumeLatticeSync()
   // 广播新登录态并在后台 pull 一次（登出时内部直接返回）
   void resumeLatticeAfterProfileSwitch()
@@ -231,6 +256,7 @@ export async function switchAccountProfile(
   }
 
   switching = true
+  setProfileSwitchInProgress(true)
   logger.info(
     `[Profiles] 原地切换账号数据空间：${current ?? 'null'} -> ${desired}（${reason}），不重启应用`
   )
@@ -266,5 +292,6 @@ export async function switchAccountProfile(
     }
   } finally {
     switching = false
+    setProfileSwitchInProgress(false)
   }
 }

@@ -16,6 +16,8 @@ import {
   type InstalledPackageInfo
 } from '../plugins/package-install'
 import { findExternalPlugin } from '../plugins/scanner'
+import { isPluginOperationRunning, withPluginOperation } from '../plugins/operation-lock'
+import { isProfileSwitchInProgress, profileMatchesSession } from '../profiles/runtime'
 import {
   LatticeApiError,
   downloadLatticeFile,
@@ -23,9 +25,10 @@ import {
   latticeRequest,
   uploadLatticeBytes
 } from './client'
-import { getLatticeDeviceId } from './session'
+import { getLatticeDeviceId, hasLatticeSession } from './session'
 import {
   installSourceBytes,
+  promoteSourceToWorkshop,
   recordPublishedSource,
   resolvePluginSource,
   type ResolvedPluginSource
@@ -1001,8 +1004,31 @@ export async function installLatticePlugin(
 ): Promise<LatticeInstallResult> {
   const id = String(pluginId ?? '').trim()
   if (!id) return { ok: false, error: '缺少插件 id' }
+  if (!hasLatticeSession()) return { ok: false, error: '未登录插件中心，请先登录' }
+  if (isProfileSwitchInProgress() || !profileMatchesSession()) {
+    return { ok: false, error: '账号数据空间正在切换，请稍候再安装/更新' }
+  }
+  try {
+    return await withPluginOperation(id, '正在安装/更新', () =>
+      installLatticePluginInner(id, version)
+    )
+  } catch (err) {
+    // 锁冲突（另一个入口正在安装/卸载同一插件）：可读地拒绝，别让两个动作互相覆盖
+    return { ok: false, error: latticeErrorMessage(err) }
+  }
+}
+
+async function installLatticePluginInner(
+  pluginId: string,
+  version?: string
+): Promise<LatticeInstallResult> {
+  const id = String(pluginId ?? '').trim()
+  if (!id) return { ok: false, error: '缺少插件 id' }
   try {
     const detail = await getLatticeHubDetail(id)
+    if (detail.install_enabled === false) {
+      return { ok: false, error: `插件 '${id}' 暂不可安装（平台已禁用该插件的安装）` }
+    }
     const target = pickVersion(detail, version)
     logger.info(
       `[Lattice] Downloading ${detail.plugin_id}@${target.version} (sha256=${target.sha256.slice(0, 12)}...)`
@@ -1145,7 +1171,9 @@ export async function installLatticePlugin(
      * 会把云端数据写回 `plugin-state/<id>.json`（用户 2026-11-23：「不然以后的数据同步怎么办」）。
      * 不 await：安装结果不依赖网络同步，后台完成即可。
      */
-    void syncLattice({ direction: 'pull', installMissing: false })
+    // 安装过程中用户可能已经退出登录：没有会话就别再发一次后台 pull
+    // （否则一条「未登录」同步结果会写进新账号空间的状态条）
+    if (hasLatticeSession()) void syncLattice({ direction: 'pull', installMissing: false })
     logger.info(
       `[Lattice] Install complete: ${info.id}@${info.version}${info.upgraded ? ' (upgrade)' : ''}`
     )
@@ -1168,6 +1196,118 @@ export async function installLatticePlugin(
     }
     logger.warn(`[Lattice] Failed to install '${id}' from plugin hub: ${message}`)
     return { ok: false, error: message }
+  }
+}
+
+/** 「打开源码」前按需补源码的结果 */
+export interface EnsureLatticeSourceResult {
+  ok: boolean
+  path?: string
+  version?: string
+  error?: string
+}
+
+/**
+ * 打开源码之前的**按需补源码**：本机没有源码时，按「本机已安装的那个版本」从插件中心
+ * 下载一次源码并解压到插件存放路径。
+ *
+ * 为什么需要：安装时源码下载失败只会记进 `sourceError`，不影响插件安装成功（契约 §2）；
+ * 于是会出现「插件中心显示已安装、也标着有源码，但点『在对话中修改』只能回退到
+ * 资源管理器」的状态（用户 2026-11-25 的现场，卸载重装后才好）。这里把「重装一次」
+ * 变成一次可恢复的按需下载，用户不用卸载插件/重启应用。
+ *
+ * 约束：
+ * - 只补**本机安装的版本**，不要拿 latest 的源码去配旧安装包（版本错配比没有源码更糟）；
+ * - 未登录 / 平台上该版本没有源码包时返回可读原因，由界面提示（不静默打开文件夹）；
+ * - 已经存在源码（哪怕在 userData 回退目录）时什么都不做，交给调用方做迁移。
+ */
+export async function ensureLatticePluginSource(
+  pluginIdRaw: unknown
+): Promise<EnsureLatticeSourceResult> {
+  const pluginId = typeof pluginIdRaw === 'string' ? pluginIdRaw.trim() : ''
+  if (!pluginId) return { ok: false, error: '缺少插件 id' }
+  if (isPluginOperationRunning(pluginId)) {
+    return { ok: false, error: '插件正在安装/更新，请等它完成后再打开源码' }
+  }
+
+  const existing = resolvePluginSource(pluginId)
+  if (existing) {
+    return {
+      ok: true,
+      path: existing.path,
+      ...(existing.version ? { version: existing.version } : {})
+    }
+  }
+
+  if (!hasLatticeSession()) {
+    return {
+      ok: false,
+      error:
+        '本机没有这份插件的源码，且当前未登录插件中心，无法自动下载源码。' +
+        '请先登录插件中心后重试，或重新安装带源码包的新版本。'
+    }
+  }
+
+  const installed = findExternalPlugin(pluginId)
+  if (!installed) {
+    return {
+      ok: false,
+      error: `本机没有安装插件 '${pluginId}'，也没有它的源码：请先在插件中心安装（会自动下载源码）`
+    }
+  }
+
+  try {
+    const detail = await getLatticeHubDetail(pluginId)
+    const installedVersion = installed.manifest.version
+    const target = detail.versions.find((item) => item.version === installedVersion)
+    if (!target) {
+      return {
+        ok: false,
+        error:
+          `插件中心没有本机安装的版本 v${installedVersion}（可能已被作者删除），` +
+          '无法下载与安装包一致的源码。请更新/重装一个带源码的版本。'
+      }
+    }
+    if (!versionHasSource(target)) {
+      return {
+        ok: false,
+        error: `插件 v${installedVersion} 没有发布源码包，无法创建插件工作区（请让作者发布源码，或安装带源码的版本）。`
+      }
+    }
+
+    const expectedSourceSha = target.source_sha256?.toLowerCase() || undefined
+    logger.info(
+      `[Lattice] Local source is missing, downloading it on demand: ${pluginId}@${target.version}`
+    )
+    const downloaded = await downloadLatticeFile(
+      `/v1/hub/plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(target.version)}/source`,
+      expectedSourceSha ? { expectedSha256: expectedSourceSha } : {}
+    )
+    const actualSha =
+      expectedSourceSha ?? createHash('sha256').update(downloaded.bytes).digest('hex')
+    const stored = await installSourceBytes({
+      pluginId,
+      version: target.version,
+      bytes: downloaded.bytes,
+      sha256: actualSha,
+      ...(target.source_asset_name ? { assetName: target.source_asset_name } : {})
+    })
+    recordLatticeSourceCache(pluginId, {
+      path: stored.path,
+      version: target.version,
+      sha256: actualSha,
+      managed: stored.managed
+    })
+    if (stored.managed === 'pluginsPath') broadcastWorkshopChanged()
+    logger.info(`[Lattice] On-demand source ready: ${pluginId}@${target.version} -> ${stored.path}`)
+    return { ok: true, path: stored.path, version: target.version }
+  } catch (err) {
+    const message = latticeErrorMessage(err)
+    logger.warn(`[Lattice] Failed to download the missing source on demand: ${message}`)
+    return {
+      ok: false,
+      error: `下载源码失败：${message}。请检查网络/插件中心登录状态后重试，或重新安装该插件。`
+    }
   }
 }
 
@@ -1202,15 +1342,42 @@ function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
       throw new Error(`源码目录不存在：${explicit}`)
     }
     if (!stat.isDirectory()) throw new Error(`源码目录不是文件夹：${explicit}`)
+    assertNotInstalledPackageRoot(pluginId, explicit)
     return resolvePackageRoot(explicit)
   }
   const resolved: ResolvedPluginSource | null = resolvePluginSource(pluginId)
-  if (resolved) return resolved.path
-  const local = getLatticeLocalSourcePath(pluginId)
-  if (local.path) return local.path
+  if (resolved) {
+    /**
+     * userData 回退目录里的源码先迁到插件存放路径：只有草稿目录才能构建/发布。
+     * 迁移失败时不要拿它去 `draftDir` 构建（路径不同，最终会报一个难懂的错）。
+     */
+    const promoted = resolved.inWorkshop
+      ? resolved
+      : (promoteSourceToWorkshop(pluginId) ?? resolved)
+    assertNotInstalledPackageRoot(pluginId, promoted.path)
+    return promoted.path
+  }
+  /**
+   * 不再回退到「本机已安装的插件包目录」（`userData/plugins/<id>`）：
+   * 那是构建产物，不是源码。把它当源码发布会把**旧代码**重新上传成新版本，还会把
+   * 新版本号写进安装包的 plugin.json——页面显示 vNew，实际跑的仍是旧产物
+   * （用户 2026-11-25 的「发布后版本号对不上」现场）。没有源码就如实拒绝。
+   */
   throw new Error(
-    `本机没有 '${pluginId}' 的源码目录：请先从插件中心安装（会自动下载源码），或在详情里用「打开源码」后再发布`
+    `本机没有 '${pluginId}' 的源码目录，无法发布新版本。请先在插件中心安装带源码的版本，` +
+      '或在详情里用「打开源码 / 在对话中修改」自动补下源码后再试。'
   )
+}
+
+/** 显式传入的目录如果是「已安装包目录」，拒绝：那是产物，发布它等于把旧代码当新版本 */
+function assertNotInstalledPackageRoot(pluginId: string, dir: string): void {
+  const installed = installedPackageDirOf(pluginId)
+  if (installed && isSamePath(dir, installed)) {
+    throw new Error(
+      `目录是本机已安装的插件包（构建产物），不是可编辑的源码：${dir}。` +
+        '请先在插件工坊/插件中心打开源码（会下载源码包）后再发布新版本。'
+    )
+  }
 }
 
 /**
@@ -1250,14 +1417,27 @@ function readSourceManifest(dir: string): LocalPackageManifest | null {
   }
 }
 
-/** 该源码目录是不是「工坊草稿」（= 配置的插件存放路径下的 `<id>/`，且带 workshop.json） */
+/**
+ * 该源码目录是不是「工坊草稿」（= 配置的插件存放路径下的 `<id>/`）。
+ *
+ * 不要求目录里先有 `workshop.json`：从插件中心下载的源码包只有 `plugin.json`，
+ * 它同样应该能直接构建/发布（构建会在结束时补写 workshop.json）。旧判据要求
+ * workshop.json，导致「刚装好、还没在对话里改过」的插件点「发布新版本」永远
+ * 报「不是可发布的构建产物」——用户必须先随便改一个文件才行。
+ */
 function isWorkshopSourceRoot(pluginId: string, dir: string): boolean {
   try {
-    return isSamePath(dir, draftDir(pluginId)) && fs.existsSync(path.join(dir, 'workshop.json'))
+    return isSamePath(dir, draftDir(pluginId))
   } catch {
     // 没有配置插件存放路径时 draftDir 会抛错：按「不是草稿」处理，让下面的报错说明去处
     return false
   }
+}
+
+/** 本机已安装的插件包目录（`userData/plugins/<id>`）——它是产物，不是源码，不能拿来发布 */
+function installedPackageDirOf(pluginId: string): string | null {
+  const installed = findExternalPlugin(pluginId)
+  return installed ? path.resolve(installed.dir) : null
 }
 
 /** 发布用的**安装包根目录**解析（源码目录 ≠ 安装包，这是这一层最容易混淆的地方） */

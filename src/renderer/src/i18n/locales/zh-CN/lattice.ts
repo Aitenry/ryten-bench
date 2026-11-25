@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 登录 / 账号 / Lattice 插件中心 / 同步 词条。
  *
  * 命名空间按产品区域拆开（不在组件里写死任何文案）：
@@ -173,7 +173,8 @@ export const zhCNLattice = {
         open: '打开源码',
         size: '源码 {{size}}',
         hint: '平台版本同时提供安装包与源代码包',
-        downloadFailed: '安装包已装好，但源码下载失败：{{reason}}'
+        downloadFailed: '安装包已装好，但源码下载失败：{{reason}}',
+        backedUp: '本机源码有改动，更新前已备份到：{{path}}'
       },
       /** 本机已安装但还没发布到插件中心的插件（本地上传装的） */
       local: {

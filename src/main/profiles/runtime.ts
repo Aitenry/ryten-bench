@@ -1,5 +1,7 @@
 import { app, dialog } from 'electron'
 import logger from 'electron-log'
+import { settingsStore } from '../context'
+import type { HarnessSettings } from '../types/settings'
 import {
   ANONYMOUS_PROFILE,
   applyProfile,
@@ -24,6 +26,47 @@ import {
 let activeKey: string | null = null
 let ready = false
 let restartScheduled = false
+/** 正在原地对调账号数据空间（安装/卸载/发布等写盘动作要避开这一段） */
+let switchInProgress = false
+
+/** 是否正在切换账号数据空间 */
+export function isProfileSwitchInProgress(): boolean {
+  return switchInProgress
+}
+
+/** 由 `profiles/live.ts` 在切换前后设置 */
+export function setProfileSwitchInProgress(value: boolean): void {
+  switchInProgress = value
+}
+
+/**
+ * 账号数据空间换了以后，清掉侧栏「各侧当前内容」的引用。
+ *
+ * `activeMode` / `workContent` / `chatContent` / `pluginContent` 存在**机器级**
+ * `settings.json` 里，但它们记的 workspaceId / topicId 是**账号库自增 id**。
+ * 不清理的话，换号后 `restoreLastContent` 会拿 A 账号的 id 去新库查：要么新建一条
+ * 插件工作区并改掉刚对齐好的活动工作区，要么撞上另一条无关会话（串号）。
+ * 保留 `pluginsPath` / `memoryPath` 等机器级配置，只丢「选中了哪条内容」。
+ *
+ * 启动期与运行中切换共用（启动期的对调在 `initAccountProfile` 里做，早于渲染层）。
+ */
+export function clearAccountScopedContentSelections(): void {
+  try {
+    const harness = settingsStore.get('harness') as HarnessSettings | undefined
+    if (!harness) return
+    const next: HarnessSettings = { ...harness }
+    delete next.activeMode
+    delete next.workContent
+    delete next.chatContent
+    delete next.pluginContent
+    settingsStore.set('harness', next)
+    logger.info(
+      '[Profiles] Cleared the sidebar content selection remembered for the previous account'
+    )
+  } catch (err) {
+    logger.warn('[Profiles] Failed to clear the previous account sidebar selection:', err)
+  }
+}
 
 /** 应用启动早期调用一次（必须在 initPluginHost / 打开数据库之前）；返回 false 表示已退出 */
 export function initAccountProfile(): boolean {
@@ -35,6 +78,11 @@ export function initAccountProfile(): boolean {
     activeKey = desired
     ready = true
     logApplyResult(result, desired)
+    /**
+     * 这次启动真的对调了账号容器（from 与目标不同）：上一次运行记住的侧栏内容
+     * 都是旧账号库的自增 id，必须在渲染层恢复之前清掉，否则会串到新账号的会话。
+     */
+    if (result.from && result.from !== desired) clearAccountScopedContentSelections()
     return true
   } catch (err) {
     activeKey = null
@@ -146,6 +194,11 @@ export function requestProfileRestart(reason: string): void {
     }
     app.exit(0)
   }, 600)
+}
+
+/** 是否已经安排了「重启应用」来切换数据空间（避免同一流程再发起一次切换） */
+export function isProfileRestartScheduled(): boolean {
+  return restartScheduled
 }
 
 /** 会话刷新后核对身份（例如旧会话启动后才从 /v1/me 补到 user id） */

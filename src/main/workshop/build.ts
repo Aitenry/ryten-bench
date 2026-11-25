@@ -270,8 +270,24 @@ function appendCss(parts: string[], chunk: string): void {
  *
  * **不抛错**：任何失败都收敛成 `info.ok === false` + `info.errors`，
  * 让助手/面板拿到一份可读诊断（工具层再决定怎么说给模型听）。
+ *
+ * **同一草稿同一时刻只跑一次**：构建开头会 `rm -rf dist/<id>`。侧栏与插件工坊弹窗
+ * 各有一份 `busyId`，两边同时点构建（或模型工具与用户操作撞车）会把同一个产物目录
+ * 删两遍、写出混合 chunk。第二个请求直接拿到第一次的 Promise，结果一致。
  */
-export async function buildDraft(
+const buildLocks = new Map<string, Promise<BuildDraftResult>>()
+
+export function buildDraft(id: string, opts: BuildDraftOptions = {}): Promise<BuildDraftResult> {
+  const running = buildLocks.get(id)
+  if (running) return running
+  const task = buildDraftInner(id, opts).finally(() => {
+    buildLocks.delete(id)
+  })
+  buildLocks.set(id, task)
+  return task
+}
+
+async function buildDraftInner(
   id: string,
   opts: BuildDraftOptions = {}
 ): Promise<BuildDraftResult> {

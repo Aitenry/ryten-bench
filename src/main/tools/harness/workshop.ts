@@ -8,6 +8,7 @@ import {
   buildStale,
   createDraftFromTemplate,
   disable,
+  dirOf,
   draftDetail,
   draftSummary,
   enable,
@@ -26,7 +27,15 @@ import {
   writeFile
 } from '../../workshop/service'
 import { formatReport } from '../../workshop/verify'
-import type { WorkshopBuildInfo, WorkshopRendererProbe, WorkshopReport } from '../../../shared/harness/workshop'
+import {
+  clearActiveWorkspaceIfRemoved,
+  clearRememberedPluginContent
+} from '../../workshop/active-workspace'
+import type {
+  WorkshopBuildInfo,
+  WorkshopRendererProbe,
+  WorkshopReport
+} from '../../../shared/harness/workshop'
 
 /**
  * 插件工坊的 AI 工具（4 个）——「和助手对话，把插件做出来」的那条链路。
@@ -246,7 +255,15 @@ const createDraftTool = (): StructuredToolInterface =>
           }
           case 'remove': {
             if (!input.id) return '缺少 id'
+            let removedDir = ''
+            try {
+              removedDir = dirOf(input.id)
+            } catch {
+              // 未配置插件存放路径：删除本身会失败并给出可读错误
+            }
             removeDraft(input.id)
+            if (removedDir) clearActiveWorkspaceIfRemoved(removedDir)
+            clearRememberedPluginContent(input.id)
             return `已删除草稿 '${input.id}'（含它的源码目录、构建产物与验收报告；若它已装进应用，插件本体不受影响，需要的话用 plugin_publish 的 uninstall 卸掉）`
           }
           default:
@@ -421,7 +438,9 @@ const publishTool = (): StructuredToolInterface =>
                 '警告：安装完成但启用状态未生效——请让用户到 设置 → 插件 里手动启用，并查看主日志的 [Plugins] 行。'
               )
             }
-            lines.push('界面应该马上出现它的菜单/设置页；如果没出现，让用户看一眼主日志的 [Plugins] 行。')
+            lines.push(
+              '界面应该马上出现它的菜单/设置页；如果没出现，让用户看一眼主日志的 [Plugins] 行。'
+            )
             return lines.join('\n') + contributionHint(lastReport(input.id))
           }
           case 'enable': {

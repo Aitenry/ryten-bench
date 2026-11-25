@@ -1,4 +1,4 @@
-﻿import type { zhCNLattice } from '../zh-CN/lattice'
+import type { zhCNLattice } from '../zh-CN/lattice'
 
 /**
  * Copy for the login page, the account area, the Lattice plugin hub and sync.
@@ -167,7 +167,8 @@ export const enUSLattice: typeof zhCNLattice = {
         open: 'Open source',
         size: 'Source {{size}}',
         hint: 'Hub versions ship both the plugin package and a source package',
-        downloadFailed: 'Package installed, but the source download failed: {{reason}}'
+        downloadFailed: 'Package installed, but the source download failed: {{reason}}',
+        backedUp: 'Your local source edits were backed up before the update: {{path}}'
       },
       local: {
         badge: 'Local install',

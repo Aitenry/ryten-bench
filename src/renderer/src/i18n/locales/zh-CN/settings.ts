@@ -37,6 +37,9 @@ export const zhCNSettings = {
     purgeCheckbox: '同时删除该插件在本机的数据',
     purgeDetailCloud: '删除后无法恢复；云端备份会保留，重新安装后仍可同步。',
     purgeDetail: '删除后无法恢复。',
+    purgeUnavailable: '该插件没有提供数据清除能力（或当前已停用）',
+    purgeUnavailableDetail:
+      '卸载只会移除插件代码，本机数据会保留。如需清除数据，请先启用插件再卸载并勾选删除。',
     uninstallConfirm: '卸载',
     uninstallKeptData: '插件已卸载，数据已保留',
     installFromRepo: '从插件仓库安装',

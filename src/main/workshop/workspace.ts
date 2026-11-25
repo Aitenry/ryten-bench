@@ -78,6 +78,16 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
   const name = draftSummary(pluginId).title || pluginId
   const existing = await findPluginWorkspace(pluginId)
   if (existing) {
+    /**
+     * 老行还在、源码目录却被删了（用户删了草稿 / 改了插件存放路径）：不能把这一行
+     * 当成可用工作区返回——切过去以后 AI 的文件工具和监听全都会对着一个不存在的目录
+     * 报 ENOENT。会话行本身保留（删源码不等于删对话），但「现在开不了」要如实报错。
+     */
+    if (!fs.existsSync(dir)) {
+      throw new Error(
+        `插件源码目录不存在：${dir}（源码可能已被删除或移走；重新下载/导入插件后再开会话）`
+      )
+    }
     if (existing.name !== name) {
       // 插件改过名：工作区名跟着走（这些行不在「工作」列表里，用户不会自己去改名）
       await updateWorkspace(existing.id, { name })

@@ -1305,18 +1305,20 @@ async function runSync(
   }
   if (!isLatticeLoggedIn()) {
     result.error = '未登录插件中心，请先登录'
-    return finishSync(result)
+    // 未登录不是一次「同步结果」：不写 cache、不广播，避免退出登录后一次后台 pull
+    // 把「未登录」错误写进新账号空间的 lattice-sync.json
+    return result
   }
   // 账号数据空间与登录身份不一致（刚登录/登出、还没重启）→ 暂停同步，避免串号
   const profileGuard = profileSyncGuard()
   if (profileGuard) {
     result.error = profileGuard
-    return finishSync(result)
+    return result
   }
   // 正在原地切换账号数据空间：此刻目录会被对调，任何同步都不能写盘
   if (paused) {
     result.error = '账号数据空间正在切换，已暂停同步'
-    return finishSync(result)
+    return result
   }
   // 未显式传 installMissing 时跟设置项走（默认开启）：启动/登录后的后台 pull 也能换机自动补齐
   const installMissing = options.installMissing ?? getLatticeAutoInstallMissing()
@@ -1409,16 +1411,29 @@ export function cancelPendingLatticePush(): void {
  * 不中断网络请求（中断只会留下半截写入），只是**等它写完**再让调用方去改目录；
  * 超时上限避免网络卡死把切号永远挂住（超时后仍然继续切，最坏情况是那次同步报错）。
  */
-export async function pauseLatticeSync(timeoutMs = 5000): Promise<void> {
+/**
+ * 切换账号数据空间前调用：挂起同步，并等正在跑的那一次收尾。
+ *
+ * 不中断网络请求（中断只会留下半截写入），只是**等它写完**再让调用方去改目录；
+ * 超时上限避免网络卡死把切号永远挂住。
+ *
+ * @returns true = 已经没有在跑的同步（可以安全对调目录）；false = 超时后仍在跑。
+ * 返回 false 时调用方**不能**对调目录：正在跑的同步持有旧账号的内存缓存，
+ * 而路径已经指向新空间，继续写就会把 A 的数据写进 B（串号）。宁可这次切号失败/重启。
+ */
+export async function pauseLatticeSync(timeoutMs = 5000): Promise<boolean> {
   paused = true
   if (debounceTimer) {
     clearTimeout(debounceTimer)
     debounceTimer = null
   }
-  if (!running) return
-  await Promise.race([
-    running.catch(() => {}),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+  if (!running) return true
+  return await Promise.race([
+    running.then(
+      () => true,
+      () => true
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))
   ])
 }
 

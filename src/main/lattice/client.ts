@@ -237,9 +237,16 @@ export async function refreshLatticeAccessToken(): Promise<string> {
   if (refreshInFlight) return refreshInFlight
   const refreshToken = session.getLatticeRefreshToken()
   if (!refreshToken) {
-    throw notifyAuthLost('未登录插件中心，请先登录')
+    /**
+     * 没登录 ≠ 登录过期：不要走 `notifyAuthLost`（它会广播「登录已过期」并触发数据空间
+     * 切换）。用户退出登录后再点插件中心的动作，只应该得到一句「请先登录」。
+     */
+    throw new LatticeApiError('未登录插件中心，请先登录', { code: 'AUTH_REQUIRED' })
   }
   const task = (async (): Promise<string> => {
+    // 发起请求时的会话代际：响应回来前用户可能已经退出/换了账号，迟到的 refresh 响应
+    // 绝不能把旧会话（尤其是轮换后的新 refresh token）写回来。
+    const epoch = session.getLatticeSessionEpoch()
     const response = await fetchOnce({
       method: 'POST',
       url: buildLatticeUrl('/v1/auth/refresh'),
@@ -258,6 +265,12 @@ export async function refreshLatticeAccessToken(): Promise<string> {
     const accessToken = readAccessToken(data)
     if (!accessToken) {
       throw new LatticeApiError('刷新登录态失败：响应里没有 access token', { code: 'FORMAT' })
+    }
+    if (epoch !== session.getLatticeSessionEpoch() || !session.hasLatticeSession()) {
+      logger.info(
+        '[Lattice] Discarded a late refresh response (session changed while it was in flight)'
+      )
+      throw new LatticeApiError('登录状态已变更，本次刷新已取消', { code: 'AUTH_REQUIRED' })
     }
     session.applyLatticeRefresh({
       accessToken,
@@ -337,7 +350,9 @@ export async function loginLattice(
     const me = await fetchLatticeMe()
     role = me.role
   } catch (err) {
-    logger.warn(`[Lattice] Failed to read /v1/me after login (role unavailable): ${latticeErrorMessage(err)}`)
+    logger.warn(
+      `[Lattice] Failed to read /v1/me after login (role unavailable): ${latticeErrorMessage(err)}`
+    )
   }
   return {
     user: session.getLatticeSessionSnapshot().user ?? user,
@@ -353,7 +368,9 @@ export async function logoutLattice(): Promise<void> {
     try {
       await latticeRequest('/v1/auth/logout', { method: 'POST' })
     } catch (err) {
-      logger.warn(`[Lattice] Server logout failed (local login state will still be cleared): ${latticeErrorMessage(err)}`)
+      logger.warn(
+        `[Lattice] Server logout failed (local login state will still be cleared): ${latticeErrorMessage(err)}`
+      )
     }
   }
   session.clearLatticeSession()

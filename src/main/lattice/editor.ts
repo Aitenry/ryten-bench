@@ -1,12 +1,10 @@
-import { shell } from 'electron'
-import * as fs from 'fs'
 import logger from 'electron-log'
 import { settingsStore } from '../context'
 import { getAllTopics } from '../database/mapper/harness/harness'
 import { emitAppEvent } from '../plugins/app-events'
 import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
-import { findExternalPlugin } from '../plugins/scanner'
 import { broadcastWorkshopChanged } from '../ipc/harness/workshop'
+import { isPluginOperationRunning } from '../plugins/operation-lock'
 import type { HarnessSettings } from '../types/settings'
 import { ensurePluginWorkspace } from '../workshop/workspace'
 import { promoteSourceToWorkshop, resolvePluginSource } from './sources'
@@ -30,10 +28,14 @@ import type { LatticeOpenSourceResult } from './types'
  *    `app.workspace-changed`（AI 工作目录、资源管理器根、文件 IPC 边界、文件改动审查都只认它）；
  * 4. 广播 `harness:workshop-changed`（渲染层据此刷新草稿/插件工作区清单）。
  *
- * 可靠性边界（**不假装打开了对话**）：
+ * 可靠性边界（**不再假装打开了对话，也不再悄悄弹文件管理器**）：
  * - 只有源码目录真的位于用户配置的插件存放路径（= workshop 草稿目录）时才走上面的对话链路；
- * - 未配置 pluginsPath、id 不满足草稿目录规则、或建工作区时抛错 → 回退
- *   `shell.openPath(源码目录)` 并返回 `{ok:true,opened:'folder'}`；
+ * - 本机没有源码（安装时源码包下载失败、旧安装、本地安装包）时，先按**本机已安装的版本**
+ *   从插件中心**按需补一次源码**（见 hub.ts 的 `ensureLatticePluginSource`）——用户点
+ *   「源码/在对话中修改」的意图是打开插件工作区，而不是重装应用/重启；
+ * - 补不下来（未登录、平台没有该版本的源码包、网络失败、未配置 pluginsPath）时返回
+ *   `{ok:false,error}` 让界面给出可读原因；**绝不回退成 `shell.openPath`**——
+ *   用户 2026-11-25 的现场就是「点源码弹出一个资源管理器窗口」；
  * - userData 回退目录里的源码会先尝试迁移到 pluginsPath（`promoteSourceToWorkshop`），
  *   迁移成功才可能走对话链路。
  */
@@ -85,52 +87,49 @@ async function findPluginTopic(workspaceId: number, pluginId: string): Promise<n
   return existing ? existing.id : null
 }
 
-/** 回退：在系统文件管理器里打开目录（如实返回 opened:'folder'，不假装开了对话） */
-async function openFolderFallback(dir: string): Promise<LatticeOpenSourceResult> {
-  /**
-   * 先自查目录是否真的可访问：直接 `shell.openPath` 一个不存在/被删了一半/无权限的目录，
-   * Windows 会先弹一个「位置不可用 / 拒绝访问」的资源管理器窗口，用户看到的就是
-   * 「弹出一个打不开的文件夹」（用户 2026-11-23 现场）。这里如实返回错误，由界面提示。
-   */
-  try {
-    const stat = fs.statSync(dir)
-    if (!stat.isDirectory()) throw new Error('目标不是文件夹')
-    // 真正读一次目录：没权限（EACCES/EPERM）时会在这里就抛，而不是交给 Explorer 弹窗
-    fs.readdirSync(dir)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    logger.warn(`[Lattice] Source directory is not accessible (${dir}): ${message}`)
-    return { ok: false, error: `源码目录不可访问：${dir}（${message}）` }
-  }
-  const error = await shell.openPath(dir)
-  if (error) {
-    logger.warn(`[Lattice] Failed to open source directory (${dir}): ${error}`)
-    return { ok: false, error: `打开源码目录失败：${error}` }
-  }
-  logger.info(
-    `[Lattice] Opened source directory in file manager (could not create session): ${dir}`
-  )
-  return { ok: true, opened: 'folder', path: dir }
-}
-
 /**
  * `lattice:open-source` 的业务实现（详见文件头注释）。
  *
  * 返回：
  * - 真开对话：`{ok:true,workspaceId,topicId?,mode:'conversation',path}`（topicId 缺省 = 空白会话）
- * - 回退文件夹：`{ok:true,opened:'folder',path}`
- * - 失败：`{ok:false,error}`
+ * - 失败：`{ok:false,error}`（**没有「悄悄打开文件管理器」这种成功**）
  */
 export async function openLatticePluginSource(
   rawPluginId: unknown
 ): Promise<LatticeOpenSourceResult> {
   const pluginId = typeof rawPluginId === 'string' ? rawPluginId.trim() : ''
   if (!pluginId) return { ok: false, error: '缺少插件 id' }
+  /**
+   * 安装/更新正在改写源码目录：此时打开源码只会拿到半套文件，甚至把用户带进一个
+   * 马上被替换的工作区。明确拒绝，等安装结束再点。
+   */
+  if (isPluginOperationRunning(pluginId)) {
+    return { ok: false, error: '插件正在安装/更新，请等它完成后再打开源码' }
+  }
 
   let resolved = resolvePluginSource(pluginId)
   // userData 回退目录里的源码：先尝试迁到用户配置的插件存放路径，迁移成功才能开插件会话
   if (resolved && !resolved.inWorkshop) {
     resolved = promoteSourceToWorkshop(pluginId) ?? resolved
+  }
+
+  /**
+   * 本机完全没有源码：按需补一次（安装时源码下载失败是已知状态，见 hub.ts）。
+   * 用户点「源码」的意图是打开插件工作区，不该因为一次历史下载失败就让他卸载重装。
+   */
+  let ensureError: string | null = null
+  if (!resolved) {
+    // 动态导入避免 editor ↔ hub 的模块环（hub 也引用了源码/会话相关模块）
+    const { ensureLatticePluginSource } = await import('./hub')
+    const ensured = await ensureLatticePluginSource(pluginId)
+    if (ensured.ok) {
+      resolved = resolvePluginSource(pluginId)
+      if (resolved && !resolved.inWorkshop) {
+        resolved = promoteSourceToWorkshop(pluginId) ?? resolved
+      }
+    } else {
+      ensureError = ensured.error ?? '自动下载源码失败'
+    }
   }
 
   if (resolved?.inWorkshop) {
@@ -156,19 +155,27 @@ export async function openLatticePluginSource(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn(
-        `[Lattice] Failed to create/reuse plugin workspace for '${pluginId}', falling back to file manager: ${message}`
-      )
+      logger.warn(`[Lattice] Failed to create/reuse plugin workspace for '${pluginId}': ${message}`)
+      return {
+        ok: false,
+        error: `创建插件工作区失败：${message}。请检查插件的源码目录是否还在（${resolved.path}）。`
+      }
     }
   }
 
-  // 对话链路不可用：优先打开源码目录；没有源码时退回本机已安装的插件包目录
-  const fallbackDir = resolved?.path ?? findExternalPlugin(pluginId)?.dir ?? null
-  if (!fallbackDir) {
+  // 源码存在但不在插件存放路径下（未配置 pluginsPath / 迁移失败）：如实报错，不打开文件夹
+  if (resolved) {
     return {
       ok: false,
-      error: `本机没有 '${pluginId}' 的源码目录：请先在插件中心安装（会自动下载源码）后再试`
+      error:
+        `源码已在本机（${resolved.path}），但它不在「插件存放路径」下，无法创建插件工作区。` +
+        '请到 设置 → 助手 → 插件工坊 配置插件存放路径后重试。'
     }
   }
-  return await openFolderFallback(fallbackDir)
+
+  return {
+    ok: false,
+    error:
+      ensureError ?? `本机没有 '${pluginId}' 的源码目录：请先在插件中心安装（会自动下载源码）后再试`
+  }
 }

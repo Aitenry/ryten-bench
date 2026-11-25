@@ -16,6 +16,7 @@ import {
   resolveInDraft,
   writeJson
 } from './paths'
+import { releaseWorkshopDir } from './dir-release'
 
 /**
  * 草稿存储：`drafts/<id>/` 下的读写、列举、删除。
@@ -52,12 +53,29 @@ export const MAX_TOTAL_BYTES = 5 * 1024 * 1024
 /** 列举时跳过的目录（产物、依赖、VCS） */
 const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', '.cache'])
 
-/** 草稿元数据的默认值（缺 workshop.json 时用目录名兜底） */
+/**
+ * 从 `plugin.json` 取展示名（没有/为空返回空字符串）。
+ *
+ * 下载安装的源码包（插件中心「源代码」）通常只有 plugin.json、没有 workshop.json：
+ * 这时展示名必须取清单里的 name，而不是目录名（插件 id）。
+ */
+function manifestTitle(id: string): string {
+  const manifest = readDraftManifest(id)
+  return typeof manifest?.name === 'string' ? manifest.name.trim() : ''
+}
+
+/**
+ * 草稿元数据的默认值（缺 workshop.json 时用**清单名称**兜底，再退回目录名）。
+ *
+ * 只在没有 workshop.json 时被 `patchDraftMeta` 用来建底：如果这里写 id，
+ * 第一次通过工坊写文件就会生成一份 `title: <id>` 的 workshop.json，之后
+ * 侧栏/插件工作区就永远显示 id（用户 2026-11-25「插件工作区的名称还是 id」）。
+ */
 function defaultMeta(id: string): WorkshopDraftMeta {
   const now = Date.now()
   return {
     id,
-    title: id,
+    title: manifestTitle(id) || id,
     template: 'minimal',
     css: 'auto',
     createdAt: now,
@@ -246,7 +264,15 @@ export function deleteDraftFile(id: string, rel: unknown): void {
 export function deleteDraft(id: string): { removedDir: boolean } {
   if (!hasPluginsRoot()) return { removedDir: false }
   const dir = draftDir(id)
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true })
+  if (fs.existsSync(dir)) {
+    // 插件模式打开着它的源码时目录正被监听：Windows 上直接 rm 会 EPERM，先放掉监听
+    const release = releaseWorkshopDir(dir)
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } finally {
+      release?.()
+    }
+  }
   return { removedDir: true }
 }
 

@@ -6,7 +6,14 @@ import { getLatticeBaseUrl, getLatticeAutoInstallMissing } from './settings'
 import * as session from './session'
 import * as sync from './sync'
 import { setPluginSyncRequester } from '../plugins/context'
-import { ensureProfileMatchesSession } from '../profiles/runtime'
+import { ANONYMOUS_PROFILE } from '../profiles/manager'
+import {
+  ensureProfileMatchesSession,
+  getActiveProfileKey,
+  isAccountProfileReady,
+  isProfileRestartScheduled,
+  requestProfileRestart
+} from '../profiles/runtime'
 import {
   LATTICE_IPC,
   type LatticeStatus,
@@ -146,6 +153,49 @@ export async function resumeLatticeAfterProfileSwitch(): Promise<void> {
 }
 
 /**
+ * 会话被动失效（refresh 被拒 / 被别处踢下线）后，把本地数据空间切回 anonymous。
+ *
+ * 为什么必须做：`clearLatticeSession()` 只清登录态，账号数据目录（RytenBenchDB /
+ * plugin-state / lattice-sync.json）仍停在原账号上。用户看到「未登录」，后续的插件数据、
+ * 会话却继续写进旧账号容器；重启后 anonymous 生效，这段内容就像凭空消失（其实在
+ * `profiles/u-<id>/` 里）。显式退出登录一直有这一步，被动失效没有——这里补齐。
+ *
+ * 延迟一拍再切：显式退出登录也会先让 refresh 失败（服务端吊销 token），如果那次正在
+ * 切空间，直接撞上去只会得到「正在切换」。等它先走，切完/切起来后这里自然跳过。
+ */
+let authLostAlignmentTimer: NodeJS.Timeout | null = null
+
+function alignProfileAfterAuthLost(): void {
+  if (authLostAlignmentTimer) return
+  authLostAlignmentTimer = setTimeout(() => {
+    authLostAlignmentTimer = null
+    void (async () => {
+      try {
+        if (session.hasLatticeSession()) return
+        if (isProfileRestartScheduled()) return
+        const active = getActiveProfileKey()
+        if (!isAccountProfileReady() || active === null || active === ANONYMOUS_PROFILE) return
+        const live = await import('../profiles/live')
+        const switched = await live.switchAccountProfile({
+          reason: 'auth lost -> anonymous',
+          targetKey: ANONYMOUS_PROFILE
+        })
+        if (switched.ok || switched.restarted) return
+        if (switched.error?.includes('正在切换')) return
+        logger.warn(
+          `[Lattice] Failed to move to the anonymous data space after auth loss, restarting: ${switched.error ?? 'unknown'}`
+        )
+        requestProfileRestart('auth lost -> anonymous')
+      } catch (err) {
+        logger.warn('[Lattice] Failed to align the data space after auth loss:', err)
+        requestProfileRestart('auth lost -> anonymous')
+      }
+    })()
+  }, 700)
+  authLostAlignmentTimer.unref?.()
+}
+
+/**
  * 初始化（由 `registerLatticeIpc()` 在窗口创建前调用一次）。
  *
  * 必须在 app ready 之后（`safeStorage`/`app.getPath` 依赖），当前调用点
@@ -156,11 +206,27 @@ export function initLattice(): void {
   initialized = true
 
   session.loadLatticeSession()
+  /**
+   * 启动期会话被丢弃（换了基址 / 版本不符 / refresh token 解不开）：`initAccountProfile()`
+   * 是按**文件里还有会话**选的账号容器，现在会话没了，数据空间必须回到 anonymous。
+   * 先落一条重启请求：数据库还没就绪，原地切换不可用；重启后会按无会话落到 anonymous。
+   */
+  if (
+    !session.hasLatticeSession() &&
+    getActiveProfileKey() !== null &&
+    getActiveProfileKey() !== ANONYMOUS_PROFILE
+  ) {
+    logger.warn(
+      '[Lattice] Startup session was discarded (base URL changed / unreadable token); restarting into the anonymous data space'
+    )
+    requestProfileRestart('startup session discarded -> anonymous')
+  }
 
-  // 刷新被拒 → client 清会话；这里负责状态广播
+  // 刷新被拒 → client 清会话；这里负责状态广播 + 把数据空间切回 anonymous
   client.setLatticeAuthLostHandler(() => {
     lastError = '登录已过期，请重新登录'
     broadcastLatticeStatus()
+    alignProfileAfterAuthLost()
   })
 
   hub.configureLatticeHub({

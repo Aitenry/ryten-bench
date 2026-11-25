@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import logger from 'electron-log'
+import { releaseWorkspaceWatcherFor, withWorkspaceWatcherReleased } from '../workspace'
 import { extractZipToTemp } from '../plugins/package-install'
 import { assertDraftId, draftDir, hasPluginsRoot } from '../workshop/paths'
 import type { LatticeSourceManaged } from './types'
@@ -194,6 +195,156 @@ function moveDir(from: string, to: string): void {
   }
   fs.cpSync(from, to, { recursive: true })
   fs.rmSync(from, { recursive: true, force: true })
+}
+
+/** 目录替换失败时的重试节奏（Windows 杀软/索引器/资源管理器短暂占用目录，通常几十~几百毫秒后放开） */
+const FS_RETRY_DELAYS_MS = [0, 60, 180, 400, 800]
+
+/** 这些错误码在 Windows 上通常是「目录/文件正被占用」，值得等一会儿再试 */
+function isRetryableFsError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return (
+    code === 'EPERM' ||
+    code === 'EACCES' ||
+    code === 'EBUSY' ||
+    code === 'EEXIST' ||
+    code === 'ENOTEMPTY'
+  )
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 带重试地执行一步文件操作；最后一次失败原样抛出（错误信息带可读步骤名） */
+async function withFsRetry<T>(step: string, action: () => T): Promise<T> {
+  let lastError: unknown = null
+  for (const delay of FS_RETRY_DELAYS_MS) {
+    if (delay > 0) await sleepMs(delay)
+    try {
+      return action()
+    } catch (err) {
+      lastError = err
+      if (!isRetryableFsError(err)) break
+      logger.warn(`[Lattice] ${step} is temporarily unavailable (retrying): ${String(err)}`)
+    }
+  }
+  const reason = lastError instanceof Error ? lastError.message : String(lastError)
+  throw new Error(`${step}失败：${reason}`)
+}
+
+/**
+ * 把新源码目录的内容**原地**合并进旧目录，并清掉旧版本多出来的文件。
+ *
+ * 只在「旧目录连改名都做不到」（资源管理器/编辑器/索引器打开着它）时作为最后手段：
+ * 直接覆盖内容不需要删除/改名被占用的根目录，Windows 上不会撞 EPERM。
+ */
+function mergeDirContents(staging: string, target: string): void {
+  fs.mkdirSync(target, { recursive: true })
+  fs.cpSync(staging, target, { recursive: true, force: true })
+  pruneMissingEntries(target, staging)
+}
+
+/** 删掉 target 里 staging 没有的条目（旧版本遗留文件；递归） */
+function pruneMissingEntries(target: string, staging: string, prefix = ''): void {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(target, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    const counterpart = path.join(staging, entry.name)
+    if (!fs.existsSync(counterpart)) {
+      try {
+        fs.rmSync(path.join(target, entry.name), { recursive: true, force: true })
+      } catch (err) {
+        logger.warn(`[Lattice] Failed to remove stale source entry (ignored): ${rel}`, err)
+      }
+      continue
+    }
+    if (entry.isDirectory()) pruneMissingEntries(path.join(target, entry.name), counterpart, rel)
+  }
+}
+
+/**
+ * 用 staging 目录替换 target（安装新源码的最后一步）。
+ *
+ * 首选原子改名：旧目录先改名到隐藏的 `.lattice-source-old-*`，再把 staging 改名到位，
+ * 最后尽力删掉旧目录。这样既不会出现「旧目录已删、新目录还没到位」的空窗，也不会
+ * 因为目标名被系统短暂保留而 EPERM。
+ *
+ * 兜底：旧目录连改名都失败（被别的进程打开）→ 原地覆盖 + 清理多余文件；下次安装
+ * 会通过 `cleanupStaleArtifacts` 清掉遗留的 `.lattice-source-old-*` 目录。
+ */
+async function replaceSourceDirectory(
+  staging: string,
+  target: string,
+  pluginId: string
+): Promise<'renamed' | 'merged'> {
+  const parent = path.dirname(target)
+  if (!fs.existsSync(target)) {
+    try {
+      await withFsRetry(`把解压好的源码移动到 ${target}`, () => fs.renameSync(staging, target))
+      return 'renamed'
+    } catch (err) {
+      // 目标本来不存在也挪不过去（父目录/杀软占用，或检查后被别的进程抢先建出来）：
+      // 退回原地创建 + 拷贝，至少把源码落地，不让用户卡在「安装成功但没源码」。
+      logger.warn(
+        `[Lattice] Could not move the staged source into place, copying its contents instead: ${target}`,
+        err
+      )
+      await withFsRetry(`写入源码目录 ${target}`, () => mergeDirContents(staging, target))
+      return 'merged'
+    }
+  }
+
+  const trash = path.join(parent, `.lattice-source-old-${pluginId}-${process.pid}-${Date.now()}`)
+  try {
+    await withFsRetry(`把旧源码目录移开 ${target}`, () => fs.renameSync(target, trash))
+  } catch (err) {
+    logger.warn(
+      `[Lattice] Existing source directory cannot be moved aside (in use by another process), replacing its contents in place: ${target}`,
+      err
+    )
+    await withFsRetry(`原地覆盖源码目录 ${target}`, () => mergeDirContents(staging, target))
+    return 'merged'
+  }
+
+  try {
+    await withFsRetry(`把新源码目录移动到 ${target}`, () => fs.renameSync(staging, target))
+  } catch (err) {
+    // 新目录没能到位：把旧目录挪回原处，再尝试原地覆盖（有些占用只锁最终名字，不锁旧目录）
+    try {
+      await withFsRetry(`恢复旧源码目录 ${target}`, () => fs.renameSync(trash, target))
+    } catch (restoreErr) {
+      logger.error(
+        `[Lattice] Failed to place the new source at ${target} and failed to restore the old directory; it stays at ${trash}:`,
+        restoreErr
+      )
+    }
+    try {
+      await withFsRetry(`原地覆盖源码目录 ${target}`, () => mergeDirContents(staging, target))
+      return 'merged'
+    } catch (mergeErr) {
+      logger.error(
+        `[Lattice] Failed to place the new source at ${target} (move and in-place copy both failed):`,
+        mergeErr
+      )
+      throw err
+    }
+  }
+
+  try {
+    fs.rmSync(trash, { recursive: true, force: true })
+  } catch (err) {
+    logger.warn(
+      `[Lattice] Old source directory could not be removed now (will be cleaned on the next install): ${trash}`,
+      err
+    )
+  }
+  return 'renamed'
 }
 
 /**
@@ -496,17 +647,17 @@ function cleanupUserDataVersions(pluginId: string, keepDirName: string | null): 
   }
 }
 
-/** 清掉之前安装中断留下的 staging 目录（只清本插件前缀的隐藏目录） */
-function cleanupStaleStaging(parent: string, pluginId: string): void {
+/** 清掉之前安装中断留下的 staging / 旧目录（只清本插件前缀的隐藏目录） */
+function cleanupStaleArtifacts(parent: string, pluginId: string): void {
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(parent, { withFileTypes: true })
   } catch {
     return
   }
-  const prefix = `.lattice-source-stage-${pluginId}-`
+  const prefixes = [`.lattice-source-stage-${pluginId}-`, `.lattice-source-old-${pluginId}-`]
   for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue
+    if (!entry.isDirectory() || !prefixes.some((prefix) => entry.name.startsWith(prefix))) continue
     try {
       fs.rmSync(path.join(parent, entry.name), { recursive: true, force: true })
     } catch {
@@ -560,8 +711,14 @@ export async function installSourceBytes(
   const sha256 =
     readString(options.sha256) || createHash('sha256').update(options.bytes).digest('hex')
   const plan = planSourceTarget(pluginId, version)
-
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ryten-lattice-src-'))
+  /**
+   * 目标目录可能正是当前活动的「插件工作区」：Windows 上 `fs.watch` 的目录句柄不允许
+   * 删除/改名它（表现为 `EPERM: rename '.lattice-source-stage-…' -> '…/plugins/<id>'`，
+   * 用户 2026-11-25 现场，重启应用才恢复）。替换前先放掉监听，结束后再挂回去。
+   */
+  const releaseWatcher = releaseWorkspaceWatcherFor(plan.target)
+
   const zipPath = path.join(workDir, `${pluginId}-${version}-src.zip`)
   let extracted: string | null = null
   let staging: string | null = null
@@ -571,7 +728,7 @@ export async function installSourceBytes(
 
     const parent = path.dirname(plan.target)
     fs.mkdirSync(parent, { recursive: true })
-    cleanupStaleStaging(parent, pluginId)
+    cleanupStaleArtifacts(parent, pluginId)
     staging = path.join(parent, `.lattice-source-stage-${pluginId}-${process.pid}-${Date.now()}`)
     fs.cpSync(extracted, staging, { recursive: true })
     ensureRootManifest(staging, pluginId)
@@ -605,10 +762,16 @@ export async function installSourceBytes(
           `[Lattice] Backed up user changes before replacing source: ${plan.target} -> ${backupPath}`
         )
       }
-      fs.rmSync(plan.target, { recursive: true, force: true })
     }
-    moveDir(staging, plan.target)
+    /**
+     * 不再 `rmSync(target)` 后直接 rename：Windows 上目标目录即使被删掉，只要还有别的
+     * 进程（资源管理器/编辑器/索引器）开着它，目录名会短暂保留，紧接着的 rename 就会
+     * EPERM。replaceSourceDirectory 用「旧目录先改名挪开 → 新目录改名到位」的原子顺序，
+     * 挪不动时退回原地覆盖，两种情况下都不会把用户卡在「必须重启应用」。
+     */
+    const replacement = await replaceSourceDirectory(staging, plan.target, pluginId)
     staging = null
+    logger.info(`[Lattice] Source directory installed (${replacement}): ${plan.target}`)
 
     if (plan.managed === 'userData') {
       cleanupUserDataVersions(pluginId, version)
@@ -634,6 +797,7 @@ export async function installSourceBytes(
       ...(backupPath ? { backupPath } : {})
     }
   } finally {
+    releaseWatcher?.()
     if (staging) {
       try {
         fs.rmSync(staging, { recursive: true, force: true })
@@ -747,7 +911,8 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
      */
     try {
       const backup = isDirEmpty(draft) ? null : backupExistingSource(pluginId, draft)
-      fs.rmSync(draft, { recursive: true, force: true })
+      // 这个残留目录可能正被工作区监听（插件模式打开着它）：先放掉监听再删
+      withWorkspaceWatcherReleased(draft, () => fs.rmSync(draft, { recursive: true, force: true }))
       logger.warn(
         `[Lattice] Removed unusable leftover source directory before migrating: ${draft}` +
           (backup ? ` (backup: ${backup})` : ' (it was empty)')
@@ -764,7 +929,8 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
   if (!current || current.inWorkshop) return current
   try {
     fs.mkdirSync(path.dirname(draft), { recursive: true })
-    moveDir(current.path, draft)
+    // 目标草稿目录若正被工作区监听，Windows 上 rename 会 EPERM：迁移期间先放掉监听
+    withWorkspaceWatcherReleased(draft, () => moveDir(current.path, draft))
     const meta = readSourceMeta(draft)
     if (meta) writeSourceMeta(draft, { ...meta, layout: 'pluginsPath' })
     const version = current.version ?? meta?.version

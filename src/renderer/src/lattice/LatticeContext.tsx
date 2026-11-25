@@ -269,11 +269,31 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [refresh]
   )
 
+  /**
+   * 平台目录。不带分页参数时**把所有页都拉回来**（目录页需要完整清单：
+   * 只拿第一页会把第 101 个之后的已发布插件误标成「本地安装 / 尚未发布」，
+   * 搜索也搜不到它们）。调用方显式给 page/pageSize 时按调用方口径返回单页。
+   */
   const listHub = useCallback(async (params?: LatticeListQuery): Promise<HubListResultV2> => {
     const bridge = getLatticeBridge()
     if (!bridge) return EMPTY_HUB_LIST
-    return ((await bridge.list({ page: 1, pageSize: 100, ...params })) ??
+    const paged = params?.page !== undefined || params?.pageSize !== undefined
+    const first = ((await bridge.list({ page: 1, pageSize: 100, ...params })) ??
       EMPTY_HUB_LIST) as HubListResultV2
+    if (paged) return first
+    const total = Number(first.total) || first.items.length
+    const pageSize = Number(first.page_size) || 100
+    if (first.items.length >= total || first.items.length === 0) return first
+    const items = [...first.items]
+    // 上限防服务端 total 异常（或翻页不收敛）时无限循环
+    const maxPages = Math.min(50, Math.ceil(total / Math.max(pageSize, 1)))
+    for (let page = 2; page <= maxPages && items.length < total; page += 1) {
+      const next = ((await bridge.list({ page, pageSize, ...params })) ??
+        EMPTY_HUB_LIST) as HubListResultV2
+      if (!next.items || next.items.length === 0) break
+      items.push(...next.items)
+    }
+    return { ...first, items, total, page: 1, page_size: items.length }
   }, [])
 
   /**

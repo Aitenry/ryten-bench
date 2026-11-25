@@ -18,6 +18,7 @@ import {
 } from './paths'
 import { TEMPLATE_INFOS, renderTemplate } from './templates'
 import { listDraftFiles, readDraftMeta } from './store'
+import { releaseWorkshopDir, resumeWorkshopDirs } from './dir-release'
 
 /**
  * 从模板生成草稿（工坊的入口动作）。
@@ -142,7 +143,13 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     backupDir = path.join(backupsRoot(), `${id}-${backupStamp()}`)
     ensureDir(backupsRoot())
     fs.cpSync(dir, backupDir, { recursive: true, force: true })
-    fs.rmSync(dir, { recursive: true, force: true })
+    // 覆盖时旧目录可能正被工作区监听（插件模式打开着它的源码）：先放掉监听再删
+    const release = releaseWorkshopDir(dir)
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } finally {
+      release?.()
+    }
     pruneBackups(id)
   }
 
@@ -157,6 +164,8 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     }
     writeJson(path.join(staging, 'workshop.json'), meta)
     fs.renameSync(staging, dir)
+    // 覆盖重建时旧目录的监听在删除阶段被放掉了（当时目录还不存在）：新目录已就位，重新对齐
+    resumeWorkshopDirs()
   } catch (err) {
     try {
       fs.rmSync(staging, { recursive: true, force: true })

@@ -59,6 +59,21 @@ const state: SessionState = {
   deviceId: null
 }
 
+/**
+ * 会话代际：每次「登录 / 退出」自增。
+ *
+ * 用途：refresh 是异步网络请求，响应可能在用户已经退出登录（甚至换了账号）之后才回来。
+ * 没有代际校验时，迟到的 `applyLatticeRefresh` 会把新的 refresh token 写回内存并重建
+ * `lattice-session.json`——用户明明点了退出，重启后又变回已登录（轮换后的 token 仍有效）。
+ * `client.ts` 在请求返回后比对代际：不一致就丢弃响应，不写会话。
+ */
+let sessionEpoch = 0
+
+/** 当前会话代际（refresh 响应落地前比对） */
+export function getLatticeSessionEpoch(): number {
+  return sessionEpoch
+}
+
 function sessionPath(): string {
   return path.join(app.getPath('userData'), SESSION_FILE)
 }
@@ -112,7 +127,10 @@ function encryptRefreshToken(token: string): { value: string; encrypted: boolean
     try {
       return { value: safeStorage.encryptString(token).toString('base64'), encrypted: true }
     } catch (err) {
-      logger.warn('[Lattice] safeStorage failed to encrypt refresh token, falling back to plaintext:', err)
+      logger.warn(
+        '[Lattice] safeStorage failed to encrypt refresh token, falling back to plaintext:',
+        err
+      )
     }
   } else {
     logger.warn(
@@ -125,7 +143,9 @@ function encryptRefreshToken(token: string): { value: string; encrypted: boolean
 function decryptRefreshToken(stored: StoredLatticeSession): string | null {
   if (!stored.encrypted) return stored.refreshToken
   if (!encryptionAvailable()) {
-    logger.warn('[Lattice] safeStorage unavailable, cannot decrypt the saved refresh token (login required again)')
+    logger.warn(
+      '[Lattice] safeStorage unavailable, cannot decrypt the saved refresh token (login required again)'
+    )
     return null
   }
   try {
@@ -175,7 +195,9 @@ export function loadLatticeSession(): boolean {
   }
 
   if (stored.version !== SESSION_VERSION) {
-    logger.info(`[Lattice] Session file version mismatch (${stored.version} != ${SESSION_VERSION}), ignoring`)
+    logger.info(
+      `[Lattice] Session file version mismatch (${stored.version} != ${SESSION_VERSION}), ignoring`
+    )
     removeSessionFile()
     return false
   }
@@ -259,6 +281,8 @@ export function applyLatticeLogin(data: {
   role?: string | null
   deviceId?: string | null
 }): void {
+  // 新的登录 = 新会话代际：之前那次账号的 refresh 响应即使迟到，也不能再写进来
+  sessionEpoch += 1
   state.accessToken = data.accessToken
   state.expiresAt = Number.isFinite(data.expiresIn) ? Date.now() + data.expiresIn * 1000 : null
   state.refreshToken = data.refreshToken
@@ -330,6 +354,8 @@ export function persistLatticeSession(): void {
 
 /** 退出登录：清内存 + 删文件 */
 export function clearLatticeSession(): void {
+  // 代际先自增：正在飞的 refresh 响应回来时会发现自己已经过期，不会把会话写回来
+  sessionEpoch += 1
   resetState()
   removeSessionFile()
 }

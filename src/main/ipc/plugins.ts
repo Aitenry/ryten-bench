@@ -5,6 +5,8 @@ import logger from 'electron-log'
 import { clearEnabledOverride, markInstallRemoved, setEnabledOverride } from '../plugins/store'
 import { scanExternalPlugins } from '../plugins/scanner'
 import { uninstallExternalPlugin } from '../plugins/lifecycle'
+import { withPluginOperation } from '../plugins/operation-lock'
+import { isProfileSwitchInProgress, profileMatchesSession } from '../profiles/runtime'
 import { emitAppEvent } from '../plugins/app-events'
 import { APP_EVENT_PLUGIN_DATA_PURGED } from '../plugins/app-hooks'
 import {
@@ -146,6 +148,17 @@ function applyEnabled(id: string, enabled: boolean): void {
  * ③ 删 `userData/plugins/<id>/`；④ 记「用户显式卸载」、清启用覆写；⑤ 广播。
  */
 async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginListEntry[]> {
+  /**
+   * 与安装同一把互斥锁：卸载删目录、安装覆盖目录，两者并发的结果完全取决于完成顺序。
+   * 典型现场：点「更新」后马上点「卸载」，卸载先完成、安装后落地 → 插件又回来了。
+   */
+  if (isProfileSwitchInProgress() || !profileMatchesSession()) {
+    throw new Error('账号数据空间正在切换，请稍候再卸载')
+  }
+  return await withPluginOperation(id, '正在卸载', () => uninstallPluginInner(id, purgeData))
+}
+
+async function uninstallPluginInner(id: string, purgeData: boolean): Promise<PluginListEntry[]> {
   if (!listEntries().some((e) => e.id === id)) {
     throw new Error(`插件 '${id}' 未安装，无法卸载`)
   }
@@ -290,9 +303,32 @@ export function registerPluginsIpc(): void {
     if (!entry) {
       throw new Error(`插件 '${id}' 不存在`)
     }
+    if (entry.enabled === enabled) return listEntries()
+    /**
+     * 先真正装载/卸载，成功后才落盘启用态。
+     *
+     * 旧顺序是先 `setEnabledOverride` 再 `applyEnabled`：装载失败时 IPC 抛错、界面提示
+     * 「切换失败」，但启用态已经写进去了——刷新后按钮显示「已启用」，运行状态却是 error；
+     * 重启后应用还会去装载一个坏插件。这里失败回滚到原状态并广播，让落盘状态与实际一致。
+     */
+    try {
+      applyEnabled(id, enabled)
+    } catch (err) {
+      try {
+        applyEnabled(id, entry.enabled)
+      } catch (rollbackErr) {
+        logger.warn(
+          `[Plugins] Failed to roll back '${id}' to its previous enabled state:`,
+          rollbackErr
+        )
+      }
+      broadcastPluginStateChanged()
+      throw new Error(
+        `插件 '${id}' ${enabled ? '启用' : '停用'}失败：${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     setEnabledOverride(id, enabled)
     logger.info(`[Plugins] ${id} -> ${enabled ? 'enabled' : 'disabled'}`)
-    applyEnabled(id, enabled)
     broadcastPluginStateChanged()
     return listEntries()
   })

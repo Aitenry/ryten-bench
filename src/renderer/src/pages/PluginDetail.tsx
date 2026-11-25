@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Button, Checkbox, Input, Modal, Table, Tooltip, theme } from 'antd'
 import type { TableProps } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -131,8 +131,37 @@ const PluginDetail: React.FC = () => {
     capabilities
   } = useLattice()
   const [hubDetail, setHubDetail] = useState<HubDetailV2 | null>(null)
+  /**
+   * 平台详情当前处于什么状态。
+   *
+   * 以前只有 `hubDetail === null` 一个信号，把「正在加载 / 未登录 / 网络失败 / 真的没发布
+   * （404）」混成同一件事：从插件仓库点开一个未安装的插件时，本机清单先回来、平台详情还在
+   * 请求中，页面就先渲染「插件不存在或已被卸载」；网络失败则永远停在那儿。已安装并已发布的
+   * 插件还会在加载窗口里闪一下「本地安装 / 发布到插件中心」。
+   */
+  const [hubDetailState, setHubDetailState] = useState<
+    'idle' | 'loading' | 'loaded' | 'notFound' | 'error' | 'unauthenticated' | 'unavailable'
+  >('idle')
+  const [hubDetailError, setHubDetailError] = useState<string | null>(null)
   const [sourceInfo, setSourceInfo] = useState<LatticeSourcePathResult>({ path: null })
   const [localSourcePath, setLocalSourcePath] = useState<string | null>(null)
+  /**
+   * 任意一个安装/卸载/发布/下载动作正在进行（ref 版，回调里读到最新值）。
+   *
+   * 详情页有一排互斥动作：更新、安装指定版本、启用/停用、卸载、发布、下载、打开源码。
+   * 以前每个按钮只管自己的 loading，于是「点更新 → 立刻卸载」会让卸载先删完、安装后落地，
+   * 界面提示还互相矛盾（卸载成功，几秒后插件又自动装回来了）。
+   */
+  const actionBusyRef = useRef(false)
+  actionBusyRef.current =
+    busy ||
+    openSourceBusy ||
+    publishing ||
+    republishing ||
+    uninstalling ||
+    installingVersion !== null ||
+    downloadingKey !== null
+  const anyActionBusy = actionBusyRef.current
 
   /** 安装清单 → 当前插件（未安装时为 null，但可能仍能从平台详情看到它） */
   const loadEntry = useCallback(async (): Promise<PluginListEntry | null> => {
@@ -176,16 +205,36 @@ const PluginDetail: React.FC = () => {
   }, [loadEntry, loadSourceInfo])
 
   const loadHubDetail = useCallback(async (): Promise<void> => {
-    if (!latticeReady || !loggedIn) {
+    if (!latticeReady) {
       setHubDetail(null)
+      setHubDetailState('unavailable')
+      setHubDetailError(null)
       return
     }
-    try {
-      // 未发布到平台 → 主进程把 404 归一成 null；网络失败也按「无平台信息」降级
-      setHubDetail(await detailHub(pluginId))
-    } catch {
-      // 详情页照常展示本机信息，不弹错、不刷 console（平台不可达是常见状态）
+    if (!loggedIn) {
       setHubDetail(null)
+      setHubDetailState('unauthenticated')
+      setHubDetailError(null)
+      return
+    }
+    setHubDetailState((previous) =>
+      previous === 'loaded' || previous === 'notFound' ? previous : 'loading'
+    )
+    setHubDetailError(null)
+    try {
+      // 未发布到平台 → 主进程把 404 归一成 null；网络失败抛错（要区别于「真的没有」）
+      const detail = await detailHub(pluginId)
+      if (detail) {
+        setHubDetail(detail)
+        setHubDetailState('loaded')
+      } else {
+        setHubDetail(null)
+        setHubDetailState('notFound')
+      }
+    } catch (err) {
+      setHubDetailError(latticeErrorMessage(err))
+      // 保留上一次成功拿到的详情（刷新失败不该把整页降级成「不存在」）
+      setHubDetailState('error')
     }
   }, [detailHub, latticeReady, loggedIn, pluginId])
 
@@ -225,6 +274,11 @@ const PluginDetail: React.FC = () => {
   const installed = Boolean(entry)
   const enabled = Boolean(entry?.enabled)
   const failed = descriptor?.state === 'error'
+  /**
+   * 能不能真的清数据：只有装载中的插件才注册了 `plugin.purge` 贡献（停用/卸载后
+   * 贡献被摘掉）。没有贡献时主进程只会删代码、数据原样保留——勾选框必须如实反映。
+   */
+  const canPurgePluginData = Boolean(entry?.purgeLabel)
   const localVersion = entry?.version
   const hubLatestVersion = hubDetail?.latest_version
   /**
@@ -243,11 +297,12 @@ const PluginDetail: React.FC = () => {
   const icon = entry?.icon ?? hubDetail?.icon
   const menuIcon = entry?.menu?.icon
   const publishedOnHub = Boolean(hubDetail)
+  const hubConfirmedNotPublished = hubDetailState === 'notFound'
   const versions = hubDetail?.versions ?? []
-  const latestVersionHasSource = Boolean(
-    hubDetail?.has_source ??
-    (versions.length > 0 ? versions[versions.length - 1]?.has_source : false)
-  )
+  /** 平台版本清单按时间倒序，`latest_version` 指向的那条才是「最新」；没有就取第一条 */
+  const latestVersionEntry =
+    versions.find((item) => item.version === hubDetail?.latest_version) ?? versions[0]
+  const latestVersionHasSource = Boolean(hubDetail?.has_source || latestVersionEntry?.has_source)
   const resolvedSourcePath = sourceInfo.path ?? null
   /**
    * 「运行状态」一句话：未安装 / 加载失败 / 使用中 / 已停用。
@@ -271,7 +326,7 @@ const PluginDetail: React.FC = () => {
         : token.colorTextTertiary
 
   const toggle = useCallback(async (): Promise<void> => {
-    if (!entry) return
+    if (!entry || actionBusyRef.current) return
     setBusy(true)
     try {
       await window.api.plugin.setEnabled(entry.id, !entry.enabled)
@@ -279,6 +334,8 @@ const PluginDetail: React.FC = () => {
     } catch (err) {
       message.error(t('settings.plugins.switchFail'))
       console.error('[plugins] Failed to switch enabled state:', err)
+      // 主进程失败时会回滚状态：重新读一次，别让按钮停在错误方向
+      await load()
     } finally {
       setBusy(false)
     }
@@ -286,6 +343,11 @@ const PluginDetail: React.FC = () => {
 
   /** 安装 / 更新：走平台 `lattice.install`（主进程会同时下载并解压源码） */
   const installOrUpdate = useCallback(async (): Promise<void> => {
+    if (actionBusyRef.current) return
+    if (!loggedIn) {
+      navigate('/login')
+      return
+    }
     setBusy(true)
     try {
       const result = await installFromHub(pluginId, hubLatestVersion ?? undefined)
@@ -301,6 +363,9 @@ const PluginDetail: React.FC = () => {
       if (result.sourceError) {
         message.warning(t('plugins.hub.source.downloadFailed', { reason: result.sourceError }))
       }
+      if (result.sourceBackupPath) {
+        message.warning(t('plugins.hub.source.backedUp', { path: result.sourceBackupPath }), 8)
+      }
       await Promise.all([load(), loadHubDetail()])
     } catch (err) {
       message.error(t('settings.plugins.installFail'))
@@ -308,7 +373,19 @@ const PluginDetail: React.FC = () => {
     } finally {
       setBusy(false)
     }
-  }, [hubLatestVersion, installed, installFromHub, load, loadHubDetail, message, name, pluginId, t])
+  }, [
+    hubLatestVersion,
+    installed,
+    installFromHub,
+    load,
+    loadHubDetail,
+    loggedIn,
+    message,
+    name,
+    navigate,
+    pluginId,
+    t
+  ])
 
   /**
    * 版本表里安装**指定版本**（升级/降级都走这里）。
@@ -319,7 +396,11 @@ const PluginDetail: React.FC = () => {
    */
   const installSpecificVersion = useCallback(
     async (targetVersion: string): Promise<void> => {
-      if (!targetVersion || installingVersion) return
+      if (!targetVersion || actionBusyRef.current) return
+      if (!loggedIn) {
+        navigate('/login')
+        return
+      }
       setInstallingVersion(targetVersion)
       try {
         const result = await installFromHub(pluginId, targetVersion)
@@ -336,6 +417,9 @@ const PluginDetail: React.FC = () => {
         if (result.sourceError) {
           message.warning(t('plugins.hub.source.downloadFailed', { reason: result.sourceError }))
         }
+        if (result.sourceBackupPath) {
+          message.warning(t('plugins.hub.source.backedUp', { path: result.sourceBackupPath }), 8)
+        }
         await Promise.all([load(), loadHubDetail()])
       } catch (err) {
         message.error(t('settings.plugins.installFail'))
@@ -344,7 +428,7 @@ const PluginDetail: React.FC = () => {
         setInstallingVersion(null)
       }
     },
-    [installFromHub, installingVersion, load, loadHubDetail, message, name, pluginId, t]
+    [installFromHub, load, loadHubDetail, loggedIn, message, name, navigate, pluginId, t]
   )
 
   /**
@@ -400,6 +484,7 @@ const PluginDetail: React.FC = () => {
 
   /** 在对话中修改：主进程优先建/复用源码工作区并开一条插件会话，失败回退文件管理器 */
   const handleOpenSource = useCallback(async (): Promise<void> => {
+    if (actionBusyRef.current) return
     if (!capabilities.openSource) {
       message.info(t('plugins.hub.openSource.unsupported'))
       return
@@ -442,6 +527,7 @@ const PluginDetail: React.FC = () => {
   }, [capabilities.openSource, message, navigate, openSource, pluginId, t])
 
   const openRepublishModal = useCallback((): void => {
+    if (actionBusyRef.current) return
     /**
      * 版本号**回填本机当前版本**（用户 2026-11-23：「发布版本号应该回填」）。
      *
@@ -457,6 +543,7 @@ const PluginDetail: React.FC = () => {
 
   /** 发布新版本：校验 semver → 主进程读源码目录重打包（安装包 + 源码）并上传 */
   const submitRepublish = useCallback(async (): Promise<void> => {
+    if (actionBusyRef.current) return
     const nextVersion = republishVersion.trim()
     if (!nextVersion) {
       setRepublishVersionError(t('plugins.hub.publish.versionRequired'))
@@ -496,6 +583,7 @@ const PluginDetail: React.FC = () => {
   /** 下载某个版本的安装包 / 源码包（主进程弹保存框） */
   const handleDownload = useCallback(
     async (target: HubVersionV2, kind: LatticeDownloadKind): Promise<void> => {
+      if (actionBusyRef.current) return
       if (!capabilities.downloadAsset) {
         message.info(t('plugins.hub.download.unsupported'))
         return
@@ -534,8 +622,8 @@ const PluginDetail: React.FC = () => {
    * 成功提示按勾选口径区分（`uninstallDone` / `uninstallKeptData`），不再固定「数据已保留」。
    */
   const confirmUninstall = useCallback(async (): Promise<void> => {
-    if (!entry || uninstalling) return
-    const purge = purgeData
+    if (!entry || actionBusyRef.current) return
+    const purge = purgeData && canPurgePluginData
     setUninstalling(true)
     try {
       await window.api.plugin.uninstall(entry.id, purge)
@@ -550,7 +638,7 @@ const PluginDetail: React.FC = () => {
     } finally {
       setUninstalling(false)
     }
-  }, [entry, message, navigate, purgeData, t, uninstalling])
+  }, [canPurgePluginData, entry, message, navigate, purgeData, t])
 
   const actionRow = (
     icon: React.ReactNode,
@@ -762,7 +850,7 @@ const PluginDetail: React.FC = () => {
                   type="link"
                   style={{ paddingInline: 4, fontSize: 11 }}
                   icon={<RiDownloadLine size={13} />}
-                  disabled={isCurrent}
+                  disabled={isCurrent || anyActionBusy}
                   loading={installingVersion === row.version}
                   onClick={() => void installSpecificVersion(row.version)}
                 >
@@ -779,7 +867,7 @@ const PluginDetail: React.FC = () => {
                   type="link"
                   style={{ paddingInline: 4, fontSize: 11 }}
                   icon={<RiDownloadLine size={13} />}
-                  disabled={downloadUnsupported}
+                  disabled={downloadUnsupported || anyActionBusy}
                   loading={downloadingKey === packageKey}
                   onClick={() => void handleDownload(row, 'package')}
                 >
@@ -800,7 +888,7 @@ const PluginDetail: React.FC = () => {
                   type="link"
                   style={{ paddingInline: 4, fontSize: 11 }}
                   icon={<RiCodeSSlashLine size={13} />}
-                  disabled={downloadUnsupported || !row.has_source}
+                  disabled={downloadUnsupported || !row.has_source || anyActionBusy}
                   loading={downloadingKey === sourceKey}
                   onClick={() => void handleDownload(row, 'source')}
                 >
@@ -813,6 +901,7 @@ const PluginDetail: React.FC = () => {
       }
     ]
   }, [
+    anyActionBusy,
     capabilities.downloadAsset,
     downloadingKey,
     handleDownload,
@@ -829,46 +918,42 @@ const PluginDetail: React.FC = () => {
     token.colorTextSecondary
   ])
 
-  if (loading && !entry && !hubDetail) {
-    return (
-      <div
-        style={{
-          height: '100%',
-          boxSizing: 'border-box',
-          padding: '6px 9px',
-          background: token.colorBgContainer,
-          borderTopLeftRadius: token.borderRadiusLG,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 12,
-          color: token.colorTextTertiary
-        }}
-      >
-        {t('common.state.loading')}
-      </div>
-    )
-  }
-
-  if (!entry && !hubDetail) {
-    return (
-      <div
-        style={{
-          height: '100%',
-          boxSizing: 'border-box',
-          padding: '6px 9px',
-          background: token.colorBgContainer,
-          borderTopLeftRadius: token.borderRadiusLG,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 12
-        }}
-      >
-        <div style={{ fontSize: 13, color: token.colorTextSecondary }}>
-          {t('settings.plugins.pluginNotFound')}
+  /** 整页状态卡（加载 / 未登录 / 网络失败 / 不存在共用一套骨架） */
+  const pageNotice = (
+    title: string,
+    action?: React.ReactNode,
+    description?: string
+  ): React.ReactNode => (
+    <div
+      style={{
+        height: '100%',
+        boxSizing: 'border-box',
+        padding: '6px 9px',
+        background: token.colorBgContainer,
+        borderTopLeftRadius: token.borderRadiusLG,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12
+      }}
+    >
+      <div style={{ fontSize: 13, color: token.colorTextSecondary }}>{title}</div>
+      {description && (
+        <div
+          style={{
+            maxWidth: 460,
+            textAlign: 'center',
+            fontSize: 11.5,
+            lineHeight: 1.7,
+            color: token.colorTextTertiary
+          }}
+        >
+          {description}
         </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {action}
         <Button
           size="small"
           icon={<RiArrowLeftLine size={13} />}
@@ -877,7 +962,48 @@ const PluginDetail: React.FC = () => {
           {t('settings.plugins.backToRepo')}
         </Button>
       </div>
-    )
+    </div>
+  )
+
+  if (loading && !entry && !hubDetail) {
+    return pageNotice(t('common.state.loading'))
+  }
+
+  if (!entry && !hubDetail) {
+    if (hubDetailState === 'idle' || hubDetailState === 'loading') {
+      return pageNotice(t('common.state.loading'))
+    }
+    if (hubDetailState === 'error') {
+      return pageNotice(
+        t('plugins.hub.loadFailTitle'),
+        <Button
+          size="small"
+          icon={<RiRefreshLine size={13} />}
+          onClick={() => void loadHubDetail()}
+        >
+          {t('plugins.hub.retry')}
+        </Button>,
+        t('plugins.hub.loadFail', { reason: hubDetailError ?? '—' })
+      )
+    }
+    if (hubDetailState === 'unauthenticated') {
+      return pageNotice(
+        t('plugins.hub.loginRequiredTitle'),
+        <Button size="small" type="primary" onClick={() => navigate('/login')}>
+          {t('plugins.hub.goLogin')}
+        </Button>,
+        t('plugins.hub.loginRequiredDesc')
+      )
+    }
+    if (hubDetailState === 'unavailable') {
+      return pageNotice(
+        t('plugins.hub.unavailableTitle'),
+        undefined,
+        t('plugins.hub.unavailableDesc')
+      )
+    }
+    // 已登录且平台明确返回 404：这才叫「不存在或未发布」
+    return pageNotice(t('settings.plugins.pluginNotFound'))
   }
 
   const infoRows: React.ReactNode[] = [
@@ -889,7 +1015,13 @@ const PluginDetail: React.FC = () => {
       ? [
           infoRow(
             t('plugins.hub.detail.latestVersion'),
-            hubLatestVersion ? `v${hubLatestVersion}` : t('plugins.hub.detail.notPublished')
+            hubLatestVersion
+              ? `v${hubLatestVersion}`
+              : hubConfirmedNotPublished
+                ? t('plugins.hub.detail.notPublished')
+                : hubDetailState === 'loading' || hubDetailState === 'idle'
+                  ? t('common.state.loading')
+                  : '—'
           )
         ]
       : []),
@@ -1081,7 +1213,7 @@ const PluginDetail: React.FC = () => {
                   {description}
                 </div>
               )}
-              {installed && !publishedOnHub && latticeReady && loggedIn && (
+              {installed && hubConfirmedNotPublished && latticeReady && loggedIn && (
                 <div style={{ marginTop: 7, fontSize: 10, color: token.colorTextTertiary }}>
                   {t('plugins.hub.detail.notPublishedHint')}
                 </div>
@@ -1089,7 +1221,12 @@ const PluginDetail: React.FC = () => {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               {installed && (
-                <Button size="small" loading={busy} onClick={() => void toggle()}>
+                <Button
+                  size="small"
+                  loading={busy}
+                  disabled={anyActionBusy && !busy}
+                  onClick={() => void toggle()}
+                >
                   {enabled ? t('settings.plugins.disable') : t('settings.plugins.enable')}
                 </Button>
               )}
@@ -1097,6 +1234,7 @@ const PluginDetail: React.FC = () => {
                 <Button
                   size="small"
                   loading={busy}
+                  disabled={anyActionBusy && !busy}
                   icon={<RiRefreshLine size={14} />}
                   onClick={() => void installOrUpdate()}
                 >
@@ -1105,13 +1243,17 @@ const PluginDetail: React.FC = () => {
               ) : !installed ? (
                 <Button
                   size="small"
+                  type={loggedIn ? 'default' : 'primary'}
                   loading={busy}
+                  disabled={anyActionBusy && !busy}
                   icon={<RiDownloadLine size={14} />}
                   onClick={() => void installOrUpdate()}
                 >
-                  {hubLatestVersion
-                    ? t('plugins.hub.detail.installVersion', { version: hubLatestVersion })
-                    : t('plugins.hub.install')}
+                  {!loggedIn
+                    ? t('plugins.hub.goLogin')
+                    : hubLatestVersion
+                      ? t('plugins.hub.detail.installVersion', { version: hubLatestVersion })
+                      : t('plugins.hub.install')}
                 </Button>
               ) : route ? (
                 <Button
@@ -1150,10 +1292,10 @@ const PluginDetail: React.FC = () => {
               {!installed &&
                 actionRow(
                   <RiDownloadLine size={15} />,
-                  t('plugins.hub.install'),
+                  loggedIn ? t('plugins.hub.install') : t('plugins.hub.goLogin'),
                   t('plugins.hub.source.hint'),
                   () => void installOrUpdate(),
-                  busy
+                  anyActionBusy
                 )}
               {installed &&
                 actionRow(
@@ -1163,7 +1305,7 @@ const PluginDetail: React.FC = () => {
                     ? t('plugins.hub.detail.openInChatDesc')
                     : t('plugins.hub.openSource.unsupported'),
                   () => void handleOpenSource(),
-                  openSourceBusy || !capabilities.openSource
+                  openSourceBusy || !capabilities.openSource || anyActionBusy
                 )}
               {installed &&
                 publishedOnHub &&
@@ -1174,16 +1316,16 @@ const PluginDetail: React.FC = () => {
                     ? t('plugins.hub.detail.publishNewVersionDesc')
                     : t('plugins.hub.v2Unsupported'),
                   openRepublishModal,
-                  republishing || !loggedIn || !capabilities.republish
+                  republishing || !loggedIn || !capabilities.republish || anyActionBusy
                 )}
               {installed &&
-                !publishedOnHub &&
+                hubConfirmedNotPublished &&
                 actionRow(
                   <RiUploadCloud2Line size={15} />,
                   t('plugins.hub.detail.publishLocal'),
                   t('plugins.hub.detail.publishLocalDesc'),
                   () => void handlePublish(),
-                  publishing || !loggedIn
+                  publishing || !loggedIn || anyActionBusy
                 )}
               {actionRow(
                 <RiPlayCircleLine size={15} />,
@@ -1198,7 +1340,7 @@ const PluginDetail: React.FC = () => {
                     enabled ? t('settings.plugins.disable') : t('settings.plugins.enable'),
                     enabled ? t('settings.plugins.disabledBadge') : t('settings.plugins.enable'),
                     () => void toggle(),
-                    busy
+                    anyActionBusy
                   )
                 : null}
               {installed
@@ -1207,7 +1349,7 @@ const PluginDetail: React.FC = () => {
                     t('settings.plugins.uninstall'),
                     t('settings.plugins.uninstallBody'),
                     openUninstall,
-                    false,
+                    anyActionBusy,
                     true
                   )
                 : null}
@@ -1550,16 +1692,23 @@ const PluginDetail: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'flex-start' }}>
           <Checkbox
             checked={purgeData}
+            disabled={!canPurgePluginData}
             onChange={(event) => setPurgeData(event.target.checked)}
             style={{ marginTop: 1 }}
           />
           {/* 文案区域整块可点：点标题/说明与点方框等价（不必精确点中 16px 的方框） */}
           <div
-            style={{ cursor: 'pointer', userSelect: 'none' }}
-            onClick={() => setPurgeData((value) => !value)}
+            style={{
+              cursor: canPurgePluginData ? 'pointer' : 'not-allowed',
+              userSelect: 'none',
+              opacity: canPurgePluginData ? 1 : 0.6
+            }}
+            onClick={() => canPurgePluginData && setPurgeData((value) => !value)}
           >
             <div style={{ fontSize: 13, color: token.colorText }}>
-              {t('settings.plugins.purgeCheckbox')}
+              {canPurgePluginData
+                ? t('settings.plugins.purgeCheckbox')
+                : t('settings.plugins.purgeUnavailable')}
             </div>
             <div
               style={{
@@ -1569,9 +1718,11 @@ const PluginDetail: React.FC = () => {
                 marginTop: 2
               }}
             >
-              {latticeReady && loggedIn
-                ? t('settings.plugins.purgeDetailCloud')
-                : t('settings.plugins.purgeDetail')}
+              {!canPurgePluginData
+                ? t('settings.plugins.purgeUnavailableDetail')
+                : latticeReady && loggedIn
+                  ? t('settings.plugins.purgeDetailCloud')
+                  : t('settings.plugins.purgeDetail')}
             </div>
           </div>
         </div>

@@ -29,7 +29,8 @@ export const harnessEnUS: typeof harnessZhCN = {
         plugin: 'Plugins',
         workHint: 'Work mode: workspaces and conversations',
         chatHint: 'Chat mode: talk directly, no workspace (just one conversation list)',
-        pluginHint: 'Plugin mode: drafts in the Plugin Workshop (click one to open it)'
+        pluginHint:
+          'Plugin mode: drafts in the Plugin Workshop (click a row = new conversation for it; open details from ⋯)'
       },
       newDraft: 'New plugin draft',
       pluginActions: 'Plugin actions',
@@ -71,6 +72,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       topicActions: 'Conversation actions',
       workspaceActions: 'Workspace actions',
       workspaceHasRunning: 'A conversation is running',
+      workspaceSwitchFailed:
+        'Could not switch workspace. Check that the folder still exists and try again.',
       workspaceDelete: 'Delete workspace',
       workspaceDeleteConfirmTitle: 'Delete workspace',
       workspaceDeleteConfirmContent:

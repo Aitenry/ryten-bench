@@ -41,6 +41,9 @@ export const enUSSettings: typeof zhCNSettings = {
     purgeDetailCloud:
       'This cannot be undone. Your cloud backup is kept and syncs back after reinstalling.',
     purgeDetail: 'This cannot be undone.',
+    purgeUnavailable: 'This plugin does not expose a data-purge handler (or is currently disabled)',
+    purgeUnavailableDetail:
+      'Uninstalling only removes its code; local data stays. To delete the data, enable the plugin first, then uninstall and tick the data-purge option.',
     uninstallConfirm: 'Uninstall',
     uninstallKeptData: 'Plugin uninstalled, data kept',
     installFromRepo: 'Install from plugin repository',

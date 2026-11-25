@@ -431,6 +431,27 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const chatContentRef = useRef<ChatContent | null>(null)
   const pluginContentRef = useRef<PluginContent | null>(null)
   /**
+   * 插件行点击的请求序号：连点插件 A、B 时只让**最后一次**落地。
+   *
+   * `handlePluginSession` 中间有 ensureWorkspace → 写设置 → 刷新清单等多个 await；
+   * 两个调用交错完成时，活动工作区可能停在 B 而记住的插件/记忆作用域是 A（下一条消息
+   * 就带错 `plugin:<id>` 记忆）。与话题刷新用同一个「最后请求胜出」模式。
+   */
+  const pluginSessionSeqRef = useRef(0)
+
+  /**
+   * 是否有会话正在生成（ref 版）。
+   *
+   * `anyTopicRunning` 是渲染期算的；新建会话的各个入口（工作区 ＋ / 插件行 ＋ / 选文件夹）
+   * 都是 useCallback，直接闭包会拿到旧值。用 ref 让它们在点击那一刻读到最新状态，
+   * 与顶栏「＋」同一口径：生成中不换空白会话，否则正在跑的那一轮从界面上消失。
+   */
+  const anyTopicRunningRef = useRef(false)
+  useEffect(() => {
+    anyTopicRunningRef.current = loadingTopicIds.size > 0
+  }, [loadingTopicIds])
+
+  /**
    * 本次会话里**已经删掉**的话题 id。
    *
    * 用途只有一个：拦住「记住各侧当前那一条内容」那个 effect 的**迟到调用**。删除是异步的
@@ -519,20 +540,58 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [])
 
+  /**
+   * 拉工作区清单（含活动工作区 id）。
+   *
+   * 放在 `loadDrafts` 之前：工坊变更（构建/安装/改插件存放路径）会同时改变插件工作区行，
+   * 侧栏必须连工作区一起刷新——否则 `workspaces` 里还留着旧路径，点开旧会话会把活动
+   * 工作区写回已被移走的目录（用户 2026-11-25 的插件存放路径迁移现场）。
+   */
+  const loadWorkspaces = useCallback(async (): Promise<{
+    list: WorkspaceRow[]
+    activeId: number | null
+  }> => {
+    try {
+      const [list, settings] = await Promise.all([
+        harnessApi.harness.getAllWorkspaces(),
+        window.api.systemSettings.getAll()
+      ])
+      const activeId = settings.harness.activeWorkspaceId ?? null
+      setWorkspaces(list)
+      setActiveWorkspaceId(activeId)
+      return { list, activeId }
+    } catch (err) {
+      console.error('Failed to load workspaces:', err)
+      return { list: [], activeId: null }
+    }
+  }, [])
+
+  /**
+   * 草稿/插件工作区清单的请求序号：并发刷新时只采用**最后一次**的结果。
+   *
+   * 场景：构建/安装触发的 `workshop-changed` 刷新还没回来，用户又删了草稿；删除后的
+   * 刷新先到、旧响应后到，已删的行会「复活」一下，点它只会得到目录不存在的错误。
+   */
+  const draftsLoadSeqRef = useRef(0)
+
   /** 拉插件草稿清单 + 插件工作区清单（工作列表靠后者滤掉插件目录行） */
   const loadDrafts = useCallback(async (): Promise<void> => {
+    const seq = ++draftsLoadSeqRef.current
     setDraftsLoading(true)
     try {
       const state = await harnessApi.workshop.state()
+      const list = await harnessApi.workshop.list()
+      if (seq !== draftsLoadSeqRef.current) return
       setPluginsPath(state.pluginsPath ?? '')
       setPluginWorkspaces(state.pluginWorkspaces ?? [])
-      setDrafts(await harnessApi.workshop.list())
+      setDrafts(list)
     } catch {
+      if (seq !== draftsLoadSeqRef.current) return
       // 工坊没接线（AI 助手刚停用/重载）时保持空列表：面板本来就只在插件模式用
       setDrafts([])
       setPluginWorkspaces([])
     } finally {
-      setDraftsLoading(false)
+      if (seq === draftsLoadSeqRef.current) setDraftsLoading(false)
     }
   }, [])
 
@@ -540,8 +599,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     // 三份清单都要拉：插件模式要列表，工作列表要靠草稿目录 / 对话工作区把非用户工作区滤掉
     void loadDrafts().finally(() => setDraftsLoaded(true))
     void loadChatWorkspaces().finally(() => setChatWorkspacesLoaded(true))
-    return harnessApi.workshop.onChanged(() => void loadDrafts())
-  }, [loadDrafts, loadChatWorkspaces])
+    return harnessApi.workshop.onChanged(() => {
+      void loadDrafts()
+      // 插件存放路径迁移 / 插件工作区新建后，行里的 path 也必须跟着刷新
+      void loadWorkspaces()
+    })
+  }, [loadDrafts, loadChatWorkspaces, loadWorkspaces])
 
   /**
    * 开关跟随内容：工坊页/插件详情一被打开，就切到「插件」
@@ -559,7 +622,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    */
 
   const {
-    busyId: draftBusyId,
+    busyIds: draftBusyIds,
     build: buildDraft,
     verify: verifyDraft,
     publish: publishDraft
@@ -618,7 +681,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   /** 插件行的「⋯」：构建 / 验收 / 安装（与设置页同一个菜单口径）+ 重命名 / 删除 */
   const draftMenuFor = useCallback(
-    (draft: WorkshopDraftSummary): MenuProps['items'] => [
+    (draft: WorkshopDraftSummary, sessionRunning = false): MenuProps['items'] => [
       { key: 'build', icon: <RiHammerLine size={14} />, label: t('workshopSettings.action.build') },
       {
         key: 'verify',
@@ -633,14 +696,23 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           : t('workshopSettings.action.publish')
       },
       { type: 'divider' },
-      { key: 'detail', icon: <RiSettings4Line size={14} />, label: t('settings.plugins.viewWorkshop') },
+      {
+        key: 'detail',
+        icon: <RiSettings4Line size={14} />,
+        label: t('settings.plugins.viewWorkshop')
+      },
       { key: 'rename', icon: <RiEditLine size={14} />, label: t('harness.sidebar.pluginRename') },
       { type: 'divider' },
       {
         key: 'remove',
         danger: true,
         icon: <RiDeleteBin6Line size={14} />,
-        label: t('harness.sidebar.pluginDelete')
+        // 该插件的会话正在生成时禁止删源码：否则正在跑的轮次会突然失去工作目录，
+        // 后续文件工具全部失败（与工作区删除的 hasRunningTopic 同一口径）
+        disabled: sessionRunning,
+        label: sessionRunning
+          ? t('harness.sidebar.workspaceHasRunning')
+          : t('harness.sidebar.pluginDelete')
       }
     ],
     [t]
@@ -690,7 +762,16 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           break
       }
     },
-    [buildDraft, verifyDraft, publishDraft, openDraftRename, handleRemoveDraft, message, t, openDraft]
+    [
+      buildDraft,
+      verifyDraft,
+      publishDraft,
+      openDraftRename,
+      handleRemoveDraft,
+      message,
+      t,
+      openDraft
+    ]
   )
 
   /* ── 工作区状态 ── */
@@ -814,25 +895,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [memoryExpanded, loadMnemonSnapshot])
 
   /* ── 工作区与会话 ── */
-
-  const loadWorkspaces = useCallback(async (): Promise<{
-    list: WorkspaceRow[]
-    activeId: number | null
-  }> => {
-    try {
-      const [list, settings] = await Promise.all([
-        harnessApi.harness.getAllWorkspaces(),
-        window.api.systemSettings.getAll()
-      ])
-      const activeId = settings.harness.activeWorkspaceId ?? null
-      setWorkspaces(list)
-      setActiveWorkspaceId(activeId)
-      return { list, activeId }
-    } catch (err) {
-      console.error('Failed to load workspaces:', err)
-      return { list: [], activeId: null }
-    }
-  }, [])
 
   /**
    * 选一个插件存放路径（空态里的「选择插件存放路径」按钮与右上角 ＋ 共用这一条路）。
@@ -1041,21 +1103,35 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return () => window.removeEventListener('workspace-changed', handleWorkspaceChanged)
   }, [memoryExpanded, loadMnemonSnapshot, loadWorkspaces, loadChatWorkspaces])
 
-  /** 切换工作区：写设置 + 派发事件（Index 负责清空当前会话并刷新会话列表） */
-  const switchWorkspace = useCallback(async (ws: WorkspaceRow): Promise<void> => {
-    try {
-      await window.api.systemSettings.update({
-        harness: {
-          workspacePath: ws.path,
-          activeWorkspaceId: ws.id
-        } as Parameters<typeof window.api.systemSettings.update>[0]['harness']
-      })
-      setActiveWorkspaceId(ws.id)
-      window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: ws.id } }))
-    } catch (err) {
-      console.error('Failed to switch workspace:', err)
-    }
-  }, [])
+  /**
+   * 切换工作区：写设置 + 派发事件（Index 负责清空当前会话并刷新会话列表）。
+   *
+   * 返回是否真的切成功：写设置失败时调用方必须**中止**后续的「打开这条会话」——
+   * 否则会话内容显示出来了，AI 的工作目录却还停在上一个工作区（文件工具/资源管理器
+   * 全在错的目录里），且界面没有任何提示。
+   */
+  const switchWorkspace = useCallback(
+    async (ws: WorkspaceRow): Promise<boolean> => {
+      try {
+        await window.api.systemSettings.update({
+          harness: {
+            workspacePath: ws.path,
+            activeWorkspaceId: ws.id
+          } as Parameters<typeof window.api.systemSettings.update>[0]['harness']
+        })
+        setActiveWorkspaceId(ws.id)
+        window.dispatchEvent(
+          new CustomEvent('workspace-changed', { detail: { workspaceId: ws.id } })
+        )
+        return true
+      } catch (err) {
+        console.error('Failed to switch workspace:', err)
+        viewMessage('workspace-switch', 'error', t('harness.sidebar.workspaceSwitchFailed'), 6)
+        return false
+      }
+    },
+    [t, viewMessage]
+  )
 
   /**
    * 打开「对话」模式里的某条会话（或该模式的空白会话）：主进程按话题 id 算目录（根目录 /
@@ -1123,6 +1199,28 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 「对话」模式的工作区集合（同样要从「工作」列表里滤掉） */
   const chatWorkspaceIds = useMemo(() => new Set(chatWorkspaces.ids), [chatWorkspaces.ids])
 
+  /**
+   * 当前活动工作区是插件工作区、而它的草稿已经不在了（用户在插件模式删了源码，或在别处删了目录）：
+   * 把界面从「指向已删目录」的状态里拉回来。
+   *
+   * 主进程在 `workshop-remove` 里已经把 `harness.workspacePath` 清空（否则重启后文件工具
+   * 还对着一个不存在的目录）；这里同步侧栏的激活态并回到空白欢迎态。工作区行与会话本身
+   * 保留（删源码不等于删对话），重建同名草稿后它们会重新出现。
+   */
+  useEffect(() => {
+    if (!draftsLoaded || activeWorkspaceId == null) return
+    const pluginWs = pluginWorkspaces.find((item) => item.workspaceId === activeWorkspaceId)
+    if (!pluginWs) return
+    if (drafts.some((draft) => draft.id === pluginWs.draftId)) return
+    setActiveWorkspaceId(null)
+    setExpandedWorkspaceId(null)
+    // 记住的「插件模式当前内容」也指向这份已删插件时一并作废：否则切回插件模式 /
+    // 重启恢复会一直去打开一个不存在的插件目录（每次一条错误提示，内容还停在别处）。
+    if (pluginContentRef.current?.pluginId === pluginWs.draftId) rememberPlugin(null)
+    window.dispatchEvent(new CustomEvent('workspace-changed', { detail: {} }))
+    onNewHarness()
+  }, [activeWorkspaceId, drafts, draftsLoaded, onNewHarness, pluginWorkspaces, rememberPlugin])
+
   /** 这一行是不是非用户工作区（插件 / 对话）：工作列表只列用户自己的 */
   const isNonUserWorkspace = useCallback(
     (workspaceId: number): boolean =>
@@ -1167,8 +1265,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           const { list } = await loadWorkspaces()
           target = list.find((w) => w.id === workspaceId) ?? null
         }
-        if (target) await switchWorkspace(target)
-        else console.error('Failed to resolve the workspace to switch to:', workspaceId)
+        if (target) {
+          const switched = await switchWorkspace(target)
+          if (!switched) return
+        } else console.error('Failed to resolve the workspace to switch to:', workspaceId)
       }
       if (isPluginSession) setExpandedWorkspaceId(workspaceId)
       await onSelectTopic(topic)
@@ -1196,13 +1296,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
   const handleCreateSession = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
+      if (anyTopicRunningRef.current) {
+        viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
+        return
+      }
       setExpandedWorkspaceId(ws.id)
       // 该工作区会话尚未加载过时先补一次，避免切换瞬间出现空列表
       if (!Object.prototype.hasOwnProperty.call(workspaceTopics, ws.id)) {
         loadWorkspaceTopics(ws.id).then()
       }
       if (ws.id !== activeWorkspaceId) {
-        await switchWorkspace(ws)
+        const switched = await switchWorkspace(ws)
+        if (!switched) return
       }
       // 新建出来的是这条工作区的空白会话：它就是工作模式「当前那一条内容」
       rememberWork({ workspaceId: ws.id, topicId: null })
@@ -1219,7 +1324,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       onNewHarness,
       onOpenHarness,
       rememberWork,
-      mode
+      mode,
+      t,
+      viewMessage
     ]
   )
 
@@ -1295,10 +1402,26 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const handlePluginSession = useCallback(
     async (
       draft: { id: string },
-      options?: { topic?: HarnessTopicRow; focus?: boolean; navigate?: boolean }
+      options?: {
+        topic?: HarnessTopicRow
+        focus?: boolean
+        navigate?: boolean
+        /**
+         * 允许在别的会话生成中切换（插件中心「在对话中修改」用：主进程已经把活动
+         * 工作区切到插件目录了，渲染层再拒绝只会让界面与设置不一致）。
+         */
+        allowWhileRunning?: boolean
+      }
     ): Promise<void> => {
+      // 有会话正在生成时，点插件行 / ＋ 不要清空当前视图（那一轮会「凭空消失」）
+      if (!options?.topic && !options?.allowWhileRunning && anyTopicRunningRef.current) {
+        viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
+        return
+      }
+      const requestSeq = ++pluginSessionSeqRef.current
       // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
       const ensured = await harnessApi.workshop.ensureWorkspace(draft.id)
+      if (requestSeq !== pluginSessionSeqRef.current) return
       if (!ensured.ok || !ensured.data) {
         viewMessage('plugin-session-ws', 'error', ensured.error ?? '', 6)
         return
@@ -1317,6 +1440,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         viewMessage('plugin-session-ws', 'error', String(err), 6)
         return
       }
+      // 期间用户又点了另一份插件：最后那次说了算，别用旧请求覆盖它
+      if (requestSeq !== pluginSessionSeqRef.current) return
       setActiveWorkspaceId(target.id)
       setExpandedWorkspaceId(target.id)
       window.dispatchEvent(
@@ -1324,6 +1449,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       )
       // 刚建出来的插件工作区要立刻进本地清单（草稿行才能展开、工作列表才能滤掉它）
       await Promise.all([loadWorkspaces(), loadDrafts()])
+      if (requestSeq !== pluginSessionSeqRef.current) return
       // 记下「插件模式当前那一条内容」：切模式回来 + 下次进应用都接着看它
       rememberPlugin({
         pluginId: draft.id,
@@ -1357,12 +1483,17 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       onOpenHarness,
       onSelectTopic,
       viewMessage,
-      rememberPlugin
+      rememberPlugin,
+      t
     ]
   )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
+    if (anyTopicRunningRef.current) {
+      viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
+      return
+    }
     try {
       const dir = await harnessApi.harness.selectWorkspace()
       if (!dir) return
@@ -1391,7 +1522,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     } catch (err) {
       console.error('Failed to create workspace:', err)
     }
-  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode])
+  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode, viewMessage])
 
   const handleDeleteWorkspace = useCallback(
     (ws: WorkspaceRow): void => {
@@ -1597,10 +1728,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
     const state = draftStateOf(draft)
     /** 这一行正跑着构建/验收/安装：行内动作先收起来，避免重复点 */
-    const busy = draftBusyId === draft.id
+    const busy = draftBusyIds.has(draft.id)
     /** 这份插件的「插件工作区」（会话的工作目录）；没开过会话就还没有这一行 */
     const pluginWsId = pluginWorkspaceIdOf(draft)
     const expanded = pluginWsId != null && expandedWorkspaceId === pluginWsId
+    /** 这份插件自己的会话是否有正在生成的（删除源码会抽掉它的工作目录） */
+    const pluginSessionRunning =
+      pluginWsId != null && topicsOf(pluginWsId).some((topic) => loadingTopicIds.has(topic.id))
     return (
       <div key={draft.id} className="mb-0.5">
         <div
@@ -1686,7 +1820,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
               <Dropdown
                 menu={{
-                  items: draftMenuFor(draft),
+                  items: draftMenuFor(draft, pluginSessionRunning),
                   onClick: ({ key, domEvent }) => {
                     domEvent.stopPropagation()
                     onDraftMenuClick(draft, key)
@@ -2215,7 +2349,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         const topic = detail.topicId != null ? await fetchTopicRow(detail.topicId) : undefined
         await handlePluginSession(
           { id: pluginId },
-          { topic: topic ?? undefined, focus: true, navigate: true }
+          { topic: topic ?? undefined, focus: true, navigate: true, allowWhileRunning: true }
         )
       })()
     }
@@ -2289,11 +2423,23 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const enterPluginModeContent = useCallback(async (): Promise<void> => {
     if (inPluginContent) return
     const remembered = pluginContentRef.current
-    if (remembered) {
-      const topic = remembered.topicId != null ? await fetchTopicRow(remembered.topicId) : undefined
-      if (topic || remembered.topicId == null) {
+    /**
+     * 记住的插件已经不在草稿清单里（源码被删/被移走，甚至不是通过本应用删的）：
+     * 先清掉这条记忆，再回落到第一份可用插件。否则会对着不存在的插件目录
+     * `ensureWorkspace` → 每次切到插件模式都弹一次「源码目录不存在」。
+     */
+    if (remembered && !drafts.some((draft) => draft.id === remembered.pluginId)) {
+      rememberPlugin(null)
+    }
+    const validRemembered = drafts.some((draft) => draft.id === remembered?.pluginId)
+      ? remembered
+      : null
+    if (validRemembered) {
+      const topic =
+        validRemembered.topicId != null ? await fetchTopicRow(validRemembered.topicId) : undefined
+      if (topic || validRemembered.topicId == null) {
         await handlePluginSession(
-          { id: remembered.pluginId },
+          { id: validRemembered.pluginId },
           { focus: false, topic: topic ?? undefined }
         )
         return

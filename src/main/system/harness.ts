@@ -14,7 +14,7 @@ import { harnessQueue } from '../services/harness/queue-store'
 import { goalRoundDriver } from '../services/harness/goal-driver'
 import { dumpRendererMemory } from '../services/harness/renderer-memory'
 import { closeAllMnemon } from '../services/harness/mnemon-singleton'
-import { syncWorkspaceWatcher, stopWorkspaceWatcher } from '../workspace'
+import { syncWorkspaceWatcher, stopWorkspaceWatcher, isWatchingPath } from '../workspace'
 import { registerHarnessIpc } from '../ipc/harness/harness'
 import { harnessTopicIpcHandlers } from '../ipc/harness/harness-topic'
 import { chatIpcHandlers } from '../ipc/harness/chat'
@@ -23,6 +23,7 @@ import { workspaceIpcHandlers } from '../ipc/harness/workspace'
 import { agentIpcHandlers } from '../ipc/harness/agent'
 import { workshopIpcHandlers } from '../ipc/harness/workshop'
 import { installWorkshopHost, uninstallWorkshopHost } from '../workshop/wiring'
+import { configureWorkshopDirReleaseHook } from '../workshop/dir-release'
 import { mcpIpcHandlers } from '../ipc/harness/mcp'
 import {
   configureMcp,
@@ -88,6 +89,37 @@ export function startHarness(): void {
     // 工坊自己不做 IO 约定：宿主运行时表、插件装载/卸载、模块加载器、渲染层探针
     // 都在 wiring.ts 里一次性注入（那边刻意是唯一 import electron/core 的地方）。
     installWorkshopHost()
+    /**
+     * 工坊删除/重建草稿时，如果目录正被工作区监听（= 插件模式打开着它的源码），
+     * Windows 上会 EPERM。把「先放掉监听、做完再挂回去」的实现注入给工坊服务：
+     * 服务层保持 electron-free（离线工装仍可跑），主进程这里负责真实监听。
+     */
+    configureWorkshopDirReleaseHook(
+      (dir) => {
+        if (!isWatchingPath(dir)) return null
+        stopWorkspaceWatcher()
+        return () => {
+          try {
+            syncWorkspaceWatcher()
+          } catch (err) {
+            logger.warn(
+              '[Harness] Failed to restore the workspace watcher after a workshop action:',
+              err
+            )
+          }
+        }
+      },
+      () => {
+        try {
+          syncWorkspaceWatcher()
+        } catch (err) {
+          logger.warn(
+            '[Harness] Failed to resync the workspace watcher after a workshop action:',
+            err
+          )
+        }
+      }
+    )
 
     // ── MCP 客户端接线 ───────────────────────────────────────────────────
     // 配置读取器由这里注入（管理器本身不 import electron，可离线回归）；
@@ -126,6 +158,7 @@ export function startHarness(): void {
       stopWorkspaceWatcher()
       configureFileHistory('')
       configureToolOutputStore('')
+      configureWorkshopDirReleaseHook(null)
       uninstallWorkshopHost()
       setMcpToolProvider(undefined)
       configureMcp(undefined)

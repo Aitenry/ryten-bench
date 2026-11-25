@@ -5,6 +5,29 @@ import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../../../api/harness'
 
 /**
+ * 与主进程 `workshop/paths.ts` 的 `assertDraftId` 保持同一口径：
+ * 只允许小写 kebab（不能有连续的 `-`、不能以 `-` 结尾）、最长 40、宿主保留 id 与
+ * Windows 设备名不允许。以前前端只查 `/^[a-z][a-z0-9-]*$/`，`foo-` / 41 个字符
+ * 都能点「创建」，然后在主进程才被拒——用户看到的是一次莫名其妙的失败。
+ */
+const DRAFT_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+const DRAFT_ID_MAX = 40
+const RESERVED_DRAFT_IDS = new Set([
+  'host',
+  ...['con', 'prn', 'aux', 'nul'],
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`)
+])
+
+function isValidDraftId(value: string): boolean {
+  const id = value.trim()
+  if (!id || id.length > DRAFT_ID_MAX) return false
+  if (!DRAFT_ID_RE.test(id)) return false
+  if (RESERVED_DRAFT_IDS.has(id)) return false
+  return true
+}
+
+/**
  * 「新建草稿」弹窗（侧栏的 ＋ 与设置页的「新建草稿」共用同一个）。
  *
  * 两处入口共用它，是为了让「点一下就开始」这条路径**只有一次跳转**：
@@ -39,8 +62,8 @@ const NewDraftModal: React.FC<{
       .catch(() => setConfigured(false))
   }, [open])
 
-  /** id 规则与主进程一致：小写 kebab */
-  const validId = /^[a-z][a-z0-9-]*$/.test(id.trim())
+  /** id 规则与主进程一致：小写 kebab（含长度上限 / 保留名） */
+  const validId = isValidDraftId(id)
   const ready = validId && configured
 
   const close = (): void => {

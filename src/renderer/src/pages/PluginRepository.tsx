@@ -88,10 +88,19 @@ const PluginRepository: React.FC = () => {
     clearUploadProgress,
     capabilities,
     openSource,
+    sourcePath,
     importLocalDir
   } = useLattice()
 
   const [entries, setEntries] = useState<PluginListEntry[]>([])
+  /**
+   * 本机**真的存在源码**的插件 id 集合。
+   *
+   * 不能用平台目录的 `has_source` 代替：它说的是「最新版本带源码包」，而本机装的可能
+   * 是旧版本、或安装时源码下载失败（源码只落在安装包目录）。只看它会渲染出一个
+   * 「源码」按钮，点下去却只能打开安装包所在的资源管理器窗口（用户 2026-11-25）。
+   */
+  const [localSourceIds, setLocalSourceIds] = useState<Set<string>>(() => new Set())
   /**
    * 本机清单是否已经回来过一次。
    *
@@ -166,6 +175,32 @@ const PluginRepository: React.FC = () => {
     }
   }, [])
 
+  /** 逐个问主进程「这个插件本机有没有源码」（数量很少，装/卸后随 entries 重算） */
+  const loadLocalSources = useCallback(
+    async (list: PluginListEntry[]): Promise<void> => {
+      if (!capabilities.sourcePath || list.length === 0) {
+        setLocalSourceIds(new Set())
+        return
+      }
+      const results = await Promise.all(
+        list.map(async (entry) => {
+          try {
+            const info = await sourcePath(entry.id)
+            return info.path ? entry.id : null
+          } catch {
+            return null
+          }
+        })
+      )
+      setLocalSourceIds(new Set(results.filter((id): id is string => Boolean(id))))
+    },
+    [capabilities.sourcePath, sourcePath]
+  )
+
+  useEffect(() => {
+    void loadLocalSources(entries)
+  }, [entries, loadLocalSources])
+
   const loadHub = useCallback(async (): Promise<void> => {
     if (!latticeReady) {
       setHub(null)
@@ -178,8 +213,9 @@ const PluginRepository: React.FC = () => {
       const result = await listHub()
       setHub(result)
     } catch (err) {
+      // 刷新失败不要清掉已经拿到的目录：一次网络抖动 / 插件状态广播触发的后台刷新失败，
+      // 会把整页目录、分类与搜索上下文一起抹掉（用户什么也没做，页面却变成「加载失败」）。
       setHubError(latticeErrorMessage(err))
-      setHub(null)
     } finally {
       setHubLoading(false)
     }
@@ -267,7 +303,17 @@ const PluginRepository: React.FC = () => {
 
   /** 平台目录：登录后加载，并跟随插件启停/安装广播刷新（安装后 installed/update_available 会变） */
   useEffect(() => {
-    if (!latticeReady || !loggedIn) return
+    if (!latticeReady || !loggedIn) {
+      /**
+       * 退出登录后不能留着上一个账号的目录快照：它是按账号算的安装态，且会把
+       * 本机已装插件误判成「平台上已有」（localOnly 过滤掉它们）→ 访客态看不到本机插件。
+       * 等重新登录后由下面的分支重新拉。
+       */
+      setHub(null)
+      setHubError(null)
+      setHubLoading(false)
+      return
+    }
     void loadHub()
     const unsub = window.api.plugin.onStateChanged(() => void loadHub())
     return unsub
@@ -581,6 +627,9 @@ const PluginRepository: React.FC = () => {
         if (result.sourceError) {
           message.warning(t('plugins.hub.source.downloadFailed', { reason: result.sourceError }))
         }
+        if (result.sourceBackupPath) {
+          message.warning(t('plugins.hub.source.backedUp', { path: result.sourceBackupPath }), 8)
+        }
         await Promise.all([refresh(), loadHub()])
       } catch (err) {
         message.error(t('plugins.hub.installFail'))
@@ -598,7 +647,7 @@ const PluginRepository: React.FC = () => {
    */
   const handleUpdateAll = useCallback(async (): Promise<void> => {
     const targets = (hub?.items ?? []).filter((item) => hasLocalUpdate(item))
-    if (targets.length === 0 || bulkUpdating) return
+    if (targets.length === 0 || bulkUpdating || busy !== null || openBusy !== null) return
     setBulkUpdating(true)
     let ok = 0
     let fail = 0
@@ -616,6 +665,9 @@ const PluginRepository: React.FC = () => {
           if (result.sourceError) {
             message.warning(t('plugins.hub.source.downloadFailed', { reason: result.sourceError }))
           }
+          if (result.sourceBackupPath) {
+            message.warning(t('plugins.hub.source.backedUp', { path: result.sourceBackupPath }), 8)
+          }
         } finally {
           setBusy(null)
         }
@@ -632,7 +684,18 @@ const PluginRepository: React.FC = () => {
     } finally {
       setBulkUpdating(false)
     }
-  }, [bulkUpdating, hasLocalUpdate, hub?.items, installLatticePlugin, loadHub, message, refresh, t])
+  }, [
+    bulkUpdating,
+    busy,
+    hasLocalUpdate,
+    hub?.items,
+    installLatticePlugin,
+    loadHub,
+    message,
+    openBusy,
+    refresh,
+    t
+  ])
 
   /**
    * 卡片「打开源码」：主进程优先建/复用工作区并开一条插件会话；
@@ -926,7 +989,24 @@ const PluginRepository: React.FC = () => {
     )
   }
 
-  /** 平台目录内容区状态：未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格 */
+  /**
+   * 卡片点击 → 详情页，但**忽略来自按钮/输入控件的冒泡**。
+   *
+   * antd 的 Button 在 `loading` 时会在内部 handler 里直接 return（连我们的
+   * `e.stopPropagation()` 都不执行）：双击「安装」的第二下被按钮吞掉、继续冒泡到卡片，
+   * 结果安装还在跑，人却被带到了详情页。按事件目标判断比依赖 stopPropagation 稳。
+   */
+  const handleCardNavigate =
+    (pluginId: string) =>
+    (event: React.MouseEvent<HTMLDivElement>): void => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('button, a, input, textarea, select, [role="button"]')) return
+      navigate(`/plugins/${pluginId}`)
+    }
+
+  /**
+   * 平台目录内容区状态：未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格
+   */
   const renderHubContent = (): React.ReactNode => {
     if (!latticeReady) {
       return withLocalCards(
@@ -954,7 +1034,7 @@ const PluginRepository: React.FC = () => {
         )
       )
     }
-    if (hubError) {
+    if (hubError && !hub) {
       return withLocalCards(
         <StateCard
           icon={<RiErrorWarningLine size={24} />}
@@ -1036,6 +1116,7 @@ const PluginRepository: React.FC = () => {
           const hubEnabled = installed && Boolean(localEntry?.enabled)
           const localVersion = localEntry ? localEntry.version : undefined
           const hasSource = Boolean(item.has_source)
+          const hasLocalSource = localSourceIds.has(item.plugin_id)
           // 可更新 = 中心最新版**严格新于**本机版本（不是「版本号字符串不相等」）
           const updateAvailable = installed
             ? localVersion
@@ -1062,12 +1143,17 @@ const PluginRepository: React.FC = () => {
               ? t('plugins.hub.update')
               : ''
             : t('plugins.hub.install')
-          const sourceOpenable = installed && hasSource && capabilities.openSource
+          /**
+           * 「源码」按钮：本机有源码就直接开工作区；没有源码但已登录且平台说明有源码时，
+           * 允许点一次（主进程会按本机安装的版本按需下载），不再出现「点了只弹资源管理器」。
+           */
+          const sourceOpenable =
+            installed && capabilities.openSource && (hasLocalSource || (loggedIn && hasSource))
           return (
             <div
               key={item.plugin_id}
               className="lattice-hub-card is-clickable"
-              onClick={() => navigate(`/plugins/${item.plugin_id}`)}
+              onClick={handleCardNavigate(item.plugin_id)}
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <PluginIcon id={item.plugin_id} icon={item.icon} size={44} />
@@ -1147,7 +1233,11 @@ const PluginRepository: React.FC = () => {
                         updateAvailable ? <RiArrowUpLine size={13} /> : <RiDownloadLine size={13} />
                       }
                       loading={busyThis}
-                      disabled={busy !== null && busy !== item.plugin_id}
+                      disabled={
+                        (busy !== null && busy !== item.plugin_id) ||
+                        openBusy === item.plugin_id ||
+                        bulkUpdating
+                      }
                       onClick={(e) => {
                         e.stopPropagation()
                         void handleHubInstall(item)
@@ -1162,7 +1252,11 @@ const PluginRepository: React.FC = () => {
                         size="small"
                         icon={<RiCodeSSlashLine size={13} />}
                         loading={openBusy === item.plugin_id}
-                        disabled={openBusy !== null && openBusy !== item.plugin_id}
+                        disabled={
+                          (openBusy !== null && openBusy !== item.plugin_id) ||
+                          busy === item.plugin_id ||
+                          bulkUpdating
+                        }
                         onClick={(e) => {
                           e.stopPropagation()
                           void handleOpenSource(item.plugin_id)
@@ -1308,7 +1402,7 @@ const PluginRepository: React.FC = () => {
             <div
               key={entry.id}
               className="lattice-hub-card is-clickable"
-              onClick={() => navigate(`/plugins/${entry.id}`)}
+              onClick={handleCardNavigate(entry.id)}
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <PluginIcon id={entry.id} icon={entry.icon} menuIcon={entry.menu?.icon} size={44} />
@@ -1353,7 +1447,7 @@ const PluginRepository: React.FC = () => {
                     <span>{t('plugins.hub.local.desc')}</span>
                   </div>
                 </div>
-                {capabilities.openSource && (
+                {capabilities.openSource && localSourceIds.has(entry.id) && (
                   <Tooltip title={t('plugins.hub.source.open')}>
                     <Button
                       size="small"
@@ -1960,6 +2054,7 @@ const PluginRepository: React.FC = () => {
                   <Button
                     size="small"
                     loading={conflictBusy === localKey}
+                    disabled={conflictBusy !== null}
                     onClick={() => void resolveConflict(conflict.plugin_id, 'local')}
                   >
                     {t('sync.resolve.useLocal')}
@@ -1967,6 +2062,7 @@ const PluginRepository: React.FC = () => {
                   <Button
                     size="small"
                     loading={conflictBusy === cloudKey}
+                    disabled={conflictBusy !== null}
                     onClick={() => void resolveConflict(conflict.plugin_id, 'cloud')}
                   >
                     {t('sync.resolve.useCloud')}
@@ -1976,6 +2072,7 @@ const PluginRepository: React.FC = () => {
                       size="small"
                       type="primary"
                       loading={conflictBusy === mergeKey}
+                      disabled={conflictBusy !== null}
                       onClick={() => void resolveConflict(conflict.plugin_id, 'merge')}
                     >
                       {t('sync.resolve.merge')}

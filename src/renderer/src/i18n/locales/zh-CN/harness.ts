@@ -38,7 +38,7 @@ export const harnessZhCN = {
         plugin: '插件',
         workHint: '工作模式：工作区与会话',
         chatHint: '对话模式：直接对话，没有工作区（只有一份会话列表）',
-        pluginHint: '插件模式：插件工坊里的草稿（点一行打开它的详情）'
+        pluginHint: '插件模式：插件工坊里的草稿（点一行＝给它开新会话；⋯ 里可打开工坊详情）'
       },
       newDraft: '新建插件草稿',
       pluginActions: '插件操作',
@@ -79,6 +79,7 @@ export const harnessZhCN = {
       topicActions: '会话操作',
       workspaceActions: '工作区操作',
       workspaceHasRunning: '有会话进行中',
+      workspaceSwitchFailed: '切换工作区失败：请检查目录是否仍然存在，然后重试',
       workspaceDelete: '删除工作区',
       workspaceDeleteConfirmTitle: '删除工作区',
       workspaceDeleteConfirmContent:

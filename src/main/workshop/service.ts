@@ -45,6 +45,7 @@ import {
 } from './host'
 import { publishDraft, disableDraft, enableDraft, unpublishDraft, exportDraft } from './install'
 import { readReport, verifyDraft, type VerifyOptions } from './verify'
+import { releaseWorkshopDir } from './dir-release'
 
 /**
  * 工坊门面：AI 工具（`main/tools/workshop.ts`）与设置页（`main/ipc/workshop.ts`）
@@ -116,12 +117,18 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
    *
    * 之前只看 `workshop.json`，从插件中心安装的源码在侧栏会显示成 `personal-ledger`
    * 这种 id（用户 2026-11-23：「安装源码的内容，显示的为什么是 id，而不是名称」）。
+   *
+   * 2026-11-25 再修：早期版本用 `patchDraftMeta(id, {})` 写文件时会补一份
+   * `title: <id>` 的 workshop.json（见 store.ts 的 defaultMeta），于是这里优先取到的
+   * 恰好是 id，清单里的名称反而永远用不上。**标题与 id 相同视为「没有标题」**，
+   * 继续回退到清单名称；插件工作区名也跟着 `draftSummary().title` 一起恢复成名称。
    */
   const manifestName =
     typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : ''
+  const metaTitle = typeof meta?.title === 'string' ? meta.title.trim() : ''
   return {
     id,
-    title: meta?.title ?? (manifestName || id),
+    title: metaTitle && metaTitle !== id ? metaTitle : manifestName || id,
     template: (meta?.template ?? 'minimal') as WorkshopTemplate,
     version: typeof manifest?.version === 'string' ? manifest.version : '0.0.0',
     description:
@@ -269,7 +276,18 @@ export function adoptPluginsRoot(dir: string): {
   // 先迁移旧路径的数据：迁移失败就抛错，设置保持旧值（不会出现「设置换了、源码没搬」）
   const previous = pluginsRootPath()
   const changed = Boolean(previous) && !isSamePath(previous, target)
-  const migrated = changed ? migrateStorageDirectory('plugins', previous, target).moved : []
+  /**
+   * 迁移会 rename 旧路径下的插件目录：如果其中某个目录正被工作区监听（插件模式
+   * 打开着它的源码），Windows 上会 EPERM。迁移期间先放掉监听；活动工作区路径会由
+   * 调用方随后 remap 并触发一次 workspace-changed，监听自然跟着新根恢复。
+   */
+  const release = changed ? releaseWorkshopDir(previous) : null
+  let migrated: string[] = []
+  try {
+    if (changed) migrated = migrateStorageDirectory('plugins', previous, target).moved
+  } finally {
+    release?.()
+  }
   const legacyMoved = migrateLegacyDrafts(target)
 
   host.setPluginsRoot(target)

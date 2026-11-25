@@ -307,6 +307,17 @@ export function registerLatticeIpc(): void {
         reason: 'logout -> anonymous',
         targetKey: ANONYMOUS_PROFILE
       })
+      /**
+       * 切换失败（不是「需要重启」）时不能报成功：本地会话已经清了，但数据空间仍停在
+       * 旧账号上——界面必须告诉用户「退出没完成」，否则他会在未登录状态继续写旧账号容器。
+       * 需要重启的路径（restarted）算成功：应用马上回来，启动时会按无会话落到 anonymous。
+       */
+      if (!switched.ok && !switched.restarted) {
+        return {
+          ok: false as const,
+          error: switched.error ?? '退出登录失败：账号数据空间切换未完成，请重试'
+        }
+      }
       return { ok: true as const, restarting: switched.restarted === true, switching: switched.ok }
     }
     return { ok: true as const }

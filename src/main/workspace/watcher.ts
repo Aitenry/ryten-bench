@@ -192,6 +192,27 @@ function isExistingDirectory(dir: string): boolean {
   }
 }
 
+/** 当前正在监听的工作区根（空字符串 = 没在监听） */
+export function watchedWorkspaceRoot(): string {
+  return watchedRoot
+}
+
+/**
+ * `dir` 是否被工作区监听**直接或间接**占用（监听根 = dir，或监听根在 dir 里面）。
+ *
+ * Windows 上 `fs.watch` 打开的目录句柄没有 `FILE_SHARE_DELETE`：只要监听还挂在
+ * 这个目录（或它的子目录）上，删除/改名它就会得到 `EPERM`。替换插件源码目录、
+ * 删除草稿之前必须先 `stopWorkspaceWatcher()`（installSourceBytes / 工坊删除都这么做）。
+ *
+ * 反过来的情况（dir 在监听根里面）不算：监听挂在父目录上时，子目录名可以正常删除/改名。
+ */
+export function isWatchingPath(dir: string): boolean {
+  if (!watchedRoot) return false
+  const root = path.resolve(watchedRoot)
+  const target = path.resolve(dir)
+  return root === target || root.startsWith(target + path.sep)
+}
+
 /** 开始监听工作区（切换工作区时先停再起；同一工作区重复调用是空操作） */
 export function startWorkspaceWatcher(root: string, workspaceId: number): void {
   if (!root) {
@@ -234,7 +255,10 @@ export function startWorkspaceWatcher(root: string, workspaceId: number): void {
     logger.info(`[WorkspaceWatcher] Started watching ${root}`)
   } catch (err) {
     // Linux 上 fs.watch 不支持 recursive：退化为只监听根目录（不致命，刷新按钮仍可用）
-    logger.warn('[WorkspaceWatcher] Recursive watch unavailable, falling back to root-only watch:', err)
+    logger.warn(
+      '[WorkspaceWatcher] Recursive watch unavailable, falling back to root-only watch:',
+      err
+    )
     try {
       watcher = fs.watch(root, (_event, filename) => {
         if (!filename) return

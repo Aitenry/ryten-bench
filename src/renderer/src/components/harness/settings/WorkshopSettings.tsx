@@ -130,7 +130,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
    * `run` 留在这里给停用 / 导出 / 删除 / 卸载复用（忙碌态与失败提示同一套）。
    */
   const {
-    busyId,
+    busyIds,
     run: runAction,
     build: handleBuild,
     verify: handleVerify,
@@ -142,15 +142,15 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
     }
   })
 
-  const handlePublish = (id: string): Promise<void> =>
+  const handlePublish = (id: string): Promise<boolean> =>
     publish(id, () => {
       void message.success(t('workshopSettings.publish.done'))
     })
 
-  const handleDisable = (id: string): Promise<void> =>
+  const handleDisable = (id: string): Promise<boolean> =>
     runAction(id, () => harnessApi.workshop.disable(id))
 
-  const handleExport = (id: string): Promise<void> =>
+  const handleExport = (id: string): Promise<boolean> =>
     runAction(
       id,
       () => harnessApi.workshop.exportZip(id),
@@ -202,8 +202,9 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       okButtonProps: { danger: true },
       cancelText: t('common.action.cancel'),
       onOk: async () => {
-        await runAction(draft.id, () => harnessApi.workshop.remove(draft.id))
-        setDetail(null)
+        const removed = await runAction(draft.id, () => harnessApi.workshop.remove(draft.id))
+        // 只有真的删掉了才收起抽屉：失败时把「还在」留在眼前，别让人以为删成功了
+        if (removed) setDetail(null)
       }
     })
   }
@@ -475,7 +476,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
                       <Button
                         size="small"
                         type="text"
-                        loading={busyId === draft.id}
+                        loading={busyIds.has(draft.id)}
                         aria-label={t('workshopSettings.action.menu')}
                         icon={<RiMore2Line size={16} />}
                       />
@@ -506,7 +507,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
               <Button
                 size="small"
                 icon={<RiHammerLine size={14} />}
-                loading={busyId === detail.id}
+                loading={busyIds.has(detail.id)}
                 onClick={() => void handleBuild(detail.id)}
               >
                 {t('workshopSettings.action.build')}
@@ -514,7 +515,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
               <Button
                 size="small"
                 icon={<RiShieldCheckLine size={14} />}
-                loading={busyId === detail.id}
+                loading={busyIds.has(detail.id)}
                 onClick={() => void handleVerify(detail.id)}
               >
                 {t('workshopSettings.action.verify')}
@@ -523,7 +524,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
                 size="small"
                 type="primary"
                 icon={<RiUploadCloud2Line size={14} />}
-                loading={busyId === detail.id}
+                loading={busyIds.has(detail.id)}
                 onClick={() => void handlePublish(detail.id)}
               >
                 {t('workshopSettings.action.publish')}

@@ -31,6 +31,10 @@ import {
   listPluginWorkspaces,
   syncPluginWorkspaceName
 } from '../../workshop/workspace'
+import {
+  clearActiveWorkspaceIfRemoved,
+  clearRememberedPluginContent
+} from '../../workshop/active-workspace'
 import { workshopHost } from '../../workshop/host'
 
 /**
@@ -272,7 +276,19 @@ export function workshopIpcHandlers(): IpcHandlerMap {
     'workshop-remove',
     async (id: string) =>
       await act(async () => {
+        // 先记下目录：删完再取 draftDir 仍可算，但活动工作区的复位要以被删目录为准
+        let removedDir = ''
+        try {
+          removedDir = dirOf(id)
+        } catch {
+          // 未配置插件存放路径：removeDraft 自己会返回「没删」，这里没有活动目录要复位
+        }
         removeDraft(id)
+        // 删的正是当前活动工作区（插件模式打开着它的源码）：清空活动工作区，
+        // 否则 AI 文件工具/资源管理器还指着一个不存在的目录。
+        if (removedDir) clearActiveWorkspaceIfRemoved(removedDir)
+        // 无论是不是活动工作区，都别让「插件模式上次看的那条内容」继续指向它
+        clearRememberedPluginContent(id)
         broadcastWorkshopChanged()
         return true
       })
