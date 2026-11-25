@@ -15,7 +15,6 @@ import {
   RiGitMergeLine,
   RiHammerLine,
   RiInboxLine,
-  RiLoader4Line,
   RiLoginBoxLine,
   RiRefreshLine,
   RiSearchLine,
@@ -27,6 +26,8 @@ import { useTranslation } from '@renderer/i18n'
 import { usePlugins, usePluginSettingsSections } from '@renderer/plugin-host/PluginHostContext'
 import { PluginBoundary } from '@renderer/plugin-host/PluginBoundary'
 import PluginIcon from '@renderer/components/system/PluginIcon'
+import { SkeletonBlock, SkeletonStyle } from '@renderer/components/system/Skeleton'
+import { skeletonVars, useSkeletonPalette } from '@renderer/components/system/skeleton-palette'
 import WorkshopSettings from '../components/harness/settings/WorkshopSettings'
 import {
   subscribeWorkshopModalRequest,
@@ -45,6 +46,18 @@ import type {
   LatticeSyncDetails
 } from '@renderer/lattice/types'
 import type { PluginListEntry } from '@shared/plugin/types'
+
+/**
+ * 平台目录的会话内快照（按「账号 + 基址」记账）。
+ *
+ * 为什么要留一份：每次进插件仓库都会重新拉目录，请求回来之前页面只能铺骨架；
+ * 在「对话 ↔ 插件仓库」之间来回切时，同一个人每次都要看一眼占位再看到卡片，
+ * 观感上就是加载闪屏（用户 2026-11-25）。
+ *
+ * 命中时先用上一份目录把网格铺满，再在后台刷新；账号 / 基址变了不命中——
+ * 那是另一套安装记录，把 A 的「已安装」画到 B 的目录上是错的。
+ */
+let hubSnapshot: { account: string; list: HubListResultV2 } | null = null
 
 /**
  * 插件仓库（系统页面 `/plugins`）。
@@ -74,6 +87,8 @@ const PluginRepository: React.FC = () => {
    */
   const {
     available: latticeReady,
+    /** 登录态是否已经读回来过：没有它就只能先铺骨架，不能按「未登录」渲染 */
+    ready: latticeStatusReady,
     status: latticeStatus,
     loggedIn,
     syncing: latticeSyncing,
@@ -91,6 +106,11 @@ const PluginRepository: React.FC = () => {
     sourcePath,
     importLocalDir
   } = useLattice()
+
+  /** 目录快照的归属：同一账号 + 同一基址才算命中（换号 / 换平台不命中） */
+  const hubAccount = latticeStatus.user?.id
+    ? `${latticeStatus.baseUrl}#${latticeStatus.user.id}`
+    : ''
 
   const [entries, setEntries] = useState<PluginListEntry[]>([])
   /**
@@ -125,8 +145,13 @@ const PluginRepository: React.FC = () => {
   const [openBusy, setOpenBusy] = useState<string | null>(null)
   const [query, setQuery] = useState('')
 
-  /** 平台目录（服务端全量拉一次，搜索/分类在本地过滤，输入即响应） */
-  const [hub, setHub] = useState<HubListResultV2 | null>(null)
+  /**
+   * 平台目录（服务端全量拉一次，搜索/分类在本地过滤，输入即响应）。
+   * 命中会话快照时直接铺满，后台刷新由下面的 effect 负责。
+   */
+  const [hub, setHub] = useState<HubListResultV2 | null>(() =>
+    hubSnapshot && hubSnapshot.account === hubAccount ? hubSnapshot.list : null
+  )
   const [hubLoading, setHubLoading] = useState(false)
   const [hubError, setHubError] = useState<string | null>(null)
   const [hubCategory, setHubCategory] = useState('all')
@@ -212,6 +237,8 @@ const PluginRepository: React.FC = () => {
     try {
       const result = await listHub()
       setHub(result)
+      // 只缓存有归属的目录（未登录 / 账号信息缺失时不缓存，免得把匿名视图留给下一个人）
+      if (hubAccount) hubSnapshot = { account: hubAccount, list: result }
     } catch (err) {
       // 刷新失败不要清掉已经拿到的目录：一次网络抖动 / 插件状态广播触发的后台刷新失败，
       // 会把整页目录、分类与搜索上下文一起抹掉（用户什么也没做，页面却变成「加载失败」）。
@@ -219,7 +246,7 @@ const PluginRepository: React.FC = () => {
     } finally {
       setHubLoading(false)
     }
-  }, [latticeReady, listHub])
+  }, [hubAccount, latticeReady, listHub])
 
   useEffect(() => {
     void refresh()
@@ -1012,9 +1039,16 @@ const PluginRepository: React.FC = () => {
     }
 
   /**
-   * 平台目录内容区状态：未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格
+   * 平台目录内容区状态：首屏骨架 / 未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格。
+   *
+   * 所有加载态都用**与真实卡片同尺寸的骨架网格**占住卡片最终要出现的位置：
+   * 旧版用「居中转圈 + 240px 占位块」，本机卡片排在它下面，目录一回来占位块消失，
+   * 同一批卡片整组向上跳——用户 2026-11-25 反馈的「一开始插件在下面，突然移动上去」。
    */
   const renderHubContent = (): React.ReactNode => {
+    // 桥接 / 登录态还没定下来：先铺骨架。不要先画「不可用」大状态卡，
+    // 它下一帧就会被换成真实内容，整页跟着塌一次。
+    if (!latticeStatusReady) return <HubGridSkeleton />
     if (!latticeReady) {
       return withLocalCards(
         <StateCard
@@ -1027,7 +1061,7 @@ const PluginRepository: React.FC = () => {
     }
     if (!loggedIn) {
       // 本机清单没回来之前不画：否则会先按「没有本机插件」铺一块引导，再塌成一条提示
-      if (!localLoaded) return null
+      if (!localLoaded) return <HubGridSkeleton />
       const goLogin = (): void => {
         void navigate('/login')
       }
@@ -1056,26 +1090,14 @@ const PluginRepository: React.FC = () => {
         />
       )
     }
-    if (hubLoading && !hub) {
-      return withLocalCards(
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            minHeight: 240,
-            marginTop: 18
-          }}
-        >
-          <RiLoader4Line size={24} className="animate-spin" style={{ color: token.colorPrimary }} />
-          <span style={{ fontSize: 12.5, color: token.colorTextTertiary }}>
-            {t('plugins.hub.loading')}
-          </span>
-        </div>
-      )
-    }
+    /**
+     * 目录还没回来（登录后第一次拉取 / 刚切进本页）。
+     *
+     * 这里**必须**先不画本机卡片：目录为空时 `localOnlyAll` 等于本机全部已装插件，
+     * 它们会先按「本机插件」排在占位块下面；目录一到，同一批插件被认成目录卡片，
+     * 整组挪到网格顶部，就是那次向上跳。骨架占住最终位置，回来时原地换成真实卡片。
+     */
+    if (!hub) return <HubGridSkeleton />
     if (visibleHub.length === 0) {
       const filtered = Boolean(normalizedQuery) || hubCategory !== 'all'
       return withLocalCards(
@@ -2133,6 +2155,65 @@ const PluginRepository: React.FC = () => {
             ))}
         </div>
       </Modal>
+    </div>
+  )
+}
+
+/**
+ * 目录首屏的骨架卡片网格。
+ *
+ * 卡片外形直接复用 `.lattice-hub-card`（同圆角/描边/底色/最小高度），内部只换成
+ * 灰色骨架块：占位与真实卡片同尺寸、同网格列宽，目录回来时是「原地填充」，
+ * 页面不会因为占位块消失而整体上移（用户 2026-11-25 的闪屏）。
+ * 块宽按固定 pattern 递变——用随机数会让每次渲染都在抖。
+ */
+const HUB_SKELETON_CARDS = 6
+const HUB_SKELETON_TITLE = ['58%', '46%', '62%', '52%', '44%', '56%']
+const HUB_SKELETON_DESC = ['100%', '84%', '92%', '76%', '96%', '88%']
+
+const HubGridSkeleton: React.FC = () => {
+  const palette = useSkeletonPalette()
+  return (
+    <div
+      data-hub-loading="skeleton"
+      aria-busy="true"
+      style={{
+        ...skeletonVars(palette),
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+        gap: 14,
+        marginTop: 16
+      }}
+    >
+      <SkeletonStyle />
+      {Array.from({ length: HUB_SKELETON_CARDS }, (_, index) => (
+        <div key={index} className="lattice-hub-card" aria-hidden>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <SkeletonBlock w={44} h={44} r={13} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <SkeletonBlock w={HUB_SKELETON_TITLE[index % HUB_SKELETON_TITLE.length]} h={14} />
+              <SkeletonBlock w="36%" h={10} />
+            </div>
+          </div>
+          <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
+            <SkeletonBlock h={10} />
+            <SkeletonBlock w={HUB_SKELETON_DESC[index % HUB_SKELETON_DESC.length]} h={10} />
+          </div>
+          <div
+            style={{
+              marginTop: 'auto',
+              paddingTop: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
+            }}
+          >
+            <SkeletonBlock w={68} h={22} r={11} />
+            <SkeletonBlock w={38} h={10} />
+            <SkeletonBlock w={30} h={10} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
