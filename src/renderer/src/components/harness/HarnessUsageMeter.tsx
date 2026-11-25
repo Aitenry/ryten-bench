@@ -23,9 +23,17 @@ import {
  * 上下文窗口 → 不画圆环；整段会话没有用量 → 整条不渲染），不做估算。
  */
 
-/** 圆环直径 / 线宽（收起态与 11.5px 文字同高） */
-const RING_SIZE = 13
-const RING_STROKE = 2
+/**
+ * 圆环直径 / 线宽 / 光学偏移。
+ *
+ * - 直径取 14（比文字 `1em` 略大）：8% 这种小占比只剩一小段弧，环越小越像"一个点"；
+ * - 线宽 2.5（不是 2）：细环在浅色主题下几乎读不出"进度"，加粗后弧段才有分量；
+ * - 光学偏移 +1px：flex 的 `align-items: center` 对齐的是**行盒**，而数字的视觉中心
+ *   比行盒中心低约 1px（行盒含降部空间），不补偿的话圆环看起来比「8%」高半拍。
+ */
+const RING_SIZE = 14
+const RING_STROKE = 2.5
+const RING_OPTICAL_OFFSET = 1
 
 const ContextRing: React.FC<{ percent: number; color: string; track: string }> = ({
   percent,
@@ -42,7 +50,11 @@ const ContextRing: React.FC<{ percent: number; color: string; track: string }> =
       height={RING_SIZE}
       viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
       aria-hidden="true"
-      style={{ flexShrink: 0, display: 'block' }}
+      style={{
+        flexShrink: 0,
+        display: 'block',
+        transform: `translateY(${RING_OPTICAL_OFFSET}px)`
+      }}
     >
       {/* 底环：整圈暗色轨道，表示窗口总量 */}
       <circle
@@ -160,11 +172,10 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
           })}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 2 }}
         >
-          <ContextRing
-            percent={contextPercent}
-            color={token.colorTextSecondary}
-            track={token.colorFillTertiary}
-          />
+          {/* 轨道用 colorBorder、进度用 colorText：两档都不透明到「看不见」的程度，
+              黑白主题下都读得出「用了多少」。原先 colorFillTertiary(≈4%) 在白底上
+              几乎消失，只剩一小段弧，看着像凭空挂了个逗号。 */}
+          <ContextRing percent={contextPercent} color={token.colorText} track={token.colorBorder} />
           <span>{contextPercent}%</span>
         </span>
       )}
