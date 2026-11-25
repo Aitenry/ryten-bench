@@ -124,10 +124,32 @@ export interface PluginSyncSnapshotContribution {
   /**
    * 合并：把云端快照并入本机（不覆盖本机独有数据，按插件的自然键去重）。
    *
-   * 返回摘要文本供界面提示；宿主合并成功后会再把「合并后的本机快照」强制推回云端，
-   * 所以插件只需要保证本地是「两边并集」，不必自己调网络。
+   * 返回摘要文本供界面提示；宿主合并成功后会把「合并后的本机快照」推回云端（带
+   * `data_rev`、不 force），所以插件只需要保证本地是「两边并集」，不必自己调网络。
+   *
+   * **新契约（2026-11-25 起）**：宿主只在插件同时声明 `mergeBase: true` 时才会调用它，
+   * 并把 `opts.base`（上次成功同步时的云端快照）传进来。插件必须按「三方合并」实现：
+   * 本机相对 base 删掉的行不得再从云端拉回、本机改过的行不得重复追加；旧的无条件并集
+   * 会把用户删掉/改过的数据回填（用户报障：「删了、改了，后面还给我推送」）。
    */
-  merge?: (data: unknown) => void | Promise<{ summary?: string; rows?: number }>
+  merge?: (
+    data: unknown,
+    opts?: { base?: unknown }
+  ) => void | Promise<{ summary?: string; rows?: number }>
+  /**
+   * 声明 `merge()` 已升级为**基于 merge base 的三方合并**。
+   *
+   * 不声明（旧版插件）时宿主只做快进（push / pull）与显式冲突选择，不会调用 `merge()`，
+   * 也不会显示「合并两边」——宁可少一个功能，也不静默把已删除的数据并回来。
+   *
+   * 实现 checklist（2026-11-25 数据事故沉淀，详见工坊模板 WORKSHOP.md 5b）：
+   * - 用 `opts.base` 算出本机相对上次同步**删掉/改走的行**，远端旧行不再加回；
+   * - id 对得上时按 id 判断编辑：本机没改→接受云端，两边都改→本机优先（不要追加第二条）；
+   * - 设置里的集合（成员/规则/模板）也要按 base 过滤，否则删除会被并集带回；
+   * - 导入/合并前把悬空的 accountId/categoryId/merchantId/refundOfId 置空，不要拒绝整份快照；
+   * - 纯函数 merge(local, remote, base)，幂等、忽略 exportedAt 等易变字段。
+   */
+  mergeBase?: boolean
   /**
    * 本机是否已有业务数据（可选；宿主用它判断「还没推过快照、本机又有数据」时
    * 不能直接拿云端覆盖，必须先记冲突让用户选择/合并）。
@@ -155,6 +177,7 @@ export function pluginSyncSnapshot(id: string): PluginSyncSnapshotContribution |
     export: value.export,
     ...(typeof value.import === 'function' ? { import: value.import } : {}),
     ...(typeof value.merge === 'function' ? { merge: value.merge } : {}),
+    ...(value.mergeBase === true ? { mergeBase: true } : {}),
     ...(typeof value.hasData === 'function' ? { hasData: value.hasData } : {}),
     ...(typeof value.count === 'function' ? { count: value.count } : {}),
     ...(typeof value.label === 'string' ? { label: value.label } : {})

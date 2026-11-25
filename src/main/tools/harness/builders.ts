@@ -17,6 +17,7 @@ import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
 import { workshopToolBuilders, workshopToolInfos } from './workshop'
+import { latticeToolBuilders, latticeToolInfos } from './lattice'
 
 // ============================================================================
 // Tool Registry — 本地工具 + 插件贡献（harness 只提供注册表/消费点）
@@ -30,11 +31,14 @@ type ToolFactory = () => StructuredToolInterface
  * - `get_time`：纯本地时间；
  * - `plugin_draft` / `plugin_build` / `plugin_verify` / `plugin_publish`：**插件工坊**
  *   （见 `main/workshop/**`）——「和助手对话把插件做出来」这条链路是 harness 自己的能力，
- *   不是别的插件贡献的工具，所以走这张本地表而不是 `harness.tool` 贡献点。
+ *   不是别的插件贡献的工具，所以走这张本地表而不是 `harness.tool` 贡献点；
+ * - `plugin_release`：**插件中心**发版（见 `main/lattice/**`）。与 `plugin_publish`
+ *   （装进本机应用）相对，它是「把版本发出去给别的用户装」。
  *
- * 但这 4 个是**模式工具**：注册在这里（`buildTools` 要按名字建实例、同名插件贡献照旧被本地挡住），
+ * 但这 5 个是**模式工具**：注册在这里（`buildTools` 要按名字建实例、同名插件贡献照旧被本地挡住），
  * 却**不出现在设置页的可选清单里**——它们由插件模式自动挂载，见 `shared/mcp.ts` 的
- * `PLUGIN_MODE_TOOL_NAMES` 与下面 `listAvailableTools` 的过滤。
+ * `PLUGIN_MODE_TOOL_NAMES` 与下面 `listAvailableTools` 的过滤。其中 `plugin_release`
+ * 还要看插件中心登录态（`LATTICE_MODE_TOOL_NAMES`，未登录时连名字都不追加）。
  *
  * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
  * （插件源码的 `main/tools.ts`），由插件 `install(ctx)` 经
@@ -44,7 +48,8 @@ type ToolFactory = () => StructuredToolInterface
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
   get_time: buildGetTimeTool,
-  ...workshopToolBuilders
+  ...workshopToolBuilders,
+  ...latticeToolBuilders
 }
 
 // ============================================================================
@@ -70,8 +75,9 @@ const localToolInfos: ToolInfo[] = [
     icon: 'RiTimeLine',
     color: '#52c41a'
   },
-  // 插件工坊（4 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
-  ...workshopToolInfos
+  // 插件工坊（4 个）+ 插件中心发版（1 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
+  ...workshopToolInfos,
+  ...latticeToolInfos
 ]
 
 // ============================================================================
@@ -171,7 +177,7 @@ function resolveToolBuilders(): Record<string, ToolFactory> {
  * 每次调用即时拉取，因此插件启停与 MCP 连接状态都会立刻反映在这份清单里。
  * 排序与去重规则与 `resolveToolBuilders` 同源（同一个 `mergeToolSources`），不会漂移。
  *
- * **只返回用户可勾选的真实工具**：模式工具（插件工坊 4 个）由插件模式自动挂载；MCP 工具
+ * **只返回用户可勾选的真实工具**：模式工具（工坊 4 个 + 发布版本 1 个）由插件模式自动挂载；MCP 工具
  * （`mcp__…`）/ 分组项（`mcp@…`）/ 旧标记（`mcp`）由 MCP 页管理、运行时自动并入。
  * 过滤在主进程完成，渲染层拿到什么就展示什么，不再二次过滤。
  */

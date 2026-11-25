@@ -17,6 +17,10 @@ import type { MainPluginContext } from './context'
  * - `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)`：给助手的 AI 工具（读写同一份数据）；
  * - `ctx.contribute(PLUGIN_PURGE, …)`：卸载勾「同时删除数据」时清本插件的表行与文件。
  *
+ * 有业务表的插件还应贡献 `PLUGIN_SYNC_SNAPSHOT`（export/import/hasData/count）；需要「合并两边」
+ * 时按 merge base 三方语义实现 `merge(remote, { base })` 并声明 `mergeBase: true`——规范与
+ * 事故清单见 `WORKSHOP.md` 第 5b 节。
+ *
  * 一切副作用都放进 `ctx.effect` 并返回回滚函数：插件停用时宿主逆序撤销。
  */
 export function install(ctx: MainPluginContext): void {

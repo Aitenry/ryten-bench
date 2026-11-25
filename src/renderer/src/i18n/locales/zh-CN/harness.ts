@@ -85,7 +85,7 @@ export const harnessZhCN = {
       workspaceDeleteConfirmContent:
         '确定要删除「{{name}}」吗？该工作区下的所有会话与记忆也将被删除。',
       newSession: '新建会话',
-      newSessionRunning: '有会话正在生成，先停止再新建',
+      newSessionRunning: '上一轮生成仍在后台继续，可回到那条会话接着看',
       renameWorkspace: '重命名工作区',
       workspaceNamePlaceholder: '工作区名称',
       workspaceNameRequired: '请输入工作区名称',

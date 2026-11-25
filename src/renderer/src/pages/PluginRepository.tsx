@@ -819,12 +819,12 @@ const PluginRepository: React.FC = () => {
   }, [loadHub, message, openSyncDetails, syncLattice, t])
 
   /**
-   * 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机，再推回云端。
+   * 合并云端数据：逐插件按 merge base 做 git 式快进 / 冲突。
    *
-   * 提示是**和「同步完成：推送 X 个插件 / Y 条数据…」同构的一句话**（用户 2026-11-25：
-   * 「要和同步一样的简化提示」）：不再把每个插件的自述用「；」拼进来——插件一多就是
-   * 「全球时区: 两边一致，无需新增；个人记账台账: 两边一致，无需新增…」，而且「一致」
-   * 和「有新增」两种结果混在同一句里扫不出来。逐插件摘要仍由主进程 `summaries` 带回。
+   * 提示和「同步完成」同构（用户 2026-11-25：「要和同步一样的简化提示」）：
+   * - 本机改过、云端没动 → 推上去（删除/修改不会被回填）；
+   * - 云端更新、本机没动 → 拉下来；
+   * - 两边都改过 → 记冲突，提示用户去「解决冲突」显式选择（不再自动并集）。
    */
   const handleMergeCloud = useCallback(async (): Promise<void> => {
     setMergeBusy(true)
@@ -833,12 +833,19 @@ const PluginRepository: React.FC = () => {
       const merged = result.merged ?? 0
       const rows = result.rows ?? 0
       const failed = result.failed ?? 0
-      if (!result.ok && failed === 0) {
+      const conflicts = result.conflicts ?? 0
+      const blocked = result.blocked ?? 0
+      if (!result.ok && failed === 0 && conflicts === 0) {
         // 前置失败（未登录 / 账号数据尚未就绪）：原因直接给用户，不进三态
         message.error(result.error || t('sync.error', { reason: '' }))
         return
       }
-      if (failed > 0 && merged > 0) {
+      if (conflicts > 0) {
+        message.warning(t('sync.merge.conflicts', { merged, rows, conflicts }))
+      } else if (blocked > 0 && blocked === failed) {
+        // 全是「还没建立合并基线」：提示先同步一次，比笼统的「合并失败」可执行
+        message.warning(t('sync.merge.blocked', { blocked }))
+      } else if (failed > 0 && merged > 0) {
         message.warning(t('sync.merge.partial', { merged, rows, failed }))
       } else if (failed > 0) {
         message.error(t('sync.merge.failed', { failed }))

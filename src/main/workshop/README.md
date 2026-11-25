@@ -292,17 +292,21 @@ plugin_draft    create/list/tree/read/write/remove（插件与文件）
 plugin_build    构建 + 静态体检（宿主说明符、第三方依赖、语法、chunk 绝对化、样式覆盖）
 plugin_verify   构建 + 完整验收电池（含真实装载冒烟、渲染层探针、样式作用域与宿主安全）
 plugin_publish  install / disable / uninstall / export（装进应用并启用）
+plugin_release  id + version + changelog → 发到插件中心（安装包 + 源码包，需登录）
 ```
 
-四个工具刻意按**工作流的四步**切开，而不是把十几个动作塞进一个工具：每一步的失败都要给出
+工坊这四个工具刻意按**工作流的四步**切开，而不是把十几个动作塞进一个工具：每一步的失败都要给出
 「那一步专属」的可执行诊断（构建失败给 esbuild 的 `文件:行:列`，验收失败给逐项 PASS/FAIL 与建议）。
 **每次改完源码都必须重新 `plugin_verify`**：发布闸门按源码指纹核对，只重新构建不算
-（细节见「发布与回滚」）。
+（细节见「发布与回滚」）。留给用户的最后一步对外发版是 `plugin_release`（实现见
+`main/tools/harness/lattice.ts`）：它不装本机、只上传，本机安装仍然是 `plugin_publish install`。
 
-前提：**切到插件模式**。这四个是模式工具，不进「设置 → 智能体 → 默认工具」的可选清单、
+前提：**切到插件模式**。这五个是模式工具，不进「设置 → 智能体 → 默认工具」的可选清单、
 也不用勾选——插件模式（会话的记忆作用域是 `plugin:<id>`）的每一轮自动挂载它们
 （用户口径 2026-09-29「不要在这里面选择工具才注册这些工具，当用户切换到插件模式下，自动注册」；
-名单与实现见 `shared/mcp.ts` 的 `PLUGIN_MODE_TOOL_NAMES`）。
+名单与实现见 `shared/mcp.ts` 的 `PLUGIN_MODE_TOOL_NAMES`）。其中 `plugin_release` 还有一道
+**登录闸门**（`LATTICE_MODE_TOOL_NAMES`）：插件中心未登录时连名字都不追加——否则模型会去调一个
+必然 401 的工具，把「没登录」误当成「发布失败」。
 工坊**不提供**「一键启用」这类旁路入口——应用里所有工具都走同一条路径（2026-09-27 用户明确
 不需要设置页里那块内容）。
 
@@ -467,7 +471,7 @@ plugin_publish  install / disable / uninstall / export（装进应用并启用�
 | `node --experimental-strip-types test/verify-plugin-publish-flow.mjs` | 离线 43 条（假宿主 + 假 esbuild）：**构建后不再误判过期**（旧实现回写 `workshop.json` 后必然为 true）、源码指纹口径、只改元数据不过期 / 改源码才过期、**发布闸门**（没验收 / 没通过 / 验后改源码 / 只重新构建没重新验收 / 旧报告缺指纹逐条拒绝并给下一步）、发布 = 安装 + 启用 + 真界面复验 + **报告回写**（`renderer.probe` 从 SKIP 变 PASS）、重复发布升级、停用保留目录、**enable 重新启用并在复验失败时自动停用**、复验失败回滚卸载、新装启用失败回滚、升级启用失败收敛成「已安装·停用」、工具层拒绝语/成功语/enable、按模板重建草稿清掉旧产物与旧报告 |
 | `node --experimental-strip-types test/verify-repeat-guard.mjs`    | 离线 20 条：**防循环护栏按「有没有进展」判定**——同参数同结果第 3 次后拦截、结果变化即重置（10 轮构建全部放行，旧实现第 3 轮就误伤）、交替 publish/verify 且结果不变会被拦、**只有耗时/时间戳/溢出文件 UUID 变化不算进展**、真变化（失败项变了）会解除、连续同调用兜底、提示语点名工坊的下一步 |
 | `node test/probe-plugin-workshop-live.mjs`                        | 真机 113 条：工坊通道与设置页、**助手工具是模式工具**（「默认工具」可选清单里没有工坊 4 个、真回合日志 `本轮工具 pluginMode=true …plugin_draft…` 说明插件模式自动挂载、`pluginMode=false` 那一轮不挂）、建草稿 → 构建 → 验收（含真界面探针）→ 发布 → 菜单出现 → 通道可用 → **侧栏工作/插件胶囊开关**（一进来停在「工作」、跟着内容切、空态与「尚未配置工作区」逐字同款）→ **插件行行内操作**（⋯ 菜单五项、重命名落盘到 workshop.json/plugin.json、＋ 新建会话**保持输入框干净**并聚焦、删除只删自己那个子目录）→ **插件会话的记忆作用域**（话题上写 `plugin:<id>`、工作会话仍是 null 不泄漏、运行时日志 `memoryScope=plugin-…`、`<memoryPath>/plugin-<id>/mnemon` 真的建出来）→ **记忆显示跟着会话**（插件模式下记忆块仍在、插件会话里标题仍只写「记忆」且条目数与 `plugin:live-demo` 作用域一致、卡片点开 `/memories/...` 按作用域各读各的、设置 → 记忆页标出「插件「Live Demo」」、切回工作会话跟回工作区那套）→ **插件会话的工作目录**（插件行 ＋ 之后活动工作区 = 插件源码目录、工作区名 = 插件名、话题挂在它下面、资源管理器能列出插件源码而旧工作区已越界、插件工作区不出现在「工作」列表、插件行展开能看到自己的会话、老插件会话自动归位、切回工作会话后活动工作区与越界边界都还原、切模式来回各回各的会话）→ 卸载（保留数据）→ 删草稿 |
-| `node --experimental-strip-types test/verify-mode-tools.mjs`     | 离线 13 条：**工坊 4 个工具是模式工具**——`listAvailableTools()`（设置页下拉的真源）里没有它们、也没误伤天气/时间；`effectiveMainAgentTools` 非插件模式不带、插件模式自动追加在末尾、历史配置里残留的名字去重后不重复挂；真注册表（`main/tools/builders.ts` + `workshop.ts`，只替身 electron/electron-store/electron-log 三个环境模块）在插件模式下**真的构造出** 4 个带 schema 的实例，并真调一次 `plugin_draft list`（未接工坊时返回可读说明而非抛错） |
+| `node --experimental-strip-types test/verify-mode-tools.mjs`     | 离线 17 条：**工坊 4 个 + 插件中心发布版本是模式工具**——`listAvailableTools()`（设置页下拉的真源）里没有它们、也没误伤天气/时间；`effectiveMainAgentTools` 非插件模式不带、插件模式自动追加在末尾、历史配置里残留的名字去重后不重复挂；**`plugin_release` 的登录闸门**（已登录才追加、未登录/缺省都不追加）；真注册表（`main/tools/builders.ts` + `workshop.ts` + `lattice.ts`，只替身 electron/electron-store/electron-log/模板文本加载器四个环境模块）在插件模式下**真的构造出** 5 个带 schema 的实例，并真调一次 `plugin_draft list`（未接工坊时返回可读说明而非抛错） |
 | `node --experimental-strip-types test/verify-chat-mode.mjs`      | 离线 43 条（**真 PGlite + 真 drizzle 迁移 + 真 mapper + 真 chat 模块**，只替身 electron / electron-log / database-instance）：`workspace.kind` 列与默认值真的落到库上；对话根目录 = `<userData>/chat`、空白会话用根目录、每条会话一个 `<话题 id>/` 子目录；删会话目录的两道闸（只认直接的数字子目录，根目录删不掉，0/负数/NaN 全拒）；插件工作区 `kind='plugin'` 且与对话工作区互不串类；启动分类把历史插件工作区从默认 `'user'` 认领成 `'plugin'` 且不动名字/路径；记忆作用域 `chat` → `<memoryPath>/chat`（不是 `plugin-chat`）、`plugin:<id>` 与空值口径不变；**建话题的作用域按工作区种类兜底**（对话→`chat`、插件→`plugin:<目录名>`、用户→null；显式值优先、不存在的行不抛错，且真话题落库就是 `chat`）；切到对话目录后活动工作区路径落在它里面（模型文件工具的边界） |
 | `node test/probe-chat-mode.mjs`                                  | 真机 32 条：侧栏三档开关（**对话 / 工作 / 插件**，「对话」在最前）；切到「对话」不需要工作区、活动工作区被主进程指到 `<userData>/chat/`；该模式只有一份扁平会话列表（空态「暂无会话」）；新建会话落在对话工作区、话题记 `memory_scope='chat'`；**不传作用域建话题也落成 `chat`，并立刻把活动目录切到 `<userData>/chat/<话题 id>/`**（第一条消息写的文件就属于这条会话）；点开会话后活动目录 = 它自己的子目录、`chatContent` 落盘；**在该目录里真写一个文件再读回来**（「文件内容不可操作」那条口径的正向验收）；切回工作不丢原工作区且对话目录不进工作列表；最窄侧栏（200px）下三档头部不溢出 |
 | `node test/probe-chat-restore.mjs`                               | 真机 31 条（三趟重启，同一个 user-data）：**对话会话的重启恢复**（胶囊停在「对话」、选中那条会话、活动目录 = `chat/<话题 id>/`、`chatContent` 落盘）；从行内「⋯」**删掉正在看的会话**后活动目录退回对话根目录、会话目录真的被删、列表回空态、`chatContent` 变成该模式的空白会话（`topicId=null` 且不能是 null 对象——老配置的 `activeMode='chat'` 等于工作）、`activeMode` 仍是 chat；删完点 ＋ 再发消息不会在已删目录上写文件；删后再建话题仍按工作区种类兜底成 `chat`；第三趟重启仍停在「对话」的空白会话（不会被当成老配置的 `chat=工作`） |

@@ -440,16 +440,25 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const pluginSessionSeqRef = useRef(0)
 
   /**
-   * 是否有会话正在生成（ref 版）。
+   * 「屏幕上这条会话是不是还在生成」（ref 版）。
    *
-   * `anyTopicRunning` 是渲染期算的；新建会话的各个入口（工作区 ＋ / 插件行 ＋ / 选文件夹）
-   * 都是 useCallback，直接闭包会拿到旧值。用 ref 让它们在点击那一刻读到最新状态，
-   * 与顶栏「＋」同一口径：生成中不换空白会话，否则正在跑的那一轮从界面上消失。
+   * 新建会话的各个入口（工作区 ＋ / 插件行 ＋ / 选文件夹 / 对话模式的 ＋）都是 useCallback，
+   * 直接闭包 props 会拿到旧值，用 ref 让它们在点击那一刻读到最新状态。
+   *
+   * 只用来决定「要不要提示一句」，**不拦新建**：新建会把当前对话窗口清成空白，被换下屏幕的
+   * 若恰是正在生成的那一条，人容易以为那一轮丢了（后台仍在推、落库也正常，点回侧栏那一条
+   * 就能接着看）。用户口径 2026-11-25「为什么要阻止我新建会话，以前是可以的」：生成中照样
+   * 能新建，只把「那一轮还在后台继续」说清楚即可。
    */
-  const anyTopicRunningRef = useRef(false)
+  const currentTopicRunningRef = useRef(false)
   useEffect(() => {
-    anyTopicRunningRef.current = loadingTopicIds.size > 0
-  }, [loadingTopicIds])
+    currentTopicRunningRef.current = currentTopicId != null && loadingTopicIds.has(currentTopicId)
+  }, [currentTopicId, loadingTopicIds])
+
+  /** 新建时换走了正在生成的会话 → 一句提示（不拦，只说明后台还在继续） */
+  const viewReplacedRunningTopic = useCallback((): void => {
+    viewMessage('new-session-running', 'info', t('harness.sidebar.newSessionRunning'), 4)
+  }, [viewMessage, t])
 
   /**
    * 本次会话里**已经删掉**的话题 id。
@@ -1296,10 +1305,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   /** 在指定工作区新建会话：跨工作区时先切换工作区 */
   const handleCreateSession = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
-      if (anyTopicRunningRef.current) {
-        viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
-        return
-      }
+      // 换下屏幕的要是正在生成的那一条，新建完提示一句「还在后台继续」（不拦，见 ref 的说明）
+      const replacingRunningTopic = currentTopicRunningRef.current
       setExpandedWorkspaceId(ws.id)
       // 该工作区会话尚未加载过时先补一次，避免切换瞬间出现空列表
       if (!Object.prototype.hasOwnProperty.call(workspaceTopics, ws.id)) {
@@ -1312,6 +1319,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       // 新建出来的是这条工作区的空白会话：它就是工作模式「当前那一条内容」
       rememberWork({ workspaceId: ws.id, topicId: null })
       if (mode !== 'work') setMode('work')
+      if (replacingRunningTopic) viewReplacedRunningTopic()
       onNewHarness()
       // 空白会话已经就位：再把主内容区带回对话页（否则会先闪一下上一条会话，见 onOpenHarness）
       onOpenHarness()
@@ -1325,8 +1333,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       onOpenHarness,
       rememberWork,
       mode,
-      t,
-      viewMessage
+      viewReplacedRunningTopic
     ]
   )
 
@@ -1352,6 +1359,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       navigate?: boolean
     }): Promise<void> => {
       const topic = options?.topic
+      // 用户点「＋」（navigate）时，被换下屏幕的可能正是生成中的那一条：给一句提示，不拦
+      const replacingRunningTopic = Boolean(options?.navigate) && currentTopicRunningRef.current
       // 目录 + 工作区行 + 活动工作区：主进程按话题 id 决定用根目录还是会话子目录
       const activated = await activateChatTopic(topic?.id)
       if (!activated) return
@@ -1360,6 +1369,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (topic) {
         await onSelectTopic(topic)
       } else {
+        if (replacingRunningTopic) viewReplacedRunningTopic()
         onNewHarness()
       }
       // 只聚焦、不写内容；切模式自动进入时不抢光标
@@ -1371,7 +1381,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       // 空白会话 / 指定会话都已经在屏幕上了，最后才切路由（否则会先闪一下上一条会话）
       if (options?.navigate) onOpenHarness()
     },
-    [activateChatTopic, onNewHarness, onOpenHarness, onSelectTopic, rememberChat]
+    [
+      activateChatTopic,
+      onNewHarness,
+      onOpenHarness,
+      onSelectTopic,
+      rememberChat,
+      viewReplacedRunningTopic
+    ]
   )
 
   /**
@@ -1406,18 +1423,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         topic?: HarnessTopicRow
         focus?: boolean
         navigate?: boolean
-        /**
-         * 允许在别的会话生成中切换（插件中心「在对话中修改」用：主进程已经把活动
-         * 工作区切到插件目录了，渲染层再拒绝只会让界面与设置不一致）。
-         */
-        allowWhileRunning?: boolean
       }
     ): Promise<void> => {
-      // 有会话正在生成时，点插件行 / ＋ 不要清空当前视图（那一轮会「凭空消失」）
-      if (!options?.topic && !options?.allowWhileRunning && anyTopicRunningRef.current) {
-        viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
-        return
-      }
+      // 换下屏幕的要是正在生成的那一条，新会话就位后提示一句「还在后台继续」（不拦）
+      const replacingRunningTopic = currentTopicRunningRef.current
       const requestSeq = ++pluginSessionSeqRef.current
       // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
       const ensured = await harnessApi.workshop.ensureWorkspace(draft.id)
@@ -1461,6 +1470,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (options?.topic) {
         await onSelectTopic(options.topic)
       } else {
+        if (replacingRunningTopic) viewReplacedRunningTopic()
         onNewHarness()
       }
       if (options?.focus !== false) {
@@ -1484,16 +1494,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       onSelectTopic,
       viewMessage,
       rememberPlugin,
-      t
+      viewReplacedRunningTopic
     ]
   )
 
   /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
-    if (anyTopicRunningRef.current) {
-      viewMessage('new-session-running', 'warning', t('harness.sidebar.newSessionRunning'), 4)
-      return
-    }
+    const replacingRunningTopic = currentTopicRunningRef.current
     try {
       const dir = await harnessApi.harness.selectWorkspace()
       if (!dir) return
@@ -1515,6 +1522,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       // 新建并激活的工作区 = 工作模式「当前那一条内容」（空白会话），新建动作本身也把人留在工作这一侧
       rememberWork({ workspaceId: id, topicId: null })
       if (mode !== 'work') setMode('work')
+      if (replacingRunningTopic) viewReplacedRunningTopic()
       onNewHarness()
       // 空白会话已经就位，最后把主内容区带回对话页（先切路由会先闪一下上一条会话）
       onOpenHarness()
@@ -1522,7 +1530,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     } catch (err) {
       console.error('Failed to create workspace:', err)
     }
-  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode, viewMessage])
+  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode, viewReplacedRunningTopic])
 
   const handleDeleteWorkspace = useCallback(
     (ws: WorkspaceRow): void => {
@@ -1671,15 +1679,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const chatVisibleTopics = query
     ? chatWorkspaceTopics.filter((topic) => topic.title.toLowerCase().includes(query))
     : chatWorkspaceTopics
-
-  /**
-   * 有没有会话正在生成（任意工作区 / 任意模式）。
-   *
-   * 用途只有一个：禁用「新建会话」——`onNewHarness()` 会把当前对话窗口清成空白，
-   * 正在跑的那一轮就从界面上消失了（后台还在推、落库也正常，但用户看不见，像丢了）。
-   * 生成中想开新会话时，先在输入框按停止。
-   */
-  const anyTopicRunning = loadingTopicIds.size > 0
 
   /** 草稿状态行：构建 / 验收 / 安装三件事各自的最新结果 */
   const draftStateOf = (draft: WorkshopDraftSummary): { text: string; color: string } => {
@@ -1897,15 +1896,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     title: string,
     onClick: () => void,
     icon: React.ReactNode,
-    /** 禁用态（生成中不能重开当前会话：那会把正在跑的这一轮从界面上丢掉） */
-    disabled = false,
     /** 紧凑样式：用于右侧动作胶囊 */
     compact = false
   ): React.ReactNode => (
     <button
       title={title}
       onClick={onClick}
-      disabled={disabled}
       className="flex items-center justify-center transition-colors"
       style={{
         width: 26,
@@ -1914,11 +1910,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         borderRadius: compact ? 5 : 7,
         background: 'transparent',
         color: colorTextSecondary,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.4 : 1
+        cursor: 'pointer'
       }}
       onMouseEnter={(e) => {
-        if (disabled) return
         e.currentTarget.style.background = headerHover
         e.currentTarget.style.color = colorText
       }}
@@ -2349,7 +2343,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         const topic = detail.topicId != null ? await fetchTopicRow(detail.topicId) : undefined
         await handlePluginSession(
           { id: pluginId },
-          { topic: topic ?? undefined, focus: true, navigate: true, allowWhileRunning: true }
+          { topic: topic ?? undefined, focus: true, navigate: true }
         )
       })()
     }
@@ -2694,7 +2688,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 t('harness.sidebar.searchTooltip'),
                 () => setSearchMode(true),
                 <RiSearchLine size={14} />,
-                false,
                 true
               )}
               <span
@@ -2713,21 +2706,17 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     t('harness.sidebar.newDraft'),
                     () => void handleNewDraft(),
                     <RiFoldersLine size={14} />,
-                    false,
                     true
                   )
                 : mode === 'chat'
                   ? /* 对话模式：新建会话（该模式没有工作区，所以没有「新建工作区」这个动作） */
                     iconBtn(
-                      anyTopicRunning
-                        ? t('harness.sidebar.newSessionRunning')
-                        : t('harness.sidebar.newSession'),
+                      t('harness.sidebar.newSession'),
                       () => {
                         // 空白会话备好之后由 handleChatSession 把路由带回对话页
                         void handleChatSession({ navigate: true })
                       },
                       <RiAddLine size={14} />,
-                      anyTopicRunning,
                       true
                     )
                   : /* 工作模式：新建工作区 */
@@ -2735,7 +2724,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                       t('harness.sidebar.newWorkspace'),
                       handleBrowseFolder,
                       <RiFoldersLine size={14} />,
-                      false,
                       true
                     )}
             </div>

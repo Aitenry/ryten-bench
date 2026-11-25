@@ -11,6 +11,7 @@ import type { ToolInfo } from '../../services/harness/types'
 import { effectiveMainAgentTools, type MainAgentConfig } from '../../../shared/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
+import { hasLatticeSession } from '../../lattice/session'
 import { readVirtualTextFile } from '../../runtime/harness/fs-backend'
 import { getToolOutputStore } from '../../runtime/harness/tool-output-store'
 import type {
@@ -257,8 +258,13 @@ async function runHarnessTurn(
   )
   const pluginMode = memoryScope.kind === 'plugin'
 
-  // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具
-  const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
+  // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具。
+  // 「发布版本」要插件中心会话（未登录时连名字都不追加），所以登录态必须在这里现取：
+  // 用户中途登录/退出后，下一轮的工具集随之变化，不需要重启。
+  const selectedTools = effectiveMainAgentTools(mainAgentDefaults, {
+    pluginMode,
+    signedIn: hasLatticeSession()
+  })
   const tools = buildTools(selectedTools)
   logger.info(
     `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
@@ -1317,7 +1323,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         harnessSettings?.activeWorkspaceId ?? 0
       )
       const pluginMode = syncMemoryScope.kind === 'plugin'
-      const selectedTools = effectiveMainAgentTools(mainAgentDefaults, { pluginMode })
+      const selectedTools = effectiveMainAgentTools(mainAgentDefaults, {
+        pluginMode,
+        signedIn: hasLatticeSession()
+      })
       const tools = buildTools(selectedTools)
       logger.info(
         `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`

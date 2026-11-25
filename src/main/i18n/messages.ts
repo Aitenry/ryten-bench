@@ -136,12 +136,14 @@ export const zhCN = {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
     },
-    // 工坊这 4 个是**模式工具**：不进下拉（插件模式自动挂载，见 harness 的
-    // shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`）。文案留作兜底：别处按名字列工具时仍能出中文名。
+    // 工坊这 4 个 + 插件中心「发布版本」是**模式工具**：不进下拉（插件模式自动挂载，见 harness 的
+    // shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`；`plugin_release` 还要求登录插件中心）。
+    // 文案留作兜底：别处按名字列工具时仍能出中文名。
     plugin_draft: { label: '插件草稿', description: '新建插件草稿、读写草稿里的文件' },
     plugin_build: { label: '构建插件', description: '把草稿构建成可安装的插件包并做静态体检' },
     plugin_verify: { label: '验收插件', description: '跑自动化验收电池，确认插件真的能用' },
-    plugin_publish: { label: '发布插件', description: '把验收过的插件装进应用并启用' }
+    plugin_publish: { label: '发布插件', description: '把验收过的插件装进应用并启用' },
+    plugin_release: { label: '发布版本', description: '把插件发布一个新版本到插件中心（需登录）' }
   },
   /** 模型重试失败后的「换模型继续」弹窗 */
   modelRecovery: {
@@ -263,8 +265,9 @@ export const enUS: typeof zhCN = {
       description:
         'Organize documents, to-dos, knowledge bases and graph entities; documents support line/range edits'
     },
-    // Mode tools (plugin workshop): never listed in the tool picker - auto-mounted in plugin mode
-    // (see the harness plugin's shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`). Kept as fallback labels.
+    // Mode tools (plugin workshop + plugin hub release): never listed in the tool picker - auto-mounted
+    // in plugin mode (see the harness plugin's shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`; `plugin_release`
+    // only when signed in to the plugin hub). Kept as fallback labels.
     plugin_draft: {
       label: 'Plugin drafts',
       description: 'Create a plugin draft and edit its files'
@@ -280,6 +283,10 @@ export const enUS: typeof zhCN = {
     plugin_publish: {
       label: 'Publish plugin',
       description: 'Install a verified plugin into the app and enable it'
+    },
+    plugin_release: {
+      label: 'Release version',
+      description: 'Publish a new plugin version to the plugin hub (sign-in required)'
     }
   },
   modelRecovery: {

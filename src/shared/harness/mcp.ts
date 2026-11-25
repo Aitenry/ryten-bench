@@ -260,10 +260,10 @@ export function expandMcpServerGroups(
 }
 
 /**
- * **模式工具**：插件工坊的 4 个工具（草稿 / 构建 / 验收 / 发布）。
+ * **模式工具**：插件工坊的 4 个工具（草稿 / 构建 / 验收 / 安装）+ 插件中心的「发布版本」。
  *
  * 它们**不进**「设置 → 智能体 → 默认工具」的可选清单：那张清单是给「哪一轮都可能用得上」的
- * 工具准备的，而这 4 个只在写插件时成立。用户口径（2026-09-29）：不要在这里勾了才注册；
+ * 工具准备的，而这些只在写插件时成立。用户口径（2026-09-29）：不要在这里勾了才注册；
  * 切到**插件模式**就自动挂载，同时把它们从主智能体的可选清单里拿掉。
  *
  * 于是模式工具走一条独立的路：
@@ -274,6 +274,9 @@ export function expandMcpServerGroups(
  *    插件模式的判定 = 会话（话题）的记忆作用域是 `plugin:<id>`，见 `main/memory-scope.ts`，
  *    因此「切到插件模式 → 下一轮就能用」，不需要任何勾选动作，重启应用后重开这条会话也仍然成立。
  *
+ * 其中 `LATTICE_MODE_TOOL_NAMES`（发布版本）还多一道**登录闸门**：没登录插件中心时连名字都
+ * 不追加，否则模型会去调一个必然 401 的工具（见 `effectiveMainAgentTools` 的 `signedIn`）。
+ *
  * 名单放在这个 shared 模块里、而不是新开一个文件：主进程（工具注册/组装）与渲染层
  * （设置页清理历史残留）都要用它，而本模块是**零相对 import 的纯模块**——
  * `test/verify-mcp-tools.mjs` 直接 `node --experimental-strip-types` 加载它做离线断言，
@@ -283,8 +286,23 @@ export const PLUGIN_MODE_TOOL_NAMES = [
   'plugin_draft',
   'plugin_build',
   'plugin_verify',
-  'plugin_publish'
+  'plugin_publish',
+  'plugin_release'
 ] as const
+
+/**
+ * 模式工具里**需要登录**才挂载的那几个：`plugin_release` 直连插件中心（发版要平台会话），
+ * 未登录时调用只会拿到 401/「请先登录」，不如干脆不注册。
+ *
+ * 与 `PLUGIN_MODE_TOOL_NAMES` 分开：上面那份是「插件模式有哪些工具」，这份是「其中哪些还要看登录态」，
+ * 设置页的过滤与历史配置清理只关心前者。
+ */
+export const LATTICE_MODE_TOOL_NAMES = ['plugin_release'] as const
+
+/** 这个名字是不是「登录后才挂载」的模式工具 */
+export function isLatticeModeTool(name: string): boolean {
+  return (LATTICE_MODE_TOOL_NAMES as readonly string[]).includes(name)
+}
 
 /** 这个名字是不是插件模式的模式工具（设置页过滤历史残留时用） */
 export function isPluginModeTool(name: string): boolean {
@@ -359,10 +377,14 @@ export interface MainAgentConfig {
  * 都走这里，避免「页面显示已启用、实际没挂上」这类漂移。`tools` 里若混进了 MCP 分组项
  * （历史数据/子智能体配置被复制过来）或模式工具（改版前在这一页勾过的历史配置），这里直接跳过
  * ——它们都不是用户可勾的真实工具名，模式工具再由 `pluginMode` 统一追加。
+ *
+ * `signedIn`（= 插件中心登录态，主进程取 `hasLatticeSession()`）：只有**登录**时才会追加
+ * `LATTICE_MODE_TOOL_NAMES`（发布版本）。缺省按「没登录」处理——少挂一个工具只会让模型
+ * 看不到它，而误挂一个必然 401 的工具会让模型把「没登录」当成「发布失败」反复重试。
  */
 export function effectiveMainAgentTools(
   config?: MainAgentConfig | null,
-  options?: { pluginMode?: boolean }
+  options?: { pluginMode?: boolean; signedIn?: boolean }
 ): string[] {
   const out: string[] = []
   const push = (names?: string[]): void => {
@@ -377,7 +399,11 @@ export function effectiveMainAgentTools(
   push(config?.tools)
   push(config?.mcpTools)
   if (options?.pluginMode) {
-    for (const name of PLUGIN_MODE_TOOL_NAMES) if (!out.includes(name)) out.push(name)
+    for (const name of PLUGIN_MODE_TOOL_NAMES) {
+      // 登录后才挂的那几个（发布版本）：没登录连名字都不追加
+      if (!options.signedIn && isLatticeModeTool(name)) continue
+      if (!out.includes(name)) out.push(name)
+    }
   }
   return out
 }

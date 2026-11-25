@@ -265,11 +265,15 @@ export const enUSLattice: typeof zhCNLattice = {
     now: 'Sync now',
     merge: {
       button: 'Merge cloud data',
-      success: 'Merge complete: {{merged}} plugin(s) / {{rows}} new record(s)',
-      partial: 'Merge complete: {{merged}} plugin(s) / {{rows}} new record(s), {{failed}} failed',
+      success: 'Merge complete: {{merged}} plugin(s) / {{rows}} record(s)',
+      partial: 'Merge complete: {{merged}} plugin(s) / {{rows}} record(s), {{failed}} failed',
       failed: 'Merge failed: {{failed}} plugin(s) were not merged',
-      empty: 'Nothing to merge (not installed, merging unsupported, or no cloud snapshot)',
-      hint: 'Merge the cloud snapshots of all installed plugins into this device (local data is never overwritten: cloud-only rows are added and deduplicated by natural keys), then push the merged result back to the cloud.'
+      conflicts:
+        'Aligned {{merged}} plugin(s) / {{rows}} record(s); {{conflicts}} plugin(s) changed on both sides — open "Resolve conflicts" to choose (nothing was overwritten)',
+      blocked:
+        '{{blocked}} plugin(s) have no merge baseline yet — run "Sync now" once, then merge again (nothing was changed this time)',
+      empty: 'Nothing to merge (no snapshot plugins installed, or no cloud snapshot yet)',
+      hint: 'Compare against the last synced baseline: local-only changes (deletes/edits) are pushed up; cloud-only updates are pulled down; if both sides changed, it becomes a conflict for you to resolve — never an automatic union or overwrite.'
     },
     syncing: 'Syncing…',
     success:

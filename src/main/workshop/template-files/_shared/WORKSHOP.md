@@ -162,8 +162,45 @@ export async function listItems() {
   只贡献 `export` 不实现 `import` 的插件，云端数据无法写回本机。
   建议同时实现 `hasData()`（本机是否已有业务数据；宿主据此避免「从未推过快照的新设备」被云端覆盖）
   和 `count(data)`（一份快照里有多少条数据；同步界面/状态条用来显示「推送/拉取 N 条」）。
-  可选实现 `merge(remote)`：把云端快照**非破坏性**地并进本机（按自然键去重、给远端独有行
-  分配新 id），返回 `{ summary, rows }`；冲突弹窗就会多一个「合并两边」，宿主随后把合并结果推回云端。
+
+- **要支持冲突里的「合并两边」，必须做 merge base 三方合并**（2026-11-25 数据事故后的硬约定）：
+  `ctx.contribute(PLUGIN_SYNC_SNAPSHOT, { ..., mergeBase: true, merge: (remote, { base }) => ... })`。
+  宿主**只有**看到 `mergeBase: true` 才会显示/调用「合并两边」，并把「上次成功同步时的云端快照」
+  作为 `base` 传进来。规则（每一条都对应一次真实事故）：
+  1. **先算本机相对 base 删掉/改走的行**（自然键或内容指纹），远端再出现这些旧行时**不要加回来**；
+     没有这一步，用户删掉/改过的数据会被云端旧快照回填。
+  2. **id 对得上时按 id 判断编辑**（两台机器从同一份快照出发时自增 id 相同）：
+     本机没改、云端改了 → 原地接受云端；两边都改了 → 本机优先、跳过云端版本。
+     只做自然键并集会让「改金额」变成两条逻辑重复的行。
+  3. **设置里的集合也要按 base 过滤**（成员/规则/模板等）：否则删掉的成员会被并集悄悄带回来。
+  4. **导入/合并前做引用体检**：`accountId`/`categoryId`/`merchantId`/`refundOfId` 指向不存在的行时
+     置空并在日志里计数，**不要拒绝整份快照**——一条坏数据不该卡住整台设备的同步。
+  5. **幂等 + 稳定比较**：同一份远端快照重复合并不得新增行；`exportedAt` 这类每次导出都变的字段
+     不参与「是否变化」判断；行顺序不同的快照应视为相同。
+  6. **纯函数优先**：`merge(local, remote, base) → { merged, stats }` 不碰数据库，IO 层只负责读快照、
+     调纯函数、在一个事务里替换入库；纯函数才能被单测覆盖。
+  7. **反例**：只实现 `merge(remote)` 并集、忽略 base；只合并业务表忘了设置；把云端原始引用直接
+     insert 进库；用 `JSON.stringify` 直接比较含 `exportedAt` 的快照。
+
+  参考实现（本机工坊 / ryten-plugins）：
+  - `personal-ledger/main/db/merge.ts`：自然键 + 内容指纹 + 设置集合 + 引用体检；
+  - `task-planner/main/db/merge.ts`：任务树自然键 + id 对齐编辑；
+  - `global-time-zones/main/db/merge.ts`：`zone` 唯一键 + base 删除过滤。
+
+  最小骨架：
+  ```ts
+  ctx.contribute(PLUGIN_SYNC_SNAPSHOT, {
+    label: '本插件的业务数据',
+    export: exportSnapshot,
+    import: importSnapshot,
+    mergeBase: true,
+    merge: (remote, { base }) => mergeSnapshot(remote, base),
+    hasData,
+    count
+  })
+  ```
+  验收动作（宿主「合并云端数据」）：本机删一行 + 云端加一行 → 记冲突 → 「合并两边」→ 删的不回来、
+  加的两边都有；再点一次合并应提示「没有可合并的数据」。
 
 ## 5c. 词条（界面上要显示的文字）
 

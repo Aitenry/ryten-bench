@@ -79,7 +79,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceDeleteConfirmContent:
         'Delete "{{name}}"? All conversations and memories in this workspace will be deleted too.',
       newSession: 'New conversation',
-      newSessionRunning: 'A conversation is running — stop it before starting a new one',
+      newSessionRunning: 'The previous run keeps going in the background — reopen it anytime',
       renameWorkspace: 'Rename workspace',
       workspaceNamePlaceholder: 'Workspace name',
       workspaceNameRequired: 'Please enter a workspace name',

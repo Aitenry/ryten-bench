@@ -267,8 +267,20 @@ export interface LatticeSyncConflict {
   local_data?: unknown
   /** 打开弹窗时补拉的云端数据快照（用于预览） */
   server_data?: unknown
-  /** 该插件是否提供 `merge()`（不支持的插件不应显示「合并两边」） */
+  /**
+   * 该插件是否支持**基于 merge base 的三方合并**。
+   *
+   * 只有插件明确声明 `mergeBase: true` 才为 true；旧版插件的 `merge()` 是无条件并集，
+   * 会把本机删除/修改过的行回填，因此界面不应显示「合并两边」。
+   */
   merge_supported?: boolean
+  /**
+   * 冲突来源：
+   * - `diverged`：本机有未同步改动，云端 rev 也前进了（真正的分叉）；
+   * - `rev`：旧口径的 push/pull rev 冲突；
+   * - `no-base`：缺少合并基线（升级后第一次），需要先同步一次。
+   */
+  reason?: 'diverged' | 'no-base' | 'rev'
   at: number
 }
 
@@ -285,26 +297,33 @@ export type LatticeResolveConflictResult =
   | { ok: false; error: string }
 
 /**
- * 「合并云端数据」：逐个已安装插件把云端快照并进本机，再把合并结果推回云端。
+ * 「合并云端数据」：逐插件按 **merge base** 做 git 式快进 / 冲突（不再无条件并集）。
  *
- * 界面提示按 `merged / rows / failed` 三个数字拼一句话（和「同步完成」同构，用户
- * 2026-11-25：「要和同步一样的简化提示」），**不再**把 `summaries` 里每个插件的自述
- * 直接拼进 toast——插件一多就是「A: 两边一致，无需新增；B: 两边一致，无需新增…」。
+ * 界面提示按 `merged / rows / failed / conflicts` 拼一句话（和「同步完成」同构）；
+ * **不再**把 `summaries` 里每个插件的自述直接拼进 toast。
  */
 export interface LatticeMergeDataResult {
   ok: boolean
-  /** 实际完成了合并（合并 + 推回云端）的插件数 */
+  /** 实际完成对齐（push + pull）的插件数 */
   merged?: number
-  /** 合并新加进来的数据条数（各插件 `merge()` 自报之和） */
+  /** 其中「把本机更新推上去」的插件数（删除/修改是走这条，不会被云端回填） */
+  pushed?: number
+  /** 其中「把云端更新拉下来」的插件数（只有本机无未同步改动时才会发生） */
+  pulled?: number
+  /** 本次真正同步的业务数据条数（插件 count() 统计，push + pull） */
   rows?: number
-  /** 合并失败的插件数；失败按插件隔离，不影响其它插件 */
+  /** 失败的插件数；失败按插件隔离，不影响其它插件 */
   failed?: number
+  /** 两边都有改动、已记为冲突的插件数（需要用户显式选择，不会自动覆盖） */
+  conflicts?: number
+  /** 缺少合并基线 / 本机快照读不到而跳过的插件数（先同步一次即可） */
+  blocked?: number
   /**
-   * 一个插件都没并、也没有失败：没装可合并的插件，或云端没有它们的快照。
-   * 不算错误，界面用「没有可合并的数据」提示，而不是报「合并完成：0 个插件」。
+   * 一个插件都没动、也没有失败/冲突：没装快照插件，或云端没有它们的快照。
+   * 不算错误，界面用「没有可合并的数据」提示。
    */
   empty?: boolean
-  /** 每个插件的合并摘要（逐插件明细用，不再直接进 toast） */
+  /** 每个插件的处理摘要（逐插件明细用，不再直接进 toast） */
   summaries?: string[]
   /** 失败插件的「id: 原因」，逐条拼接；给日志 / 详情用，不直接展示 */
   error?: string

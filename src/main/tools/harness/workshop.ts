@@ -61,6 +61,10 @@ import type {
  * 不进「设置 → 智能体 → 默认工具」的可选清单，也不靠用户勾选——切到**插件模式**的那一轮起自动挂载
  * （判定 = 会话的记忆作用域是 `plugin:<id>`，实现见 `shared/mcp.ts` 的 PLUGIN_MODE_TOOL_NAMES
  * 与 `ipc/harness.ts` 里按 `pluginMode` 组装工具的那两处）。
+ *
+ * 同属插件模式的还有插件中心的 `plugin_release`（发布版本，见 `tools/harness/lattice.ts`）：
+ * 那是「把版本发到插件中心」，与本文件的 `plugin_publish`（装进本机应用）相对，
+ * 并且**要登录**才挂载（`LATTICE_MODE_TOOL_NAMES` + `effectiveMainAgentTools` 的 `signedIn`）。
  */
 
 /** 工具在设置页下拉里的兜底元数据（真正下发时由 main/i18n 按界面语言覆盖） */

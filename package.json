@@ -13,6 +13,7 @@
     "test:env": "node --no-warnings tests/environment.test.mts",
     "test:lock": "node --no-warnings tests/lock-credentials.test.mts",
     "test:settings": "node --no-warnings tests/settings-recovery.test.mts",
+    "test:merge": "node --no-warnings tests/lattice-merge-base.test.mts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
