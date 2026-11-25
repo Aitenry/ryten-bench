@@ -78,6 +78,13 @@
       "when": 1791707344667,
       "tag": "0010_workspace_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795619158336,
+      "tag": "0011_topic_pin_archive",
+      "breakpoints": true
     }
   ]
 }

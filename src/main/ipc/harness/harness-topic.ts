@@ -1,4 +1,6 @@
+import { shell } from 'electron'
 import logger from 'electron-log'
+import * as fs from 'fs'
 import type { IpcHandlerMap } from '../register'
 import { todoStore } from '../../runtime/harness/todo'
 import { goalStore } from '../../runtime/harness/goal'
@@ -10,6 +12,7 @@ import { permissionGate } from '../../runtime/harness/permission-gate'
 import { getToolOutputStore } from '../../runtime/harness/tool-output-store'
 import { deleteCompactionByTopic } from '../../database/mapper/harness/compaction'
 import { settingsStore } from '../../context'
+import { mainFormat, mainMessages } from '../../i18n'
 import { harnessQueue } from '../../services/harness/queue-store'
 import { clearTopicCache } from '../../services/harness/preload-cache'
 import type { HarnessSettings } from '../../types/settings'
@@ -22,8 +25,13 @@ import {
   createWorkspace,
   updateWorkspace,
   deleteWorkspace,
+  getWorkspaceById,
+  setTopicPinned,
+  setTopicArchived,
+  forkTopic,
   getAllTopics,
   getAllTopicsPaginated,
+  getArchivedTopics,
   getTopicById,
   createTopic,
   updateTopic,
@@ -80,6 +88,31 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
     }
   })
 
+  /**
+   * 在系统文件管理器里打开工作区目录（侧栏工作区行「⋯ → 在文件夹中显示」）。
+   *
+   * 入参是**工作区 id 而不是路径**：目录由主进程按行查出来再打开，渲染层没法借这条通道
+   * 打开任意路径（工作区目录是用户自选的，可能在 AI 工作区根之外，不能复用
+   * `assertInsideWorkspace` 那套边界）。跳转前先看一眼目录还在不在：被删/被挪走时给出
+   * 可读原因，而不是把 `shell.openPath` 的英文失败串直接丢到界面上。
+   */
+  handle('workspace-open-dir', async (id: number) => {
+    try {
+      const messages = mainMessages().error
+      const row = await getWorkspaceById(id)
+      if (!row) return { ok: false, error: messages.workspaceNotFound }
+      const stat = await fs.promises.stat(row.path).catch(() => null)
+      if (!stat?.isDirectory()) {
+        return { ok: false, error: mainFormat(messages.workspaceDirMissing, { path: row.path }) }
+      }
+      const failure = await shell.openPath(row.path)
+      return failure ? { ok: false, error: failure } : { ok: true, data: row.path }
+    } catch (error) {
+      logger.error('Error in workspace-open-dir:', error)
+      return { ok: false, error: (error as Error).message }
+    }
+  })
+
   handle('workspace-delete', async (id: number) => {
     try {
       clearTopicCache()
@@ -112,6 +145,16 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
       }
     }
   )
+
+  /** 所有工作区里已归档的会话（侧栏底部「已归档」分组；按归档时间倒序） */
+  handle('harness-topic-get-archived', async () => {
+    try {
+      return await getArchivedTopics()
+    } catch (error) {
+      logger.error('Error in harness-topic-get-archived:', error)
+      throw error
+    }
+  })
 
   handle('harness-topic-get-by-id', async (id: number) => {
     try {
@@ -173,6 +216,44 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
       }
     }
   )
+
+  /** 置顶 / 取消置顶（只改 pinned_at，不碰 updated_at：取消后回到原来的活跃位置） */
+  handle('harness-topic-set-pinned', async (id: number, pinned: boolean) => {
+    try {
+      clearTopicCache()
+      return await setTopicPinned(id, pinned)
+    } catch (error) {
+      logger.error('Error in harness-topic-set-pinned:', error)
+      throw error
+    }
+  })
+
+  /** 归档 / 取消归档（同理不碰 updated_at） */
+  handle('harness-topic-set-archived', async (id: number, archived: boolean) => {
+    try {
+      clearTopicCache()
+      return await setTopicArchived(id, archived)
+    } catch (error) {
+      logger.error('Error in harness-topic-set-archived:', error)
+      throw error
+    }
+  })
+
+  /**
+   * 分叉会话：复制「话题行 + 全部对话」成一条新的独立会话，返回新行。
+   *
+   * 标题由渲染层给（`原标题（分叉）`，跟着界面语言走）；主进程只认数据，不做文案。
+   * 返回整行而不是 id：界面拿它立刻插进列表并打开（不用再查一次）。
+   */
+  handle('harness-topic-fork', async (id: number, title: string) => {
+    try {
+      clearTopicCache()
+      return await forkTopic(id, title)
+    } catch (error) {
+      logger.error('Error in harness-topic-fork:', error)
+      throw error
+    }
+  })
 
   handle('harness-topic-delete', async (id: number) => {
     try {

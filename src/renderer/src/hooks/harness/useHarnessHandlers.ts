@@ -94,6 +94,8 @@ export interface UseHarnessHandlersReturn {
   inputHistoryRef: { current: string[] }
   currentSessionIdRef: React.RefObject<string | null>
   currentTopicIdRef: React.RefObject<number | null>
+  /** 当前会话是否已归档（只读：输入框隐藏、发送被拒） */
+  currentTopicArchived: boolean
   loadingTopicIds: Set<number>
   /**
    * 正挂着提问 / 审批、等用户确认的会话（侧栏行首的黄色呼吸点）。
@@ -256,6 +258,30 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const activeSubAgentCauseIdsRef = useRef<Map<number, Set<string>>>(new Map())
   const [currentTopicId, setCurrentTopicId] = useState<number | null>(null)
   const currentTopicIdRef = useRef<number | null>(null)
+  /**
+   * 当前会话是不是**已归档**（只读）：打开后输入框隐藏、发送被拒（用户 2026-11-25
+   * 「归档内容只能查看，不能对话」）。状态给页面渲染用，ref 给回调里判断用（避免闭包拿旧值）。
+   */
+  const [currentTopicArchived, setCurrentTopicArchived] = useState(false)
+  const currentTopicArchivedRef = useRef(false)
+  /** 同时写状态与 ref：两者必须一起变 */
+  const markTopicArchived = useCallback((archived: boolean): void => {
+    currentTopicArchivedRef.current = archived
+    setCurrentTopicArchived(archived)
+  }, [])
+  /**
+   * 侧栏改归档状态时（归档 / 取消归档）通知这边：**改的正是当前会话**就同步只读态。
+   * 否则会出现「刚取消归档、输入框还不回来」或者「归档了当前会话、却还能接着发」。
+   */
+  useEffect(() => {
+    const onArchiveChanged = (e: Event): void => {
+      const detail = (e as CustomEvent<{ topicId?: number; archived?: boolean }>).detail
+      if (detail?.topicId == null || detail.archived == null) return
+      if (detail.topicId === currentTopicIdRef.current) markTopicArchived(detail.archived)
+    }
+    window.addEventListener('harness-topic-archive-changed', onArchiveChanged)
+    return () => window.removeEventListener('harness-topic-archive-changed', onArchiveChanged)
+  }, [markTopicArchived])
   /**
    * 对话页（`/harness`）此刻是不是显示在主内容区。
    *
@@ -1421,6 +1447,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     setMessages([])
     setCurrentTopicId(null)
     currentTopicIdRef.current = null
+    // 新会话一定不是归档态：清掉只读标记，输入框回来
+    currentTopicArchivedRef.current = false
+    setCurrentTopicArchived(false)
     messagesBelongToTopicRef.current = null
     setInputValue('')
     setAttachments([])
@@ -1486,6 +1515,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
       currentTopicIdRef.current = topic.id
       setCurrentTopicId(topic.id)
+      // 归档的会话是只读的：打开只查看历史（输入框隐藏、发送被拒）
+      markTopicArchived(Boolean(topic.archived_at))
 
       // 先尝试从缓存恢复（进行中的会话）
       const restored = restoreSessionFromCache(topic.id)
@@ -1534,7 +1565,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       setInputValue('')
       setAttachments([])
     },
-    [saveSessionToCache, restoreSessionFromCache, acknowledgeTopic]
+    [saveSessionToCache, restoreSessionFromCache, acknowledgeTopic, markTopicArchived]
   )
 
   /**
@@ -1651,6 +1682,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           // ——用户口径 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」。
           currentTopicIdRef.current = null
           handleNewHarness()
+          // 删掉的若是归档会话：只读标记跟着清掉（新视图是空白会话，输入框要回来）
+          currentTopicArchivedRef.current = false
+          setCurrentTopicArchived(false)
           // 双保险：清视图过程中若又落了缓存，这里补删一次
           sessionsRef.current.delete(topicId)
         }
@@ -1904,6 +1938,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
   /** 输入框发送：空闲时直接开一轮；生成中则交给主进程收进插话队列 */
   const handleSend = useCallback(async (): Promise<void> => {
+    // 归档会话只读：输入框本来就不渲染，这里再兜一道，别的入口（快捷键等）也发不出去
+    if (currentTopicArchivedRef.current) return
     if (!inputValue.trim()) return
 
     // 新一轮问答开始：清空输入框上方的进行中任务卡片（等待模型重新规划）
@@ -2171,6 +2207,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     availableTools,
     copiedId,
     currentTopicId,
+    currentTopicArchived,
     topics,
     topicsWorkspaceId,
     sidebarOpen,

@@ -31,6 +31,8 @@ interface MessageActionsProps {
   turnStartedAt?: number
   /** 当前话题（评价落本地索引用） */
   topicId: number | null
+  /** 只读（归档会话）：只留复制与只读元信息，隐藏评价 / 存入记忆 / 分支 / 删除 */
+  readOnly?: boolean
   /** 该条回复的真实用量（harness_dialogue_usage 行）；无回传时为 undefined，不显示用量 */
   usage?: HarnessDialogueUsageRow
   /** 分支：交给 hooks 处理（它才知道话题列表与切换流程） */
@@ -116,6 +118,7 @@ const MessageActions: React.FC<MessageActionsProps> = ({
   index,
   turnStartedAt,
   topicId,
+  readOnly = false,
   usage,
   onBranch,
   getCopyText,
@@ -411,53 +414,57 @@ const MessageActions: React.FC<MessageActionsProps> = ({
         isCopied ? t('harness.messageActions.copied') : t('harness.messageActions.copy'),
         () => onCopy(getCopyText(), message.id)
       )}
-      {iconButton(
-        <RiThumbUpLine size={16} />,
-        feedback === 'up'
-          ? t('harness.messageActions.feedbackUpMarked')
-          : t('harness.messageActions.feedbackUp'),
-        () => handleFeedback('up'),
-        { active: feedback === 'up' }
-      )}
-      {iconButton(
-        <RiThumbDownLine size={16} />,
-        feedback === 'down'
-          ? t('harness.messageActions.feedbackDownMarked')
-          : t('harness.messageActions.feedbackDown'),
-        () => handleFeedback('down'),
-        { active: feedback === 'down' }
-      )}
-      {iconButton(
-        <RiBrainLine size={16} />,
-        savingMemory
-          ? t('harness.messageActions.savingToMemory')
-          : t('harness.messageActions.saveToMemory'),
-        () => {
-          void handleSaveToMemory()
-        },
-        { disabled: savingMemory }
-      )}
-      {iconButton(
-        <RiGitBranchLine size={16} />,
-        branching ? t('harness.messageActions.branching') : t('harness.messageActions.branch'),
-        () => {
-          void handleBranch()
-        },
-        { disabled: branching }
-      )}
-      {iconButton(
-        <RiDeleteBin6Line size={16} />,
-        t('harness.messageActions.deleteTurn'),
-        () =>
-          modal.confirm({
-            title: t('harness.messageActions.deleteConfirmTitle'),
-            content: t('harness.messageActions.deleteConfirmContent'),
-            okText: t('common.action.delete'),
-            cancelText: t('common.action.cancel'),
-            okButtonProps: { danger: true },
-            onOk: () => onDelete(index)
-          }),
-        { danger: true }
+      {!readOnly && (
+        <>
+          {iconButton(
+            <RiThumbUpLine size={16} />,
+            feedback === 'up'
+              ? t('harness.messageActions.feedbackUpMarked')
+              : t('harness.messageActions.feedbackUp'),
+            () => handleFeedback('up'),
+            { active: feedback === 'up' }
+          )}
+          {iconButton(
+            <RiThumbDownLine size={16} />,
+            feedback === 'down'
+              ? t('harness.messageActions.feedbackDownMarked')
+              : t('harness.messageActions.feedbackDown'),
+            () => handleFeedback('down'),
+            { active: feedback === 'down' }
+          )}
+          {iconButton(
+            <RiBrainLine size={16} />,
+            savingMemory
+              ? t('harness.messageActions.savingToMemory')
+              : t('harness.messageActions.saveToMemory'),
+            () => {
+              void handleSaveToMemory()
+            },
+            { disabled: savingMemory }
+          )}
+          {iconButton(
+            <RiGitBranchLine size={16} />,
+            branching ? t('harness.messageActions.branching') : t('harness.messageActions.branch'),
+            () => {
+              void handleBranch()
+            },
+            { disabled: branching }
+          )}
+          {iconButton(
+            <RiDeleteBin6Line size={16} />,
+            t('harness.messageActions.deleteTurn'),
+            () =>
+              modal.confirm({
+                title: t('harness.messageActions.deleteConfirmTitle'),
+                content: t('harness.messageActions.deleteConfirmContent'),
+                okText: t('common.action.delete'),
+                cancelText: t('common.action.cancel'),
+                okButtonProps: { danger: true },
+                onOk: () => onDelete(index)
+              }),
+            { danger: true }
+          )}
+        </>
       )}
 
       {/* 分割线：左边是可交互操作，右边是只读元信息 */}

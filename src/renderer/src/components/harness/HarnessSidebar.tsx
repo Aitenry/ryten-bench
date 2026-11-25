@@ -4,22 +4,29 @@ import { SkeletonListRows, SkeletonTextLines } from '@renderer/components/system
 import type { InputRef } from 'antd'
 import {
   RiAddLine,
+  RiArchiveLine,
   RiArrowDownSLine,
   RiArrowRightSLine,
   RiBrain4Line,
   RiBriefcaseLine,
   RiChat3Line,
   RiCloseLine,
+  RiCodeLine,
   RiDatabase2Line,
   RiDeleteBin6Line,
   RiEditLine,
+  RiExternalLinkLine,
   RiFileTextLine,
   RiFolder2Line,
   RiFolderOpenLine,
   RiFoldersLine,
+  RiGitBranchLine,
   RiHammerLine,
+  RiInboxUnarchiveLine,
   RiMoreLine,
   RiPuzzleLine,
+  RiPushpinFill,
+  RiPushpinLine,
   RiSearchLine,
   RiSettings4Line,
   RiShieldCheckLine,
@@ -76,6 +83,8 @@ interface HarnessSidebarProps {
   onSelectTopic: (topic: HarnessTopicRow) => void | Promise<void>
   onDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   onLoadMoreTopics: () => void
+  /** 整表刷新当前活动工作区的会话（置顶/重命名/归档/分叉后让列表与标题立刻跟上） */
+  onRefreshTopics: () => Promise<void>
   /** 在当前工作区新建会话 */
   onNewHarness: () => void
   /**
@@ -306,15 +315,20 @@ const SidebarModeSwitch: React.FC<{
 }
 
 /**
- * 合并两份会话行（按 id 去重，先出现的那份保序）。
+ * 合并两份会话行（按 id 去重，**同一条以 incoming 为准**，顺序按 base）。
  *
  * 「对话」模式的列表有两个来源：`topics` 属性（活动工作区那一份，只有第一页）与侧栏自己
  * 滚出来的分页结果。两边都可能先到，直接覆盖就会来回丢页，因此统一走这个合并。
+ *
+ * 重复 id 必须取 incoming 那份：那是刚从库里读出来的最新行（置顶 / 归档 / 改名之后
+ * 就靠它把新状态带进来）。早先「保留先出现的那份」会让对话模式里置顶、归档、改名
+ * 全部不生效——列表还是旧对象。
  */
 function mergeTopicRows(base: HarnessTopicRow[], incoming: HarnessTopicRow[]): HarnessTopicRow[] {
   if (incoming.length === 0) return base
-  const seen = new Set(base.map((topic) => topic.id))
-  const merged = [...base]
+  const byId = new Map(incoming.map((topic) => [topic.id, topic]))
+  const merged = base.map((topic) => byId.get(topic.id) ?? topic)
+  const seen = new Set(merged.map((topic) => topic.id))
   for (const topic of incoming) {
     if (seen.has(topic.id)) continue
     seen.add(topic.id)
@@ -370,6 +384,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   onSelectTopic,
   onDeleteTopic,
   onLoadMoreTopics,
+  onRefreshTopics,
   onNewHarness,
   onOpenHarness,
   shellMode = false
@@ -379,6 +394,20 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const { modal, message } = App.useApp()
   const { t } = useTranslation()
   const navigate = useNavigate()
+  /**
+   * 平台（preload 透出的 `process.platform`，不在渲染层猜 navigator）：
+   * 文件管理器的叫法（访达 / 资源管理器 / 文件管理器）与快捷键修饰键（⌘/⌥ vs Ctrl/Alt）都跟着它走。
+   */
+  const platform = window.api.platform
+  const isMacPlatform = platform === 'darwin'
+  /** 工作区行「在文件夹中显示」的平台文案 */
+  const revealWorkspaceLabel = t(
+    isMacPlatform
+      ? 'harness.sidebar.workspaceRevealInFinder'
+      : platform === 'win32'
+        ? 'harness.sidebar.workspaceRevealInFolder'
+        : 'harness.sidebar.workspaceRevealInFileManager'
+  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -820,6 +849,52 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [renameName, setRenameName] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
 
+  /* 会话重命名弹窗（与工作区那个同一套交互：一行输入 + 保存） */
+  const [topicRenameOpen, setTopicRenameOpen] = useState(false)
+  const [topicRenameTarget, setTopicRenameTarget] = useState<HarnessTopicRow | null>(null)
+  const [topicRenameName, setTopicRenameName] = useState('')
+  const [topicRenameSaving, setTopicRenameSaving] = useState(false)
+
+  /**
+   * 侧栏底部「已归档」分组（用户 2026-11-25）：**所有工作区**归档的会话都收在这里，
+   * 位置在「记忆」上面、默认收起；点开只读查看（输入框隐藏），不参与工作区下的会话列表。
+   */
+  const [archivedTopics, setArchivedTopics] = useState<HarnessTopicRow[]>([])
+  const [archivedOpen, setArchivedOpen] = useState(false)
+  const [archivedLoading, setArchivedLoading] = useState(false)
+
+  /** 拉一次「已归档」清单（归档 / 取消归档 / 删除 / 改名后都走它刷新） */
+  const loadArchivedTopics = useCallback(async (): Promise<void> => {
+    setArchivedLoading(true)
+    try {
+      setArchivedTopics(await harnessApi.harness.getArchivedTopics())
+    } catch (err) {
+      console.error('Failed to load archived topics:', err)
+    } finally {
+      setArchivedLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    void loadArchivedTopics()
+  }, [loadArchivedTopics])
+
+  /** 「在应用中打开」的候选应用（文件资源管理器永远在内，其余按本机安装情况探测） */
+  const [openInApps, setOpenInApps] = useState<
+    { id: string; label: string; icon?: string }[]
+  >([])
+  useEffect(() => {
+    let alive = true
+    harnessApi.harness
+      .openInAppTargets()
+      .then((targets) => {
+        if (alive) setOpenInApps(targets)
+      })
+      .catch((err) => console.error('Failed to load open-in-app targets:', err))
+    return () => {
+      alive = false
+    }
+  }, [])
+
   // Mnemon 记忆概览状态
   const [memoryExpanded, setMemoryExpanded] = useState(false)
   const [memoryLoading, setMemoryLoading] = useState(false)
@@ -1115,10 +1190,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       // 对话工作区可能刚被主进程按需建出来（建话题 / 激活会话那条路不经过本侧栏）：
       // 同步一次它的 id，工作列表才滤得掉它、对话列表才有根可挂
       loadChatWorkspaces().then()
+      // 归档清单是跨工作区的：换工作区 / 新建会话后也顺手对齐一次
+      void loadArchivedTopics()
     }
     window.addEventListener('workspace-changed', handleWorkspaceChanged)
     return () => window.removeEventListener('workspace-changed', handleWorkspaceChanged)
-  }, [memoryExpanded, loadMnemonSnapshot, loadWorkspaces, loadChatWorkspaces])
+  }, [memoryExpanded, loadMnemonSnapshot, loadWorkspaces, loadChatWorkspaces, loadArchivedTopics])
 
   /**
    * 切换工作区：写设置 + 派发事件（Index 负责清空当前会话并刷新会话列表）。
@@ -1603,6 +1680,25 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t, isNonUserWorkspace, rememberWork]
   )
 
+  /**
+   * 「在文件夹中显示」：让系统文件管理器打开这个工作区的目录。
+   *
+   * 只传工作区 id，目录由主进程按行解析（渲染层拿不到、也不该传任意路径）；
+   * 目录已被删/挪走时主进程回一句可读原因，这里原样弹提示条——不给用户看
+   * `shell.openPath` 的英文失败串。
+   */
+  const handleRevealWorkspace = useCallback(
+    async (ws: WorkspaceRow): Promise<void> => {
+      try {
+        const result = await harnessApi.harness.openWorkspaceDir(ws.id)
+        if (!result.ok) viewMessage('ws-reveal-in-folder', 'error', result.error ?? '', 6)
+      } catch (err) {
+        viewMessage('ws-reveal-in-folder', 'error', String(err), 6)
+      }
+    },
+    [viewMessage]
+  )
+
   /* 打开重命名弹窗 */
   const openRename = useCallback((ws: WorkspaceRow): void => {
     setRenameTarget(ws)
@@ -1630,6 +1726,384 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       setRenameSaving(false)
     }
   }, [renameName, renameTarget, viewMessage, loadWorkspaces, t])
+
+  /* ── 会话行的动作（置顶 / 重命名 / 分叉 / 在应用中打开 / 归档 / 删除） ────────
+   * 用户口径 2026-11-25（参考图）：会话的「⋯」里要这些功能，除了「复制 Session ID」。
+   * 置顶 / 归档都不改活跃时间（主进程只写 pinned_at / archived_at）：取消之后回到原来的位置。
+   */
+
+  /** 会话列表刷新：活动工作区走 Provider（标题/顺序以它为准），其余工作区重拉第一页 */
+  const refreshTopicList = useCallback(
+    async (workspaceId: number): Promise<void> => {
+      if (workspaceId === topicsWorkspaceId) {
+        await onRefreshTopics()
+      } else {
+        await loadWorkspaceTopics(workspaceId)
+      }
+    },
+    [topicsWorkspaceId, onRefreshTopics, loadWorkspaceTopics]
+  )
+
+  /** 置顶 / 取消置顶 */
+  const handleToggleTopicPin = useCallback(
+    async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+      try {
+        await harnessApi.harness.setTopicPinned(topic.id, !topic.pinned_at)
+        await refreshTopicList(workspaceId)
+      } catch (err) {
+        console.error('Failed to pin topic:', err)
+        viewMessage('topic-pin', 'error', t('harness.sidebar.topicPinFailed'), 5)
+      }
+    },
+    [refreshTopicList, t, viewMessage]
+  )
+
+  /** 归档 / 取消归档（归档的会话收进「已归档」分组，数据不删） */
+  const handleToggleTopicArchive = useCallback(
+    async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+      const next = !topic.archived_at
+      try {
+        await harnessApi.harness.setTopicArchived(topic.id, next)
+        await refreshTopicList(workspaceId)
+        void loadArchivedTopics()
+        // 改的是当前正在看的那条：让对话页同步只读态（取消归档后输入框要回来）
+        if (topic.id === currentTopicId) {
+          window.dispatchEvent(
+            new CustomEvent('harness-topic-archive-changed', {
+              detail: { topicId: topic.id, archived: next }
+            })
+          )
+        }
+        viewMessage(
+          'topic-archive',
+          'success',
+          next ? t('harness.sidebar.topicArchiveDone') : t('harness.sidebar.topicUnarchiveDone'),
+          2
+        )
+      } catch (err) {
+        console.error('Failed to archive topic:', err)
+        viewMessage('topic-archive', 'error', t('harness.sidebar.topicArchiveFailed'), 5)
+      }
+    },
+    [currentTopicId, loadArchivedTopics, refreshTopicList, t, viewMessage]
+  )
+
+  const openRenameTopic = useCallback((topic: HarnessTopicRow): void => {
+    setTopicRenameTarget(topic)
+    setTopicRenameName(topic.title)
+    setTopicRenameOpen(true)
+  }, [])
+
+  const handleRenameTopicSave = useCallback(async (): Promise<void> => {
+    const name = topicRenameName.trim()
+    if (!name || !topicRenameTarget) {
+      viewMessage('topic-rename-validate', 'warning', t('harness.sidebar.topicNameRequired'))
+      return
+    }
+    const topic = topicRenameTarget
+    try {
+      setTopicRenameSaving(true)
+      await harnessApi.harness.updateTopic(topic.id, { title: name })
+      setTopicRenameOpen(false)
+      await refreshTopicList(topic.workspace_id)
+      void loadArchivedTopics()
+      viewMessage('topic-rename-done', 'success', t('harness.sidebar.topicRenameSuccess'), 2)
+    } catch (err) {
+      console.error('Failed to rename topic:', err)
+      viewMessage('topic-rename-error', 'error', t('harness.sidebar.topicRenameFailed'))
+    } finally {
+      setTopicRenameSaving(false)
+    }
+  }, [topicRenameName, topicRenameTarget, refreshTopicList, loadArchivedTopics, viewMessage, t])
+
+  /**
+   * 分叉会话：主进程复制「话题 + 全部对话」成一条新会话，这里刷新列表并**打开那条新会话**
+   * （走 handleOpenTopic：跨工作区、切模式、记忆作用域、路由都跟点会话行同一条链）。
+   */
+  const handleForkTopic = useCallback(
+    async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+      try {
+        const title = t('harness.sidebar.topicForkTitle', { title: topic.title })
+        const forked = await harnessApi.harness.forkTopic(topic.id, title)
+        if (!forked) {
+          viewMessage('topic-fork', 'error', t('harness.sidebar.topicForkFailed'), 5)
+          return
+        }
+        await refreshTopicList(workspaceId)
+        await handleOpenTopic(workspaceId, forked)
+        viewMessage('topic-fork', 'success', t('harness.sidebar.topicForkDone'), 2)
+      } catch (err) {
+        console.error('Failed to fork topic:', err)
+        viewMessage('topic-fork', 'error', t('harness.sidebar.topicForkFailed'), 5)
+      }
+    },
+    [handleOpenTopic, refreshTopicList, t, viewMessage]
+  )
+
+  /** 「在应用中打开」：用选中的应用打开这条会话的工作区目录 */
+  const handleOpenTopicInApp = useCallback(
+    async (workspaceId: number, appId: string): Promise<void> => {
+      try {
+        const result = await harnessApi.harness.openWorkspaceInApp(workspaceId, appId)
+        if (!result.ok) viewMessage('topic-open-in-app', 'error', result.error ?? '', 6)
+      } catch (err) {
+        viewMessage('topic-open-in-app', 'error', String(err), 6)
+      }
+    },
+    [viewMessage]
+  )
+
+  /**
+   * 删除会话（原先写在行内菜单里的那段流程，原样搬出来给菜单构造器用）。
+   *
+   * 删当前那条时要复位对话目录 / 记忆作用域；删非活动工作区的会话要补刷本地缓存
+   * ——理由都在下面逐段注释里（用户 2026-10-26 的「删了还是选中的历史记录」）。
+   */
+  const handleDeleteTopicRow = useCallback(
+    async (workspaceId: number, topic: HarnessTopicRow, running: boolean): Promise<void> => {
+      if (running) return
+      const isChatTopic = chatWorkspaceIds.has(workspaceId)
+      const pluginId = pluginWorkspaces.find((item) => item.workspaceId === workspaceId)?.draftId
+      const wasCurrent = currentTopicId === topic.id
+      // 先登记：否则「记住当前内容」的 effect 会拿旧的 currentTopicId 迟到覆盖一次
+      // （见 deletedTopicIdsRef 的说明）
+      deletedTopicIdsRef.current.add(topic.id)
+      await onDeleteTopic(topic.id)
+      if (isChatTopic) {
+        // 对话模式：列表从本地那份里摘掉（它不属于当前活动工作区时 useHarness 不刷），
+        // 并顺手删掉这条会话自己的目录（主进程有两道闸，失败不影响删话题）
+        setChatWorkspaceTopics((prev) => prev.filter((item) => item.id !== topic.id))
+        void harnessApi.harness.removeChatTopicDir(topic.id)
+        if (wasCurrent) {
+          // 删的是**正在看的**这条：`onDeleteTopic → onNewHarness` 只清空了视图，
+          // 活动目录还停在这条会话的子目录上（已被删掉 → 模型一写文件就 ENOENT），
+          // 挂起的记忆作用域也被清成了「工作区」。两样都要就地复位：
+          // 目录回对话根、记忆回 chat（下一条新话题由主进程按工作区种类兜底，
+          // 这里把界面这一侧也同步回 chat，侧栏记忆块才显示对的那一份）。
+          const activation = await activateChatTopic()
+          if (activation) {
+            rememberChat({ workspaceId: activation.workspaceId, topicId: null })
+          }
+          window.dispatchEvent(
+            new CustomEvent('harness-focus-input', {
+              detail: { scope: 'chat', focus: false }
+            })
+          )
+        }
+      } else if (workspaceId !== activeWorkspaceId) {
+        await loadWorkspaceTopics(workspaceId)
+      }
+      // 插件会话同理：`onDeleteTopic → onNewHarness` 会把挂起作用域清成工作区，
+      // 下一条新话题就会串进工作记忆；把这份插件的作用域补回去（目录不用动，
+      // 插件工作区还指着插件源码目录，它没被删）
+      if (!isChatTopic && wasCurrent && pluginId) {
+        rememberPlugin({ pluginId, workspaceId, topicId: null })
+        window.dispatchEvent(
+          new CustomEvent('harness-focus-input', {
+            detail: { pluginId, focus: false }
+          })
+        )
+      }
+      // 删掉的可能是归档列表里的那条：清单跟着收一次
+      void loadArchivedTopics()
+    },
+    [
+      activateChatTopic,
+      activeWorkspaceId,
+      chatWorkspaceIds,
+      currentTopicId,
+      loadArchivedTopics,
+      loadWorkspaceTopics,
+      onDeleteTopic,
+      pluginWorkspaces,
+      rememberChat,
+      rememberPlugin
+    ]
+  )
+
+  /** 快捷键提示文案：Windows/Linux 是 Ctrl + Alt，macOS 显示 ⌘ + ⌥ */
+  const shortcutHint = (key: string, shift = false): string => {
+    const mod = isMacPlatform ? '⌘' : 'Ctrl'
+    const alt = shift ? 'Shift' : isMacPlatform ? '⌥' : 'Alt'
+    return `${mod} + ${alt} + ${key}`
+  }
+
+  /**
+   * 会话行的「⋯」菜单（顺序对齐用户 2026-11-25 给的参考图）：
+   * 置顶 / 重命名 / 分叉 → 在应用中打开 ▸ → 归档 / 删除。
+   * 参考图里的「复制 Session ID」按用户口径**不做**。
+   *
+   * 每个菜单项都 `domEvent.stopPropagation()`：菜单挂在**这一行的 React 子树**里
+   * （portal 只换 DOM 位置，React 事件仍按组件树冒泡），不拦住就会顺带触发行的
+   * onClick → 打开这条会话（用户 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」）。
+   */
+  const topicMenuItems = (
+    workspaceId: number,
+    topic: HarnessTopicRow,
+    running: boolean
+  ): NonNullable<MenuProps['items']> => {
+    const archived = Boolean(topic.archived_at)
+    const pinned = Boolean(topic.pinned_at)
+    const stop = (domEvent: { stopPropagation(): void }): void => domEvent.stopPropagation()
+
+    const openInChildren: NonNullable<MenuProps['items']> = openInApps.length
+      ? openInApps.map((app) => ({
+          key: `open-in:${app.id}`,
+          label: app.label,
+          // 用系统里那个应用的真实图标（主进程 app.getFileIcon 抠出来的 PNG）；取不到才退回通用图标
+          icon: app.icon ? (
+            <img
+              src={app.icon}
+              alt=""
+              width={16}
+              height={16}
+              style={{ display: 'block', objectFit: 'contain', borderRadius: 3 }}
+            />
+          ) : app.id === 'explorer' ? (
+            <RiFolderOpenLine size={14} />
+          ) : (
+            <RiCodeLine size={14} />
+          ),
+          onClick: ({ domEvent }) => {
+            stop(domEvent)
+            void handleOpenTopicInApp(workspaceId, app.id)
+          }
+        }))
+      : [
+          {
+            key: 'open-in:none',
+            label: t('harness.sidebar.topicOpenInAppEmpty'),
+            disabled: true
+          }
+        ]
+
+    const items: NonNullable<MenuProps['items']> = []
+    if (!archived) {
+      items.push({
+        key: 'pin',
+        label: pinned ? t('harness.sidebar.topicUnpin') : t('harness.sidebar.topicPin'),
+        icon: <RiPushpinLine size={14} />,
+        onClick: ({ domEvent }) => {
+          stop(domEvent)
+          void handleToggleTopicPin(workspaceId, topic)
+        }
+      })
+    }
+    items.push(
+      {
+        key: 'rename',
+        label: t('common.action.rename'),
+        icon: <RiEditLine size={14} />,
+        extra: shortcutHint('G'),
+        onClick: ({ domEvent }) => {
+          stop(domEvent)
+          openRenameTopic(topic)
+        }
+      },
+      {
+        key: 'fork',
+        label: t('harness.sidebar.topicFork'),
+        icon: <RiGitBranchLine size={14} />,
+        extra: shortcutHint('F'),
+        onClick: ({ domEvent }) => {
+          stop(domEvent)
+          void handleForkTopic(workspaceId, topic)
+        }
+      },
+      { type: 'divider' },
+      {
+        key: 'open-in',
+        label: t('harness.sidebar.topicOpenInApp'),
+        icon: <RiExternalLinkLine size={14} />,
+        children: openInChildren
+      },
+      { type: 'divider' }
+    )
+    items.push(
+      archived
+        ? {
+            key: 'unarchive',
+            label: t('harness.sidebar.topicUnarchive'),
+            icon: <RiInboxUnarchiveLine size={14} />,
+            extra: shortcutHint('A', true),
+            onClick: ({ domEvent }) => {
+              stop(domEvent)
+              void handleToggleTopicArchive(workspaceId, topic)
+            }
+          }
+        : {
+            key: 'archive',
+            label: running
+              ? t('harness.sidebar.topicArchiveBlocked')
+              : t('harness.sidebar.topicArchive'),
+            icon: <RiArchiveLine size={14} />,
+            extra: shortcutHint('A', true),
+            disabled: running,
+            onClick: ({ domEvent }) => {
+              stop(domEvent)
+              void handleToggleTopicArchive(workspaceId, topic)
+            }
+          }
+    )
+    items.push({
+      key: 'delete',
+      // 会话生成中禁止删除（含后台仍在流式输出的话题）
+      label: running ? t('harness.sidebar.topicDeleteBlocked') : t('harness.sidebar.topicDelete'),
+      danger: true,
+      disabled: running,
+      icon: <RiDeleteBin6Line size={14} />,
+      onClick: ({ domEvent }) => {
+        stop(domEvent)
+        void handleDeleteTopicRow(workspaceId, topic, running)
+      }
+    })
+    return items
+  }
+
+  /** 当前选中的会话（可能挂在任一工作区 / 对话根 / 插件工作区下） */
+  const findTopicById = useCallback(
+    (topicId: number): HarnessTopicRow | null => {
+      for (const rows of Object.values(workspaceTopics)) {
+        const hit = rows.find((topic) => topic.id === topicId)
+        if (hit) return hit
+      }
+      return chatWorkspaceTopics.find((topic) => topic.id === topicId) ?? null
+    },
+    [workspaceTopics, chatWorkspaceTopics]
+  )
+
+  /**
+   * 会话快捷键（与菜单里标的一致）：Ctrl/⌘ + Alt + G 重命名、Ctrl/⌘ + Alt + F 分叉、
+   * Ctrl/⌘ + Shift + A 归档。
+   *
+   * 只作用于**当前选中的会话**，且只在对话页生效——侧栏在外壳里常驻，人停在资料库 /
+   * 设置页时按这些键不该动会话。
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // 长按会连发：分叉/归档都不能被自动重复触发
+      if (event.repeat) return
+      if (!(event.ctrlKey || event.metaKey)) return
+      // 应用是 hash 路由（`#/harness`）：URL 的 pathname 永远是 `/`，只能看 hash
+      if (!window.location.hash.startsWith('#/harness')) return
+      if (currentTopicId == null) return
+      const topic = findTopicById(currentTopicId)
+      if (!topic) return
+      const key = event.key.toLowerCase()
+      if (event.altKey && !event.shiftKey && key === 'g') {
+        event.preventDefault()
+        openRenameTopic(topic)
+      } else if (event.altKey && !event.shiftKey && key === 'f') {
+        event.preventDefault()
+        void handleForkTopic(topic.workspace_id, topic)
+      } else if (!event.altKey && event.shiftKey && key === 'a') {
+        event.preventDefault()
+        void handleToggleTopicArchive(topic.workspace_id, topic)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [currentTopicId, findTopicById, openRenameTopic, handleForkTopic, handleToggleTopicArchive])
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
@@ -1668,9 +2142,24 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           topicsOf(ws.id).some((t) => t.title.toLowerCase().includes(query))
       )
     : userWorkspaces
+  /**
+   * 会话排序：置顶在前，其余按最近活跃倒序。
+   *
+   * 主进程的查询也这么排（见 mapper 的 topicOrderBy）；这里再排一遍是为了本地乐观更新
+   * （置顶/取消置顶后不等 IPC 回来）与分页追加时顺序不跳。
+   */
+  const sortTopics = (list: HarnessTopicRow[]): HarnessTopicRow[] =>
+    [...list].sort((a, b) => {
+      const pinnedA = a.pinned_at ? 0 : 1
+      const pinnedB = b.pinned_at ? 0 : 1
+      if (pinnedA !== pinnedB) return pinnedA - pinnedB
+      return String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? ''))
+    })
+
   const visibleTopicsOf = (workspaceId: number): HarnessTopicRow[] => {
-    const list = topicsOf(workspaceId)
-    return query ? list.filter((t) => t.title.toLowerCase().includes(query)) : list
+    // 归档的会话不留在工作区列表里：它们统一收在侧栏底部的「已归档」分组（只读查看）
+    const list = topicsOf(workspaceId).filter((topic) => !topic.archived_at)
+    return sortTopics(query ? list.filter((t) => t.title.toLowerCase().includes(query)) : list)
   }
   /** 插件模式下的草稿清单（搜索框在三种模式里共用：按名字/id/它自己的会话标题过滤） */
   const visibleDrafts = query
@@ -1683,10 +2172,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       })
     : drafts
 
-  /** 「对话」模式的会话列表（搜索框共用：按会话标题过滤） */
-  const chatVisibleTopics = query
-    ? chatWorkspaceTopics.filter((topic) => topic.title.toLowerCase().includes(query))
-    : chatWorkspaceTopics
+  /** 「对话」模式的会话列表（搜索框共用：按会话标题过滤；置顶同样排在前面） */
+  const chatVisibleTopics = sortTopics(
+    query
+      ? chatWorkspaceTopics.filter((topic) => topic.title.toLowerCase().includes(query))
+      : chatWorkspaceTopics
+  )
 
   /** 草稿状态行：构建 / 验收 / 安装三件事各自的最新结果 */
   const draftStateOf = (draft: WorkshopDraftSummary): { text: string; color: string } => {
@@ -1889,7 +2380,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   /* 顶行右侧动作胶囊的配色：深色外壳用手写色（与模式开关同一套），浅色跟随 antd token */
   const headerTrack = shellMode ? '#2a2a2d' : colorFillAlter
-  const headerHairline = shellMode ? '#3a3a40' : token.colorBorderSecondary
+  // 顶行胶囊里「搜索 / 新建」之间的竖线：深色外壳用手写色，亮色主题用 colorBorder
+  // （colorBorderSecondary 在浅灰胶囊上几乎看不出，用户 2026-11-26「中间那个分割线看不见」）
+  const headerHairline = shellMode ? '#3a3a40' : token.colorBorder
   const headerHover = shellMode ? '#3a3a40' : token.colorFill
 
   /**
@@ -1946,6 +2439,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       completed: completedTopicIds.has(topic.id)
     })
     const selected = workspaceId === activeWorkspaceId && currentTopicId === topic.id
+    const archived = Boolean(topic.archived_at)
     return (
       <div
         key={topic.id}
@@ -1953,6 +2447,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         /* 稳定钩子：工装靠它判断「现在是哪一条会话」（切模式后内容有没有跟着切） */
         data-topic-id={topic.id}
         data-topic-selected={selected ? '1' : '0'}
+        data-topic-archived={archived ? '1' : '0'}
+        data-topic-pinned={topic.pinned_at ? '1' : '0'}
         /* 稳定钩子：行首指示器的状态（idle / running / awaiting / completed），工装断言用 */
         data-topic-status={topicStatus}
         className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
@@ -1963,7 +2459,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           paddingRight: 8,
           height: 30,
           color: selected ? colorText : colorTextSecondary,
-          background: selected ? token.colorFill : 'transparent'
+          background: selected ? token.colorFill : 'transparent',
+          // 归档的会话收在「已归档」分组里：淡一档，一眼看出它不是主列表的
+          opacity: archived ? 0.62 : 1
         }}
         onMouseEnter={(e) => {
           if (!selected) e.currentTarget.style.background = token.colorFillQuaternary
@@ -1986,6 +2484,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <TopicStatusDot color={colorSuccess} label={t('harness.sidebar.topicCompleted')} />
           ) : null}
         </span>
+        {/* 置顶标记放行尾（用户口径 2026-11-25「应该放在后面」）：时间在左、图钉最右，
+            悬停时只是时间换成 ⋯，标记本身不挪位置 */}
         <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
           {topic.title}
         </span>
@@ -1998,73 +2498,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           </span>
         )}
         <Dropdown
-          menu={{
-            items: [
-              {
-                key: 'delete',
-                // 会话生成中禁止删除（含后台仍在流式输出的话题）
-                label: isTopicLoading
-                  ? t('harness.sidebar.topicDeleteBlocked')
-                  : t('harness.sidebar.topicDelete'),
-                danger: true,
-                disabled: isTopicLoading,
-                icon: <RiDeleteBin6Line size={14} />,
-                // 删除非当前工作区的会话：useHarness 只刷新当前工作区列表，这里补刷本地缓存
-                onClick: async ({ domEvent }) => {
-                  // 菜单是 Dropdown 的一部分、挂在**这一行的 React 子树**里（portal 只换 DOM 位置，
-                  // React 事件仍按组件树冒泡）：不拦住的话，点「删除会话」还会顺带触发行的
-                  // onClick → handleOpenTopic 把这条刚删掉的会话重新选中（历史又回到屏幕上）。
-                  // 用户口径 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」。
-                  domEvent.stopPropagation()
-                  if (isTopicLoading) return
-                  const isChatTopic = chatWorkspaceIds.has(workspaceId)
-                  const pluginId = pluginWorkspaces.find(
-                    (item) => item.workspaceId === workspaceId
-                  )?.draftId
-                  const wasCurrent = currentTopicId === topic.id
-                  // 先登记：否则「记住当前内容」的 effect 会拿旧的 currentTopicId 迟到覆盖一次
-                  // （见 deletedTopicIdsRef 的说明）
-                  deletedTopicIdsRef.current.add(topic.id)
-                  await onDeleteTopic(topic.id)
-                  if (isChatTopic) {
-                    // 对话模式：列表从本地那份里摘掉（它不属于当前活动工作区时 useHarness 不刷），
-                    // 并顺手删掉这条会话自己的目录（主进程有两道闸，失败不影响删话题）
-                    setChatWorkspaceTopics((prev) => prev.filter((item) => item.id !== topic.id))
-                    void harnessApi.harness.removeChatTopicDir(topic.id)
-                    if (wasCurrent) {
-                      // 删的是**正在看的**这条：`onDeleteTopic → onNewHarness` 只清空了视图，
-                      // 活动目录还停在这条会话的子目录上（已被删掉 → 模型一写文件就 ENOENT），
-                      // 挂起的记忆作用域也被清成了「工作区」。两样都要就地复位：
-                      // 目录回对话根、记忆回 chat（下一条新话题由主进程按工作区种类兜底，
-                      // 这里把界面这一侧也同步回 chat，侧栏记忆块才显示对的那一份）。
-                      const activation = await activateChatTopic()
-                      if (activation) {
-                        rememberChat({ workspaceId: activation.workspaceId, topicId: null })
-                      }
-                      window.dispatchEvent(
-                        new CustomEvent('harness-focus-input', {
-                          detail: { scope: 'chat', focus: false }
-                        })
-                      )
-                    }
-                  } else if (workspaceId !== activeWorkspaceId) {
-                    await loadWorkspaceTopics(workspaceId)
-                  }
-                  // 插件会话同理：`onDeleteTopic → onNewHarness` 会把挂起作用域清成工作区，
-                  // 下一条新话题就会串进工作记忆；把这份插件的作用域补回去（目录不用动，
-                  // 插件工作区还指着插件源码目录，它没被删）
-                  if (!isChatTopic && wasCurrent && pluginId) {
-                    rememberPlugin({ pluginId, workspaceId, topicId: null })
-                    window.dispatchEvent(
-                      new CustomEvent('harness-focus-input', {
-                        detail: { pluginId, focus: false }
-                      })
-                    )
-                  }
-                }
-              }
-            ]
-          }}
+          menu={{ items: topicMenuItems(workspaceId, topic, isTopicLoading) }}
           trigger={['click']}
           placement="bottomRight"
         >
@@ -2081,6 +2515,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <RiMoreLine size={15} />
           </button>
         </Dropdown>
+        {topic.pinned_at ? (
+          <RiPushpinFill
+            size={12}
+            style={{ color: colorTextTertiary, flexShrink: 0 }}
+            aria-label={t('harness.sidebar.topicPinned')}
+          />
+        ) : null}
       </div>
     )
   }
@@ -2127,7 +2568,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             {ws.name}
           </span>
 
-          {/* 悬停/激活时显示：重命名删除菜单 + 新建会话 */}
+          {/* 悬停/激活时显示：重命名 / 在文件夹中显示 / 删除 菜单 + 新建会话 */}
           <span className="flex items-center gap-0.5 shrink-0">
             <Dropdown
               menu={{
@@ -2140,6 +2581,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     onClick: ({ domEvent }) => {
                       domEvent.stopPropagation()
                       openRename(ws)
+                    }
+                  },
+                  {
+                    key: 'reveal',
+                    label: revealWorkspaceLabel,
+                    icon: <RiFolderOpenLine size={14} />,
+                    onClick: ({ domEvent }) => {
+                      domEvent.stopPropagation()
+                      void handleRevealWorkspace(ws)
                     }
                   },
                   {
@@ -2221,6 +2671,66 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 空态与 loading 一样在整栏居中：不能再加左侧缩进，否则 text-center 只在「缩进剩下的」
    * 区域里居中，看起来整体偏右。
    */
+  /**
+   * 归档行（侧栏底部「已归档」分组里的那一行）：标题 + 所属工作区（小字）+ ⋯ 菜单。
+   * 点开 = 只读查看（输入框隐藏，见 useHarnessHandlers 的 currentTopicArchived）。
+   * 归档是跨工作区的清单，所以每行都带工作区名字，避免同名会话分不清。
+   */
+  const renderArchivedRow = (topic: HarnessTopicRow): React.ReactNode => {
+    const selected = activeWorkspaceId === topic.workspace_id && currentTopicId === topic.id
+    const workspaceName = workspaces.find((ws) => ws.id === topic.workspace_id)?.name ?? ''
+    return (
+      <div
+        key={topic.id}
+        data-archived-topic-id={topic.id}
+        onClick={() => void handleOpenTopic(topic.workspace_id, topic)}
+        className="group flex items-center gap-2 mx-1 my-0.5 rounded-md cursor-pointer transition-colors"
+        style={{
+          paddingLeft: 6,
+          paddingRight: 6,
+          height: 30,
+          color: selected ? colorText : colorTextSecondary,
+          background: selected ? token.colorFill : 'transparent'
+        }}
+        onMouseEnter={(e) => {
+          if (!selected) e.currentTarget.style.background = token.colorFillQuaternary
+        }}
+        onMouseLeave={(e) => {
+          if (!selected) e.currentTarget.style.background = 'transparent'
+        }}
+      >
+        <RiArchiveLine size={13} style={{ color: colorTextTertiary, flexShrink: 0 }} />
+        <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
+          {topic.title}
+        </span>
+        {workspaceName ? (
+          <span
+            className="shrink-0 truncate group-hover:hidden"
+            style={{ maxWidth: 92, fontSize: 11, color: colorTextTertiary }}
+          >
+            {workspaceName}
+          </span>
+        ) : null}
+        <Dropdown
+          menu={{ items: topicMenuItems(topic.workspace_id, topic, false) }}
+          trigger={['click']}
+          placement="bottomRight"
+        >
+          <button
+            onClick={(e) => e.stopPropagation()}
+            title={t('harness.sidebar.topicActions')}
+            className="hidden group-hover:flex items-center justify-center shrink-0 rounded"
+            style={{ width: 20, height: 20, color: colorTextTertiary, background: 'transparent' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = token.colorFillSecondary)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <RiMoreLine size={15} />
+          </button>
+        </Dropdown>
+      </div>
+    )
+  }
+
   const renderTopicList = (workspaceId: number): React.ReactNode => {
     const list = visibleTopicsOf(workspaceId)
     // 只有「该工作区会话从未加载过」才算加载中：缓存已有内容时直接无缝渲染。
@@ -2800,11 +3310,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             </p>
           ) : (
             <div className="pb-1">
-              {/* 根工作区那一行是**按需创建**的（第一次进入这个模式才建），没有它就没得点 */}
+              {/* 根工作区那一行是**按需创建**的（第一次进入这个模式才建），没有它就没得点。
+                  归档的会话不在这里：统一收在侧栏底部的「已归档」分组 */}
               {chatWorkspaces.rootWorkspaceId != null &&
-                chatVisibleTopics.map((topic) =>
-                  renderTopicRow(chatWorkspaces.rootWorkspaceId as number, topic)
-                )}
+                chatVisibleTopics
+                  .filter((topic) => !topic.archived_at)
+                  .map((topic) =>
+                    renderTopicRow(chatWorkspaces.rootWorkspaceId as number, topic)
+                  )}
               {chatTopicsHasMore && chatTopicsLoading && (
                 <div className="py-1">
                   <SkeletonListRows rows={2} variant="stacked" />
@@ -2818,6 +3331,56 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           </p>
         ) : (
           visibleWorkspaces.map((ws) => renderWorkspace(ws))
+        )}
+      </div>
+
+      {/*
+        「已归档」：**所有工作区**归档的会话都收在这一处（用户 2026-11-25「所有归档会话，
+        都在记忆上面」），位置就在「记忆」上方，默认收起。点开只读查看——输入框不显示、
+        发送被拒（见 useHarnessHandlers 的 currentTopicArchived）。
+      */}
+      <div
+        data-harness-archived-block="1"
+        className="border-t flex-shrink-0"
+        style={{ borderColor: colorFillAlter }}
+      >
+        <button
+          onClick={() => {
+            const next = !archivedOpen
+            setArchivedOpen(next)
+            if (next) void loadArchivedTopics()
+          }}
+          aria-expanded={archivedOpen}
+          className="flex items-center justify-between w-full px-4 py-2 text-left transition-colors"
+          style={{ color: colorTextSecondary }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = colorFillAlter)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <RiArchiveLine size={16} />
+            {t('harness.sidebar.topicArchivedTitle')}
+            {archivedTopics.length > 0 && (
+              <span style={{ fontSize: 12, color: colorTextTertiary }}>{archivedTopics.length}</span>
+            )}
+          </span>
+          <span className="flex items-center gap-2">
+            {archivedOpen ? <RiArrowDownSLine size={16} /> : <RiArrowRightSLine size={16} />}
+          </span>
+        </button>
+        {archivedOpen && (
+          <div className="overflow-y-auto history-scrollbar px-2 pb-2" style={{ maxHeight: 260 }}>
+            {archivedLoading && archivedTopics.length === 0 ? (
+              <div className="px-1 py-2">
+                <SkeletonTextLines lines={3} />
+              </div>
+            ) : archivedTopics.length === 0 ? (
+              <p className="text-xs text-center py-3" style={{ color: colorTextTertiary }}>
+                {t('harness.sidebar.topicArchivedEmpty')}
+              </p>
+            ) : (
+              archivedTopics.map((topic) => renderArchivedRow(topic))
+            )}
+          </div>
         )}
       </div>
 
@@ -2992,6 +3555,30 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           value={renameName}
           onChange={(e) => setRenameName(e.target.value)}
           onPressEnter={handleRenameSave}
+        />
+      </Modal>
+
+      {/* 重命名会话弹窗（与工作区那个同一套交互：一行输入 + 保存） */}
+      <Modal
+        title={t('harness.sidebar.topicRenameTitle')}
+        open={topicRenameOpen}
+        onCancel={() => {
+          setTopicRenameOpen(false)
+          setTopicRenameTarget(null)
+        }}
+        onOk={handleRenameTopicSave}
+        okText={t('common.action.save')}
+        cancelText={t('common.action.cancel')}
+        confirmLoading={topicRenameSaving}
+        width={380}
+      >
+        <Input
+          autoFocus
+          data-topic-field="rename"
+          placeholder={t('harness.sidebar.topicNamePlaceholder')}
+          value={topicRenameName}
+          onChange={(e) => setTopicRenameName(e.target.value)}
+          onPressEnter={handleRenameTopicSave}
         />
       </Modal>
 

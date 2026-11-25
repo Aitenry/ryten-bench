@@ -402,6 +402,12 @@ export const harnessApi = {
       invoke('harness:workspace-create', name, path) as Promise<number>,
     updateWorkspace: (id: number, updates: { name: string }) =>
       invoke('harness:workspace-update', id, updates) as Promise<boolean>,
+    /**
+     * 「在文件夹中显示」：在系统文件管理器里打开这个工作区的目录。
+     * 只传 id（目录由主进程按行解析）；目录已被删除/移走时返回可读原因，不抛错。
+     */
+    openWorkspaceDir: (id: number) =>
+      invoke('harness:workspace-open-dir', id) as Promise<WorkshopActionResult<string>>,
     deleteWorkspace: (id: number) => invoke('harness:workspace-delete', id) as Promise<boolean>,
 
     /**
@@ -427,6 +433,9 @@ export const harnessApi = {
     // 话题管理
     getAllTopics: (workspaceId: number) =>
       invoke('harness:harness-topic-get-all', workspaceId) as Promise<HarnessTopicRow[]>,
+    /** 所有工作区里已归档的会话（侧栏底部「已归档」分组用，按归档时间倒序） */
+    getArchivedTopics: () =>
+      invoke('harness:harness-topic-get-archived') as Promise<HarnessTopicRow[]>,
     getAllTopicsPaginated: (workspaceId: number, page: number, pageSize: number) =>
       invoke('harness:harness-topic-get-paginated', workspaceId, page, pageSize) as Promise<
         PaginatedResult<HarnessTopicRow>
@@ -453,7 +462,31 @@ export const harnessApi = {
       id: number,
       updates: Partial<Pick<HarnessTopicRow, 'title' | 'model' | 'selected_tools'>>
     ) => invoke('harness:harness-topic-update', id, updates) as Promise<boolean>,
+    /** 置顶 / 取消置顶（只改 pinned_at：不刷新活跃时间，取消后回到原来的位置） */
+    setTopicPinned: (id: number, pinned: boolean) =>
+      invoke('harness:harness-topic-set-pinned', id, pinned) as Promise<boolean>,
+    /** 归档 / 取消归档（归档的会话从列表主区收进「已归档」分组，数据不删） */
+    setTopicArchived: (id: number, archived: boolean) =>
+      invoke('harness:harness-topic-set-archived', id, archived) as Promise<boolean>,
+    /**
+     * 分叉会话：把一条会话（话题 + 全部对话）复制成一条新的独立会话，返回新行。
+     * 标题由调用方给（`原标题（分叉）`，跟着界面语言走）。
+     */
+    forkTopic: (id: number, title: string) =>
+      invoke('harness:harness-topic-fork', id, title) as Promise<HarnessTopicRow | null>,
     deleteTopic: (id: number) => invoke('harness:harness-topic-delete', id) as Promise<boolean>,
+
+    /** 「在应用中打开」的候选应用（文件资源管理器永远在内；其余按本机安装情况探测） */
+    openInAppTargets: () =>
+      invoke('harness:open-in-app-targets') as Promise<
+        { id: string; label: string; icon?: string }[]
+      >,
+    /**
+     * 用指定应用打开某个工作区的目录（会话 ⋯ → 在应用中打开）。
+     * 只传工作区 id（目录由主进程解析）；目录被删/应用不在了都回可读原因，不抛错。
+     */
+    openWorkspaceInApp: (workspaceId: number, appId: string) =>
+      invoke('harness:open-workspace-in-app', workspaceId, appId) as Promise<WorkshopActionResult>,
 
     // 消息管理
     getDialoguesByTopic: (topicId: number) =>

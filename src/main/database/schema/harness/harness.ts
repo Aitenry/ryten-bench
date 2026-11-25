@@ -34,7 +34,17 @@ export const harness_topic = pgTable(
      */
     memory_scope: text(),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
-    updated_at: timestamp({ mode: 'string' }).defaultNow()
+    updated_at: timestamp({ mode: 'string' }).defaultNow(),
+    /**
+     * 置顶时刻（null = 未置顶）。列表排序「置顶在前、其余按活跃时间」，
+     * 置顶/取消置顶**不动 updated_at**：那是活跃时间，取消了要回到它原来的位置。
+     */
+    pinned_at: timestamp({ mode: 'string' }),
+    /**
+     * 归档时刻（null = 未归档）。归档的会话从会话列表主区收进「已归档」分组，
+     * 不删数据；同样不碰 updated_at（取消归档后回到原来的位置）。
+     */
+    archived_at: timestamp({ mode: 'string' })
   },
   (table) => [
     index('idx_harness_topic_updated_at').using(

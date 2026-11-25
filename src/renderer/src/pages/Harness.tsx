@@ -63,6 +63,8 @@ const Harness: React.FC = () => {
     setInputValue,
     copiedId,
     currentTopicId,
+    /** 当前会话已归档 = 只读：不渲染输入框（用户 2026-11-25「选中之后对话输入框应该不要显示」） */
+    currentTopicArchived,
     selectedProviderId,
     setSelectedProviderId,
     attachments,
@@ -634,7 +636,8 @@ const Harness: React.FC = () => {
                     <div className="w-full max-w-2xl mx-auto px-8">
                       <WelcomeIntro colorText={colorText} colorTextSecondary={colorTextSecondary} />
                     </div>
-                    {inputArea}
+                    {/* 归档会话只读：输入框整个不渲染（用户口径：不要提示条，什么都不要留） */}
+                    {currentTopicArchived ? null : inputArea}
                   </div>
                 ) : (
                   <>
@@ -643,6 +646,7 @@ const Harness: React.FC = () => {
                       isDarkMode={isDarkMode}
                       streaming={isLoading}
                       currentTopicId={currentTopicId}
+                      readOnly={currentTopicArchived}
                       colorText={colorText}
                       colorTextSecondary={colorTextSecondary}
                       colorTextTertiary={colorTextTertiary}
@@ -666,7 +670,7 @@ const Harness: React.FC = () => {
                         runOnPanel((handle) => handle.openVirtualFile(realPath, realPath))
                       }}
                     />
-                    {inputArea}
+                    {currentTopicArchived ? null : inputArea}
                   </>
                 )}
               </>

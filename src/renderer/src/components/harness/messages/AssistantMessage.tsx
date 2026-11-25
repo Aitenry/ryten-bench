@@ -86,6 +86,8 @@ interface AssistantMessageProps {
   colorBorderSecondary: string
   /** 当前话题 id（操作栏的评价索引用） */
   topicId: number | null
+  /** 只读（归档会话）：操作栏只留复制 / 元信息，隐藏分支、存入记忆、删除 */
+  readOnly?: boolean
   /** 该轮提问的时间戳（操作栏算「用时」用） */
   turnStartedAt?: number
   /** 该条回复的真实用量（harness_dialogue_usage 行；无回传时为 undefined） */
@@ -177,6 +179,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
     colorFillAlter,
     colorBorderSecondary,
     topicId,
+    readOnly = false,
     turnStartedAt,
     usage,
     onBranch,
@@ -2388,6 +2391,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               turnStartedAt={turnStartedAt}
               topicId={topicId}
               usage={usage}
+              readOnly={readOnly}
               onBranch={onBranch}
               getCopyText={getCopyText}
               isCopied={isCopied}

@@ -1,5 +1,6 @@
-﻿import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { App, Button, Input, Modal, Popover, Tooltip, theme } from 'antd'
+import type { InputRef } from 'antd'
 import {
   RiArrowUpLine,
   RiAttachment2,
@@ -248,6 +249,22 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   >([])
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  /** 工具 / 技能面板里的搜索词（只在面板内过滤，关掉清空；不进设置） */
+  const [toolQuery, setToolQuery] = useState('')
+  const [skillQuery, setSkillQuery] = useState('')
+  /** 面板每次打开都把光标放进搜索框（Popover 的内容挂着不卸载，autoFocus 只有第一次有效） */
+  const toolSearchRef = useRef<InputRef | null>(null)
+  const skillSearchRef = useRef<InputRef | null>(null)
+  useEffect(() => {
+    if (!toolsOpen) return
+    const timer = window.setTimeout(() => toolSearchRef.current?.focus(), 60)
+    return () => window.clearTimeout(timer)
+  }, [toolsOpen])
+  useEffect(() => {
+    if (!skillsOpen) return
+    const timer = window.setTimeout(() => skillSearchRef.current?.focus(), 60)
+    return () => window.clearTimeout(timer)
+  }, [skillsOpen])
   /** mainAgent.skills（保存工具时要原样带回：main-agent-update 只覆盖传入的字段） */
   const mainAgentSkillsRef = useRef<string[]>([])
   /** harness 设置快照：技能启用集写回 systemSettings 时要用整份 harness 覆盖 */
@@ -1265,26 +1282,76 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     </div>
   )
 
-  /** 工具 / 技能的多选面板：一行一项，右侧打勾表示已选（点完不收起，方便连续勾） */
+  /**
+   * 工具 / 技能的多选面板：顶部搜索框 + 一行一项（右侧打勾表示已选，点完不收起，方便连续勾）。
+   *
+   * 搜索只过滤当前面板（展示名和真实 id 都认：工具名是 `read_file` 这种英文标识、展示名是
+   * 「读取文件」，两种输入都能命中），关掉面板即清空。清单可能有几十项，没有搜索框找一项很难。
+   * 回车 = 勾/取消勾第一个命中项（键盘连续勾选时不用来回换手）。
+   */
   const pickerMenu = (
     items: { key: string; label: string; active: boolean; onToggle: () => void }[],
-    empty: string
-  ): React.ReactNode => (
-    <div className="harness-model-menu" style={{ ...menuVars, width: 260 }}>
-      <div className="hmm-list" style={{ maxHeight: 300, overflowY: 'auto' }}>
-        {items.length === 0 ? (
-          <div className="hmm-empty">{empty}</div>
-        ) : (
-          items.map((item) => (
-            <button key={item.key} type="button" className="hmm-item" onClick={item.onToggle}>
-              <span className="hmm-item-label">{item.label}</span>
-              {item.active ? <RiCheckLine size={14} className="hmm-item-check" /> : null}
-            </button>
-          ))
-        )}
+    options: {
+      empty: string
+      placeholder: string
+      query: string
+      onQueryChange: (next: string) => void
+      inputRef: React.RefObject<InputRef | null>
+      onClose: () => void
+    }
+  ): React.ReactNode => {
+    const keyword = options.query.trim().toLowerCase()
+    const filtered = keyword
+      ? items.filter(
+          (item) =>
+            item.label.toLowerCase().includes(keyword) || item.key.toLowerCase().includes(keyword)
+        )
+      : items
+    return (
+      <div className="harness-model-menu" style={{ ...menuVars, width: 260 }}>
+        <div className="hmm-search">
+          <Input
+            ref={options.inputRef}
+            size="small"
+            allowClear
+            value={options.query}
+            onChange={(e) => options.onQueryChange(e.target.value)}
+            prefix={<RiSearchLine size={13} className="hmm-search-icon" />}
+            placeholder={options.placeholder}
+            aria-label={options.placeholder}
+            onKeyDown={(e) => {
+              // 中文输入法选词时的回车 / Esc 是给输入法的，不能当成「勾选 / 清空」
+              if (e.nativeEvent.isComposing) return
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                if (options.query) options.onQueryChange('')
+                else options.onClose()
+                return
+              }
+              if (e.key === 'Enter' && filtered.length > 0) {
+                e.preventDefault()
+                filtered[0].onToggle()
+              }
+            }}
+          />
+        </div>
+        <div className="hmm-list" style={{ maxHeight: 300, overflowY: 'auto' }}>
+          {items.length === 0 ? (
+            <div className="hmm-empty">{options.empty}</div>
+          ) : filtered.length === 0 ? (
+            <div className="hmm-empty">{t('harness.input.pickerNoMatch')}</div>
+          ) : (
+            filtered.map((item) => (
+              <button key={item.key} type="button" className="hmm-item" onClick={item.onToggle}>
+                <span className="hmm-item-label">{item.label}</span>
+                {item.active ? <RiCheckLine size={14} className="hmm-item-check" /> : null}
+              </button>
+            ))
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   const toolMenu = pickerMenu(
     toolCatalog.map((tool) => ({
@@ -1293,7 +1360,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       active: selectedTools.includes(tool.name),
       onToggle: () => toggleTool(tool.name)
     })),
-    t('harness.input.toolsEmpty')
+    {
+      empty: t('harness.input.toolsEmpty'),
+      placeholder: t('harness.input.toolsSearchPlaceholder'),
+      query: toolQuery,
+      onQueryChange: setToolQuery,
+      inputRef: toolSearchRef,
+      onClose: () => setToolsOpen(false)
+    }
   )
 
   const skillMenu = pickerMenu(
@@ -1303,7 +1377,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       active: selectedSkills.includes(skill.id),
       onToggle: () => toggleSkill(skill.id)
     })),
-    t('harness.input.skillsEmpty')
+    {
+      empty: t('harness.input.skillsEmpty'),
+      placeholder: t('harness.input.skillsSearchPlaceholder'),
+      query: skillQuery,
+      onQueryChange: setSkillQuery,
+      inputRef: skillSearchRef,
+      onClose: () => setSkillsOpen(false)
+    }
   )
 
   /** 输入卡片下方的选择器：权限 / 工具 / 技能（用户口径：这些都放在输入框底部） */
@@ -1352,7 +1433,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       {/* 工具 / 技能：主智能体的默认选择（设置页移除后搬到这里，选完下一轮即生效） */}
       <Popover
         open={toolsOpen}
-        onOpenChange={setToolsOpen}
+        onOpenChange={(open) => {
+          setToolsOpen(open)
+          // 关掉就清空搜索词：下次打开是完整清单
+          if (!open) setToolQuery('')
+        }}
         trigger="click"
         placement="topLeft"
         arrow={false}
@@ -1382,7 +1467,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       </Popover>
       <Popover
         open={skillsOpen}
-        onOpenChange={setSkillsOpen}
+        onOpenChange={(open) => {
+          setSkillsOpen(open)
+          if (!open) setSkillQuery('')
+        }}
         trigger="click"
         placement="topLeft"
         arrow={false}

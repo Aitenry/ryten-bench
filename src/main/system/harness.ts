@@ -17,6 +17,7 @@ import { closeAllMnemon } from '../services/harness/mnemon-singleton'
 import { syncWorkspaceWatcher, stopWorkspaceWatcher, isWatchingPath } from '../workspace'
 import { registerHarnessIpc } from '../ipc/harness/harness'
 import { harnessTopicIpcHandlers } from '../ipc/harness/harness-topic'
+import { openInAppIpcHandlers } from '../ipc/harness/open-in-app'
 import { chatIpcHandlers } from '../ipc/harness/chat'
 import { mnemonIpcHandlers } from '../ipc/harness/mnemon'
 import { workspaceIpcHandlers } from '../ipc/harness/workspace'
@@ -40,8 +41,8 @@ import { EffectScope, registerIpcHandlers } from '../ipc/register'
  * 「AI 助手」主进程装配（系统级功能，不再是插件）。
  *
  * 六件事：
- * - **通道表**：7 个域一个文件（助手主体 / 话题对话 / 对话模式的目录与会话 / Mnemon 记忆 /
- *   工作区文件与改动审查 / 智能体配置 / 插件工坊），全部是普通 `harness:*` 通道；
+ * - **通道表**：8 个域各一个文件（助手主体 / 话题对话 / 对话模式的目录与会话 / Mnemon 记忆 /
+ *   工作区文件与改动审查 / 智能体配置 / 插件工坊 / 在应用中打开），全部是普通 `harness:*` 通道；
  * - **事件通道**：主进程 → 渲染层的推送（流式 chunk、队列、目标、后台任务、子代理、
  *   提问、计划清单、工作区磁盘变化、改动记录、文档改写、工坊状态变化与装载探针）；
  *   通道名以 `harness:` 开头，preload 的系统桥按前缀放行，不需要再声明清单；
@@ -68,6 +69,7 @@ export function startHarness(): void {
   disposers = [
     registerHarnessIpc(effects),
     registerIpcHandlers(harnessTopicIpcHandlers()),
+    registerIpcHandlers(openInAppIpcHandlers()),
     registerIpcHandlers(chatIpcHandlers()),
     registerIpcHandlers(mnemonIpcHandlers()),
     registerIpcHandlers(workspaceIpcHandlers()),

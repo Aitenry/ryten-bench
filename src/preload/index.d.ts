@@ -122,6 +122,8 @@ interface Api {
     isMaximized: () => Promise<boolean>
     onMaximized: (callback: (maximized: boolean) => void) => () => void
   }
+  /** 当前运行平台（win32 / darwin / linux），与主进程的 `process.platform` 同值 */
+  platform: NodeJS.Platform
   weather: {
     getCurrent: (force?: boolean) => Promise<WeatherData>
     onUpdate: (callback: (data: WeatherData) => void) => () => void

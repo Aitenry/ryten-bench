@@ -53,7 +53,8 @@ const AssistantSidebar: React.FC = () => {
     handleSelectTopic,
     handleDeleteTopic,
     handleLoadMoreTopics,
-    handleNewHarness
+    handleNewHarness,
+    refreshTopics
   } = useHarness()
 
   return (
@@ -78,6 +79,7 @@ const AssistantSidebar: React.FC = () => {
       onSelectTopic={handleSelectTopic}
       onDeleteTopic={handleDeleteTopic}
       onLoadMoreTopics={handleLoadMoreTopics}
+      onRefreshTopics={refreshTopics}
       onNewHarness={handleNewHarness}
       onOpenHarness={openHarness}
       shellMode={effectiveTheme === 'dark'}

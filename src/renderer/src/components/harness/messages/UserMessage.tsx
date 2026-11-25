@@ -20,6 +20,8 @@ interface UserMessageProps {
   orphan?: boolean
   /** 正在**气泡内**编辑这条提问 */
   editing?: boolean
+  /** 只读（归档会话）：孤立提问也不给「编辑 / 删除」入口 */
+  readOnly?: boolean
   /** 进入编辑态 */
   onEdit?: () => void
   /** 气泡内回车提交（内容已就地替换这条提问，不会新增用户气泡） */
@@ -38,6 +40,7 @@ const UserMessage: React.FC<UserMessageProps> = ({
   colorBorderSecondary,
   orphan = false,
   editing = false,
+  readOnly = false,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -229,7 +232,7 @@ const UserMessage: React.FC<UserMessageProps> = ({
         )}
 
         {/* 孤立提问（没有回复）才有这行：状态说明 + 编辑 / 删除；编辑中就换成键盘约定提示 */}
-        {orphan ? (
+        {orphan && !readOnly ? (
           <div
             className="flex items-center justify-end gap-2 mt-1.5"
             style={{ fontSize: 11.5, color: token.colorTextTertiary }}

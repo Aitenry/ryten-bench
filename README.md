@@ -80,6 +80,21 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Workspaces** — each workspace is bound to a real directory on disk. Conversations (topics),
   messages, sub-agent configuration and memory are isolated per workspace; switching workspaces
   never leaks history or memory between them.
+- **Conversation list** — the sidebar lists workspaces and their conversations. A conversation's
+  `⋯` menu pins it to the top, renames it, forks it into an independent copy (topic row plus every
+  message, so the two histories then diverge), opens its workspace in a detected editor
+  (File Explorer, IntelliJ IDEA, PyCharm, WebStorm, GoLand, DataGrip, CLion, VS Code, Cursor —
+  located through the Windows uninstall registry / `PATH`, `/Applications` and `~/Applications` on
+  macOS, or the `PATH` / JetBrains Toolbox launchers / snap / flatpak on Linux; the file manager
+  entry is called Explorer, Finder or File Manager depending on the platform and every entry shows
+  the app's own system icon, extracted with Electron's `getFileIcon`),
+  archives it into the collapsible **Archived** section at the bottom of the sidebar (a single list
+  across workspaces, sitting right above the memory block), or deletes it. Opening an archived
+  conversation is read-only: the transcript stays visible but the composer is not rendered at all
+  (no hint bar) and message actions are reduced to copy. Pin and archive never touch the activity timestamp,
+  so unpinning or unarchiving puts the conversation back where it was.
+  Rename / fork / archive are also bound to `Ctrl+Alt+G`, `Ctrl+Alt+F` and `Ctrl+Shift+A`
+  (`⌘` on macOS) while the assistant page is open.
 - **Streaming conversation** — token streaming with a typewriter renderer, reasoning (thinking)
   display, tool-call cards with an on-demand detail viewer, and a per-turn usage panel (provider /
   model, cached vs. uncached input, cache reads and writes, output, reasoning share, call count).

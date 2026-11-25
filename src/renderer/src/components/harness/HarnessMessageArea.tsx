@@ -19,6 +19,8 @@ interface HarnessMessageAreaProps {
   streaming: boolean
   /** 当前话题 id：切换话题 / 新建会话时重置为贴底状态 */
   currentTopicId: number | null
+  /** 只读（归档会话）：保留复制等查看动作，隐藏编辑 / 删除 / 分支 / 存入记忆 */
+  readOnly?: boolean
   colorText: string
   colorTextSecondary: string
   colorTextTertiary: string
@@ -91,6 +93,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   isDarkMode,
   streaming,
   currentTopicId,
+  readOnly = false,
   colorText,
   colorTextSecondary,
   colorTextTertiary,
@@ -561,6 +564,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                       <AssistantMessage
                         message={visibleMessages[round.index]}
                         index={idx}
+                        readOnly={readOnly}
                         isDarkMode={isDarkMode}
                         copiedId={copiedId}
                         colorText={colorText}
@@ -602,6 +606,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                         colorBorderSecondary={colorBorderSecondary}
                         orphan={orphanUserIds.has(message.id)}
                         editing={editingMessageId === message.id}
+                        readOnly={readOnly}
                         onEdit={() => onStartEditMessage(idx)}
                         onEditSubmit={(content) => void onSubmitEditMessage(idx, content)}
                         onEditCancel={onCancelEditMessage}
@@ -611,6 +616,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                       <AssistantMessage
                         message={message}
                         index={idx}
+                        readOnly={readOnly}
                         isDarkMode={isDarkMode}
                         copiedId={copiedId}
                         colorText={colorText}

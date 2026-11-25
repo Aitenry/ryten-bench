@@ -169,16 +169,47 @@ async function deleteWorkspace(id: number): Promise<boolean> {
 
 // --- harness_topic CRUD ---
 
+/**
+ * 会话列表排序：未归档在前（归档的沉底）→ 置顶在前 → 其余按活跃时间倒序。
+ *
+ * 为什么要写成 SQL 片段：`desc(pinned_at)` 的 NULL 位置不是我们要的——置顶（非 NULL）
+ * 必须先出现、未置顶（NULL）在后。按「is not null」的布尔值排最直接；归档同理，方向相反。
+ * 置顶 / 归档两个动作都不改 `updated_at`，所以取消之后会回到它原来的活跃位置。
+ */
+const topicOrderBy = [
+  sql`${harness_topic.archived_at} is not null asc`,
+  sql`${harness_topic.pinned_at} is not null desc`,
+  desc(harness_topic.updated_at)
+]
+
 async function getAllTopics(workspaceId: number): Promise<HarnessTopicRow[]> {
   return withOrm('getAllTopics', async (db) => {
     const rows = await db
       .select()
       .from(harness_topic)
       .where(eq(harness_topic.workspace_id, workspaceId))
-      .orderBy(desc(harness_topic.updated_at))
+      .orderBy(...topicOrderBy)
     logger.info(
       `Query for harness topics in workspace=${workspaceId} returned ${rows.length} rows.`
     )
+    return rows
+  })
+}
+
+/**
+ * 所有工作区里已归档的会话（侧栏底部的「已归档」分组用）。
+ *
+ * 不分工作区：归档的会话统一收在侧栏一处（用户 2026-11-25 口径），列表要能看到它们的
+ * 工作区名字，所以行里带 `workspace_id`，由渲染层配名字。按归档时间倒序。
+ */
+async function getArchivedTopics(): Promise<HarnessTopicRow[]> {
+  return withOrm('getArchivedTopics', async (db) => {
+    const rows = await db
+      .select()
+      .from(harness_topic)
+      .where(sql`${harness_topic.archived_at} is not null`)
+      .orderBy(desc(harness_topic.archived_at))
+    logger.info(`Query for archived harness topics returned ${rows.length} rows.`)
     return rows
   })
 }
@@ -204,7 +235,7 @@ async function getAllTopicsPaginated(
       .select()
       .from(harness_topic)
       .where(eq(harness_topic.workspace_id, safeWorkspaceId))
-      .orderBy(desc(harness_topic.updated_at))
+      .orderBy(...topicOrderBy)
       .limit(safePageSize)
       .offset(safePage * safePageSize)
 
@@ -317,6 +348,102 @@ async function deleteTopic(id: number): Promise<boolean> {
       .returning({ id: harness_topic.id })
     logger.info(`Deleted harness topic ID=${id}, ${deleted.length} row(s) affected.`)
     return deleted.length > 0
+  })
+}
+
+/**
+ * 置顶 / 取消置顶。
+ *
+ * **不动 `updated_at`**：那是「最近活跃时间」，也是未置顶会话之间的排序键。
+ * 若这个动作顺手改了它，取消置顶后这条会话会跳到最前面，而不是回到它原来的位置。
+ */
+async function setTopicPinned(id: number, pinned: boolean): Promise<boolean> {
+  return withOrm('setTopicPinned', async (db) => {
+    const updated = await db
+      .update(harness_topic)
+      .set({ pinned_at: pinned ? sql`now()` : null })
+      .where(eq(harness_topic.id, id))
+      .returning({ id: harness_topic.id })
+    logger.info(`Set harness topic ID=${id} pinned=${pinned}, ${updated.length} row(s) affected.`)
+    return updated.length > 0
+  })
+}
+
+/** 归档 / 取消归档（理由同上：不碰 `updated_at`，取消归档后回到原来的位置） */
+async function setTopicArchived(id: number, archived: boolean): Promise<boolean> {
+  return withOrm('setTopicArchived', async (db) => {
+    const updated = await db
+      .update(harness_topic)
+      .set({ archived_at: archived ? sql`now()` : null })
+      .where(eq(harness_topic.id, id))
+      .returning({ id: harness_topic.id })
+    logger.info(
+      `Set harness topic ID=${id} archived=${archived}, ${updated.length} row(s) affected.`
+    )
+    return updated.length > 0
+  })
+}
+
+/**
+ * 分叉会话：把一条会话（话题行 + 全部对话）复制成一条**独立的**新会话。
+ *
+ * 复制的是数据快照，之后两条会话各走各的：父会话继续聊不会改到分叉，分叉里发消息也不回写父会话。
+ * - `created_at` 原样保留 ⇒ 分叉里的历史时间线与源会话一致；新会话的 `updated_at` 是现在
+ *   （排在列表最前，用户点完立刻能看到它）；
+ * - 不复制置顶 / 归档状态（分叉出来是一条新的、正常的会话）；
+ * - 不复制摘要压缩 checkpoint：它记的是「已压缩段最后一条对话 id」，指向源会话的行，
+ *   搬到新会话里就是错的（新会话宁可重新压缩一次）。
+ */
+async function forkTopic(sourceId: number, title: string): Promise<HarnessTopicRow | null> {
+  return withOrm('forkTopic', async (db) => {
+    const [source] = await db
+      .select()
+      .from(harness_topic)
+      .where(eq(harness_topic.id, sourceId))
+      .limit(1)
+    if (!source) return null
+
+    let forkedId = 0
+    await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(harness_topic)
+        .values({
+          workspace_id: source.workspace_id,
+          title,
+          model: source.model,
+          selected_tools: source.selected_tools,
+          memory_scope: source.memory_scope
+        })
+        .returning({ id: harness_topic.id })
+      forkedId = inserted[0].id
+
+      const dialogues = await tx
+        .select()
+        .from(harness_dialogue)
+        .where(eq(harness_dialogue.topic_id, sourceId))
+        .orderBy(asc(harness_dialogue.created_at), asc(harness_dialogue.id))
+      if (dialogues.length > 0) {
+        await tx.insert(harness_dialogue).values(
+          dialogues.map((row) => ({
+            topic_id: forkedId,
+            role: row.role,
+            content: row.content,
+            blocks: row.blocks,
+            created_at: row.created_at
+          }))
+        )
+      }
+    })
+
+    const [forked] = await db
+      .select()
+      .from(harness_topic)
+      .where(eq(harness_topic.id, forkedId))
+      .limit(1)
+    logger.info(
+      `Forked harness topic ${sourceId} -> ${forkedId} (${title})${forked ? `, workspace=${forked.workspace_id}` : ''}`
+    )
+    return forked ?? null
   })
 }
 
@@ -521,11 +648,15 @@ export {
   deleteWorkspace,
   getAllTopics,
   getAllTopicsPaginated,
+  getArchivedTopics,
   getTopicById,
   reparentPluginTopics,
   createTopic,
   updateTopic,
   deleteTopic,
+  setTopicPinned,
+  setTopicArchived,
+  forkTopic,
   getDialoguesByTopicId,
   getDialoguesByTopicIdPaginated,
   addDialogue,

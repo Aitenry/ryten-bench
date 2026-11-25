@@ -59,6 +59,13 @@ export const zhCN = {
     }
   },
   graphProgress: zhCNGraphProgress,
+  /** 「在应用中打开」子弹（会话 ⋯ 菜单）：系统文件管理器在各平台的名字，以及探测不到时的原因 */
+  openInApp: {
+    explorer: '文件资源管理器',
+    finder: '访达',
+    fileManager: '文件管理器',
+    notAvailable: '没有检测到该应用：可能已被卸载，换一个应用试试'
+  },
   /** 经 IPC 抛给渲染进程、最终以提示条形式出现在界面上的错误文案 */
   error: {
     musicDirNotSet: '未设置音乐目录',
@@ -72,6 +79,9 @@ export const zhCN = {
     invalidPathAbsolute: '路径无效：必须传入 AI 工作区内的绝对路径',
     workspaceDirNotConfigured: '未配置 AI 工作区目录，拒绝文件访问',
     pathOutsideWorkspace: '路径不在 AI 工作区内，已拒绝访问',
+    /** 侧栏工作区行「⋯ → 在文件夹中显示」：行已不存在 / 目录已不在 */
+    workspaceNotFound: '工作区不存在：可能已被删除，请刷新后重试',
+    workspaceDirMissing: '工作区目录不存在：{{path}}',
     graphModelNotConfigured:
       '未配置图谱构建模型：请先到「系统设置 → 图谱」中选择用于构建知识图谱的大模型。',
     memoryDirNotConfigured: '未配置记忆存储目录',
@@ -227,6 +237,12 @@ export const enUS: typeof zhCN = {
     }
   },
   graphProgress: enUSGraphProgress,
+  openInApp: {
+    explorer: 'File Explorer',
+    finder: 'Finder',
+    fileManager: 'File Manager',
+    notAvailable: 'That app was not detected. It may have been uninstalled — try another one.'
+  },
   error: {
     musicDirNotSet: 'No music folder is configured',
     playlistNotFound: 'Playlist not found',
@@ -240,6 +256,8 @@ export const enUS: typeof zhCN = {
     invalidPathAbsolute: 'Invalid path: an absolute path inside the AI workspace is required',
     workspaceDirNotConfigured: 'No AI workspace folder configured — file access denied',
     pathOutsideWorkspace: 'The path is outside the AI workspace — access denied',
+    workspaceNotFound: 'Workspace not found — it may have been deleted. Refresh and try again.',
+    workspaceDirMissing: 'Workspace folder not found: {{path}}',
     graphModelNotConfigured:
       'No graph building model configured. Choose one under Settings → Graph first.',
     memoryDirNotConfigured: 'No memory storage folder configured',
