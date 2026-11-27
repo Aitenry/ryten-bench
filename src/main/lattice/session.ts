@@ -341,6 +341,13 @@ export function persistLatticeSession(): void {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(tmp, `${JSON.stringify(stored, null, 2)}\n`, 'utf-8')
+    // 收紧权限（安全审计 S20）：refresh token 即使被 safeStorage 加密，在多用户机器上
+    // 也不该让同机其它账户读到会话文件；POSIX 下 0600 只允许本人读写。
+    try {
+      fs.chmodSync(tmp, 0o600)
+    } catch {
+      // Windows / 只读介质上 chmod 可能失败：不影响功能，权限收紧只是纵深防御
+    }
     fs.renameSync(tmp, file)
   } catch (err) {
     logger.warn('[Lattice] Failed to write lattice-session.json:', err)

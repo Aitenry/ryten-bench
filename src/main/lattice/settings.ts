@@ -114,6 +114,13 @@ export function normalizeLatticeBaseUrl(input: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`插件中心地址只支持 http/https：${trimmed}`)
   }
+  // 远程节点必须走 https：登录密码与 refresh token 会发往这个基址，明文 http 等于裸奔。
+  // 本机调试（localhost / 127.0.0.1 / ::1）保留 http 白名单。
+  const host = url.hostname.toLowerCase()
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+  if (url.protocol === 'http:' && !loopback) {
+    throw new Error(`插件中心地址必须是 https://（本机调试可用 http://localhost）：${trimmed}`)
+  }
   const pathname = url.pathname.replace(/\/+$/, '')
   return `${url.protocol}//${url.host}${pathname}`
 }
