@@ -12,6 +12,7 @@ import {
   type ScheduledTask
 } from '../../runtime/harness/schedule-store'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
+import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
 import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
 import { drainPendingTurns } from '../../services/harness/turn-drain'
@@ -330,6 +331,12 @@ async function runHarnessTurn(
   params: RunHarnessTurnParams
 ): Promise<{ topicId: number; cancelled: boolean; turnId: number }> {
   const { event, question, options } = params
+
+  // 用户上传/粘贴的图片与 read_image 共用同一套规范化：进入上下文/落库前先按
+  // 像素与字节预算缩放或重编码（前端气泡里的预览仍是原图，二者允许不同）。
+  if (options?.images?.length) {
+    options.images = options.images.map((image) => normalizeImageDataUrl(image).dataUrl)
+  }
 
   // 渲染进程已失效（崩溃/窗口关闭）时跳过本轮：不再创建模型、不保存消息、不向死帧发送
   if (!isSenderAlive(event.sender)) {

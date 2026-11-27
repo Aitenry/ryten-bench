@@ -7,7 +7,7 @@ import { mainFormat, mainPlural } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { recordToolFacts } from './tool-result-facts'
 import { MAX_IMAGE_BYTES, readImageFile, toolMedia, type ImageMimeType } from './image-tool'
-import { planImageNormalization } from './image-normalize'
+import { normalizeImageDataUrl } from './image-encode'
 import { applyHunks, parsePatch } from './apply-patch'
 import { applyInsert, applyStrReplace, formatView } from './str-replace-core'
 import { recordFileChange } from '../../workspace/file-history'
@@ -17,7 +17,6 @@ import { permissionGate } from './permission-gate'
 import { isPermissionMode } from './permission'
 import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../../sandbox/exec'
 import type { SandboxMode } from '../../sandbox/types'
-import { nativeImage } from 'electron'
 import { jobsRegistry } from './jobs'
 import {
   MAX_EXEC_CHARS,
@@ -415,10 +414,8 @@ function walkDir(root: string, relDir: string, out: string[], cap = MAX_SCAN_ENT
 /**
  * 按像素/字节预算缩放或重编码图片（Electron nativeImage）。
  *
- * 与 DSH 的附件规范化同目标：让进入上下文的那一份图有界。三条硬规则：
- * - 解码失败、编码为空、结果反而更大 → 一律退回原图（规范化绝不能把图弄坏/弄大）；
- * - GIF 不处理（重编码会丢动画，决策层已排除）；
- * - JPEG 仍出 JPEG（保证照片体积），其它格式出 PNG（保留可能的透明通道）。
+ * 真正的解码/编码在 `image-encode.ts`（与用户上传附件共用同一套规则）；这里只把
+ * 返回结构适配成 read_image 需要的形状（带虚拟路径与 ImageMimeType）。
  */
 function normalizeImageForContext(image: {
   dataUrl: string
@@ -432,37 +429,17 @@ function normalizeImageForContext(image: {
   dimensions?: { width: number; height: number }
   normalized: boolean
 } {
-  const original = { ...image, normalized: false }
-  if (!image.dimensions) return original
-  const decision = planImageNormalization({
-    width: image.dimensions.width,
-    height: image.dimensions.height,
-    bytes: image.bytes,
-    mimeType: image.mimeType
-  })
-  if (decision.action === 'keep') return original
-  try {
-    const base64 = image.dataUrl.slice(image.dataUrl.indexOf(',') + 1)
-    const decoded = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'))
-    if (decoded.isEmpty()) return original
-    const resized = decoded.resize({
-      width: decision.width,
-      height: decision.height,
-      quality: 'good'
-    })
-    const outputMime: ImageMimeType = image.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
-    const buffer = outputMime === 'image/jpeg' ? resized.toJPEG(85) : resized.toPNG()
-    if (!buffer || buffer.length === 0 || buffer.length >= image.bytes) return original
-    const size = resized.getSize()
-    return {
-      dataUrl: `data:${outputMime};base64,${buffer.toString('base64')}`,
-      mimeType: outputMime,
-      bytes: buffer.length,
-      dimensions: { width: size.width, height: size.height },
-      normalized: true
-    }
-  } catch {
-    return original
+  const normalized = normalizeImageDataUrl(image.dataUrl)
+  const dimensions =
+    normalized.width && normalized.height
+      ? { width: normalized.width, height: normalized.height }
+      : image.dimensions
+  return {
+    dataUrl: normalized.dataUrl,
+    mimeType: normalized.mimeType as ImageMimeType,
+    bytes: normalized.bytes || image.bytes,
+    dimensions,
+    normalized: normalized.normalized
   }
 }
 

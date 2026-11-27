@@ -88,3 +88,18 @@ export function planImageNormalization(
   }
   return { action: 'keep' }
 }
+
+/** 从 data URL 中解析出 MIME 与原始字节（失败返回 null） */
+export function parseImageDataUrl(
+  dataUrl: string
+): { mimeType: string; bytes: Buffer } | null {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl ?? '')
+  if (!match || !match[2]) return null
+  try {
+    const bytes = Buffer.from(match[3], 'base64')
+    if (bytes.length === 0) return null
+    return { mimeType: (match[1] || 'application/octet-stream').toLowerCase(), bytes }
+  } catch {
+    return null
+  }
+}
