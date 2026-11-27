@@ -11,7 +11,8 @@
  *   （与 DSH 的 scheduler 行为一致：补跑会瞬间刷屏，且旧提醒往往已无意义）。
  */
 import { nextRunAfterRun, selectDueTaskIds } from './schedule-core'
-import { scheduleStore, type ScheduledTask, type ScheduleStore } from './schedule-store'
+import { scheduleStore, type ScheduleStore } from './schedule-store'
+import type { ScheduledTask } from './schedule-types'
 
 /** 一次触发请求 */
 export interface ScheduledTurnRequest {
@@ -92,7 +93,7 @@ export class ScheduleRunner {
   async tick(now = new Date()): Promise<number> {
     const drive = this.drive
     if (!drive) return 0
-    const tasks = this.store.list()
+    const tasks = await this.store.list()
     const dueIds = selectDueTaskIds(tasks, now, {
       running: this.running,
       limit: MAX_TASKS_PER_TICK
@@ -118,7 +119,7 @@ export class ScheduleRunner {
       // 下一次触发：一次性任务执行完即停用；其余从「现在」重新计算（错过的不补跑）
       const nextRunAt = nextRunAfterRun(task.when, now)
       try {
-        this.store.markRun(task.id, {
+        await this.store.markRun(task.id, {
           status,
           ranAt: now.toISOString(),
           nextRunAt,

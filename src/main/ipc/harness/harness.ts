@@ -8,9 +8,9 @@ import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
 import { scheduleRunner } from '../../runtime/harness/schedule-runner'
 import {
   isScheduleStoreConfigured,
-  scheduleStore,
-  type ScheduledTask
+  scheduleStore
 } from '../../runtime/harness/schedule-store'
+import type { ScheduledTask } from '../../runtime/harness/schedule-types'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
@@ -2475,10 +2475,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
   // ── 定时任务管理（设置 →「定时任务」页）─────────────────────────────────
   // 只做列表与暂停/恢复/删除：创建仍走模型工具（需要会话归属与自然语言提示词）。
-  handle('harness-schedule-list', () => {
+  handle('harness-schedule-list', async () => {
     if (!isScheduleStoreConfigured()) return []
     try {
-      return scheduleStore.list()
+      return await scheduleStore.list()
     } catch (err) {
       logger.warn('[Schedule] Failed to list tasks:', err)
       return []
@@ -2487,22 +2487,22 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
   handle(
     'harness-schedule-update',
-    (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) => {
+    async (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) => {
       if (!isScheduleStoreConfigured()) return { ok: false }
       try {
         if (payload.action === 'delete') {
-          return { ok: scheduleStore.remove(payload.id) }
+          return { ok: await scheduleStore.remove(payload.id) }
         }
         if (payload.action === 'pause') {
-          return { ok: Boolean(scheduleStore.update(payload.id, { enabled: false, nextRunAt: null })) }
+          return { ok: Boolean(await scheduleStore.update(payload.id, { enabled: false, nextRunAt: null })) }
         }
-        const task = scheduleStore.get(payload.id)
+        const task = await scheduleStore.get(payload.id)
         if (!task) return { ok: false }
         const validated = validateScheduleWhen(task.when)
         if (!validated.ok) return { ok: false }
         return {
           ok: Boolean(
-            scheduleStore.update(payload.id, { enabled: true, nextRunAt: validated.nextRunAt })
+            await scheduleStore.update(payload.id, { enabled: true, nextRunAt: validated.nextRunAt })
           )
         }
       } catch (err) {

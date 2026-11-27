@@ -12,9 +12,9 @@ import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
 import {
   MAX_SCHEDULED_TASKS,
   isScheduleStoreConfigured,
-  scheduleStore,
-  type ScheduledTask
+  scheduleStore
 } from '../../runtime/harness/schedule-store'
+import type { ScheduleRunRecord, ScheduledTask } from '../../runtime/harness/schedule-types'
 import {
   computeNextRun,
   describeScheduleWhen,
@@ -68,8 +68,8 @@ function runStatusText(
   return texts.none
 }
 
-/** 单条任务的详情文本 */
-function viewText(task: ScheduledTask): string {
+/** 单条任务的详情文本（执行记录由调用方按需读取） */
+function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
   const texts = getScheduleToolTexts()
   const lines = [
     mainFormat(texts.viewHeader, { id: task.id, title: task.title }),
@@ -91,10 +91,9 @@ function viewText(task: ScheduledTask): string {
       })
     )
   }
-  const runs = (task.runs ?? []).slice(-3)
   if (runs.length > 0) {
     lines.push(texts.viewRecentRuns)
-    for (const run of runs) {
+    for (const run of runs.slice(-3)) {
       lines.push(
         mainFormat(texts.viewRunItem, { time: run.at, status: runStatusText(texts, run.status) })
       )
@@ -114,7 +113,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
       const validated = validateScheduleWhen(when as ScheduleWhen)
       if (!validated.ok) return invalidWhenText(validated.reason)
       try {
-        const task = scheduleStore.create({
+        const task = await scheduleStore.create({
           title: title.trim(),
           prompt: prompt.trim(),
           when: when as ScheduleWhen,
@@ -153,9 +152,9 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     async () => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
-      const tasks = scheduleStore
-        .list()
-        .sort((a, b) => Date.parse(a.nextRunAt ?? '0') - Date.parse(b.nextRunAt ?? '0'))
+      const tasks = (await scheduleStore.list()).sort(
+        (a, b) => Date.parse(a.nextRunAt ?? '0') - Date.parse(b.nextRunAt ?? '0')
+      )
       if (tasks.length === 0) return texts.listEmpty
       const header = mainFormat(texts.listHeader, { count: String(tasks.length) })
       const rows = tasks.map((task) =>
@@ -185,8 +184,10 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     async ({ id }) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
-      const task = scheduleStore.get(id)
-      return task ? viewText(task) : mainFormat(texts.notFound, { id })
+      const task = await scheduleStore.get(id)
+      if (!task) return mainFormat(texts.notFound, { id })
+      const runs = await scheduleStore.listRuns(id, 5)
+      return viewText(task, runs)
     },
     {
       name: 'schedule_view',
@@ -200,21 +201,21 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     async ({ id, action, title, prompt, when }) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
-      const task = scheduleStore.get(id)
+      const task = await scheduleStore.get(id)
       if (!task) return mainFormat(texts.notFound, { id })
 
       if (action === 'delete') {
-        scheduleStore.remove(id)
+        await scheduleStore.remove(id)
         return mainFormat(texts.deleted, { id })
       }
       if (action === 'pause') {
-        scheduleStore.update(id, { enabled: false, nextRunAt: null })
+        await scheduleStore.update(id, { enabled: false, nextRunAt: null })
         return mainFormat(texts.paused, { id, title: task.title })
       }
       if (action === 'resume') {
         const validated = validateScheduleWhen(task.when)
         if (!validated.ok) return invalidWhenText(validated.reason)
-        scheduleStore.update(id, { enabled: true, nextRunAt: validated.nextRunAt })
+        await scheduleStore.update(id, { enabled: true, nextRunAt: validated.nextRunAt })
         return mainFormat(texts.resumed, { id, title: task.title, next: validated.nextRunAt })
       }
 
@@ -229,7 +230,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         const next = computeNextRun(task.when, new Date())
         nextRunAt = next ? next.toISOString() : null
       }
-      const updated = scheduleStore.update(id, {
+      const updated = await scheduleStore.update(id, {
         title: title?.trim() || task.title,
         prompt: prompt?.trim() || task.prompt,
         when: nextWhen,

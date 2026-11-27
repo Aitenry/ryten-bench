@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 数据库 schema（drizzle ORM 单一真源）。
  *
  * 约定：
@@ -25,6 +25,7 @@ export * from './harness/agent'
 export * from './harness/subagent-session'
 export * from './harness/team-board'
 export * from './harness/team-task-event'
+export * from './harness/scheduled'
 // 资料库（document 依赖 wiki，graph 依赖 wiki）
 export * from './notes/todo'
 export * from './notes/wiki'

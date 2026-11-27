@@ -6,8 +6,9 @@ import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
 import { onAppEvent } from '../plugins/app-events'
 import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
-import { configureScheduleStore } from '../runtime/harness/schedule-store'
+import { configureScheduleStoreBackend } from '../runtime/harness/schedule-store'
 import { scheduleRunner } from '../runtime/harness/schedule-runner'
+import { DbScheduleStore, migrateLegacySchedules } from '../database/schedule-db'
 import { terminalSessions } from '../runtime/harness/terminal-sessions'
 import { preloadHarnessData } from '../services/harness/preload-cache'
 import { clearSubAgentCache } from '../services/harness/subagents'
@@ -198,15 +199,25 @@ export function startHarness(): void {
       read: readMcpResource
     })
 
-    // 定时任务：存储落在 userData/schedules/（JSON），执行入口由 IPC 层注入；
+    // 定时任务：存储在后端数据库（PGlite 表），执行入口由 IPC 层注入；
     // 计时器只在应用运行期间生效，错过的触发不补跑（见 schedule-runner 设计说明）。
-    configureScheduleStore(join(app.getPath('userData'), 'schedules'))
-    scheduleRunner.start()
+    // 数据库就绪后装配存储后端、导入旧 JSON 任务，再启动计时器（见 awaitInitialized 块）。
 
     // 工作区文件监听：数据库初始化完成（设置已加载）后跟随当前工作区启动。
     let stopped = false
-    void awaitInitialized().then(() => {
+    void awaitInitialized().then(async () => {
       if (stopped) return
+      // 定时任务装配：存储后端 + 旧 JSON 导入 + 计时器
+      try {
+        configureScheduleStoreBackend(new DbScheduleStore())
+        const migrated = await migrateLegacySchedules(join(app.getPath('userData'), 'schedules'))
+        if (!migrated.skipped) {
+          logger.info(`[Harness] Legacy scheduled tasks imported: ${migrated.imported}`)
+        }
+        scheduleRunner.start()
+      } catch (err) {
+        logger.warn('[Harness] Failed to initialize scheduled tasks:', err)
+      }
       try {
         syncWorkspaceWatcher()
       } catch (err) {
@@ -237,7 +248,7 @@ export function startHarness(): void {
       setMcpToolProvider(undefined)
       setMcpResourceOps(undefined)
       scheduleRunner.stop()
-      configureScheduleStore(undefined)
+      configureScheduleStoreBackend(undefined)
       // 退出前收掉所有持久终端（整树 kill，不留孤儿 shell）
       terminalSessions.closeAll()
       configureMcp(undefined)
