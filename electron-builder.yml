@@ -18,6 +18,27 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # 仓库里的本地开发/调试产物绝不能进安装包（2026-11-27 实测：不排除时 app.asar 会从
+  # ~450MB 膨胀到 3.3GB，多出来的全是 test/.tmp/.dsh-* 等本地目录，既拖慢安装包也泄露
+  # 设计文档与调试数据）：
+  - '!test/**'
+  - '!tests/**'
+  - '!scripts/**'
+  - '!docs/**'
+  - '!mockup/**'
+  - '!.tmp/**'
+  - '!.tmp-cdp-profile/**'
+  # 构建输出目录（默认 dist、以及本地验证用的 dist-*）：绝不能相互嵌套进 asar
+  - '!dist/**'
+  - '!dist-*/**'
+  - '!.dsh-design/**'
+  - '!.dsh-vision-toolkit/**'
+  - '!.tooling/**'
+  - '!.trae/**'
+  - '!.idea/**'
+  - '!.agents/**'
+  - '!.github/**'
+  - '!*.tsbuildinfo'
   # 注意：**不要**在这里排除 `node_modules/esbuild/**`。
   # asarUnpack 的语义是「先打进 asar，再复制一份到 app.asar.unpacked」——
   # 用 files 排除掉它，就没有任何东西可解，两份都会消失
