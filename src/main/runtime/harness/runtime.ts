@@ -20,7 +20,8 @@ import { buildAskUserTool } from './ask'
 import { buildSubagentControlTools, subagentSessions } from './subagent-sessions'
 import { buildTeamTools, teamStore } from './team'
 import { buildWorkflowTool } from './workflow'
-import { buildSkillsPromptSection, loadSkills } from './skills'
+import { buildSkillsPromptSection, loadSkills, type SkillInfo } from './skills-core'
+import { buildSkillTool } from './skill-tool'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
 import { createTaskTool } from './subagent'
 import { createAgentAuthoringTool } from './subagent-authoring'
@@ -116,6 +117,8 @@ export class Runtime {
   private readonly authoringTool?: StructuredToolInterface
   private readonly workflowTool: StructuredToolInterface
   private readonly systemPrompt: string
+  /** 本轮启用的技能（系统提示词只放索引，正文由 skill 工具按需加载） */
+  private readonly skills: SkillInfo[]
   private readonly mnemon?: MnemonComponent
   /** 图递归上限：远宽于工具调用次数护栏（每轮约 2 个节点步 + 收尾余量），
    *  工具护栏先触发；即使触顶也有 graph.ts 的优雅收尾兜底（不报错）。 */
@@ -142,6 +145,10 @@ export class Runtime {
       workspaceId: opts.workspaceId,
       // 视觉门禁：read_image 只在模型声明支持图片输入时执行
       supportsImageInput: opts.supportsImageInput
+    })
+    this.skills = loadSkills({
+      skillsPath: opts.skillsPath,
+      enabledSkills: opts.enabledSkills
     })
     this.systemPrompt = this.buildSystemPrompt()
 
@@ -214,6 +221,8 @@ export class Runtime {
         ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
         this.workflowTool,
         ...(this.mnemon ? this.mnemon.tools : []),
+        // 技能：系统提示词只放索引，正文由 skill 工具按需加载（没有技能时不挂）
+        ...(this.skills.length > 0 ? [buildSkillTool(this.skills)] : []),
         ...(this.taskTool ? [this.taskTool] : []),
         ...(this.authoringTool ? [this.authoringTool] : [])
       ],
@@ -223,9 +232,16 @@ export class Runtime {
 
   /** 子代理工具（按声明的工具名从系统工具注册表独立构建）——同样过闸门 */
   private buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
+    // 子代理的技能同样按需加载：提示词里只有索引，因此必须带上 skill 工具，
+    // 否则子代理能看到技能列表却读不到正文。
+    const subAgentSkills =
+      subAgent.skills && subAgent.skills.length > 0
+        ? loadSkills({ skillsPath: this.opts.skillsPath, enabledSkills: subAgent.skills })
+        : []
     // 子代理同样是团队一员（仅团队模式开启时）：带上共享任务板工具（身份由 configurable.teamAgent 提供）
     return this.guard([
       ...buildSubAgentToolsFromRegistry(subAgent),
+      ...(subAgentSkills.length > 0 ? [buildSkillTool(subAgentSkills)] : []),
       ...(teamModeStore.isEnabled(this.currentTopicId)
         ? buildTeamTools(teamStore, this.currentTopicId)
         : [])
@@ -272,9 +288,7 @@ ${list}
 If no existing subagent fits, you can create a reusable one yourself with agent_create (name in lowercase kebab-case, a precise description, a complete system_prompt, and optionally tools/model). It persists for this workspace (visible and editable in Settings → Agents) and can be used immediately with task, including later in this same turn. Do not create a subagent that duplicates an existing one.
 Once a delegation finishes, the subagent's full output is shown to the user directly; your final answer only needs a brief summary or a short wrap-up — do not restate the detail the subagent already produced.`
     }
-    const skillsSection = buildSkillsPromptSection(
-      loadSkills({ skillsPath: this.opts.skillsPath, enabledSkills: this.opts.enabledSkills })
-    )
+    const skillsSection = buildSkillsPromptSection(this.skills)
     if (skillsSection) {
       prompt += skillsSection
     }

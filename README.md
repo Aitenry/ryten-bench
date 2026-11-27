@@ -164,8 +164,9 @@ from the hub or from a local package, and both paths end in the same host instal
   PGlite). It is exposed to the model as 13 `mnemon_*` tools and is configurable under
   More → Memory.
 - **Skills** — a local directory of skills, where every sub-directory containing a `SKILL.md`
-  (YAML frontmatter with `name` / `description`) is a skill; enabled skills are injected into the
-  system prompt. Managed under More → Skills.
+  (YAML frontmatter with `name` / `description`) is a skill. Enabled skills appear in the system
+  prompt as a short name/description index; their full instructions load on demand through a
+  `skill` tool, so the prompt never carries every skill body at once. Managed under More → Skills.
 - **MCP servers** — connect Model Context Protocol servers over stdio (a local command such as
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers), and their tools join the same tool-call loop as

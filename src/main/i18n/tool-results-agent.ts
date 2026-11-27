@@ -25,6 +25,12 @@ export const zhCNAgentToolTexts = {
     toolFailed: '工具执行失败: {{message}}'
   },
 
+  /** 技能工具（skills.ts）：按需加载技能全文 */
+  skill: {
+    notFound: '没有名为 "{{name}}" 的技能。可用技能：{{names}}',
+    header: '## 技能: {{name}}（{{id}}）'
+  },
+
   /** 目标存储与目标工具（goal.ts）：工具返回、抛错与 authority 拒绝 */
   goal: {
     /** create_goal 仅限人类直接请求 */
@@ -160,6 +166,12 @@ export const zhCNAgentToolTexts = {
 export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
   agent: {
     toolFailed: 'Tool execution failed: {{message}}'
+  },
+
+  /** Skill tool (skills.ts): loads a skill body on demand */
+  skill: {
+    notFound: 'No skill named "{{name}}". Available skills: {{names}}',
+    header: '## Skill: {{name}} ({{id}})'
   },
 
   goal: {
