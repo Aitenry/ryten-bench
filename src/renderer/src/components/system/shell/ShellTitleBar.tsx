@@ -18,7 +18,7 @@ import { useTheme } from '@renderer/hooks/useTheme'
  * Linux 没有 WCO，主进程回退系统原生边框，AppShell 也不会挂载本组件。
  */
 
-const api = () => window.api
+const api = (): Window['api'] => window.api
 
 const ShellTitleBar: React.FC = () => {
   const { t } = useTranslation()
