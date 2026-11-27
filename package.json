@@ -1,6 +1,6 @@
 {
   "name": "ryten-bench",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "RytenBench - AI-Powered Desktop Workspace",
   "main": "./out/main/index.js",
   "author": "https://github.com/Aitenry",
