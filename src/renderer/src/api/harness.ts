@@ -993,7 +993,7 @@ export const harnessApi = {
           }
         | { ok: false; error: string; detail?: string }
       >,
-    peek: (payload: { sessionId: string; maxChars?: number }) =>
+    peek: (payload: { sessionId: string; maxChars?: number; raw?: boolean }) =>
       invoke('harness:terminal-peek', payload) as Promise<
         TerminalPeekView | { ok: false; error: string }
       >,

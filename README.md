@@ -146,9 +146,12 @@ from the hub or from a local package, and both paths end in the same host instal
   process tree on close, on 10 minutes of idleness and on app quit. Because the shell is not
   sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
   The same sessions are reachable from a **right-side terminal panel** (top-bar terminal button,
-  docked in the same column as the workspace panel): sessions opened by the model appear as tabs,
-  clicking the terminal surface types directly into it (no separate command box — Enter sends,
-  Backspace edits), output follows the app theme, and the panel reads non-destructively so the
+  docked in the same column as the workspace panel): opening the panel automatically creates a
+  session when there is none, sessions opened by the model appear as tabs, and the terminal itself
+  is rendered by the open-source **xterm.js** (`@xterm/xterm` + fit addon) rather than a hand-made
+  widget — ANSI colours, selection, copy/paste and scrollback come from it, while commands are
+  still executed through the persistent-session layer (line mode: full-screen interactive programs
+  are not supported). Output follows the app theme, and the panel reads non-destructively so the
   model's `terminal_read` still sees the same unread output. The panel belongs to the human and is
   **not limited by the conversation's permission mode** — only the model-facing
   `terminal_open`/`terminal_send` tools require full access. When a conversation has no workspace

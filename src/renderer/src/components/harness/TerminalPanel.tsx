@@ -1,25 +1,31 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, theme, Tooltip } from 'antd'
-import { RiAddLine, RiCloseLine, RiLayoutRightLine, RiTerminalBoxLine } from '@remixicon/react'
+import {
+  RiAddLine,
+  RiCloseLine,
+  RiLayoutRightLine,
+  RiTerminalBoxLine
+} from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi, type TerminalSessionView } from '../../api/harness'
+import TerminalEmulator, {
+  type TerminalEmulatorHandle
+} from './TerminalEmulator'
 
 /**
  * 右侧「终端」面板（持久终端会话的用户侧入口）。
  *
- * 口径与设计稿（2026-11-27 用户确认）：
- * - **右侧停靠、直接占用布局宽度**，结构与右侧工作区面板同构（标题栏 / 页签 / 分隔条由外层给）；
- * - **没有单独的命令输入框**：点击终端区后直接在页面上打字，Enter 发送、Backspace 删除；
- * - 终端内容跟随主题（亮色浅底深字、暗色深底浅字），不显示「完全权限专用」这类底部提示；
- * - 与模型侧 `terminal_*` 工具共用会话管理器：模型开的会话会出现在页签里，面板里敲的
- *   命令也进入模型的可见输出（读取走非消费的 peek，不抢模型的未读缓冲）。
+ * 渲染/输入交给开源组件 **xterm.js**（TerminalEmulator），满足「不自己造轮子」；
+ * 本组件只保留面板壳（标题栏 / 会话页签 / 空态 / 会话生命周期）。
  *
- * 安全边界：新建会话 / 发送命令只在 `danger-full-access` 档允许（主进程仍会再校验），
- * 查看与关闭永远可用。
+ * 口径（2026-11-27 用户确认后持续迭代）：
+ * - 打开面板且没有会话时**默认自动新建一个终端**（不再要求先点「新建」）；
+ * - 与模型侧 `terminal_*` 工具共用会话管理器；peek 走非消费快照，不抢模型的未读输出；
+ * - 用户侧终端不受会话权限档限制（模型侧工具仍限完全权限档）。
  */
 
 interface TerminalPanelProps {
-  /** 当前话题；null = 没有选中会话，面板只显示空态 */
+  /** 当前话题；null = 没有选中会话，也允许用（会话归属 0，cwd 落到用户主目录） */
   topicId: number | null
   isDarkMode: boolean
   colorBgContainer: string
@@ -48,7 +54,8 @@ const TERMINAL_ERROR_KEYS = {
 } as const
 
 type TerminalErrorKey =
-  (typeof TERMINAL_ERROR_KEYS)[keyof typeof TERMINAL_ERROR_KEYS] | 'harness.terminalPanel.failed'
+  | (typeof TERMINAL_ERROR_KEYS)[keyof typeof TERMINAL_ERROR_KEYS]
+  | 'harness.terminalPanel.failed'
 
 const errorKey = (code: string | undefined): TerminalErrorKey => {
   if (code && code in TERMINAL_ERROR_KEYS) {
@@ -64,7 +71,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
   colorText,
   colorTextSecondary,
   colorTextTertiary,
-  colorBorderSecondary,
   onRunningCountChange,
   onClosePanel
 }) => {
@@ -73,11 +79,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const [sessions, setSessions] = useState<TerminalSessionView[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  /** 非消费快照（输出正文；轮询整体替换，不做增量拼接） */
+  const [busy, setBusy] = useState(false)
   const [snapshot, setSnapshot] = useState<{
     text: string
     cwd: string
@@ -86,22 +91,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     truncated: boolean
     binary: boolean
   } | null>(null)
-  /** 在终端页面上直接输入的当前行（没有输入框，这一行渲染在终端内容末尾） */
-  const [buffer, setBuffer] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [focused, setFocused] = useState(false)
-  /** 列表/新建都按 topicId ?? 0 归属：没有选中会话时也能用终端（落到用户主目录） */
-  const sessionKey = topicId ?? 0
 
-  const surfaceRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
   activeIdRef.current = activeId
-
-  const termBg = isDarkMode ? '#16181d' : '#f7f8fa'
-  const termText = isDarkMode ? '#d7dae0' : '#2b3038'
-  const promptColor = isDarkMode ? '#7ee787' : '#0b7a3b'
-  const cwdColor = isDarkMode ? '#79c0ff' : '#0b5cad'
-  const cursorColor = isDarkMode ? '#7ee787' : '#2b3038'
+  const emulatorRef = useRef<TerminalEmulatorHandle>(null)
+  /** 自动新建只尝试一次（失败或用户手动关闭后不反复重建；重开面板时组件重挂载会复位） */
+  const autoOpenedRef = useRef(false)
 
   const loadSessions = useCallback(async (): Promise<TerminalSessionView[]> => {
     try {
@@ -109,7 +104,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const list = result.ok ? result.sessions : []
       setSessions(list)
       setActiveId((prev) =>
-        prev && list.some((s) => s.sessionId === prev) ? prev : (list[0]?.sessionId ?? null)
+        prev && list.some((session) => session.sessionId === prev)
+          ? prev
+          : (list[0]?.sessionId ?? null)
       )
       onRunningCountChange?.(list.length)
       return list
@@ -119,21 +116,45 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, [onRunningCountChange, topicId])
 
+  const openSession = useCallback(async (): Promise<void> => {
+    if (opening) return
+    setOpening(true)
+    setError(null)
+    try {
+      const result = await harnessApi.terminal.open({ topicId: topicId ?? 0 })
+      if (!result.ok) {
+        setError(t(errorKey(result.error)))
+        return
+      }
+      await loadSessions()
+      setActiveId(result.session.sessionId)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setOpening(false)
+    }
+  }, [loadSessions, opening, t, topicId])
+
+  // 话题切换 / 首次挂载：清空列表与快照（自动新建标记复位）
   useEffect(() => {
     setSessions([])
     setActiveId(null)
     setSnapshot(null)
-    setBuffer('')
     setError(null)
-    setNotice(null)
+    autoOpenedRef.current = false
     setLoading(true)
-    void (async () => {
-      await loadSessions()
-      setLoading(false)
-    })()
-  }, [loadSessions, sessionKey])
+    void loadSessions().finally(() => setLoading(false))
+  }, [loadSessions])
 
-  // 轮询：会话列表（存活状态）+ 当前会话输出快照。peek 不消费未读缓冲。
+  // 打开面板且没有会话 → 默认自动新建一个终端（用户 2026-11-27 口径）
+  useEffect(() => {
+    if (loading || opening || error) return
+    if (sessions.length > 0 || autoOpenedRef.current) return
+    autoOpenedRef.current = true
+    void openSession()
+  }, [error, loading, openSession, opening, sessions.length])
+
+  // 轮询：会话列表（存活状态）+ 当前会话**原始**输出快照（保留 ANSI 给 xterm）
   useEffect(() => {
     let cancelled = false
     const tick = async (): Promise<void> => {
@@ -145,7 +166,11 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         return
       }
       try {
-        const peek = await harnessApi.terminal.peek({ sessionId: id, maxChars: 30_000 })
+        const peek = await harnessApi.terminal.peek({
+          sessionId: id,
+          maxChars: 30_000,
+          raw: true
+        })
         if (cancelled) return
         if (peek.ok) {
           setSnapshot({
@@ -172,38 +197,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, [loadSessions, topicId])
 
-  // 输出 / 输入变化后贴底
-  useEffect(() => {
-    const el = surfaceRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [snapshot, buffer])
-
-  // 面板打开或切换会话后把焦点放回终端（直接打字，没有输入框）
-  useEffect(() => {
-    if (activeId) surfaceRef.current?.focus()
-  }, [activeId])
-
-  const openSession = useCallback(async (): Promise<void> => {
-    if (opening) return
-    setOpening(true)
-    setError(null)
-    try {
-      const result = await harnessApi.terminal.open({ topicId: topicId ?? 0 })
-      if (!result.ok) {
-        setError(t(errorKey(result.error)))
-        return
-      }
-      setNotice(null)
-      const list = await loadSessions()
-      setActiveId(result.session.sessionId)
-      if (list.length === 0) await loadSessions()
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      setOpening(false)
-    }
-  }, [loadSessions, opening, t, topicId])
-
   const closeSession = useCallback(
     async (sessionId: string): Promise<void> => {
       try {
@@ -220,69 +213,33 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     [loadSessions]
   )
 
-  const sendCommand = useCallback(async (): Promise<void> => {
-    const id = activeIdRef.current
-    const command = buffer.trim()
-    if (!id || busy || !command) return
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    setBuffer('')
-    try {
-      const result = await harnessApi.terminal.send({
-        topicId: topicId ?? 0,
-        sessionId: id,
-        command,
-        // 命令可能长跑：先等一小段拿即时输出，其余交给 peek 轮询
-        waitMs: 400
-      })
-      if (!result.ok) {
-        setError(t(errorKey(result.error)))
-        // 发送失败时把命令放回输入行，避免用户重打
-        setBuffer(command)
-      } else if (result.result.timedOut) {
-        setNotice(t('harness.terminalPanel.stillRunning'))
-      }
-    } catch (err) {
-      setError(String(err))
-      setBuffer(command)
-    } finally {
-      setBusy(false)
-    }
-  }, [buffer, busy, t, topicId])
-
-  const onKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>): void => {
-      if (event.metaKey || event.ctrlKey) return
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        void sendCommand()
-        return
-      }
-      if (event.key === 'Backspace') {
-        event.preventDefault()
-        setBuffer((prev) => prev.slice(0, -1))
-        return
-      }
-      if (event.key.length === 1) {
-        event.preventDefault()
-        setBuffer((prev) => (prev.length >= 2000 ? prev : prev + event.key))
-        return
-      }
-      if (event.key === 'Escape') {
-        event.currentTarget.blur()
+  /** 命令发送：走已有会话通道；错误/超时以终端内一行提示呈现（不再是底部说明条） */
+  const handleSendCommand = useCallback(
+    async (command: string): Promise<void> => {
+      const id = activeIdRef.current
+      if (!id || busy) return
+      setBusy(true)
+      try {
+        const result = await harnessApi.terminal.send({
+          topicId: topicId ?? 0,
+          sessionId: id,
+          command,
+          waitMs: 400
+        })
+        if (!result.ok) {
+          emulatorRef.current?.writeLine(`\x1b[31m${t(errorKey(result.error))}\x1b[0m`)
+        } else if (result.result.timedOut) {
+          emulatorRef.current?.writeLine(`\x1b[33m${t('harness.terminalPanel.stillRunning')}\x1b[0m`)
+        }
+        emulatorRef.current?.focus()
+      } catch (err) {
+        emulatorRef.current?.writeLine(`\x1b[31m${String(err)}\x1b[0m`)
+      } finally {
+        setBusy(false)
       }
     },
-    [sendCommand]
+    [busy, t, topicId]
   )
-
-  const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>): void => {
-    const text = event.clipboardData?.getData('text') ?? ''
-    if (!text) return
-    event.preventDefault()
-    // 终端面板只接受单行命令：换行折叠成空格（多行脚本请用 && / ; 串联）
-    setBuffer((prev) => (prev + text.replace(/\r?\n+/g, ' ')).slice(0, 2000))
-  }, [])
 
   return (
     <div
@@ -320,9 +277,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
               fontWeight: 600
             }}
           >
-            <span
-              style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }}
-            />
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
             {t('harness.terminalPanel.runningCount', { count: sessions.length })}
           </span>
         ) : null}
@@ -333,7 +288,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
             size="small"
             data-terminal-action="new"
             aria-label={t('harness.terminalPanel.newSession')}
-            disabled={opening}
+            disabled={opening || sessions.length >= 3}
             loading={opening}
             icon={<RiAddLine size={14} />}
             onClick={() => void openSession()}
@@ -364,7 +319,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         ) : null}
       </div>
 
-      {/* 会话页签：与编辑器页签同款（激活白底 + 顶部主色条） */}
+      {/* 会话页签 */}
       <div
         className="flex items-stretch overflow-hidden"
         style={{
@@ -443,88 +398,38 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         ) : null}
       </div>
 
-      {/* 终端内容：点击就直接打字（没有输入框） */}
-      <div
-        ref={surfaceRef}
-        tabIndex={0}
-        data-terminal-surface="1"
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-          margin: 10,
-          borderRadius: 10,
-          background: termBg,
-          border: `1px solid ${focused ? token.colorPrimaryBorder : colorBorderSecondary}`,
-          boxShadow: focused ? `0 0 0 2px ${token.colorPrimaryBg}` : undefined,
-          padding: '12px 14px',
-          fontFamily: '"Cascadia Mono", Consolas, "SFMono-Regular", monospace',
-          fontSize: 11.8,
-          lineHeight: 1.78,
-          color: termText,
-          outline: 'none',
-          cursor: 'text'
-        }}
-      >
-        {loading ? (
-          <div style={{ color: colorTextTertiary }}>{t('harness.terminalPanel.loading')}</div>
-        ) : error ? (
-          <div style={{ color: token.colorError, whiteSpace: 'pre-wrap' }}>{error}</div>
-        ) : sessions.length === 0 ? (
-          <div style={{ color: isDarkMode ? '#8b949e' : '#8a8f99', fontSize: 12 }}>
-            <div style={{ marginBottom: 6 }}>{t('harness.terminalPanel.empty')}</div>
-            <div style={{ marginBottom: 10 }}>{t('harness.terminalPanel.emptyHint')}</div>
+      {/* 终端主体：xterm.js */}
+      {loading ? (
+        <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
+          {t('harness.terminalPanel.loading')}
+        </div>
+      ) : error ? (
+        <div style={{ padding: 14, fontSize: 12, color: token.colorError }}>
+          {error}
+          <div style={{ marginTop: 10 }}>
             <Button size="small" icon={<RiAddLine size={13} />} onClick={() => void openSession()}>
               {t('harness.terminalPanel.newSession')}
             </Button>
           </div>
-        ) : snapshot ? (
-          <>
-            {snapshot.text ? (
-              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{snapshot.text}</div>
-            ) : null}
-            {snapshot.truncated ? (
-              <div style={{ color: isDarkMode ? '#e3b341' : '#a86f0d', marginTop: 4 }}>
-                {t('harness.terminalPanel.truncated')}
-              </div>
-            ) : null}
-            {snapshot.binary ? (
-              <div style={{ color: isDarkMode ? '#e3b341' : '#a86f0d', marginTop: 4 }}>
-                {t('harness.terminalPanel.binary')}
-              </div>
-            ) : null}
-            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 2 }}>
-              <span style={{ color: cwdColor }}>{snapshot.cwd || '~'}</span>{' '}
-              <span style={{ color: promptColor }}>❯</span> {buffer}
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: 7,
-                  height: 13,
-                  verticalAlign: '-2px',
-                  background: cursorColor,
-                  opacity: focused ? 0.85 : 0.35,
-                  marginLeft: 1
-                }}
-              />
-            </div>
-            {!snapshot.alive ? (
-              <div style={{ color: colorTextTertiary, marginTop: 4 }}>
-                {t('harness.terminalPanel.exited')}
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <div style={{ color: colorTextTertiary }}>{t('harness.terminalPanel.loading')}</div>
-        )}
-        {notice ? (
-          <div style={{ color: isDarkMode ? '#e3b341' : '#a86f0d', marginTop: 4 }}>{notice}</div>
-        ) : null}
-      </div>
+        </div>
+      ) : sessions.length === 0 ? (
+        <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
+          <div style={{ marginBottom: 6 }}>{t('harness.terminalPanel.empty')}</div>
+          <div style={{ marginBottom: 10 }}>{t('harness.terminalPanel.emptyHint')}</div>
+          <Button size="small" icon={<RiAddLine size={13} />} onClick={() => void openSession()}>
+            {t('harness.terminalPanel.newSession')}
+          </Button>
+        </div>
+      ) : (
+        <TerminalEmulator
+          key={activeId ?? 'none'}
+          ref={emulatorRef}
+          output={snapshot?.text ?? ''}
+          isDarkMode={isDarkMode}
+          busy={busy}
+          onSend={(command) => void handleSendCommand(command)}
+        />
+      )}
     </div>
   )
 }

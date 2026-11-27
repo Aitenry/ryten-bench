@@ -312,10 +312,14 @@ export class TerminalSessionManager {
   /**
    * 只读快照（用户侧终端面板轮询用）：返回最近 maxChars 的合并输出，**不消费**未读缓冲，
    * 因此不会抢走模型 `terminal_read` 该读的内容；同时带回会话存活与 cwd 供面板展示。
+   *
+   * `raw: true` 时保留 ANSI 转义序列（xterm.js 前端要自己渲染颜色/光标控制）；
+   * 模型侧 `read()` 与默认 peek 仍走 stripAnsi 的纯文本。
    */
   peek(
     sessionId: string,
-    maxChars: number = MAX_RESULT_CHARS
+    maxChars: number = MAX_RESULT_CHARS,
+    options?: { raw?: boolean }
   ):
     | {
         ok: true
@@ -333,7 +337,7 @@ export class TerminalSessionManager {
     const session = this.sessions.get(sessionId)
     if (!session) return { ok: false, error: 'session-not-found' }
     const snap = session.ring.snapshot(maxChars)
-    const text = stripSentinelLines(stripAnsi(snap.text))
+    const stripped = stripSentinelLines(options?.raw ? snap.text : stripAnsi(snap.text))
     return {
       ok: true,
       sessionId: session.id,
@@ -341,10 +345,10 @@ export class TerminalSessionManager {
       shell: session.shell.kind,
       cwd: session.cwd,
       createdAt: session.createdAt,
-      text,
+      text: stripped,
       truncated: snap.truncated,
       droppedChars: snap.dropped,
-      binary: looksBinary(text)
+      binary: looksBinary(stripAnsi(stripped))
     }
   }
 

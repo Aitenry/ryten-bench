@@ -113,13 +113,17 @@ export function terminalIpcHandlers(): IpcHandlerMap {
   )
 
   /** 只读输出快照（非消费）：面板轮询用 */
-  handle('terminal-peek', (payload: { sessionId?: unknown; maxChars?: unknown }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
-    if (!sessionId) return { ok: false, error: 'invalid-session' }
-    const rawMax = Number(payload?.maxChars)
-    const maxChars = Number.isFinite(rawMax) ? Math.max(1_000, Math.min(80_000, rawMax)) : 20_000
-    return terminalSessions.peek(sessionId, maxChars)
-  })
+  /** 只读输出快照（非消费）：面板轮询用；`raw: true` 保留 ANSI 供 xterm 渲染 */
+  handle(
+    'terminal-peek',
+    (payload: { sessionId?: unknown; maxChars?: unknown; raw?: unknown }) => {
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+      if (!sessionId) return { ok: false, error: 'invalid-session' }
+      const rawMax = Number(payload?.maxChars)
+      const maxChars = Number.isFinite(rawMax) ? Math.max(1_000, Math.min(80_000, rawMax)) : 20_000
+      return terminalSessions.peek(sessionId, maxChars, { raw: payload?.raw === true })
+    }
+  )
 
   /** 关闭一个会话（整树终止；幂等） */
   handle('terminal-close', (payload: { sessionId?: unknown }) => {
