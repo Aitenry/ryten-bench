@@ -30,6 +30,11 @@ export const zhCNScheduleToolTexts = {
   viewLast: '上次执行: {{last}}（{{status}}）',
   viewTopic: '会话: {{topicId}}',
   viewPrompt: '提示词:\n{{prompt}}',
+  viewRecentRuns: '最近执行:',
+  viewRunItem: '- {{time}} · {{status}}',
+  runStatusCompleted: '成功',
+  runStatusCancelled: '已取消',
+  runStatusFailed: '失败',
   none: '—',
   /** 定时任务投递给模型的消息抬头（runner 使用） */
   question:
@@ -69,6 +74,11 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   viewLast: 'Last run: {{last}} ({{status}})',
   viewTopic: 'Conversation: {{topicId}}',
   viewPrompt: 'Prompt:\n{{prompt}}',
+  viewRecentRuns: 'Recent runs:',
+  viewRunItem: '- {{time}} · {{status}}',
+  runStatusCompleted: 'succeeded',
+  runStatusCancelled: 'cancelled',
+  runStatusFailed: 'failed',
   none: '—',
   question:
     '[Scheduled task: {{title}}]\n{{prompt}}\n\n(This message was delivered automatically by a schedule the user created. Work on it now; do not ask the user for confirmation.)',

@@ -57,6 +57,17 @@ function invalidWhenText(reason: ScheduleValidationFailure): string {
   return mainFormat(texts.invalidWhen, { reason: detail })
 }
 
+/** 执行状态 → 本地化标签 */
+function runStatusText(
+  texts: ReturnType<typeof getScheduleToolTexts>,
+  status: ScheduledTask['lastStatus']
+): string {
+  if (status === 'completed') return texts.runStatusCompleted
+  if (status === 'cancelled') return texts.runStatusCancelled
+  if (status === 'failed') return texts.runStatusFailed
+  return texts.none
+}
+
 /** 单条任务的详情文本 */
 function viewText(task: ScheduledTask): string {
   const texts = getScheduleToolTexts()
@@ -71,7 +82,23 @@ function viewText(task: ScheduledTask): string {
     mainFormat(texts.viewPrompt, { prompt: task.prompt })
   ]
   if (task.lastRunAt) {
-    lines.splice(4, 0, mainFormat(texts.viewLast, { last: task.lastRunAt, status: task.lastStatus ?? texts.none }))
+    lines.splice(
+      4,
+      0,
+      mainFormat(texts.viewLast, {
+        last: task.lastRunAt,
+        status: runStatusText(texts, task.lastStatus)
+      })
+    )
+  }
+  const runs = (task.runs ?? []).slice(-3)
+  if (runs.length > 0) {
+    lines.push(texts.viewRecentRuns)
+    for (const run of runs) {
+      lines.push(
+        mainFormat(texts.viewRunItem, { time: run.at, status: runStatusText(texts, run.status) })
+      )
+    }
   }
   return lines.join('\n')
 }

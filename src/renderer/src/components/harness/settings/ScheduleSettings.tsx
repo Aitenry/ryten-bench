@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { Button, Empty, Tag, theme } from 'antd'
 import {
   RiCalendar2Line,
@@ -80,6 +80,13 @@ const ScheduleSettings: React.FC = () => {
   const timeText = (iso: string | null): string =>
     iso ? new Date(iso).toLocaleString() : t('scheduleSettings.never')
 
+  const statusText = (status: ScheduleView['lastStatus']): string => {
+    if (status === 'completed') return t('scheduleSettings.statusCompleted')
+    if (status === 'cancelled') return t('scheduleSettings.statusCancelled')
+    if (status === 'failed') return t('scheduleSettings.statusFailed')
+    return t('scheduleSettings.never')
+  }
+
   const ruleText = (task: ScheduleView): string => {
     if (task.when.kind === 'once') {
       return t('scheduleSettings.ruleOnce', { at: timeText(task.when.at) })
@@ -143,6 +150,14 @@ const ScheduleSettings: React.FC = () => {
                   {' · '}
                   {t('scheduleSettings.nextRun', { time: timeText(task.nextRunAt) })}
                 </div>
+                {task.lastRunAt ? (
+                  <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
+                    {t('scheduleSettings.lastRun', {
+                      time: timeText(task.lastRunAt),
+                      status: statusText(task.lastStatus)
+                    })}
+                  </div>
+                ) : null}
                 <div
                   style={{
                     fontSize: 12,

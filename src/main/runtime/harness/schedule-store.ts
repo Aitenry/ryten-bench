@@ -25,7 +25,18 @@ export interface ScheduledTask {
   nextRunAt: string | null
   lastRunAt?: string
   lastStatus?: 'completed' | 'cancelled' | 'failed'
+  /** 最近几次执行记录（上限 {@link MAX_RUN_HISTORY}；旧记录自动丢弃） */
+  runs?: ScheduleRunRecord[]
 }
+
+/** 单次执行记录 */
+export interface ScheduleRunRecord {
+  at: string
+  status: 'completed' | 'cancelled' | 'failed'
+}
+
+/** 每个任务保留的执行记录条数 */
+export const MAX_RUN_HISTORY = 5
 
 export interface ScheduleCreateInput {
   title: string
@@ -135,7 +146,8 @@ export class ScheduleStore {
   }
 
   /**
-   * 记录一次执行结果：更新 nextRunAt / enabled / lastRunAt / lastStatus。
+   * 记录一次执行结果：更新 nextRunAt / enabled / lastRunAt / lastStatus，并追加一条
+   * 有界的执行历史（供设置页与 schedule_view 展示）。
    *
    * `nextRunAt = null` 表示不再触发（一次性任务或已停用）。
    */
@@ -148,11 +160,16 @@ export class ScheduleStore {
       enabled?: boolean
     }
   ): ScheduledTask | undefined {
+    const task = this.get(id)
+    if (!task) return undefined
+    const status = result.status ?? 'completed'
+    const runs = [...(task.runs ?? []), { at: result.ranAt, status }].slice(-MAX_RUN_HISTORY)
     return this.update(id, {
       lastRunAt: result.ranAt,
-      lastStatus: result.status,
+      lastStatus: status,
       nextRunAt: result.nextRunAt,
-      enabled: result.enabled ?? result.nextRunAt !== null
+      enabled: result.enabled ?? result.nextRunAt !== null,
+      runs
     })
   }
 }
