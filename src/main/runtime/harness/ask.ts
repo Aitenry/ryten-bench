@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
+import { buildCancelledAnswer } from './question-cancel'
 
 /**
  * 向用户提问（ask_user_question）— 对应 deepseek-harness 的
@@ -44,6 +45,11 @@ export interface AskQuestion {
 /** 答案（单选取第一个；多选为数组；selected 为空而带 custom = 用户自行输入，即「其他」） */
 export interface AskAnswer {
   answers: Array<{ id: string; selected: string[]; custom?: string }>
+  /**
+   * 用户点了「取消」：本轮**不中止**，工具正常返回这条带 cancelled 的答案，
+   * 模型据此继续执行（见 ask 工具描述与 question-cancel.ts）。
+   */
+  cancelled?: boolean
 }
 
 /** 挂起提问的视图（广播到前端） */
@@ -150,6 +156,23 @@ export class QuestionService {
     return true
   }
 
+  /**
+   * 用户取消回答：**不中止本轮**，把挂起项按 `cancelled: true` 结算，模型继续执行。
+   *
+   * 与 `abortTopic` 的区别：abort 让工具抛 AskAbortedError（本轮结束）；这里工具正常
+   * 返回，模型拿到取消标记后自行决定下一步，不再等待用户。
+   */
+  cancel(requestId: string): boolean {
+    const record = this.pending.get(requestId)
+    if (!record) return false
+    this.pending.delete(requestId)
+    this.detach(record)
+    record.resolve(buildCancelledAnswer(record.questions))
+    this.notifyResolved(record.topicId)
+    logger.info(`[Ask] Question ${requestId} cancelled by user (turn continues)`)
+    return true
+  }
+
   /** 读取话题的挂起提问（前端重载/恢复用） */
   getPending(topicId: number): PendingQuestionView | null {
     for (const record of this.pending.values()) {
@@ -237,7 +260,7 @@ export function buildAskUserTool(fallbackTopicId = 0): StructuredToolInterface {
     {
       name: 'ask_user_question',
       description:
-        'Ask the user one or more questions and wait for the answers within the same turn (the conversation does not end). Use it when you cannot continue without user input: choosing between approaches, confirming a permission or a destructive action, or filling in missing critical information. Ask several questions at once when they belong together. Put the recommended option first and append "(Recommended)" to its label. For choice questions the UI appends an extra "Other" choice that lets the user type their own answer, so do not add your own "Other" option. The answers arrive as JSON: { answers: [{ id, selected: string[], custom? }] }. For a choice question selected normally holds one element (single) or the checked ones (multi); when the user typed a free-form / "Other" answer, selected may be empty and custom holds the typed text instead.',
+        'Ask the user one or more questions and wait for the answers within the same turn (the conversation does not end). Use it when you cannot continue without user input: choosing between approaches, confirming a permission or a destructive action, or filling in missing critical information. Ask several questions at once when they belong together. Put the recommended option first and append "(Recommended)" to its label. For choice questions the UI appends an extra "Other" choice that lets the user type their own answer, so do not add your own "Other" option. The answers arrive as JSON: { answers: [{ id, selected: string[], custom? }] }. For a choice question selected normally holds one element (single) or the checked ones (multi); when the user typed a free-form / "Other" answer, selected may be empty and custom holds the typed text instead. If the user cancels instead of answering, the result is { answers: [], cancelled: true } and you must continue on your best judgment without waiting or asking again.',
       schema: z.object({
         questions: z
           .array(askQuestionSchema)

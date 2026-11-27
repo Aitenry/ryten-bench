@@ -21,7 +21,6 @@ import ToolTextPreview from './ToolTextPreview'
 import StreamTextWindow from './StreamTextWindow'
 import FoldBody from './FoldBody'
 import {
-  ProposeActionsCard,
   ToolProgressCard,
   ToolResultCard,
   ToolImageStrip,
@@ -455,23 +454,6 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         colorBorderSecondary
       }
       return <PresentedFilesCard key={key} tool={tool} isNested={isNested} style={style} />
-    }
-
-    /** propose_action：回答下方的动作卡（按钮来自工具入参，随对话落库） */
-    const renderProposeActionsCard = (
-      tool: ToolCall,
-      key: string | number,
-      isNested = false
-    ): React.ReactNode => {
-      const style: ToolCardStyle = {
-        isDarkMode,
-        colorText,
-        colorTextSecondary,
-        colorTextTertiary,
-        colorFillAlter,
-        colorBorderSecondary
-      }
-      return <ProposeActionsCard key={key} tool={tool} isNested={isNested} style={style} />
     }
 
     // ── Mnemon 记忆工具定制卡片 ──────────────────────────────────────────
@@ -1364,9 +1346,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           if (toolName === 'present' && block.tool.status === 'completed') {
             return renderPresentCard(block.tool, blockIndex, false)
           }
-          // 动作卡（propose_action）：点选按钮即回传一条用户消息
-          if (toolName === 'propose_action' && block.tool.status === 'completed') {
-            return renderProposeActionsCard(block.tool, blockIndex, false)
+          // propose_action 不在消息流留痕（2026-11-27 用户口径）：确认只出现在输入区预填条
+          if (toolName === 'propose_action') {
+            return null
           }
           // 系统工具：进行中与完成态共用同款卡片（光泽只在进行中扫过，完成后静止）
           if (CARD_TOOLS.has(toolName)) {
@@ -1627,9 +1609,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 if (toolName === 'present' && child.tool.status === 'completed') {
                   return renderPresentCard(child.tool, ci, true)
                 }
-                // 动作卡（propose_action，嵌套）：同上
-                if (toolName === 'propose_action' && child.tool.status === 'completed') {
-                  return renderProposeActionsCard(child.tool, ci, true)
+                // propose_action（嵌套）：同样不在消息流留痕
+                if (toolName === 'propose_action') {
+                  return null
                 }
                 // 系统工具（嵌套）：进行中与完成态共用同款卡片（光泽只在进行中扫过）
                 if (CARD_TOOLS.has(toolName)) {

@@ -160,10 +160,16 @@ from the hub or from a local package, and both paths end in the same host instal
   are captured (capped at 20k/50k characters), synchronous work is limited to 5 s, the whole call to
   120 s with at most 200 tool calls. `node:vm` is not a security boundary, so like the terminal it
   only works in the **full access** permission mode.
-- **Action cards** — `propose_action` renders 1–4 clickable buttons under the reply (with an optional
-  prompt and per-action description); picking one sends its `reply` text (or its label) as the next
-  user message through the normal send path — queued when a turn is already running — so the model
-  can offer concrete choices instead of asking an open question.
+- **Next-step prefill** — `propose_action` offers 1–4 next actions without leaving anything in the
+  transcript: while the proposal is pending the composer is replaced by a single editable input
+  bar pre-filled with the first action's `reply` (falling back to its label). Enter / `›` sends
+  the text through the normal send path (queued when a turn is already running); `✕` dismisses it
+  without sending. The message flow renders no card, so history only shows what was actually sent.
+- **Inline questions** — `ask_user_question` pauses the turn and opens a panel **inside the
+  composer area instead of a separate window**: single/multi choice with a fixed "Other" free-text
+  option, free-form questions, and several questions walked one at a time (Previous / Next /
+  Submit). Submitting resumes the same turn. **Cancel does not end the turn** — the model receives
+  `cancelled: true` and continues on its own, and the composer becomes editable again immediately.
 - **Model routes for subagents** — `list_subagent_models` lists the enabled `provider:model` routes
   with a capability summary (image input, tool calling, reasoning) and marks the default, so
   `agent_create` and subagent configurations can pick a valid route instead of guessing; omitting the

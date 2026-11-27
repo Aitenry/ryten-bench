@@ -603,6 +603,12 @@ export const harnessApi = {
       on('harness:harness-question-asked', (pending) => callback(pending as PendingQuestionView)),
     answerQuestion: (requestId: string, answers: AskAnswerItem[]) =>
       invoke('harness:harness-question-answer', requestId, answers) as Promise<boolean>,
+    /**
+     * 用户取消回答：主进程按 `cancelled: true` 结算挂起问题，**本轮不终止**，
+     * 模型收到后继续执行；调用后前端立即收起内联提问面板。
+     */
+    cancelQuestion: (requestId: string) =>
+      invoke('harness:harness-question-cancel', requestId) as Promise<boolean>,
     getQuestion: (topicId: number) =>
       invoke('harness:harness-question-get', topicId) as Promise<PendingQuestionView | null>,
     /**

@@ -2374,6 +2374,13 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   handle('harness-question-get', (topicId: number) => {
     return questionService.getPending(topicId)
   })
+  /**
+   * 用户取消回答：**不中止本轮**，按 cancelled 结算后模型继续执行。
+   * （旧行为是「取消=中止本轮」，用户 2026-11-27 明确要求取消不能终止任务。）
+   */
+  handle('harness-question-cancel', (requestId: string) => {
+    return questionService.cancel(requestId)
+  })
 
   // ── 沙箱审批（危险 / 越界操作被拦下后等用户决定）─────────────────────────
   // 与提问不同：审批只影响「这一次调用」，没有「总是允许」——持久策略由档位负责。

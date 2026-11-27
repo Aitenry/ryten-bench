@@ -367,15 +367,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       toggleTerminal: 'Terminal',
       generating: 'Generating'
     },
-    /** Inline propose_action confirmation (same styling as sandbox approval) */
-    proposal: {
-      title: 'Next step',
-      subtitle:
-        'The model suggested actions; pick one to continue, or type your own instruction below',
-      fallbackQuestion: 'Continue?',
-      inlineHint: 'Your choice is sent as the next message',
-      picked: 'Picked: {{label}}'
-    },
     /** Right-side persistent terminal panel (human UI) */
     terminalPanel: {
       title: 'Terminal',
@@ -598,13 +589,23 @@ export const harnessEnUS: typeof harnessZhCN = {
       deleteOrphanContent: 'This prompt has no reply yet. Deleting it cannot be undone.'
     },
     askQuestion: {
-      title: 'Your confirmation is needed',
+      headerTitle: 'Your confirmation is needed',
       okText: 'Submit answer',
       cancelText: 'Cancel',
       otherOption: 'Other',
       customPlaceholder: 'Type your answer…',
-      footerHint:
-        'After submitting, the model continues in this turn; "Cancel" dismisses the question and stops the turn.'
+      singleHint: 'The turn continues after you answer; you can also cancel',
+      progress:
+        'Question {{current}} / {{total}} · answer to move to the next one; the turn continues after the last',
+      prev: 'Previous',
+      next: 'Next',
+      cancelHint: 'Cancelling continues the turn without waiting',
+      required: 'Answer this question first'
+    },
+    proposalBar: {
+      ariaLabel: 'AI recommended action, editable before sending',
+      send: 'Send',
+      dismiss: 'Dismiss'
     },
     modelRecovery: {
       title: 'Model request failed',

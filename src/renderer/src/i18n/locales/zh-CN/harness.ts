@@ -362,14 +362,6 @@ export const harnessZhCN = {
       toggleTerminal: '终端',
       generating: '生成中'
     },
-    /** propose_action 的输入区内联确认（与沙箱授权同一套样式） */
-    proposal: {
-      title: '下一步确认',
-      subtitle: '模型给出了可选动作；选一个继续，或直接在下方输入自己的指令',
-      fallbackQuestion: '要继续吗？',
-      inlineHint: '选择后作为下一条消息发送',
-      picked: '已选择：{{label}}'
-    },
     /** 右侧持久终端面板（用户侧） */
     terminalPanel: {
       title: '终端',
@@ -584,12 +576,22 @@ export const harnessZhCN = {
       deleteOrphanContent: '这条提问还没有对应的回复，删除后无法恢复。'
     },
     askQuestion: {
-      title: '需要你的确认',
+      headerTitle: '模型需要你确认',
       okText: '提交回答',
       cancelText: '取消',
       otherOption: '其他',
       customPlaceholder: '输入你的回答…',
-      footerHint: '提交后模型将在本轮对话中继续执行；点「取消」会取消提问并中止本轮。'
+      singleHint: '回答后本轮继续，不会中断；也可以取消',
+      progress: '问题 {{current}} / {{total}} · 回答后自动进入下一题，全部答完本轮继续',
+      prev: '上一题',
+      next: '下一题',
+      cancelHint: '取消后模型会继续执行，不等待',
+      required: '请先完成这道题'
+    },
+    proposalBar: {
+      ariaLabel: 'AI 推荐操作，可修改后发送',
+      send: '发送',
+      dismiss: '取消'
     },
     modelRecovery: {
       title: '模型请求失败',

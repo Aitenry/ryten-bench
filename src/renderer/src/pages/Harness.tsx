@@ -13,20 +13,20 @@ import HarnessInput from '../components/harness/HarnessInput'
 import InlineGoalCard from '../components/harness/InlineGoalCard'
 import InlinePlanTray from '../components/harness/InlinePlanTray'
 import PermissionApprovalPanel from '../components/harness/PermissionApprovalPanel'
-import ProposalActionPanel, {
-  type ProposalActionItem
-} from '../components/harness/ProposalActionPanel'
+import AskQuestionPanel from '../components/harness/AskQuestionPanel'
+import ProposalPrefillBar from '../components/harness/ProposalPrefillBar'
 import { useTopicPending } from '../hooks/harness/useTopicPending'
+import { findPendingProposal } from '../utils/harness/proposal'
 import WelcomeIntro from '../components/harness/WelcomeIntro'
 import QueueDock from '../components/harness/QueueDock'
 import TaskProgressCard from '../components/harness/TaskProgressCard'
-import AskQuestionModal from '../components/harness/AskQuestionModal'
 import ModelRecoveryModal from '../components/harness/ModelRecoveryModal'
 import WorkspacePanel, { type WorkspacePanelHandle } from '../components/harness/WorkspacePanel'
 import { useSubagentConversation } from '../hooks/harness/useSubagentConversation'
 import type {
   ApprovalDecision,
   ApprovalRequestView,
+  PendingQuestionView,
   SubagentSessionRow
 } from '../../../shared/harness/types'
 import {
@@ -134,51 +134,24 @@ const Harness: React.FC = () => {
   const [planReviewPending, setPlanReviewPending] = useState(false)
 
   /**
-   * 待确认的 propose_action（输入区内联面板用）。
+   * 待确认的 propose_action（输入区预填条用，2026-11-27 用户口径）。
    *
-   * 只认「最后一条用户消息之后的最新一条助手消息」里的 propose_action：一旦用户选了一个
-   * 动作（会先乐观上屏一条用户消息）或自己发了新消息，面板自动消失，历史仍旧由消息卡片
-   * 留痕。这样面板不会把几条旧的提议同时铺在输入框上方。
+   * 只认「最后一条用户消息之后的最新一条助手消息」里的 propose_action；消息流里不再渲染
+   * 任何卡片。✕ 关闭后把 key 记进 dismissedProposalKey，同一条提议不会再弹回来。
    */
-  const pendingProposal = useMemo<{
-    question: string
-    actions: ProposalActionItem[]
-  } | null>(() => {
-    let lastUserIndex = -1
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'user') {
-        lastUserIndex = i
-        break
-      }
-    }
-    for (let i = messages.length - 1; i > lastUserIndex; i -= 1) {
-      const message = messages[i]
-      if (message.role !== 'assistant') continue
-      const blocks = message.blocks ?? []
-      for (let b = blocks.length - 1; b >= 0; b -= 1) {
-        const block = blocks[b]
-        if (block.type !== 'tool') continue
-        const tool = block.tool
-        if (!tool || tool.name !== 'propose_action') continue
-        if ((tool.status ?? 'completed') !== 'completed') continue
-        const input = (tool.input ?? {}) as { question?: unknown; actions?: unknown }
-        const question = typeof input.question === 'string' ? input.question.trim() : ''
-        const actions = (Array.isArray(input.actions) ? input.actions : [])
-          .filter(
-            (action): action is ProposalActionItem =>
-              typeof action === 'object' &&
-              action !== null &&
-              typeof (action as { label?: unknown }).label === 'string' &&
-              ((action as { label: string }).label ?? '').trim().length > 0
-          )
-          .slice(0, 4)
-        if (actions.length > 0) return { question, actions }
-      }
-      // 最新一条助手消息里没有待确认的动作 → 不再往前找（旧提议已经过期）
-      break
-    }
-    return null
-  }, [messages])
+  const pendingProposal = useMemo(() => findPendingProposal(messages), [messages])
+  const [dismissedProposalKey, setDismissedProposalKey] = useState<string | null>(null)
+  const visibleProposal =
+    pendingProposal && pendingProposal.key !== dismissedProposalKey ? pendingProposal : null
+
+  /** 预填条 › / Enter：与手动发送同一条管线（生成中会排队），并立即收起输入条 */
+  const handleSendProposalText = useCallback(
+    (text: string): void => {
+      if (pendingProposal) setDismissedProposalKey(pendingProposal.key)
+      window.dispatchEvent(new CustomEvent('harness-propose-action', { detail: { text } }))
+    },
+    [pendingProposal]
+  )
 
   /** 权限授权：挂起审批存在时，输入区整体让位给内联审批面板 */
   const fetchApprovalPending = useCallback(
@@ -212,6 +185,59 @@ const Harness: React.FC = () => {
     },
     [approvalPending, approvalSubmitting, clearApprovalPending, message]
   )
+
+  /**
+   * 提问（ask_user_question）：输入区内联面板（不再弹窗）。
+   * sort 优先级：权限授权 > 提问 > propose_action 预填条 > 普通输入框。
+   * 「换模型继续」「计划评审」仍由各自的专用弹窗处理，这里过滤掉。
+   */
+  const fetchQuestionPending = useCallback(
+    (topicId: number) => harnessApi.harness.getQuestion(topicId),
+    []
+  )
+  const subscribeQuestion = useCallback(
+    (listener: (pending: PendingQuestionView) => void) =>
+      harnessApi.harness.onQuestionAsked(listener),
+    []
+  )
+  const { pending: questionPending, clear: clearQuestionPending } =
+    useTopicPending<PendingQuestionView>({
+      currentTopicId,
+      fetchPending: fetchQuestionPending,
+      subscribe: subscribeQuestion,
+      accept: (pending) =>
+        !pending.questions.some(
+          (question) => question.kind === 'model-recovery' || question.kind === 'plan-review'
+        )
+    })
+  const [questionSubmitting, setQuestionSubmitting] = useState(false)
+  const handleSubmitQuestion = useCallback(
+    async (answers: Array<{ id: string; selected: string[]; custom?: string }>): Promise<void> => {
+      if (!questionPending || questionSubmitting) return
+      setQuestionSubmitting(true)
+      try {
+        await harnessApi.harness.answerQuestion(questionPending.requestId, answers)
+        clearQuestionPending()
+      } catch (err) {
+        message.error((err as Error).message)
+      } finally {
+        setQuestionSubmitting(false)
+      }
+    },
+    [questionPending, questionSubmitting, clearQuestionPending, message]
+  )
+  /**
+   * 取消回答：**不终止本轮**。先收起面板，再让主进程按 cancelled 结算挂起提问，
+   * 模型拿到「用户取消回答」后继续执行；输入区立即恢复。
+   */
+  const handleCancelQuestion = useCallback((): void => {
+    if (!questionPending) return
+    const requestId = questionPending.requestId
+    clearQuestionPending()
+    void harnessApi.harness.cancelQuestion(requestId).catch((err: unknown) => {
+      console.error('Failed to cancel question:', err)
+    })
+  }, [questionPending, clearQuestionPending])
 
   // 模型就绪检查：应用即开即用，只有「助手」页依赖模型配置——未配置时在本页内引导
   const hasModels = providers.length > 0
@@ -609,6 +635,34 @@ const Harness: React.FC = () => {
         onDecide={handleDecideApproval}
       />
     </ConversationFooter>
+  ) : questionPending ? (
+    /* 提问内联面板：不再弹独立窗口；取消不会终止本轮 */
+    <ConversationFooter
+      welcome={false}
+      colorBgContainer={colorBgContainer}
+      colorBorderSecondary={colorBorderSecondary}
+    >
+      <AskQuestionPanel
+        key={questionPending.requestId}
+        pending={questionPending}
+        submitting={questionSubmitting}
+        onSubmit={(answers) => void handleSubmitQuestion(answers)}
+        onCancel={handleCancelQuestion}
+      />
+    </ConversationFooter>
+  ) : visibleProposal ? (
+    /* propose_action 预填条：替换输入框，消息流零留痕 */
+    <ConversationFooter
+      welcome={false}
+      colorBgContainer={colorBgContainer}
+      colorBorderSecondary={colorBorderSecondary}
+    >
+      <ProposalPrefillBar
+        proposal={visibleProposal}
+        onSend={handleSendProposalText}
+        onDismiss={() => setDismissedProposalKey(visibleProposal.key)}
+      />
+    </ConversationFooter>
   ) : (
     <ConversationFooter
       welcome={isWelcomeMode}
@@ -616,14 +670,6 @@ const Harness: React.FC = () => {
       colorBorderSecondary={colorBorderSecondary}
       top={
         <>
-          {/* 动作确认：与沙箱授权同一套内联面板样式，放在输入框区域 */}
-          {pendingProposal ? (
-            <ProposalActionPanel
-              key={`proposal-${pendingProposal.actions.map((a) => a.label).join('|')}-${messages.length}`}
-              question={pendingProposal.question}
-              actions={pendingProposal.actions}
-            />
-          ) : null}
           <InlinePlanTray
             currentTopicId={currentTopicId}
             toggleSignal={planToggleSignal}
@@ -1142,8 +1188,7 @@ const Harness: React.FC = () => {
             )}
           </div>
 
-          {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答 */}
-          <AskQuestionModal currentTopicId={currentTopicId} onCancelTurn={handleStop} />
+          {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答（已改为输入区内联面板） */}
           {/* 模型请求失败弹窗：自动重试耗尽后选择是否切换模型继续（原位继续，不重发问题） */}
           <ModelRecoveryModal currentTopicId={currentTopicId} />
         </div>

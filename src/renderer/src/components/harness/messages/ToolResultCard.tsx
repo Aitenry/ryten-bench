@@ -557,63 +557,6 @@ export const ToolImageStrip: React.FC<{
  * 点选后通过 `harness-propose-action` 事件把 reply（缺省为 label）交给会话发送逻辑——
  * 与手动发消息同一条路径（生成中则入队）。点过之后本卡片就地禁用并显示所选文本。
  */
-/**
- * 动作确认的历史留痕（propose_action 完成后的消息卡片）。
- *
- * 2026-11-27 用户口径：确认 UI 要像沙箱授权一样放在**输入框区域**（见 ProposalActionPanel），
- * 所以消息流里不再放可点按钮——这里只记录模型问过什么、给过哪些选项；真正可操作的
- * 确认面板由输入区根据「最后一条用户消息之后的最新 propose_action」渲染。
- */
-export const ProposeActionsCard: React.FC<{
-  tool: ToolCall
-  isNested?: boolean
-  style: ToolCardStyle
-}> = ({ tool, isNested = false, style }) => {
-  const input = tool.input as { question?: unknown; actions?: unknown } | undefined
-  const question = typeof input?.question === 'string' ? input.question.trim() : ''
-  const rawActions = Array.isArray(input?.actions) ? input.actions : []
-  const actions = rawActions
-    .filter(
-      (action): action is { label: string; description?: string; reply?: string } =>
-        typeof action === 'object' &&
-        action !== null &&
-        typeof (action as { label?: unknown }).label === 'string' &&
-        ((action as { label: string }).label ?? '').trim().length > 0
-    )
-    .slice(0, 4)
-  if (actions.length === 0) return null
-
-  return (
-    <div
-      style={{
-        margin: isNested ? '4px 0 6px 20px' : '6px 0 8px 22px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        maxWidth: 620
-      }}
-    >
-      {question && <div style={{ fontSize: 13, color: style.colorTextSecondary }}>{question}</div>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {actions.map((action) => (
-          <span
-            key={action.label}
-            title={action.description}
-            style={{
-              fontSize: 12,
-              color: style.colorTextTertiary,
-              border: `1px solid ${style.colorBorderSecondary}`,
-              borderRadius: 7,
-              padding: '2px 9px'
-            }}
-          >
-            {action.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
 export const PresentedFilesCard: React.FC<{
   tool: ToolCall
   isNested?: boolean
