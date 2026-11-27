@@ -599,6 +599,9 @@ async function fetchWeather(params: WeatherParams): Promise<string> {
 export function buildGetWeatherTool(): StructuredToolInterface {
   return tool(async (params) => fetchWeather(params as WeatherParams), {
     name: 'get_weather',
+    // 天气是纯读网络调用；加超时避免上游无响应时把整轮挂死
+    isConcurrencySafe: () => true,
+    timeoutMs: 30_000,
     description:
       'Get current weather and forecasts for a location. Accepts a city/district name, latitude/longitude, or no location (uses the current IP-based location when available). Returns timezone and observation time, current conditions, a daily forecast (high/low, feels-like, precipitation, wind/gusts, UV, sunrise/sunset) and, when requested, hourly rows. Use include_hourly=true for rain timing questions; use hourly_date=YYYY-MM-DD for a specific day within 16 days. If geocoding is ambiguous the result lists candidates; call again with location_index to choose one.',
     schema: z.object({

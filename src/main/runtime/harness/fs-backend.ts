@@ -1,4 +1,4 @@
-import { tool, type StructuredToolInterface } from '../../ai/tools'
+﻿import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -485,6 +485,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
       },
       {
         name: 'read_file',
+        isConcurrencySafe: () => true,
         description:
           'Read a file (UTF-8) from the virtual filesystem. Paths are virtual and must start with "/", e.g. /uploads/report.txt or /memories/_global/memories/AGENTS.md. When a file exceeds the inline limit, the result starts with a spill locator for the full content: use offset/limit to read a line range of that file, or grep to locate what you need.',
         schema: z.object({
@@ -572,6 +573,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
       },
       {
         name: 'read_image',
+        isConcurrencySafe: () => true,
         description:
           'Read a PNG / JPEG / WebP / GIF image from the virtual filesystem and put the image itself into the conversation, so you can actually look at a screenshot, diagram, chart or photo instead of guessing from its name. Requires a vision-capable model; the default cap is 10 MB per image. The image is attached right after this tool result.',
         schema: z.object({
@@ -740,6 +742,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
       },
       {
         name: 'ls',
+        isConcurrencySafe: () => true,
         description:
           'List the files and subdirectories directly inside a virtual filesystem directory (one level, not recursive). Use glob to match paths recursively by pattern.',
         schema: z.object({
@@ -778,6 +781,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
       },
       {
         name: 'glob',
+        isConcurrencySafe: () => true,
         description:
           'Find files and directories by path pattern in the virtual filesystem. Patterns support *, ** and ? (e.g. **/*.md) and are matched against paths, not file contents; use grep to search inside files.',
         schema: z.object({
@@ -837,6 +841,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
       },
       {
         name: 'grep',
+        isConcurrencySafe: () => true,
         description:
           'Search file contents in the virtual filesystem and return matching lines with their paths and line numbers. The pattern is a regular expression matched against each line; use glob to narrow which files are searched.',
         schema: z.object({

@@ -22,7 +22,9 @@ import { getMainLanguage } from './index'
 export const zhCNAgentToolTexts = {
   /** 工具执行器（agent.ts）：工具抛错时写进工具卡片的返回 */
   agent: {
-    toolFailed: '工具执行失败: {{message}}'
+    toolFailed: '工具执行失败: {{message}}',
+    toolTimeout:
+      '工具 "{{name}}" 执行超时（{{ms}} 毫秒），宿主已停止等待本次结果。请缩小范围重试，或直接根据已有信息继续。'
   },
 
   /** 技能工具（skills.ts）：按需加载技能全文 */
@@ -165,7 +167,9 @@ export const zhCNAgentToolTexts = {
 
 export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
   agent: {
-    toolFailed: 'Tool execution failed: {{message}}'
+    toolFailed: 'Tool execution failed: {{message}}',
+    toolTimeout:
+      'The tool "{{name}}" timed out after {{ms}} ms; the host stopped waiting for this call. Retry with a smaller scope, or continue with the information you already have.'
   },
 
   /** Skill tool (skills.ts): loads a skill body on demand */

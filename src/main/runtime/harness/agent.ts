@@ -154,6 +154,42 @@ export const MAX_TOOL_CALLS = 200
 /** 兜底下限：模型设置里填了过小的值也不至于一步都跑不完 */
 export const MIN_TOOL_CALLS = 10
 
+/** 工具超时错误（携带配置的毫秒数，给模型的文案据此生成） */
+class ToolTimeoutError extends Error {
+  readonly timeoutMs: number
+
+  constructor(timeoutMs: number) {
+    super(`TOOL_TIMEOUT after ${timeoutMs}ms`)
+    this.name = 'ToolTimeoutError'
+    this.timeoutMs = timeoutMs
+  }
+}
+
+/**
+ * 协作式工具超时：只约束**宿主等待时间**，不强行终止工具内部的 I/O（信号仍由工具自己观察）。
+ *
+ * 超时后底层 Promise 可能仍会结束：挂一个空的 catch 防止未处理的 rejection 冒到进程层。
+ */
+function withToolTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined): Promise<T> {
+  if (!timeoutMs || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      promise.catch(() => {})
+      reject(new ToolTimeoutError(timeoutMs))
+    }, timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
+
 /** 渐进提醒阈值：累计调用达到上限的 75% 时引导模型收尾一次（不拦截，仅提示一次） */
 export const SOFT_TOOL_CALL_WARN_RATIO = 0.75
 
@@ -219,6 +255,117 @@ function createToolRunner(
     const outputs: BaseMessage[] = []
     /** 本轮工具产出的图像：全部工具结果落盘后合并成一条 user 消息（见上方注释） */
     const imageOutputs: Array<{ tool: string; image: ToolImage }> = []
+
+    /**
+     * 一轮模型回复里的工具调用按「并行安全」分批（对应 DSH 的 isConcurrencySafe 批次）。
+     *
+     * - `isConcurrencySafe(args) === true` 的调用进入同一个安全批，整批并行执行；
+     * - 其余调用（写文件、执行命令、未知工具、被护栏拦截的调用）形成屏障：先等前面的
+     *   安全批跑完，再独占执行，保证「读-改-写」这类依赖顺序不被并行打乱。
+     *
+     * 结果仍按模型给出的调用顺序写回，前端卡片、tool_call_id 配对和防循环护栏都不变。
+     */
+    interface PendingToolCall {
+      name: string
+      callId: string
+      args: Record<string, unknown>
+      tool: StructuredToolInterface
+      key: string
+    }
+    let safeBatch: PendingToolCall[] = []
+
+    /** 推送一条不执行工具的结果（护栏/上限/未知工具），保持记录顺序 */
+    const pushSkipped = (
+      name: string,
+      callId: string,
+      args: Record<string, unknown>,
+      message: string
+    ): void => {
+      outputs.push(new ToolMessage({ content: message, tool_call_id: callId }))
+      if (push) {
+        const record: ToolCallRecord = {
+          kind: 'tool_call',
+          name,
+          input: args,
+          callId,
+          output: Promise.resolve(message)
+        }
+        pushRecord(push, record, subagentCtx)
+      }
+    }
+
+    /** 派发一次工具调用：返回文本结果与图像；执行 Promise 同时驱动前端卡片状态 */
+    const dispatch = (
+      item: PendingToolCall
+    ): Promise<{ output: string; media: ToolImage[] }> => {
+      const media: ToolImage[] = []
+      const outputPromise = (async () => {
+        try {
+          const result = await withToolTimeout(
+            item.tool.invoke(item.args, {
+              ...config,
+              configurable: { ...(config.configurable ?? {}), toolCallId: item.callId }
+            }),
+            item.tool.timeoutMs
+          )
+          if (isToolMediaResult(result)) {
+            media.push(...result.images)
+            return result.text
+          }
+          // 溢出策略：超长输出保存为溢出文件，模型拿到「预览 + 定位符」而非硬截断。
+          // 文件读取/搜索工具自带边界，豁免溢出（防 read 循环）；spill 未配置时保持原有截断行为
+          const formatted = formatOutput(result)
+          return spill && !SPILL_EXEMPT_TOOLS.has(item.name)
+            ? spill.trySpill(formatted)
+            : formatted
+        } catch (err) {
+          if (err instanceof ToolTimeoutError) {
+            logger.warn(`[Agent] Tool ${item.name} timed out after ${err.timeoutMs}ms`)
+            return mainFormat(getAgentToolTexts().agent.toolTimeout, {
+              name: item.name,
+              ms: err.timeoutMs
+            })
+          }
+          const message = err instanceof Error ? err.message : String(err)
+          logger.warn(`[Agent] Tool ${item.name} failed:`, err)
+          return mainFormat(getAgentToolTexts().agent.toolFailed, { message })
+        }
+      })()
+      if (push) {
+        const record: ToolCallRecord = {
+          kind: 'tool_call',
+          name: item.name,
+          input: item.args,
+          callId: item.callId,
+          output: outputPromise
+        }
+        pushRecord(push, record, subagentCtx)
+      }
+      return outputPromise.then((output) => ({ output, media }))
+    }
+
+    /** 收尾一次调用：记录防循环信号与模型可见结果（严格按调用顺序） */
+    const finish = (
+      item: PendingToolCall,
+      result: { output: string; media: ToolImage[] }
+    ): void => {
+      // 记录「这次调用产出了什么」：下一次同参数调用据此判断是不是在做无用功
+      repeatGuard.record(item.key, result.output)
+      outputs.push(new ToolMessage({ content: result.output, tool_call_id: item.callId }))
+      for (const image of result.media) imageOutputs.push({ tool: item.name, image })
+    }
+
+    /** 跑完当前安全批（并行），并按调用顺序收尾 */
+    const flushSafeBatch = async (): Promise<void> => {
+      if (safeBatch.length === 0) return
+      const batch = safeBatch
+      safeBatch = []
+      const results = await Promise.all(batch.map((item) => dispatch(item)))
+      for (let index = 0; index < batch.length; index++) {
+        finish(batch[index], results[index])
+      }
+    }
+
     for (const call of toolCalls) {
       if (config.signal?.aborted) {
         const err = new Error('Tool call aborted')
@@ -229,124 +376,67 @@ function createToolRunner(
       // 兜底：部分 provider 可能缺 name / id
       const name = call.name ?? 'tool'
       const callId = call.id ?? `call_${Math.random().toString(36).slice(2, 10)}`
+      const args = (call.args ?? {}) as Record<string, unknown>
       const tool = toolsByName.get(name)
 
       // 渐进提醒：接近上限时引导收尾一次（不拦截后续调用，避免合法长任务被生硬截断）
       totalCalls++
       if (!warnedSoft && totalCalls >= softWarnAt) {
         warnedSoft = true
-        const msg = `You have used ${totalCalls} tool calls in this conversation, which is a long task. If not essential, wrap up now and answer with the information you already have.`
-        outputs.push(new ToolMessage({ content: msg, tool_call_id: callId }))
-        if (push) {
-          const record: ToolCallRecord = {
-            kind: 'tool_call',
-            name,
-            input: call.args,
-            callId,
-            output: Promise.resolve(msg)
-          }
-          pushRecord(push, record, subagentCtx)
-        }
+        await flushSafeBatch()
+        pushSkipped(
+          name,
+          callId,
+          args,
+          `You have used ${totalCalls} tool calls in this conversation, which is a long task. If not essential, wrap up now and answer with the information you already have.`
+        )
         continue
       }
 
       // 总次数护栏：累计调用超过限额后一律拦截，指示模型直接回答
       if (totalCalls > callLimit) {
-        const msg = `This conversation has reached its total limit of ${callLimit} tool calls (the tool call round cap). Stop calling tools now and answer directly with the information you already have.`
-        outputs.push(new ToolMessage({ content: msg, tool_call_id: callId }))
-        if (push) {
-          const record: ToolCallRecord = {
-            kind: 'tool_call',
-            name,
-            input: call.args,
-            callId,
-            output: Promise.resolve(msg)
-          }
-          pushRecord(push, record, subagentCtx)
-        }
+        await flushSafeBatch()
+        pushSkipped(
+          name,
+          callId,
+          args,
+          `This conversation has reached its total limit of ${callLimit} tool calls (the tool call round cap). Stop calling tools now and answer directly with the information you already have.`
+        )
         continue
       }
 
       // 防循环护栏：同参数一直产出同结果 / 连续同调用才算死循环，不执行并指示模型收尾
-      const key = toolCallKey(name, call.args)
+      const key = toolCallKey(name, args)
       const verdict = repeatGuard.check(key)
       if (verdict.blocked) {
-        const msg = repeatGuardMessage(name, verdict)
-        outputs.push(new ToolMessage({ content: msg, tool_call_id: callId }))
-        if (push) {
-          const record: ToolCallRecord = {
-            kind: 'tool_call',
-            name,
-            input: call.args,
-            callId,
-            output: Promise.resolve(msg)
-          }
-          pushRecord(push, record, subagentCtx)
-        }
+        await flushSafeBatch()
+        pushSkipped(name, callId, args, repeatGuardMessage(name, verdict))
         continue
       }
 
       if (!tool) {
-        const msg = `The tool "${name}" does not exist or is not enabled. Available tools: ${[...toolsByName.keys()].join(', ')}`
-        outputs.push(new ToolMessage({ content: msg, tool_call_id: callId }))
-        if (push) {
-          const record: ToolCallRecord = {
-            kind: 'tool_call',
-            name,
-            input: call.args,
-            callId,
-            output: Promise.resolve(msg)
-          }
-          pushRecord(push, record, subagentCtx)
-        }
+        await flushSafeBatch()
+        pushSkipped(
+          name,
+          callId,
+          args,
+          `The tool "${name}" does not exist or is not enabled. Available tools: ${[...toolsByName.keys()].join(', ')}`
+        )
         continue
       }
 
-      // 工具执行异步进行；output Promise 驱动前端 executing → completed
-      //
-      // 图像类工具（read_image）返回「文本 + 图像」结果：文本进 ToolMessage，图像先攒着，
-      // 等本轮所有工具结果都产出后合并成一条 user 消息。为什么不在 ToolMessage 里直接放
-      // 图像块：OpenAI 兼容协议要求 tool_calls 之后紧跟纯 tool 消息，工具消息带图会被网关
-      // 拒绝；user 消息的 image_url 块则是所有 provider 都支持的形态。
-      let mediaImages: ToolImage[] = []
-      const outputPromise = (async () => {
-        try {
-          const result = await tool.invoke(call.args, {
-            ...config,
-            configurable: { ...(config.configurable ?? {}), toolCallId: callId }
-          })
-          if (isToolMediaResult(result)) {
-            mediaImages = result.images
-            return result.text
-          }
-          // 溢出策略：超长输出保存为溢出文件，模型拿到「预览 + 定位符」而非硬截断。
-          // 文件读取/搜索工具自带边界，豁免溢出（防 read 循环）；spill 未配置时保持原有截断行为
-          const formatted = formatOutput(result)
-          return spill && !SPILL_EXEMPT_TOOLS.has(name) ? spill.trySpill(formatted) : formatted
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          logger.warn(`[Agent] Tool ${name} failed:`, err)
-          return mainFormat(getAgentToolTexts().agent.toolFailed, { message })
-        }
-      })()
-
-      if (push) {
-        const record: ToolCallRecord = {
-          kind: 'tool_call',
-          name,
-          input: call.args,
-          callId,
-          output: outputPromise
-        }
-        pushRecord(push, record, subagentCtx)
+      const item: PendingToolCall = { name, callId, args, tool, key }
+      if (tool.isConcurrencySafe?.(args) === true) {
+        safeBatch.push(item)
+        continue
       }
-
-      const output = await outputPromise
-      // 记录「这次调用产出了什么」：下一次同参数调用据此判断是不是在做无用功
-      repeatGuard.record(key, output)
-      outputs.push(new ToolMessage({ content: output, tool_call_id: callId }))
-      for (const image of mediaImages) imageOutputs.push({ tool: name, image })
+      // 独占调用：先等安全批结束，再单独执行（形成屏障）
+      await flushSafeBatch()
+      finish(item, await dispatch(item))
     }
+
+    // 收尾最后一批安全调用
+    await flushSafeBatch()
 
     // 工具产出的图像统一追加在本轮全部 tool 消息之后：既不破坏 tool_calls 配对，
     // 又保证下一次模型请求能看到图（图像消息本身就是模型可见输入的一部分）。

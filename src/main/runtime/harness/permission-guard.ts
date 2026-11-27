@@ -87,7 +87,12 @@ export function guardTool(
     {
       name: target.name,
       description: target.description,
-      schema: schema as never
+      schema: schema as never,
+      // 并行安全分类器必须随包装一起传下去：否则闸门一包，所有工具都退化成独占，
+      // 并行工具调用的能力会被静默关掉。
+      isConcurrencySafe: target.isConcurrencySafe as ((args: unknown) => boolean) | undefined,
+      // 超时预算同样随包装下传（否则闸门一包，所有工具都变成无截止）
+      timeoutMs: target.timeoutMs
     }
   ) as unknown as StructuredToolInterface
 }

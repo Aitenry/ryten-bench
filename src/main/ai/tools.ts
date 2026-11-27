@@ -25,6 +25,22 @@ export interface StructuredToolInterface<Args = unknown> {
   invoke(args: Args, config?: ToolRunnableConfig): Promise<unknown>
   /** JSON Schema 缓存（内部用；外部工具可不实现） */
   getJsonSchema?(): Record<string, unknown>
+  /**
+   * 并行执行分类器（对应 DSH 的 `isConcurrencySafe(args)`）。
+   *
+   * 必须是**纯同步**判断：只有返回 true 的调用才允许与同一批里其它安全调用并行执行；
+   * 省略、返回 false 或抛错一律按独占处理（形成排序屏障）。只读/幂等的工具（read、
+   * glob、web_fetch…）才应标记为安全；有副作用的写操作永远不要标记。
+   */
+  isConcurrencySafe?(args: Args): boolean
+  /**
+   * 单次调用的协作式超时（毫秒；0/省略 = 无截止）。
+   *
+   * 与 DSH 的 `ToolDefinition.timeoutMs` 同义：只约束**宿主等待**，不强行终止工具
+   * 正在做的 I/O（信号仍需工具自己观察）；超时后向模型返回一条明确的结果，回合继续。
+   * 该字段不下发模型（JSON Schema 只由工具的 schema 决定）。
+   */
+  timeoutMs?: number
 }
 
 /** 参数校验失败（消息会作为工具结果回给模型，让它自己纠正参数） */
@@ -55,6 +71,10 @@ export interface ToolDefinition<Schema = unknown> {
   name: string
   description?: string
   schema?: Schema
+  /** 并行执行分类器（见 StructuredToolInterface.isConcurrencySafe） */
+  isConcurrencySafe?: (args: unknown) => boolean
+  /** 单次调用超时（毫秒；见 StructuredToolInterface.timeoutMs） */
+  timeoutMs?: number
 }
 
 /** zod schema 判定：同时兼容项目的 zod v4 主入口与 zod/v4 子路径 */
@@ -122,6 +142,8 @@ class DynamicStructuredTool<Args> implements StructuredToolInterface<Args> {
   readonly name: string
   readonly description: string
   readonly schema?: unknown
+  readonly isConcurrencySafe?: (args: Args) => boolean
+  readonly timeoutMs?: number
   private readonly func: ToolFunction<Args>
   private cachedJsonSchema?: Record<string, unknown>
 
@@ -130,6 +152,8 @@ class DynamicStructuredTool<Args> implements StructuredToolInterface<Args> {
     this.name = fields.name
     this.description = fields.description ?? ''
     this.schema = fields.schema
+    this.isConcurrencySafe = fields.isConcurrencySafe as ((args: Args) => boolean) | undefined
+    this.timeoutMs = fields.timeoutMs
   }
 
   getJsonSchema(): Record<string, unknown> {

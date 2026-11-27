@@ -134,6 +134,11 @@ from the hub or from a local package, and both paths end in the same host instal
   turn, the model keeps working and reads output incrementally with `job_output` / stops it with
   `job_kill`, and an inline top-bar tray lists every background command with collapsible per-task
   output and a stop control while the task is running.
+- **Parallel & bounded tool calls** — when one model reply requests several read-only calls (read,
+  glob, grep, `web_fetch`, …), they run concurrently instead of one after another; any write,
+  command or unknown call forms a barrier and keeps the reply's order. Tools may declare a
+  cooperative `timeoutMs`; a call that outlives it returns a readable timeout result and the turn
+  continues instead of hanging.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic
