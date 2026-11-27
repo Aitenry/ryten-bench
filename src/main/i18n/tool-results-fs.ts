@@ -74,8 +74,7 @@ export const zhCNFsToolTexts = {
 
   applyPatch: {
     /** 补丁应用成功：{{summary}} 是逐文件摘要行 */
-    applied: '补丁已应用（{{files}} 个文件）：\n{{summary}}',
-    parseFailed:
+    applied: '补丁已应用（{{files}} 个文件）：\n{{summary}}',    parseFailed:
       '补丁格式错误（{{code}}）。请用 "*** Begin Patch" / "*** End Patch" 包裹，更新块的行以空格（上下文）、"-"（删除）或 "+"（新增）开头。',
     addExists: '文件已存在，无法新增（如要修改请用 Update File）: {{path}}',
     deleteMissing: '文件不存在，无法删除: {{path}}',
@@ -87,6 +86,20 @@ export const zhCNFsToolTexts = {
     summaryAdd: 'A {{path}}（{{lines}} 行）',
     summaryDelete: 'D {{path}}',
     summaryUpdate: 'M {{path}}（+{{added}} −{{removed}}）'
+  },
+
+  /** str_replace_editor：view / create / str_replace / insert */
+  strEditor: {
+    missing: '文件不存在: {{path}}',
+    exists: '文件已存在，无法创建: {{path}}',
+    created: '已创建 {{path}}（{{lines}} 行）。',
+    viewEmpty: '（空文件）',
+    notFound: '未找到 old_str，未做任何修改。请先用 view 确认文件当前内容（空白与换行必须完全一致）。',
+    notUnique: 'old_str 在文件中出现多次，未做任何修改。请提供更长、唯一的上下文。',
+    invalidLine: 'insert_line 超出范围（允许 0-{{max}}）。',
+    replaced: '已替换 {{path}} 中的 1 处（文件共 {{total}} 行）。',
+    inserted: '已在 {{path}} 的第 {{line}} 行之后插入内容（文件共 {{total}} 行）。',
+    failed: 'str_replace_editor 失败: {{message}}'
   },
 
   ls: {
@@ -256,6 +269,22 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     summaryAdd: 'A {{path}} ({{lines}} lines)',
     summaryDelete: 'D {{path}}',
     summaryUpdate: 'M {{path}} (+{{added}} −{{removed}})'
+  },
+
+  /** str_replace_editor: view / create / str_replace / insert */
+  strEditor: {
+    missing: 'The file does not exist: {{path}}',
+    exists: 'The file already exists and cannot be created: {{path}}',
+    created: 'Created {{path}} ({{lines}} lines).',
+    viewEmpty: '(empty file)',
+    notFound:
+      'old_str was not found, so nothing changed. Use view first and match whitespace and line breaks exactly.',
+    notUnique:
+      'old_str occurs more than once, so nothing changed. Provide a longer, unique context.',
+    invalidLine: 'insert_line is out of range (allowed: 0-{{max}}).',
+    replaced: 'Replaced 1 occurrence in {{path}} ({{total}} lines total).',
+    inserted: 'Inserted content after line {{line}} of {{path}} ({{total}} lines total).',
+    failed: 'str_replace_editor failed: {{message}}'
   },
 
   ls: {

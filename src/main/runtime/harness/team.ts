@@ -603,6 +603,29 @@ export function buildTeamTools(
       }
     ),
     tool(
+      async (args: { taskId: string }, config) => {
+        try {
+          const topicId = topicOf(config as ToolConfig)
+          await store.ensureLoaded(topicId)
+          const task = store.snapshot(topicId).tasks.find((item) => item.id === args.taskId)
+          if (!task) {
+            return `team_task_get failed: task "${args.taskId}" was not found. Call team_task_list to see the current board.`
+          }
+          return formatTask(task)
+        } catch (err) {
+          return `team_task_get failed: ${(err as Error).message}`
+        }
+      },
+      {
+        name: 'team_task_get',
+        description:
+          'Read one shared team task in full (status, revision, owner, blockedBy, advisory writeScopes and description) before claiming, updating or working on it — the revision in a list snapshot may already be stale.',
+        schema: z.object({
+          taskId: z.string().describe('Task id from team_task_list, e.g. task-1')
+        })
+      }
+    ),
+    tool(
       async (args: { taskId: string; expectedRevision?: number }, config) => {
         try {
           const topicId = topicOf(config as ToolConfig)

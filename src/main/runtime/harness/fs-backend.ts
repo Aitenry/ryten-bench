@@ -8,6 +8,7 @@ import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { recordToolFacts } from './tool-result-facts'
 import { MAX_IMAGE_BYTES, readImageFile, toolMedia } from './image-tool'
 import { applyHunks, parsePatch } from './apply-patch'
+import { applyInsert, applyStrReplace, formatView } from './str-replace-core'
 import { recordFileChange } from '../../workspace/file-history'
 import { changeStats } from '../../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../../workspace/watcher'
@@ -872,6 +873,151 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           input: z
             .string()
             .describe('Full patch text, including the *** Begin Patch / *** End Patch markers')
+        })
+      }
+    ),
+
+    /**
+     * 文本编辑器（对应 DSH 的 str_replace_editor）：
+     * `view`（带行号查看） / `create`（新建，已存在则失败） / `str_replace`（唯一字面替换） /
+     * `insert`（在第 N 行后插入）。写入同样进入文件改动审查。
+     */
+    tool(
+      async (
+        { command, path: filePath, file_text, insert_line, new_str, old_str, view_range },
+        config
+      ) => {
+        const callId = callIdOf(config)
+        const resolved = resolve(filePath)
+        if ('error' in resolved) {
+          recordToolFacts(callId, { error: resolved.error })
+          return resolved.error
+        }
+        const realPath = resolved.realPath
+        try {
+          if (command === 'view') {
+            if (!fs.existsSync(realPath)) {
+              const message = mainFormat(tr.strEditor.missing, { path: filePath })
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            const content = fs.readFileSync(realPath, 'utf-8')
+            const view = formatView(content, view_range as [number, number] | undefined)
+            recordToolFacts(callId, { lines: view.totalLines, truncated: view.truncated })
+            return view.text || tr.strEditor.viewEmpty
+          }
+
+          if (command === 'create') {
+            if (fs.existsSync(realPath)) {
+              const message = mainFormat(tr.strEditor.exists, { path: filePath })
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            const content = file_text ?? ''
+            fs.mkdirSync(path.dirname(realPath), { recursive: true })
+            fs.writeFileSync(realPath, content, 'utf-8')
+            const stats = changeStats(null, content)
+            recordToolFacts(callId, {
+              bytes: Buffer.byteLength(content, 'utf-8'),
+              added: stats.added,
+              removed: stats.removed
+            })
+            await recordWorkspaceWrite({
+              options,
+              config,
+              realPath,
+              before: null,
+              after: content,
+              source: 'write_file',
+              stats
+            })
+            return mainFormat(tr.strEditor.created, {
+              path: filePath,
+              lines: content.split('\n').length
+            })
+          }
+
+          if (!fs.existsSync(realPath)) {
+            const message = mainFormat(tr.strEditor.missing, { path: filePath })
+            recordToolFacts(callId, { error: message })
+            return message
+          }
+          const current = fs.readFileSync(realPath, 'utf-8')
+          let next: string
+          let summary: string
+
+          if (command === 'str_replace') {
+            const result = applyStrReplace(current, old_str ?? '', new_str ?? '')
+            if (!result.ok) {
+              const message =
+                result.failure === 'not-unique' ? tr.strEditor.notUnique : tr.strEditor.notFound
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            next = result.content
+            summary = mainFormat(tr.strEditor.replaced, {
+              path: filePath,
+              total: next.split('\n').length
+            })
+          } else {
+            const maxLine = current.split('\n').length
+            const result = applyInsert(current, insert_line ?? 0, new_str ?? '')
+            if (!result.ok) {
+              const message = mainFormat(tr.strEditor.invalidLine, { max: maxLine })
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            next = result.content
+            summary = mainFormat(tr.strEditor.inserted, {
+              path: filePath,
+              line: insert_line ?? 0,
+              total: next.split('\n').length
+            })
+          }
+
+          fs.writeFileSync(realPath, next, 'utf-8')
+          const stats = changeStats(current, next)
+          recordToolFacts(callId, { added: stats.added, removed: stats.removed })
+          await recordWorkspaceWrite({
+            options,
+            config,
+            realPath,
+            before: current,
+            after: next,
+            source: 'edit_file',
+            stats
+          })
+          return summary
+        } catch (err) {
+          const message = mainFormat(tr.strEditor.failed, { message: (err as Error).message })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+      },
+      {
+        name: 'str_replace_editor',
+        description:
+          'Text editor with four commands: view (line-numbered content, optional view_range), create (fails if the file exists; needs file_text), str_replace (old_str must occur exactly once; needs old_str + new_str) and insert (insert new_str after line insert_line, where 0 inserts at the top). Use view before a replace when the old content is not fresh.',
+        schema: z.object({
+          command: z.enum(['view', 'create', 'str_replace', 'insert']),
+          path: z.string().describe('Virtual path of the file, e.g. /src/a.ts'),
+          file_text: z.string().optional().describe('create: full file content'),
+          insert_line: z
+            .number()
+            .int()
+            .optional()
+            .describe('insert: line number to insert after (0 inserts at the top)'),
+          new_str: z.string().optional().describe('str_replace/insert: the new text'),
+          old_str: z
+            .string()
+            .optional()
+            .describe('str_replace: the exact, unique text to replace'),
+          view_range: z
+            .array(z.number().int())
+            .length(2)
+            .optional()
+            .describe('view: optional [start, end] line range (1-based, inclusive)'),
+          ...sandboxPermissionField
         })
       }
     ),

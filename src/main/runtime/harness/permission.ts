@@ -76,7 +76,12 @@ export function isStrictlyWider(next: PermissionMode, current: PermissionMode): 
 export type ToolAccess = 'read' | 'write' | 'exec' | 'external'
 
 /** 写类工具（工作区内写入由挂载表兜底，权限面只管「这个档位允不允许写」） */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
+const WRITE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'str_replace_editor'
+])
 
 /** 执行类工具 */
 const EXEC_TOOLS = new Set(['execute'])
@@ -129,6 +134,7 @@ const READ_TOOLS = new Set([
   // 团队任务板：写的是应用自己的看板数据，不是用户文件
   'team_task_create',
   'team_task_claim',
+  'team_task_get',
   'team_task_list',
   'team_task_update',
   // 记忆（写的是应用自己的记忆目录，不是用户工作区）
