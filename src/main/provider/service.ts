@@ -161,11 +161,11 @@ class ProviderService {
       case 'xai':
         return this.buildXAI(config, extra)
 
+      // 渲染层「预置供应商」里的 value 是 `aws-bedrock`，而历史配置里可能是
+      // `aws` / `bedrock`：三个值都指向同一个 Bedrock 工厂，少一个就会掉进
+      // default 分支按 OpenAI 兼容协议发请求（Bedrock 的 SigV4/region 逻辑不会执行）。
       case 'aws':
       case 'bedrock':
-        // 渲染层「预置供应商」里的 value 是 `aws-bedrock`，而历史配置里可能是
-        // `aws` / `bedrock`：三个值都指向同一个 Bedrock 工厂，少一个就会掉进
-        // default 分支按 OpenAI 兼容协议发请求（Bedrock 的 SigV4/region 逻辑不会执行）。
       case 'aws-bedrock':
         return this.buildBedrockConverse(config, extra)
 
