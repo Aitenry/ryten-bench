@@ -1110,5 +1110,30 @@ export const harnessZhCN = {
       titlePlaceholder: '展示名（例如 番茄钟）',
       note: '生成的是完整骨架：页面、设置页、给助手的 AI 工具、事件推送、卸载清数据都有，用不上的部分交给助手删。'
     }
+  },
+
+  /* ── 定时任务设置页 ── */
+  scheduleSettings: {
+    pageTitle: '定时任务',
+    pageDescription:
+      '模型创建的定时任务会在到点时于所属会话里自动发起一轮对话。这里可以暂停、恢复或删除它们。',
+    sectionTitle: '任务列表',
+    sectionDescription: '任务只在应用运行时触发；错过的触发不会补跑。',
+    empty: '还没有定时任务。在会话里让助手「每天 9 点提醒我…」即可创建。',
+    refresh: '刷新',
+    stateEnabled: '启用中',
+    statePaused: '已暂停',
+    nextRun: '下次执行：{{time}}',
+    lastRun: '上次执行：{{time}}（{{status}}）',
+    never: '—',
+    ruleOnce: '一次性 · {{at}}',
+    ruleEvery: '每 {{minutes}} 分钟',
+    ruleDaily: '每天 {{time}}',
+    pause: '暂停',
+    resume: '恢复',
+    delete: '删除',
+    prompt: '提示词：{{prompt}}',
+    loadFailed: '加载定时任务失败：{{reason}}',
+    actionFailed: '操作失败'
   }
 }

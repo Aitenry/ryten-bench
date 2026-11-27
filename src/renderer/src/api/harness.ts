@@ -58,6 +58,24 @@ export interface PermissionStateView {
   defaultMode: PermissionMode
 }
 
+/** 定时任务视图（设置 →「定时任务」页；字段与主进程 schedule-store 一致） */
+export interface ScheduleView {
+  id: string
+  title: string
+  prompt: string
+  when:
+    | { kind: 'once'; at: string }
+    | { kind: 'every'; minutes: number }
+    | { kind: 'daily'; time: string }
+  enabled: boolean
+  topicId: number
+  createdAt: string
+  updatedAt: string
+  nextRunAt: string | null
+  lastRunAt?: string
+  lastStatus?: 'completed' | 'cancelled' | 'failed'
+}
+
 /**
  * 目标动作的返回形状：界面入口（创建/编辑/暂停/恢复/完成/清除）统一走它。
  *
@@ -270,6 +288,11 @@ export const harnessApi = {
       invoke('harness:harness-team-mode-set', payload) as Promise<TeamModeView>,
     onTeamModeUpdated: (callback: (data: TeamModeView) => void): (() => void) =>
       on('harness:harness-team-mode-updated', (data) => callback(data as TeamModeView)),
+
+    // 定时任务（设置 →「定时任务」页）：列表 + 暂停/恢复/删除
+    listSchedules: () => invoke('harness:harness-schedule-list') as Promise<ScheduleView[]>,
+    updateSchedule: (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) =>
+      invoke('harness:harness-schedule-update', payload) as Promise<{ ok: boolean }>,
 
     // 后台任务系统（jobs）
     onJobsUpdated: (

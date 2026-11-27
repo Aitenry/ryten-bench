@@ -6,7 +6,12 @@ import { isSenderAlive, safeSend } from '../../safe-send'
 import { mainFormat, mainMessages } from '../../i18n'
 import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
 import { scheduleRunner } from '../../runtime/harness/schedule-runner'
-import type { ScheduledTask } from '../../runtime/harness/schedule-store'
+import {
+  isScheduleStoreConfigured,
+  scheduleStore,
+  type ScheduledTask
+} from '../../runtime/harness/schedule-store'
+import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
 import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
 import { drainPendingTurns } from '../../services/harness/turn-drain'
@@ -2460,6 +2465,45 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     settingsStore.set('harness', { ...harness, enabledSkills: next })
     return next
   })
+
+  // ── 定时任务管理（设置 →「定时任务」页）─────────────────────────────────
+  // 只做列表与暂停/恢复/删除：创建仍走模型工具（需要会话归属与自然语言提示词）。
+  handle('harness-schedule-list', () => {
+    if (!isScheduleStoreConfigured()) return []
+    try {
+      return scheduleStore.list()
+    } catch (err) {
+      logger.warn('[Schedule] Failed to list tasks:', err)
+      return []
+    }
+  })
+
+  handle(
+    'harness-schedule-update',
+    (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) => {
+      if (!isScheduleStoreConfigured()) return { ok: false }
+      try {
+        if (payload.action === 'delete') {
+          return { ok: scheduleStore.remove(payload.id) }
+        }
+        if (payload.action === 'pause') {
+          return { ok: Boolean(scheduleStore.update(payload.id, { enabled: false, nextRunAt: null })) }
+        }
+        const task = scheduleStore.get(payload.id)
+        if (!task) return { ok: false }
+        const validated = validateScheduleWhen(task.when)
+        if (!validated.ok) return { ok: false }
+        return {
+          ok: Boolean(
+            scheduleStore.update(payload.id, { enabled: true, nextRunAt: validated.nextRunAt })
+          )
+        }
+      } catch (err) {
+        logger.warn('[Schedule] Failed to update task:', err)
+        return { ok: false }
+      }
+    }
+  )
 
   // 定时任务执行入口：runner 只负责「到点叫一下」，真正起轮仍走 runHarnessTurn 管线
   scheduleRunner.configureQuestionBuilder((task) =>

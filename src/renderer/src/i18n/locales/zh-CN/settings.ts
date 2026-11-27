@@ -12,6 +12,7 @@ export const zhCNSettings = {
     skills: '技能',
     memory: '记忆',
     mcp: 'MCP',
+    schedules: '定时任务',
     workshop: '插件工坊'
   },
   plugins: {

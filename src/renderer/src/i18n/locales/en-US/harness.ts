@@ -1105,5 +1105,31 @@ export const harnessEnUS: typeof harnessZhCN = {
       titlePlaceholder: 'Display name (e.g. Pomodoro)',
       note: 'The draft comes with everything: page, settings page, an AI tool for the assistant, event push and data purge. Let the assistant delete what you do not need.'
     }
+  },
+
+  /* ── Scheduled tasks settings page ── */
+  scheduleSettings: {
+    pageTitle: 'Scheduled tasks',
+    pageDescription:
+      'Tasks created by the model start a new turn in their conversation when due. Pause, resume or delete them here.',
+    sectionTitle: 'Tasks',
+    sectionDescription: 'Tasks run only while the app is running; missed runs are not replayed.',
+    empty:
+      'No scheduled tasks yet. Ask the assistant in a conversation, e.g. "remind me every day at 9".',
+    refresh: 'Refresh',
+    stateEnabled: 'enabled',
+    statePaused: 'paused',
+    nextRun: 'Next run: {{time}}',
+    lastRun: 'Last run: {{time}} ({{status}})',
+    never: '—',
+    ruleOnce: 'once · {{at}}',
+    ruleEvery: 'every {{minutes}} min',
+    ruleDaily: 'daily at {{time}}',
+    pause: 'Pause',
+    resume: 'Resume',
+    delete: 'Delete',
+    prompt: 'Prompt: {{prompt}}',
+    loadFailed: 'Failed to load scheduled tasks: {{reason}}',
+    actionFailed: 'The action failed'
   }
 }
