@@ -1,4 +1,10 @@
-import { BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage } from '../../ai/messages'
+import {
+  BaseMessage,
+  HumanMessage,
+  AIMessage,
+  ToolMessage,
+  SystemMessage
+} from '../../ai/messages'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
@@ -22,6 +28,11 @@ import {
   type ContextPressure
 } from '../../runtime/harness/context-pressure'
 import { planObservationMask } from '../../runtime/harness/observation-mask'
+import {
+  dialogueBudgetChars,
+  planReplayImages,
+  userMessageContent
+} from '../../runtime/harness/image-replay'
 
 /**
  * 数据库中的对话记录（精简版视图，避免循环依赖）。
@@ -166,9 +177,9 @@ export interface HistoryConvertOptions {
   restoreNote?: () => string
 }
 
-/** 单条对话的字符成本（正文 + blocks） */
+/** 单条对话的字符成本（正文 + blocks；用户行里的图片按估算值计入，见 image-replay） */
 function dialogueChars(d: HistoryDialogue): number {
-  return d.content.length + (d.blocks ? d.blocks.length : 0)
+  return dialogueBudgetChars(d)
 }
 
 /**
@@ -694,11 +705,13 @@ function appendDialogueMessages(
   )
 
   let placeholderChars = 0
+  const replayImages = planReplayImages(selected)
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]
     const d = p.dialogue
     if (d.role === 'user') {
-      messages.push(new HumanMessage(d.content))
+      // 图片按预算回放（最近 N 张）：此前这里只回放文本，导致「用户贴的图只在第一轮有效」
+      messages.push(new HumanMessage({ content: userMessageContent(d, replayImages.has(d.id)) }))
       continue
     }
     if (p.blocks === null) {

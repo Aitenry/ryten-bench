@@ -34,6 +34,12 @@ export interface ToolResultFacts {
   truncated?: boolean
   /** read_file：按 offset/limit 读取时的行区间（1 基，闭区间） */
   range?: { start: number; end: number; total: number }
+  /** read_image：本次结果是一张图片（卡片据此渲染缩略图/画廊） */
+  image?: boolean
+  /** read_image：图片 MIME 与像素尺寸（解析不出时省略） */
+  mimeType?: string
+  width?: number
+  height?: number
 }
 
 /** 登记表容量上限：超出时丢弃最早的条目（正常流不会达到） */

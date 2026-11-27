@@ -12,7 +12,8 @@ import {
   BaseMessage,
   HumanMessage,
   SystemMessage,
-  ToolMessage
+  ToolMessage,
+  type MessageContentComplex
 } from '../../ai/messages'
 import type { StructuredToolInterface } from '../../ai/tools'
 import logger from 'electron-log'
@@ -20,6 +21,7 @@ import type { RuntimeRecord, ToolCallRecord } from './types'
 // 插话注入载荷的单一真源在 ../types（IPC 层与图共用同一个类型，避免结构漂移）
 import type { AgentInjection } from '../../services/harness/types'
 import { formatOutput } from './fs-backend'
+import { isToolMediaResult, type ToolImage } from './image-tool'
 import type { SpillStore } from './spill'
 import { invokeWithModelRecovery } from './model-recovery'
 // 防循环护栏：只看「同参数是否一直产出同结果」，不按累计次数误伤迭代式工作流
@@ -29,6 +31,7 @@ import { pushMessageRecords, pushRecord, type StreamMessageLike } from './stream
 import { extractUsageMetadata, type ModelUsageRecord } from './usage'
 import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
+import { getFsToolTexts } from '../../i18n/tool-results-fs'
 
 export { pushMessageRecords, pushRecord }
 
@@ -214,6 +217,8 @@ function createToolRunner(
 
     const push = queue?.current
     const outputs: BaseMessage[] = []
+    /** 本轮工具产出的图像：全部工具结果落盘后合并成一条 user 消息（见上方注释） */
+    const imageOutputs: Array<{ tool: string; image: ToolImage }> = []
     for (const call of toolCalls) {
       if (config.signal?.aborted) {
         const err = new Error('Tool call aborted')
@@ -298,12 +303,22 @@ function createToolRunner(
       }
 
       // 工具执行异步进行；output Promise 驱动前端 executing → completed
+      //
+      // 图像类工具（read_image）返回「文本 + 图像」结果：文本进 ToolMessage，图像先攒着，
+      // 等本轮所有工具结果都产出后合并成一条 user 消息。为什么不在 ToolMessage 里直接放
+      // 图像块：OpenAI 兼容协议要求 tool_calls 之后紧跟纯 tool 消息，工具消息带图会被网关
+      // 拒绝；user 消息的 image_url 块则是所有 provider 都支持的形态。
+      let mediaImages: ToolImage[] = []
       const outputPromise = (async () => {
         try {
           const result = await tool.invoke(call.args, {
             ...config,
             configurable: { ...(config.configurable ?? {}), toolCallId: callId }
           })
+          if (isToolMediaResult(result)) {
+            mediaImages = result.images
+            return result.text
+          }
           // 溢出策略：超长输出保存为溢出文件，模型拿到「预览 + 定位符」而非硬截断。
           // 文件读取/搜索工具自带边界，豁免溢出（防 read 循环）；spill 未配置时保持原有截断行为
           const formatted = formatOutput(result)
@@ -330,6 +345,27 @@ function createToolRunner(
       // 记录「这次调用产出了什么」：下一次同参数调用据此判断是不是在做无用功
       repeatGuard.record(key, output)
       outputs.push(new ToolMessage({ content: output, tool_call_id: callId }))
+      for (const image of mediaImages) imageOutputs.push({ tool: name, image })
+    }
+
+    // 工具产出的图像统一追加在本轮全部 tool 消息之后：既不破坏 tool_calls 配对，
+    // 又保证下一次模型请求能看到图（图像消息本身就是模型可见输入的一部分）。
+    if (imageOutputs.length > 0) {
+      const tr = getFsToolTexts()
+      const content: MessageContentComplex[] = [
+        {
+          type: 'text',
+          text: imageOutputs
+            .map(({ tool, image }) =>
+              mainFormat(tr.readImage.attached, { tool, path: image.path })
+            )
+            .join('\n')
+        }
+      ]
+      for (const { image } of imageOutputs) {
+        content.push({ type: 'image_url', image_url: { url: image.dataUrl } })
+      }
+      outputs.push(new HumanMessage({ content }))
     }
 
     return { messages: [...outputs, ...injectedMessages] }

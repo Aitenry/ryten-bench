@@ -6,6 +6,7 @@ import logger from 'electron-log'
 import { mainFormat, mainPlural } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { recordToolFacts } from './tool-result-facts'
+import { MAX_IMAGE_BYTES, readImageFile, toolMedia } from './image-tool'
 import { recordFileChange } from '../../workspace/file-history'
 import { changeStats } from '../../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../../workspace/watcher'
@@ -494,6 +495,74 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             .positive()
             .optional()
             .describe('Number of lines to read, used together with offset')
+        })
+      }
+    ),
+
+    /**
+     * 读取磁盘图片并把图像本身交给模型（对应 DSH 的 read_image）。
+     *
+     * 与 read_file 的分工：文本走 read_file，二进制图片走这里。返回值不是纯文本，而是
+     * 本项目的「文本 + 图像」工具结果（ToolMediaResult）：运行时把 text 当工具结果，
+     * 把图像作为紧随其后的一条用户消息送进模型——这样所有 provider 都无需改动
+     * （OpenAI 兼容协议的工具消息本身不能带图）。
+     */
+    tool(
+      async ({ file_path }, config) => {
+        const callId = callIdOf(config)
+        const resolved = resolve(file_path)
+        if ('error' in resolved) {
+          recordToolFacts(callId, { error: resolved.error })
+          return resolved.error
+        }
+        const result = readImageFile(resolved.realPath)
+        if (!result.ok) {
+          const text =
+            result.code === 'not-file'
+              ? mainFormat(tr.readImage.notFile, { path: file_path })
+              : result.code === 'too-large'
+                ? mainFormat(tr.readImage.tooLarge, {
+                    bytes: (result.bytes ?? 0).toLocaleString(),
+                    limit: MAX_IMAGE_BYTES.toLocaleString()
+                  })
+                : result.code === 'unsupported'
+                  ? mainFormat(tr.readImage.unsupported, { path: file_path })
+                  : mainFormat(tr.readImage.failed, { message: result.message })
+          recordToolFacts(callId, { error: text })
+          return text
+        }
+        const text = result.dimensions
+          ? mainFormat(tr.readImage.ok, {
+              path: file_path,
+              mime: result.mimeType,
+              width: result.dimensions.width,
+              height: result.dimensions.height,
+              bytes: result.bytes.toLocaleString()
+            })
+          : mainFormat(tr.readImage.okNoDimensions, {
+              path: file_path,
+              mime: result.mimeType,
+              bytes: result.bytes.toLocaleString()
+            })
+        recordToolFacts(callId, {
+          image: true,
+          bytes: result.bytes,
+          mimeType: result.mimeType,
+          width: result.dimensions?.width,
+          height: result.dimensions?.height
+        })
+        return toolMedia(text, [
+          { dataUrl: result.dataUrl, path: file_path, mimeType: result.mimeType }
+        ])
+      },
+      {
+        name: 'read_image',
+        description:
+          'Read a PNG / JPEG / WebP / GIF image from the virtual filesystem and put the image itself into the conversation, so you can actually look at a screenshot, diagram, chart or photo instead of guessing from its name. Requires a vision-capable model; the default cap is 10 MB per image. The image is attached right after this tool result.',
+        schema: z.object({
+          file_path: z
+            .string()
+            .describe('Virtual path of the image file, e.g. /uploads/screenshot.png')
         })
       }
     ),

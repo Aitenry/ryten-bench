@@ -37,6 +37,18 @@ export const zhCNFsToolTexts = {
       '（文件过长，共 {{total}} 字符，已省略中间内容。可用 offset/limit 参数按行读取任意片段，或用 grep 检索关键字。）'
   },
 
+  readImage: {
+    notFile: '路径不是文件: {{path}}',
+    tooLarge: '图片过大（{{bytes}} 字节，上限 {{limit}} 字节），请压缩或裁剪后再读取。',
+    unsupported: '不支持的图片格式（仅支持 PNG / JPEG / WebP / GIF）: {{path}}',
+    failed: '读取图片失败: {{message}}',
+    ok: '已读取图片 {{path}}（{{mime}}，{{width}}×{{height}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
+    okNoDimensions:
+      '已读取图片 {{path}}（{{mime}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
+    /** 追加进模型上下文的图像消息抬头（模型侧文案） */
+    attached: '工具 {{tool}} 读取的图片：{{path}}'
+  },
+
   write: {
     written: '已写入 {{path}}（{{bytes}} 字节）',
     failed: '写入文件失败: {{message}}'
@@ -176,6 +188,17 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
       '(lines {{start}}–{{end}} of {{total}}; this file exceeds the 2M character index limit, so only its first 2M characters are indexed)\n',
     truncated:
       '(file too long: {{total}} characters, the middle has been omitted. Use offset/limit to read any line range, or grep to search for keywords.)'
+  },
+
+  readImage: {
+    notFile: 'Not a file: {{path}}',
+    tooLarge: 'The image is too large ({{bytes}} bytes, limit {{limit}} bytes). Compress or crop it before reading.',
+    unsupported: 'Unsupported image format (only PNG / JPEG / WebP / GIF are supported): {{path}}',
+    failed: 'Failed to read the image: {{message}}',
+    ok: 'Read image {{path}} ({{mime}}, {{width}}×{{height}}, {{bytes}} bytes). The image is attached right after this tool result and can be viewed directly.',
+    okNoDimensions:
+      'Read image {{path}} ({{mime}}, {{bytes}} bytes). The image is attached right after this tool result and can be viewed directly.',
+    attached: 'Image read by tool {{tool}}: {{path}}'
   },
 
   write: {
