@@ -3,7 +3,6 @@ import { theme } from 'antd'
 import { useTranslation } from '@renderer/i18n'
 import { useTheme } from '@renderer/hooks/useTheme'
 import logo from '@renderer/assets/logo.png'
-import type { Window } from '../../../resource/types/window'
 
 /**
  * 主窗口内的启动页（用户 2026-11-20 口径）。
@@ -73,7 +72,7 @@ const StartupSplash: React.FC<StartupSplashProps> = ({ onDone }) => {
   }, [onDone])
 
   useEffect(() => {
-    const loading = (window as unknown as Window).loading
+    const loading = window.loading
     if (!loading) {
       onDone()
       return

@@ -3,7 +3,6 @@ import { Dropdown, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import { useTranslation } from '@renderer/i18n'
 import { useTheme } from '@renderer/hooks/useTheme'
-import type { Window } from '../../../../resource/types/window'
 
 /**
  * 自绘标题栏（Windows / macOS 的 Window Controls Overlay 方案）。
@@ -19,7 +18,7 @@ import type { Window } from '../../../../resource/types/window'
  * Linux 没有 WCO，主进程回退系统原生边框，AppShell 也不会挂载本组件。
  */
 
-const api = (): Window['api'] => window.api
+const api = () => window.api
 
 const ShellTitleBar: React.FC = () => {
   const { t } = useTranslation()

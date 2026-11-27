@@ -35,7 +35,6 @@ import NotificationList from '../NotificationList'
 import { openSettingsModal } from '../settings/settings-modal-state'
 import AssistantSidebar from './AssistantSidebar'
 import ShellTitleBar from './ShellTitleBar'
-import type { Window } from '../../../../resource/types/window'
 
 /**
  * 新系统外壳。
@@ -470,7 +469,7 @@ const AppShell: React.FC = () => {
   const [appVersion, setAppVersion] = useState('')
   useEffect(() => {
     let cancelled = false
-    const loading = (window as unknown as Window).loading
+    const loading = window.loading
     if (!loading) return
     void loading
       .getAppVersion()

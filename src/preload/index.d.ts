@@ -322,8 +322,42 @@ interface WeatherData {
 }
 
 declare global {
+  /**
+   * 启动页桥（`window.loading`）：初始化进度的快照与订阅。
+   *
+   * 类型只在这里声明一份（此前渲染层 `resource/types/window.d.ts` 还留了一份
+   * 早期副本，两边已经漂移——见 2026-11 审计 C-18）。
+   */
+  interface LoadingBridge {
+    /** 应用版本（启动页可展示） */
+    getAppVersion: () => Promise<string>
+    /** 初始化进度快照（启动页挂载时先取一次，处理初始化已经开始/已完成的情况） */
+    getInitState: () => Promise<{
+      complete: boolean
+      error: string | null
+      currentTask: string
+      progress: number
+      taskIndex: number
+      totalTasks: number
+    }>
+    /** 初始化进度（返回取消订阅函数） */
+    onInitProgress: (
+      callback: (data: {
+        currentTask: string
+        progress: number
+        taskIndex: number
+        totalTasks: number
+      }) => void
+    ) => () => void
+    /** 初始化完成（返回取消订阅函数） */
+    onInitComplete: (callback: () => void) => () => void
+    /** 初始化失败（返回取消订阅函数） */
+    onInitError: (callback: (errorMessage: string) => void) => () => void
+  }
+
   interface Window {
     electron: ElectronAPI
     api: Api
+    loading: LoadingBridge
   }
 }

@@ -4,7 +4,6 @@ import type {
   LockScreenSnapshot,
   LockUnlockResult
 } from '@renderer/types/settings'
-import type { Window } from '../../../resource/types/window'
 
 /**
  * 锁屏的渲染层快照（主进程是唯一真源，这里只是它的一份可订阅镜像）。
