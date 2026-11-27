@@ -26,6 +26,7 @@ import {
   type ScheduleWhenView
 } from '../../../api/harness'
 import { computeNextRunPreview, deriveTaskTitle, formatRelativeDay } from '../../../utils/schedules/format'
+import { mcpNamespace, mcpServerGroupValue } from '../../../../../shared/harness/mcp'
 
 type Mode = 'chat' | 'work' | 'plugin'
 
@@ -173,7 +174,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         )
         setMcpOptions(
           (servers as { config: { name: string } }[]).map((server) => ({
-            value: `mcp@${server.config.name}`,
+            value: mcpServerGroupValue(mcpNamespace(server.config.name)),
             label: server.config.name
           }))
         )
