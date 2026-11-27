@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
+﻿import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { App, Button, Input, Modal, Popover, Switch, Tooltip, theme } from 'antd'
 import type { InputRef } from 'antd'
 import {
@@ -17,6 +17,7 @@ import {
   RiShieldFlashLine,
   RiToolsLine,
   RiFileAi2Line,
+  RiPlug2Line,
   RiInformationLine
 } from '@remixicon/react'
 import {
@@ -59,7 +60,8 @@ import {
 import ProviderMark from '@renderer/components/provider/provider-mark'
 import type { Attachment, HarnessToolInfo } from '../../types/harness/types'
 import type { PermissionMode } from '../../../../shared/harness/types'
-import { harnessApi } from '../../api/harness'
+import { harnessApi, type AgentSelectionView } from '../../api/harness'
+import { mcpNamespace, mcpServerGroupValue } from '../../../../shared/harness/mcp'
 
 // TipTap 默认不加载标准键位绑定（退格/删除/回车等），必须显式加载 prosemirror-commands 的 baseKeymap
 const BaseKeymap = Extension.create({
@@ -234,6 +236,12 @@ interface HarnessInputProps {
   onGoalCommand?: () => void
   /** 斜杠命令「计划」：由页面切换输入框上方的计划模式 */
   onPlanCommand?: () => void
+  /**
+   * 会话级运行选择（工具 / 技能 / MCP）：页面持有，发送时随 agentConfig 下发。
+   * 变化时通过 onAgentSelectionChange 回传，已存在会话由输入框直接落库。
+   */
+  agentSelection?: AgentSelectionView | null
+  onAgentSelectionChange?: (selection: AgentSelectionView) => void
 }
 
 const HarnessInput: React.FC<HarnessInputProps> = ({
@@ -265,7 +273,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   onPlanCommand,
   placeholder,
   goalCompose = false,
-  locked = false
+  locked = false,
+  onAgentSelectionChange = () => {}
 }) => {
   const [isDragOver, setIsDragOver] = useState(false)
   // 自定义光标元素（原生光标已隐藏，见 updateCaret）
@@ -349,6 +358,17 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   >([])
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [selectedMcp, setSelectedMcp] = useState<string[]>([])
+  /** 可选 MCP 服务器（选择项存服务器分组 mcp@<命名空间>，主进程挂载时展开） */
+  const [mcpCatalog, setMcpCatalog] = useState<{ value: string; label: string }[]>([])
+  const [mcpOpen, setMcpOpen] = useState(false)
+  const [mcpQuery, setMcpQuery] = useState('')
+  const mcpSearchRef = useRef<InputRef | null>(null)
+  useEffect(() => {
+    if (!mcpOpen) return
+    const timer = window.setTimeout(() => mcpSearchRef.current?.focus(), 60)
+    return () => window.clearTimeout(timer)
+  }, [mcpOpen])
   /** 工具 / 技能面板里的搜索词（只在面板内过滤，关掉清空；不进设置） */
   const [toolQuery, setToolQuery] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
@@ -365,10 +385,13 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     const timer = window.setTimeout(() => skillSearchRef.current?.focus(), 60)
     return () => window.clearTimeout(timer)
   }, [skillsOpen])
-  /** mainAgent.skills（保存工具时要原样带回：main-agent-update 只覆盖传入的字段） */
-  const mainAgentSkillsRef = useRef<string[]>([])
-  /** harness 设置快照：技能启用集写回 systemSettings 时要用整份 harness 覆盖 */
-  const harnessSettingsRef = useRef<Record<string, unknown> | null>(null)
+  /** 选择变化回传页面（发送时随 agentConfig 下发） */
+  const emitSelection = useCallback(
+    (selection: AgentSelectionView): void => {
+      onAgentSelectionChange(selection)
+    },
+    [onAgentSelectionChange]
+  )
   const currentTopicIdRef = useRef(currentTopicId)
   currentTopicIdRef.current = currentTopicId
 
@@ -388,38 +411,46 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   }, [currentTopicId])
 
+  // 工具 / 技能 / MCP 目录 + 当前会话的选择（切会话时重新读）。
+  // 默认语义：工具跟随主智能体默认；技能与 MCP 默认一个都不启用（用户口径 2026-11-27）。
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const [main, tools, skills, settings] = await Promise.all([
+        const [main, tools, skills, servers, topicSelection] = await Promise.all([
           harnessApi.mainAgent.get(),
           harnessApi.harness.getTools(),
           harnessApi.harness.listSkills(),
-          window.api.systemSettings.getAll()
+          harnessApi.mcp.list().catch(() => []),
+          currentTopicId != null
+            ? harnessApi.harness.getTopicAgentSelection(currentTopicId)
+            : Promise.resolve(null)
         ])
         if (cancelled) return
-        mainAgentSkillsRef.current = main.skills ?? []
-        // 工具选择只管「系统内置 + 已加载插件」：MCP 工具由 MCP 页管理，
-        // 运行时按 mcpTools 自动并入本轮；分组项 / 旧标记 / 模式工具也不列
-        setSelectedTools(main.tools ?? [])
         setToolCatalog(tools)
         setSkillCatalog(skills)
-        const harness = ((settings as unknown as Record<string, unknown>).harness ?? {}) as Record<
-          string,
-          unknown
-        >
-        harnessSettingsRef.current = harness
-        const enabled = harness.enabledSkills as string[] | undefined
-        setSelectedSkills(enabled ?? skills.map((skill) => skill.id))
+        setMcpCatalog(
+          servers.map((server) => ({
+            value: mcpServerGroupValue(mcpNamespace(server.config.name)),
+            label: server.config.name
+          }))
+        )
+        setSelectedTools(topicSelection?.tools ?? main.tools ?? [])
+        setSelectedSkills(topicSelection?.skills ?? [])
+        setSelectedMcp(topicSelection?.mcpTools ?? [])
+        emitSelection({
+          tools: topicSelection?.tools ?? null,
+          skills: topicSelection?.skills ?? null,
+          mcpTools: topicSelection?.mcpTools ?? null
+        })
       } catch (err) {
-        console.warn('[harness-input] Failed to load tools/skills:', err)
+        console.warn('[harness-input] Failed to load tools/skills/mcp:', err)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [currentTopicId, emitSelection])
 
   // 档位变更广播（设置页改默认值、另一窗口切换）→ 同步当前显示
   useEffect(() => {
@@ -471,28 +502,40 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [permissionMode, applyPermissionMode]
   )
 
-  /** 改工具 = 改主智能体默认工具（主进程在每一轮发送时读取，下一轮即生效） */
+  /** 会话级选择写回：已存在会话立即落库；新会话由主进程随首轮写入 */
+  const persistSelection = (selection: AgentSelectionView): void => {
+    emitSelection(selection)
+    if (currentTopicId == null) return
+    void harnessApi.harness
+      .setTopicAgentSelection(currentTopicId, selection)
+      .catch(() => message.error(t('harness.input.pickerSaveFailed')))
+  }
+
+  /** 工具：按会话启用（默认跟随主智能体，改动后该会话按新清单运行） */
   const toggleTool = (name: string): void => {
     const next = selectedTools.includes(name)
       ? selectedTools.filter((item) => item !== name)
       : [...selectedTools, name]
     setSelectedTools(next)
-    void harnessApi.mainAgent
-      .update({ tools: next, skills: mainAgentSkillsRef.current })
-      .catch(() => message.error(t('harness.input.pickerSaveFailed')))
+    persistSelection({ tools: next, skills: selectedSkills, mcpTools: selectedMcp })
   }
 
-  /** 改技能 = 改 harness.enabledSkills（与「更多 → 技能」页是同一个开关） */
+  /** 技能：按会话启用（新增技能默认不启用，需在这里勾选） */
   const toggleSkill = (id: string): void => {
     const next = selectedSkills.includes(id)
       ? selectedSkills.filter((item) => item !== id)
       : [...selectedSkills, id]
     setSelectedSkills(next)
-    const harness = { ...(harnessSettingsRef.current ?? {}), enabledSkills: next }
-    harnessSettingsRef.current = harness
-    void window.api.systemSettings
-      .update({ harness } as Parameters<typeof window.api.systemSettings.update>[0])
-      .catch(() => message.error(t('harness.input.pickerSaveFailed')))
+    persistSelection({ tools: selectedTools, skills: next, mcpTools: selectedMcp })
+  }
+
+  /** MCP：按会话勾选服务器（存分组值，主进程挂载时展开成具体工具） */
+  const toggleMcp = (value: string): void => {
+    const next = selectedMcp.includes(value)
+      ? selectedMcp.filter((item) => item !== value)
+      : [...selectedMcp, value]
+    setSelectedMcp(next)
+    persistSelection({ tools: selectedTools, skills: selectedSkills, mcpTools: next })
   }
 
   /** 扁平化选项：查找当前模型、键盘导航、搜索结果共用一份 */
@@ -1646,6 +1689,23 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   )
 
+  const mcpMenu = pickerMenu(
+    mcpCatalog.map((server) => ({
+      key: server.value,
+      label: server.label,
+      active: selectedMcp.includes(server.value),
+      onToggle: () => toggleMcp(server.value)
+    })),
+    {
+      empty: t('harness.input.mcpEmpty'),
+      placeholder: t('harness.input.mcpSearchPlaceholder'),
+      query: mcpQuery,
+      onQueryChange: setMcpQuery,
+      inputRef: mcpSearchRef,
+      onClose: () => setMcpOpen(false)
+    }
+  )
+
   /** 输入卡片下方的选择器：权限 / 工具 / 技能（用户口径：这些都放在输入框底部） */
   /** 权限档位留在输入卡片内（用户口径：权限不要放到下面那排） */
   const permissionSelector = (
@@ -1756,7 +1816,40 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
           )}
         </button>
-      </Popover>{' '}
+      </Popover>
+      <Popover
+        open={mcpOpen}
+        onOpenChange={(open) => {
+          setMcpOpen(open)
+          if (!open) setMcpQuery('')
+        }}
+        trigger="click"
+        placement="topLeft"
+        arrow={false}
+        content={mcpMenu}
+        styles={{
+          container: { padding: 0 },
+          content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+        }}
+      >
+        <button
+          type="button"
+          className="harness-permission-trigger"
+          aria-label={t('harness.input.mcpAria')}
+          aria-expanded={mcpOpen}
+        >
+          <RiPlug2Line size={14} style={{ color: token.colorTextTertiary }} />
+          <span className="harness-permission-trigger-name">{t('harness.input.mcpLabel')}</span>
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+            {selectedMcp.length}
+          </span>
+          {mcpOpen ? (
+            <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
+          ) : (
+            <RiArrowDownSLine size={14} className="harness-permission-trigger-chev" />
+          )}
+        </button>
+      </Popover>
     </>
   )
 

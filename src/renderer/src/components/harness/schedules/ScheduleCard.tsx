@@ -188,7 +188,10 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
           }}
         >
           {t('schedulesPage.conversation', {
-            title: topicTitle ?? String(task.topicId)
+            title:
+              task.topicId != null
+                ? (topicTitle ?? String(task.topicId))
+                : t('schedulesPage.newSessionTag')
           })}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: token.colorTextTertiary }}>

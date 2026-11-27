@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 定时任务独立页（侧边栏「插件仓库」下方）——取代原先藏在设置里的「定时任务」页。
  *
  * 版式对齐设计稿：页头（标题/说明/刷新/新建）→ 分段筛选 + 搜索 → 汇总行 →
@@ -15,9 +15,7 @@ import {
   type ScheduleWhenView
 } from '../api/harness'
 import ScheduleCard from '../components/harness/schedules/ScheduleCard'
-import ScheduleEditorModal, {
-  type ScheduleTopicOption
-} from '../components/harness/schedules/ScheduleEditorModal'
+import ScheduleEditorModal from '../components/harness/schedules/ScheduleEditorModal'
 import ScheduleRunsModal from '../components/harness/schedules/ScheduleRunsModal'
 import { formatRelativeDay } from '../utils/schedules/format'
 
@@ -29,7 +27,7 @@ const Schedules: React.FC = () => {
   const { message, modal } = App.useApp()
 
   const [tasks, setTasks] = useState<ScheduleView[]>([])
-  const [topics, setTopics] = useState<ScheduleTopicOption[]>([])
+  const [topicTitles, setTopicTitles] = useState<Record<number, string>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
@@ -41,19 +39,27 @@ const Schedules: React.FC = () => {
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const settings = await window.api.systemSettings.getAll()
-      const workspaceId = settings.harness?.activeWorkspaceId ?? 0
-      const [scheduleRows, topicRows] = await Promise.all([
+      // 任务可以指向任意模式/工作区的会话，标题映射要覆盖全部工作区（含对话模式）
+      const [scheduleRows, allWorkspaces, chatResult] = await Promise.all([
         harnessApi.harness.listSchedules(),
-        workspaceId > 0 ? harnessApi.harness.getAllTopics(workspaceId) : Promise.resolve([])
+        harnessApi.harness.getAllWorkspaces().catch(() => []),
+        harnessApi.harness.chatWorkspaces().catch(() => null)
       ])
-      setTasks(scheduleRows)
-      setTopics(
-        topicRows.map((row) => ({
-          id: row.id,
-          title: row.title ?? ''
-        }))
+      const workspaceIds = new Set<number>(allWorkspaces.map((row) => row.id))
+      if (chatResult?.ok && chatResult.data) {
+        for (const id of chatResult.data.ids) workspaceIds.add(id)
+      }
+      const topicLists = await Promise.all(
+        Array.from(workspaceIds).map((id) =>
+          harnessApi.harness.getAllTopics(id).catch(() => [])
+        )
       )
+      const titles: Record<number, string> = {}
+      for (const rows of topicLists) {
+        for (const row of rows) titles[row.id] = row.title ?? ''
+      }
+      setTasks(scheduleRows)
+      setTopicTitles(titles)
     } catch (error) {
       message.error(t('schedulesPage.loadFailed', { reason: String(error) }))
       setTasks([])
@@ -68,10 +74,10 @@ const Schedules: React.FC = () => {
 
   const topicTitle = useCallback(
     (topicId: number): string | undefined => {
-      const topic = topics.find((item) => item.id === topicId)
-      return topic ? topic.title || `#${topic.id}` : undefined
+      const title = topicTitles[topicId]
+      return title ? title : undefined
     },
-    [topics]
+    [topicTitles]
   )
 
   /** 筛选 + 搜索，并让启用中的任务按下次触发排前 */
@@ -156,6 +162,10 @@ const Schedules: React.FC = () => {
       try {
         const result = await harnessApi.harness.createSchedule({
           topicId: task.topicId,
+          targetMode: task.targetMode,
+          targetWorkspaceId: task.targetWorkspaceId,
+          targetMemoryScope: task.targetMemoryScope,
+          agentConfig: task.agentConfig,
           title: `${task.title} 副本`,
           prompt: task.prompt,
           when: task.when as ScheduleWhenView
@@ -290,7 +300,7 @@ const Schedules: React.FC = () => {
             <ScheduleCard
               key={task.id}
               task={task}
-              topicTitle={topicTitle(task.topicId)}
+              topicTitle={task.topicId != null ? topicTitle(task.topicId) : undefined}
               busy={busy}
               onPause={(target) => void handleToggle(target)}
               onResume={(target) => void handleToggle(target)}
@@ -322,7 +332,6 @@ const Schedules: React.FC = () => {
       <ScheduleEditorModal
         open={editorOpen}
         task={editingTask}
-        topics={topics}
         onClose={() => setEditorOpen(false)}
         onSaved={() => void load()}
       />

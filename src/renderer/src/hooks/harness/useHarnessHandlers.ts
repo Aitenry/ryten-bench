@@ -21,7 +21,7 @@ import type {
 } from '../../../../shared/harness/types'
 import type { Attachment, HarnessToolInfo, Message } from '../../types/harness/types'
 import type { LlmProviderConfig } from '../../../../main/database/mapper/provider'
-import { harnessApi } from '../../api/harness'
+import { harnessApi, type AgentSelectionView } from '../../api/harness'
 import { getMemoryScope, setMemoryScope } from '../../utils/harness/memory-scope'
 import { isChatScope } from '../../../../shared/harness/memory-scope'
 import { useTopicRunStatus } from './useTopicRunStatus'
@@ -159,6 +159,12 @@ export interface UseHarnessHandlersReturn {
   handleUpdateQueued: (itemId: string, text: string) => Promise<void>
   /** 立即插话：把这条排队消息注入正在运行的回合 */
   handleSteerQueued: (itemId: string) => Promise<void>
+  /**
+   * 当前会话的「本轮运行选择」（工具 / 技能 / MCP，输入框下面选）。
+   * 用户发送时随 startMessageStream 下发，主进程写回会话；null = 用默认。
+   */
+  agentSelection: AgentSelectionView | null
+  setAgentSelection: React.Dispatch<React.SetStateAction<AgentSelectionView | null>>
 }
 
 /**
@@ -197,6 +203,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
    * 输入框据此聚焦——不改内容，只是让用户点完 ＋ 就能直接打字。
    */
   const [focusInputToken, setFocusInputToken] = useState(0)
+  // 会话级运行选择（工具/技能/MCP）：由输入框下面那排选择器维护，随发送下发
+  const [agentSelection, setAgentSelection] = useState<AgentSelectionView | null>(null)
   /**
    * 下一条**新话题**要用的记忆作用域（插件行「＋」带过来的 `plugin:<id>`、
    * 「对话」模式带过来的 `chat`）。
@@ -1358,6 +1366,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           documents: currentDocuments.length > 0 ? currentDocuments : undefined,
           topicId,
           providerId: selectedProviderId ?? undefined,
+          // 输入框下面选的工具/技能/MCP：主进程按它组装本轮，并写回会话配置
+          agentConfig: agentSelection ?? undefined,
           // 首段助手消息的前端临时 id：插话会切段，主进程按段回传库内行 id
           messageId: aiMessageId,
           // 编辑重发：让主进程改写这条已存在的用户消息行，而不是插入新行
@@ -1812,6 +1822,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     steeredNotice,
     handleRemoveQueued,
     handleUpdateQueued,
-    handleSteerQueued
+    handleSteerQueued,
+    agentSelection,
+    setAgentSelection
   }
 }

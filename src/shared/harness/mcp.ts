@@ -111,8 +111,7 @@ export function normalizeMcpServer(input: McpServerInput): McpServerConfig {
     id: id || name,
     name,
     description: input.description?.trim() || undefined,
-    // 用户口径（2026-11-27）：新增 MCP 不能默认开启使用，要在输入框下面选。
-    enabled: input.enabled ?? false,
+    enabled: input.enabled ?? true,
     transport,
     url,
     headers: cleanMap(input.headers),

@@ -39,7 +39,12 @@ import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queu
 import { drainPendingTurns } from '../../services/harness/turn-drain'
 import { registerIpcHandlers, type EffectScope, type IpcHandlerMap } from '../register'
 import type { ToolInfo } from '../../services/harness/types'
-import { effectiveMainAgentTools, type MainAgentConfig } from '../../../shared/harness/mcp'
+import {
+  effectiveMainAgentTools,
+  expandMcpServerGroups,
+  type MainAgentConfig
+} from '../../../shared/harness/mcp'
+import { currentMcpTools } from '../../runtime/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
 import { hasLatticeSession } from '../../lattice/session'
@@ -478,10 +483,16 @@ async function runHarnessTurn(
   // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具。
   // 「发布版本」要插件中心会话（未登录时连名字都不追加），所以登录态必须在这里现取：
   // 用户中途登录/退出后，下一轮的工具集随之变化，不需要重启。
+  // MCP 选择项可能是「服务器分组」（mcp@<命名空间>）：挂载前展开成具体工具名。
+  // 只有被选中的服务器/工具才会注入本轮，默认一个都不挂（见 topic_agent_config 注释）。
+  const expandedMcpTools = expandMcpServerGroups(
+    turnSelection.mcpTools ?? [],
+    currentMcpTools().infos.map((info) => info.name)
+  )
   const selectedTools = effectiveMainAgentTools(
     {
       tools: turnSelection.tools ?? mainAgentDefaults?.tools ?? [],
-      mcpTools: turnSelection.mcpTools ?? []
+      mcpTools: expandedMcpTools
     },
     {
       pluginMode,
@@ -1700,10 +1711,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         syncWorkspaceId
       )
       const pluginMode = syncMemoryScope.kind === 'plugin'
+      const expandedSyncMcpTools = expandMcpServerGroups(
+        syncSelection.mcpTools ?? [],
+        currentMcpTools().infos.map((info) => info.name)
+      )
       const selectedTools = effectiveMainAgentTools(
         {
           tools: syncSelection.tools ?? mainAgentDefaults?.tools ?? [],
-          mcpTools: syncSelection.mcpTools ?? []
+          mcpTools: expandedSyncMcpTools
         },
         {
           pluginMode,
@@ -2493,6 +2508,37 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   // ── 工具清单（设置 →「智能体」页的工具下拉）───────────────────────────────
   // 清单每次请求现取（本地工具 + 各插件当前贡献），因此插件启停立刻反映到设置页；
   // label/description 是**界面元数据**，按当前界面语言覆盖后下发。
+  // ── 会话级运行选择（输入框下面的工具/技能/MCP 选择）──────────────────
+  handle('harness-topic-agent-selection-get', async (payload: { topicId: number }) => {
+    const topicId = Number(payload?.topicId)
+    if (!Number.isFinite(topicId) || topicId <= 0) return null
+    try {
+      return await getTopicAgentSelection(topicId)
+    } catch (err) {
+      logger.warn('[Harness] Failed to read topic agent selection:', err)
+      return null
+    }
+  })
+
+  handle(
+    'harness-topic-agent-selection-set',
+    async (payload: { topicId: number; selection: unknown }) => {
+      const topicId = Number(payload?.topicId)
+      if (!Number.isFinite(topicId) || topicId <= 0) {
+        return { ok: false, error: 'invalid-input' }
+      }
+      try {
+        const selection = normalizeAgentSelection(payload?.selection)
+        if (!selection) return { ok: false, error: 'invalid-input' }
+        await setTopicAgentSelection(topicId, selection)
+        return { ok: true, selection }
+      } catch (err) {
+        logger.warn('[Harness] Failed to save topic agent selection:', err)
+        return { ok: false, error: 'save-failed' }
+      }
+    }
+  )
+
   handle('harness-get-tools', async () => {
     const dict: Record<string, { label: string; description: string }> = mainMessages().tools
     return listAvailableTools().map((tool: ToolInfo) => {

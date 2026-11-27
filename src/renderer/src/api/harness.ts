@@ -68,12 +68,28 @@ export interface ScheduleView {
     | { kind: 'every'; minutes: number }
     | { kind: 'daily'; time: string }
   enabled: boolean
-  topicId: number
+  /** 目标会话（null = 每次触发新建一条会话） */
+  topicId: number | null
+  /** 目标模式（对话/工作/插件）；null = 旧数据（按话题所属模式） */
+  targetMode: 'chat' | 'work' | 'plugin' | null
+  /** 新会话型任务的目标工作区 */
+  targetWorkspaceId: number | null
+  /** 新会话型任务的记忆作用域（chat / plugin:<id> / null） */
+  targetMemoryScope: string | null
+  /** 任务级运行选择（工具/技能/MCP；null 维度跟随会话或默认） */
+  agentConfig: AgentSelectionView | null
   createdAt: string
   updatedAt: string
   nextRunAt: string | null
   lastRunAt?: string
   lastStatus?: 'completed' | 'cancelled' | 'failed'
+}
+
+/** 会话级运行选择（工具 / 技能 / MCP 工具；null = 不覆盖/不启用） */
+export interface AgentSelectionView {
+  tools: string[] | null
+  skills: string[] | null
+  mcpTools: string[] | null
 }
 
 /** 规则（页面表单与 IPC 共用） */
@@ -213,6 +229,8 @@ export const harnessApi = {
         providerId?: number
         images?: string[]
         documents?: { fileName: string; filePath: string }[]
+        /** 本轮运行选择（输入框下面的工具/技能/MCP 选择；主进程会写回会话） */
+        agentConfig?: AgentSelectionView
         /** 编辑并重发：改写这条已存在的用户消息行，而不是插入新行 */
         reuseUserDialogueId?: number
         /** 本轮首段助手消息的前端临时 id（插话会切段，主进程按段回传 dialogueId） */
@@ -341,10 +359,17 @@ export const harnessApi = {
       invoke('harness:harness-schedule-update', payload) as Promise<{ ok: boolean }>,
     // 侧边栏「定时任务」页：新建 / 完整编辑 / 执行记录
     createSchedule: (payload: {
-      topicId: number
       title: string
       prompt: string
       when: ScheduleWhenView
+      /** 固定会话型：目标会话 id */
+      topicId?: number | null
+      /** 新会话型：目标模式 + 工作区 + 记忆作用域 */
+      targetMode?: 'chat' | 'work' | 'plugin' | null
+      targetWorkspaceId?: number | null
+      targetMemoryScope?: string | null
+      /** 任务级运行选择 */
+      agentConfig?: AgentSelectionView | null
     }) => invoke('harness:harness-schedule-create', payload) as Promise<ScheduleMutationResult>,
     updateScheduleFull: (payload: {
       id: string
@@ -352,7 +377,19 @@ export const harnessApi = {
       prompt?: string
       when?: ScheduleWhenView
       enabled?: boolean
+      topicId?: number | null
+      targetMode?: 'chat' | 'work' | 'plugin' | null
+      targetWorkspaceId?: number | null
+      targetMemoryScope?: string | null
+      agentConfig?: AgentSelectionView | null
     }) => invoke('harness:harness-schedule-update-full', payload) as Promise<ScheduleMutationResult>,
+    // 会话级运行选择（输入框下面的工具/技能/MCP 选择，按话题持久化）
+    getTopicAgentSelection: (topicId: number) =>
+      invoke('harness:harness-topic-agent-selection-get', { topicId }) as Promise<AgentSelectionView | null>,
+    setTopicAgentSelection: (topicId: number, selection: AgentSelectionView) =>
+      invoke('harness:harness-topic-agent-selection-set', { topicId, selection }) as Promise<
+        { ok: true; selection: AgentSelectionView } | { ok: false; error: string }
+      >,
     getScheduleRuns: (id: string, limit?: number, offset?: number) =>
       invoke('harness:harness-schedule-runs', { id, limit, offset }) as Promise<{
         runs: ScheduleRunView[]

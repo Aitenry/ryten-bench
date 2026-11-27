@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { theme, Button, Spin, App } from 'antd'
 import { RiAiAgentLine, RiChatAiLine, RiFoldersLine, RiListSettingsLine } from '@remixicon/react'
 import { useTheme } from '@renderer/hooks/useTheme'
@@ -109,7 +109,9 @@ const Harness: React.FC = () => {
     steeredNotice,
     handleRemoveQueued,
     handleUpdateQueued,
-    handleSteerQueued
+    handleSteerQueued,
+    agentSelection,
+    setAgentSelection
   } = useHarness()
 
   /** 目标编辑 / 计划模式切换的触发计数器：斜杠命令只负责递增，具体内联区自己处理 */
@@ -582,6 +584,8 @@ const Harness: React.FC = () => {
         locked={planReviewPending}
         onGoalCommand={() => void beginGoalCompose()}
         onPlanCommand={() => setPlanToggleSignal((value) => value + 1)}
+        agentSelection={agentSelection}
+        onAgentSelectionChange={setAgentSelection}
       />
     </ConversationFooter>
   )
