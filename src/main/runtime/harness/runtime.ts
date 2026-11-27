@@ -25,6 +25,7 @@ import { buildSkillTool } from './skill-tool'
 import { buildSessionSearchTools } from './session-search'
 import { buildTerminalTools } from './terminal-tools'
 import { buildRunCodeTool } from './run-code-tool'
+import { buildModelRoutesTool } from './model-routes'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
 import { createTaskTool } from './subagent'
 import { createAgentAuthoringTool } from './subagent-authoring'
@@ -230,7 +231,10 @@ export class Runtime {
       // 技能：系统提示词只放索引，正文由 skill 工具按需加载（没有技能时不挂）
       ...(this.skills.length > 0 ? [buildSkillTool(this.skills)] : []),
       ...(this.taskTool ? [this.taskTool] : []),
-      ...(this.authoringTool ? [this.authoringTool] : [])
+      ...(this.authoringTool ? [this.authoringTool] : []),
+      // 模型路由清单：agent_create 的 `model` 字段只能填已启用的 provider:model，
+      // 有工作区（能创建子代理）时才挂载
+      ...(this.opts.workspaceId > 0 ? [buildModelRoutesTool()] : [])
     ]
     // PTC（run_code）要在**全部工具装配完成之后**再建：它把只读工具桥接给模型代码，
     // 必须能看到最终列表（且排除自身）。只在有工作区时挂载，与 terminal 一致。

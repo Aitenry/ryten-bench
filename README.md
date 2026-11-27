@@ -147,6 +147,10 @@ from the hub or from a local package, and both paths end in the same host instal
   are captured (capped at 20k/50k characters), synchronous work is limited to 5 s, the whole call to
   120 s with at most 200 tool calls. `node:vm` is not a security boundary, so like the terminal it
   only works in the **full access** permission mode.
+- **Model routes for subagents** — `list_subagent_models` lists the enabled `provider:model` routes
+  with a capability summary (image input, tool calling, reasoning) and marks the default, so
+  `agent_create` and subagent configurations can pick a valid route instead of guessing; omitting the
+  model inherits the main model.
 - **Parallel & bounded tool calls** — when one model reply requests several read-only calls (read,
   glob, grep, `web_fetch`, …), they run concurrently instead of one after another; any write,
   command or unknown call forms a barrier and keeps the reply's order. Tools may declare a
