@@ -56,6 +56,15 @@ interface HarnessMessageAreaProps {
   pendingByPath?: Map<string, number>
   /** 点段头上的改动徽标：打开该文件的差异视图 */
   onOpenChangedFile?: (path: string) => void
+  /**
+   * 会话检索命中后要定位的对话行 id（`harness_dialogue.id`）。
+   *
+   * 侧栏搜索点「正文命中」时会先打开会话、再看消息是否已加载；MessageArea 负责
+   * 滚到那一行并短暂高亮，完成后通过 `onJumpToDialogueConsumed` 让父级清空目标。
+   */
+  jumpToDialogueId?: number | null
+  /** 定位完成（或确认当前列表里没有这条）后通知父级清空待定位目标 */
+  onJumpToDialogueConsumed?: () => void
 }
 
 /** 距离底部小于该值视为「贴底」 */
@@ -112,7 +121,9 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   onLoadMoreMessages,
   messagesEndRef,
   pendingByPath,
-  onOpenChangedFile
+  onOpenChangedFile,
+  jumpToDialogueId,
+  onJumpToDialogueConsumed
 }) => {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -235,6 +246,47 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     setRenderFrom(0)
     viewportAnchor.current = { msgIndex: -1, scrollTop: 0, offset: null }
   }, [currentTopicId])
+
+  /**
+   * 会话检索命中 → 滚到目标对话行并短暂高亮（数据来自侧栏搜索点「正文命中」）。
+   *
+   * 定位链路：侧栏先 `handleSelectTopic` 打开会话、再写 `pendingJumpDialogueId`；
+   * 这里在完整 messages 里按 `dialogueId` 找下标（dialogue id 全局唯一，旧话题不会误命中）。
+   * - 目标行在渲染窗口之外 → 先把 renderFrom 归零再定位；
+   * - 列表里暂时没有（会话还没加载完 / 命中在更早的分页）→ 等下一次 messages 变化，
+   *   2.5s 后仍未命中则清空目标（避免切话题后重复滚动）；
+   * - 滚到位后高亮 1.8s，并回调父级清空目标。
+   */
+  useEffect(() => {
+    if (jumpToDialogueId == null) return
+    const index = messages.findIndex(
+      (message) => Number(message.dialogueId ?? message.id) === jumpToDialogueId
+    )
+    if (index < 0) {
+      const fallback = window.setTimeout(() => onJumpToDialogueConsumed?.(), 2500)
+      return () => window.clearTimeout(fallback)
+    }
+    if (index < renderFrom) {
+      setRenderFrom(0)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      const el = scrollRef.current
+      const inner = contentRef.current
+      const node = inner?.querySelector<HTMLElement>(`[data-msg-i="${index}"]`)
+      if (el && inner && node) {
+        stickToBottomRef.current = false
+        setAtBottom(false)
+        programmaticUntilRef.current = Date.now() + PROGRAMMATIC_WINDOW
+        const offset = node.getBoundingClientRect().top - inner.getBoundingClientRect().top
+        el.scrollTo({ top: Math.max(0, offset - 16), behavior: 'smooth' })
+        node.classList.add('harness-jump-highlight')
+        window.setTimeout(() => node.classList.remove('harness-jump-highlight'), 1800)
+      }
+      onJumpToDialogueConsumed?.()
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [jumpToDialogueId, messages, renderFrom, onJumpToDialogueConsumed])
 
   // 加载更多历史消息后，保持滚动位置不跳动
   useEffect(() => {

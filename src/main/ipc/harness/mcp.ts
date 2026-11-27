@@ -8,6 +8,11 @@ import type { IpcHandlerMap } from '../register'
 import type { MainAgentConfig, McpServerInput } from '../../../shared/harness/mcp'
 import { mcpServerViews, refreshCatalog, testMcpServer } from '../../runtime/harness/mcp'
 import {
+  listMcpResourceTemplates,
+  listMcpResources,
+  readMcpResource
+} from '../../runtime/harness/mcp'
+import {
   importMcpServers,
   removeMcpServer,
   setMcpServerEnabled,
@@ -186,6 +191,65 @@ export function mcpIpcHandlers(): IpcHandlerMap {
       throw error
     }
   })
+
+  // ── 资源浏览（只读）：MCP 页服务器行上的「资源」入口 ─────────────────────
+  // 模型侧早就有 list_mcp_resources / read_mcp_resource 三个工具，但用户侧一直没有
+  // 浏览入口。这里把同一套 runtime 读取能力包成三个只读通道；失败以 `{ok:false,error}`
+  // 返回，不抛异常（服务器断线/不支持资源都是可预期状态，页面就地显示原因）。
+  handle(
+    'mcp-resources-list',
+    async (payload: { server?: unknown; cursor?: unknown }) => {
+      const server = typeof payload?.server === 'string' ? payload.server.trim() : ''
+      if (!server) return { ok: false, error: 'invalid-server', resources: [] as unknown[] }
+      try {
+        const result = await listMcpResources(
+          server,
+          typeof payload?.cursor === 'string' && payload.cursor ? payload.cursor : undefined
+        )
+        return { ok: true as const, ...result }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.warn('Error in mcp-resources-list:', message)
+        return { ok: false, error: message, resources: [] as unknown[] }
+      }
+    }
+  )
+
+  handle(
+    'mcp-resources-templates',
+    async (payload: { server?: unknown; cursor?: unknown }) => {
+      const server = typeof payload?.server === 'string' ? payload.server.trim() : ''
+      if (!server) return { ok: false, error: 'invalid-server', templates: [] as unknown[] }
+      try {
+        const result = await listMcpResourceTemplates(
+          server,
+          typeof payload?.cursor === 'string' && payload.cursor ? payload.cursor : undefined
+        )
+        return { ok: true as const, ...result }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.warn('Error in mcp-resources-templates:', message)
+        return { ok: false, error: message, templates: [] as unknown[] }
+      }
+    }
+  )
+
+  handle(
+    'mcp-resources-read',
+    async (payload: { server?: unknown; uri?: unknown }) => {
+      const server = typeof payload?.server === 'string' ? payload.server.trim() : ''
+      const uri = typeof payload?.uri === 'string' ? payload.uri.trim() : ''
+      if (!server || !uri) return { ok: false, error: 'invalid-request', contents: [] as unknown[] }
+      try {
+        const result = await readMcpResource(server, uri)
+        return { ok: true as const, ...result }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.warn('Error in mcp-resources-read:', message)
+        return { ok: false, error: message, contents: [] as unknown[] }
+      }
+    }
+  )
 
   return handlers
 }

@@ -46,7 +46,7 @@ import type { MenuProps } from 'antd'
 import type { TFunction } from 'i18next'
 import type { HarnessTopicRow, WorkspaceRow } from '../../../../shared/harness/types'
 import type { WorkshopDraftSummary } from '../../../../shared/harness/workshop'
-import { harnessApi } from '../../api/harness'
+import { harnessApi, type WorkspaceSearchResult } from '../../api/harness'
 import { useMemoryScope } from '../../utils/harness/memory-scope'
 import { resolveTopicRunStatus } from '../../hooks/harness/useTopicRunStatus'
 
@@ -108,6 +108,11 @@ interface HarnessSidebarProps {
    * 用「显式点击才通知」替代「非对话页一律不导航」。
    */
   onOpenHarness: () => void
+  /**
+   * 会话检索命中「正文」时，把目标对话行 id 交给页面的消息区（打开会话后滚动并高亮）。
+   * null = 清空待定位目标（点标题命中 / 关掉搜索时用）。
+   */
+  onSetPendingJumpDialogue?: (dialogueId: number | null) => void
   /** 系统外壳模式：使用深色侧栏与参考图里的浅色胶囊滑块 */
   shellMode?: boolean
 }
@@ -387,6 +392,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   onRefreshTopics,
   onNewHarness,
   onOpenHarness,
+  onSetPendingJumpDialogue,
   shellMode = false
 }) => {
   const { token } = theme.useToken()
@@ -839,6 +845,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<InputRef | null>(null)
+  /**
+   * 侧栏检索结果（当前工作区的「会话标题 + 消息正文」混合）：
+   * 输入 ≥2 个字符才走主进程查询；结果为空/失败都在列表区给反馈。
+   */
+  const [searchResults, setSearchResults] = useState<WorkspaceSearchResult | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchFailed, setSearchFailed] = useState(false)
   useEffect(() => {
     if (searchMode) searchInputRef.current?.focus()
   }, [searchMode])
@@ -2838,6 +2851,224 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [])
 
+  /* ── 会话检索（标题 + 正文混合）────────────────────────────────────────── */
+
+  /** 搜哪个工作区：对话模式用自己的根工作区，工作模式用当前选中的工作区 */
+  const searchWorkspaceId =
+    mode === 'chat' ? (chatWorkspaces.rootWorkspaceId ?? null) : topicsWorkspaceId
+  const searchNeedle = searchQuery.trim()
+  /** 输入 ≥2 个字符才查主进程；1 个字符继续走原来的本地标题过滤（不打扰后端） */
+  const serverSearchActive = searchMode && mode !== 'plugin' && searchNeedle.length >= 2
+
+  useEffect(() => {
+    if (!serverSearchActive) {
+      setSearchResults(null)
+      setSearchFailed(false)
+      setSearchLoading(false)
+      return
+    }
+    let cancelled = false
+    setSearchLoading(true)
+    setSearchFailed(false)
+    // 防抖：连续输入只查最后一次（正文 LIKE 查询比标题过滤重得多）
+    const timer = window.setTimeout(() => {
+      void harnessApi.harness
+        .searchWorkspace({
+          query: searchNeedle,
+          workspaceId: searchWorkspaceId ?? undefined,
+          limit: 12
+        })
+        .then((result) => {
+          if (!cancelled) setSearchResults(result)
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSearchResults(null)
+            setSearchFailed(true)
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearchLoading(false)
+        })
+    }, 220)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [serverSearchActive, searchNeedle, searchWorkspaceId])
+
+  /** 收起搜索态（点结果 / 点关闭都走这里，避免下次打开还带着旧查询） */
+  const resetSearch = useCallback((): void => {
+    setSearchMode(false)
+    setSearchQuery('')
+    setSearchResults(null)
+    setSearchFailed(false)
+    onSetPendingJumpDialogue?.(null)
+  }, [onSetPendingJumpDialogue])
+
+  /**
+   * 打开一条搜索结果：标题命中只切会话；正文命中额外把 dialogueId 交给消息区定位。
+   * 工作区切换 / 对话模式激活 / 路由回对话页都复用 `handleOpenTopic` 那一套。
+   */
+  const openSearchResult = useCallback(
+    async (topicId: number, dialogueId?: number): Promise<void> => {
+      const topic = await fetchTopicRow(topicId)
+      if (!topic) {
+        viewMessage('harness-search-open', 'error', t('harness.sidebar.searchOpenFailed'), 3)
+        return
+      }
+      // 工作区以搜索范围为准；极端情况下（对话根工作区还没建好）退回话题行自己的归属
+      const workspaceId = searchWorkspaceId ?? activeWorkspaceId ?? topic.workspace_id
+      resetSearch()
+      if (dialogueId != null) onSetPendingJumpDialogue?.(dialogueId)
+      await handleOpenTopic(workspaceId, topic)
+    },
+    [
+      activeWorkspaceId,
+      fetchTopicRow,
+      handleOpenTopic,
+      onSetPendingJumpDialogue,
+      resetSearch,
+      searchWorkspaceId,
+      t,
+      viewMessage
+    ]
+  )
+
+  /** 命中片段里的关键词高亮（后端给的是纯文本片段） */
+  const renderSearchSnippet = (snippet: string, needle: string): React.ReactNode => {
+    const lower = snippet.toLowerCase()
+    const at = lower.indexOf(needle.toLowerCase())
+    if (at < 0) return snippet
+    const markStyle: React.CSSProperties = {
+      background: token.colorPrimaryBg,
+      color: colorText,
+      borderRadius: 3,
+      padding: '0 1px'
+    }
+    return (
+      <>
+        {snippet.slice(0, at)}
+        <mark style={markStyle}>{snippet.slice(at, at + needle.length)}</mark>
+        {snippet.slice(at + needle.length)}
+      </>
+    )
+  }
+
+  /**
+   * 搜索态的结果面板：会话标题命中 + 消息正文命中两组。
+   * 打开定位的点击目标都带 `data-search-*` 钩子，E2E 工装按它断言。
+   */
+  const renderSearchResults = (): React.ReactNode => {
+    if (searchLoading) return <SkeletonListRows rows={4} />
+    if (searchFailed) {
+      return (
+        <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
+          {t('harness.sidebar.searchFailed')}
+        </p>
+      )
+    }
+    if (
+      !searchResults ||
+      (searchResults.topics.length === 0 && searchResults.hits.length === 0)
+    ) {
+      return (
+        <p className="text-xs text-center py-8 px-3" style={{ color: colorTextTertiary }}>
+          {t('harness.sidebar.noMatchResult')}
+        </p>
+      )
+    }
+    const needle = searchResults.query
+    const hoverHandlers = {
+      onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) =>
+        (e.currentTarget.style.background = token.colorFillQuaternary),
+      onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) =>
+        (e.currentTarget.style.background = 'transparent')
+    }
+    const sectionTitle = (text: string): React.ReactNode => (
+      <div
+        className="px-4 pt-2 pb-1"
+        style={{ fontSize: 11, lineHeight: '16px', color: colorTextTertiary }}
+      >
+        {text}
+      </div>
+    )
+    return (
+      <div className="pb-1" data-harness-search-results="1">
+        {searchResults.topics.length > 0 && (
+          <div>
+            {sectionTitle(t('harness.sidebar.searchScopeTopics'))}
+            {searchResults.topics.map((item) => (
+              <div
+                key={`search-topic-${item.id}`}
+                data-search-topic-id={item.id}
+                className="mx-2 my-0.5 rounded-md cursor-pointer"
+                style={{ padding: '6px 8px' }}
+                {...hoverHandlers}
+                onClick={() => void openSearchResult(item.id)}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="flex-1 min-w-0 truncate"
+                    style={{ fontSize: 13, color: colorText }}
+                  >
+                    {item.title}
+                  </span>
+                  <span className="shrink-0" style={{ fontSize: 11, color: colorTextTertiary }}>
+                    {formatRelativeTime(t, item.updatedAt)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {searchResults.hits.length > 0 && (
+          <div>
+            {sectionTitle(t('harness.sidebar.searchScopeMessages'))}
+            {searchResults.hits.map((hit) => (
+              <div
+                key={`search-hit-${hit.dialogueId}`}
+                data-search-dialogue-id={hit.dialogueId}
+                data-search-hit-topic-id={hit.topicId}
+                className="mx-2 my-0.5 rounded-md cursor-pointer"
+                style={{ padding: '6px 8px' }}
+                {...hoverHandlers}
+                onClick={() => void openSearchResult(hit.topicId, hit.dialogueId)}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="flex-1 min-w-0 truncate"
+                    style={{ fontSize: 12, color: colorTextSecondary }}
+                  >
+                    {hit.topicTitle || t('harness.sidebar.searchUntitledTopic')}
+                  </span>
+                  <span className="shrink-0" style={{ fontSize: 11, color: colorTextTertiary }}>
+                    {formatRelativeTime(t, hit.createdAt)}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    marginTop: 2,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    color: colorTextSecondary,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    wordBreak: 'break-word'
+                  }}
+                >
+                  {renderSearchSnippet(hit.snippet, needle)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   /**
    * 插件中心「在对话中修改」（`lattice.openSource`）成功后的交接事件。
    *
@@ -3253,7 +3484,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         className="flex-1 overflow-y-auto py-1 history-scrollbar"
         onScroll={handleScroll}
       >
-        {mode === 'plugin' ? (
+        {serverSearchActive ? (
+          renderSearchResults()
+        ) : mode === 'plugin' ? (
           draftsLoading && drafts.length === 0 ? (
             <SkeletonListRows rows={3} />
           ) : visibleDrafts.length === 0 ? (

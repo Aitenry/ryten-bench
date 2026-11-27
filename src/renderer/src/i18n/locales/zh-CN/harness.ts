@@ -68,6 +68,12 @@ export const harnessZhCN = {
       noWorkspace: '尚未配置工作区',
       noMatchResult: '无匹配结果',
       noMatchTopic: '无匹配会话',
+      /** 会话检索（标题 + 正文混合结果） */
+      searchScopeTopics: '会话',
+      searchScopeMessages: '消息',
+      searchFailed: '搜索失败，请重试',
+      searchUntitledTopic: '（无标题会话）',
+      searchOpenFailed: '打开这条会话失败（可能已被删除）',
       emptyTopics: '暂无会话',
       topicDeleteBlocked: '进行中，无法删除',
       topicDelete: '删除会话',
@@ -216,6 +222,8 @@ export const harnessZhCN = {
       composePlaceholder: '输入目标…',
       composeFlag: '目标 · Enter 执行 · Esc 取消',
       composeHint: 'Enter 执行 · Esc 取消',
+      roundsLimit: '轮次上限',
+      roundsLimitDefault: '默认 256',
       editTitle: '编辑目标',
       enterRun: '开始执行',
       lineBreak: '换行',
@@ -761,17 +769,6 @@ export const harnessZhCN = {
       runtimeDesc:
         '新会话默认权限档位与沙箱状态；沙箱拿不到后端时命令会被拒绝执行，不会静默放行。'
     },
-    main: {
-      defaultTools: '默认工具',
-      defaultToolsDescription:
-        '选择主智能体可用的系统工具；MCP 按服务器整组勾选（名字就是服务器名），里面具体哪几个工具在「MCP」设置页里开关',
-      defaultToolsPlaceholder: '选择工具',
-      mcpToolsCount: '已启用 {{enabled}}/{{total}}',
-      defaultSkills: '默认技能',
-      defaultSkillsDescription: '选择主智能体可用的技能',
-      defaultSkillsPlaceholder: '选择技能（不选则无技能）',
-      saved: '主智能体已保存'
-    },
     list: {
       description_one: '共 {{count}} 个，只有开启的智能体才会在对话中生效',
       description_other: '共 {{count}} 个，只有开启的智能体才会在对话中生效',
@@ -1058,6 +1055,20 @@ export const harnessZhCN = {
       importFailedWithReason: '导入失败：{{reason}}',
       importPartial: '部分条目未导入',
       saveHint: '保存后会立即重连这台服务器'
+    },
+    /** 资源浏览（服务器行「资源」按钮 → 弹窗） */
+    resources: {
+      open: '浏览资源',
+      title: '资源 · {{name}}',
+      listTitle: '资源',
+      templatesTitle: '资源模板',
+      empty: '这台服务器没有暴露资源',
+      listFailed: '读取资源失败：{{reason}}',
+      loadMore: '加载更多',
+      previewTitle: '内容预览',
+      previewEmpty: '选择左侧一条资源查看内容',
+      emptyContent: '（这条资源没有内容）',
+      binaryNote: '二进制内容（{{mime}}，约 {{bytes}} 字节），暂不支持预览'
     }
   },
 
@@ -1138,34 +1149,6 @@ export const harnessZhCN = {
       titlePlaceholder: '展示名（例如 番茄钟）',
       note: '生成的是完整骨架：页面、设置页、给助手的 AI 工具、事件推送、卸载清数据都有，用不上的部分交给助手删。'
     }
-  },
-
-  /* ── 定时任务设置页 ── */
-  scheduleSettings: {
-    pageTitle: '定时任务',
-    pageDescription:
-      '模型创建的定时任务会在到点时于所属会话里自动发起一轮对话。这里可以暂停、恢复或删除它们。',
-    sectionTitle: '任务列表',
-    sectionDescription: '任务只在应用运行时触发；错过的触发不会补跑。',
-    empty: '还没有定时任务。在会话里让助手「每天 9 点提醒我…」即可创建。',
-    refresh: '刷新',
-    stateEnabled: '启用中',
-    statePaused: '已暂停',
-    nextRun: '下次执行：{{time}}',
-    lastRun: '上次执行：{{time}}（{{status}}）',
-    statusCompleted: '成功',
-    statusCancelled: '已取消',
-    statusFailed: '失败',
-    never: '—',
-    ruleOnce: '一次性 · {{at}}',
-    ruleEvery: '每 {{minutes}} 分钟',
-    ruleDaily: '每天 {{time}}',
-    pause: '暂停',
-    resume: '恢复',
-    delete: '删除',
-    prompt: '提示词：{{prompt}}',
-    loadFailed: '加载定时任务失败：{{reason}}',
-    actionFailed: '操作失败'
   },
 
   /* ── 定时任务独立页（侧边栏「定时任务」） ── */

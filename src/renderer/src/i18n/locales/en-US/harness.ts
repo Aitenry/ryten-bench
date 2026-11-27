@@ -61,6 +61,12 @@ export const harnessEnUS: typeof harnessZhCN = {
       noWorkspace: 'No workspace configured yet',
       noMatchResult: 'No matching results',
       noMatchTopic: 'No matching conversations',
+      /** Conversation search (title + message-body results) */
+      searchScopeTopics: 'Conversations',
+      searchScopeMessages: 'Messages',
+      searchFailed: 'Search failed, please retry',
+      searchUntitledTopic: '(untitled conversation)',
+      searchOpenFailed: 'Could not open this conversation (it may have been deleted)',
       emptyTopics: 'No conversations yet',
       topicDeleteBlocked: 'Running, cannot delete',
       topicDelete: 'Delete conversation',
@@ -209,6 +215,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       composePlaceholder: 'Type a goal…',
       composeFlag: 'Goal · Enter to run · Esc to cancel',
       composeHint: 'Enter to run · Esc to cancel',
+      roundsLimit: 'Round limit',
+      roundsLimitDefault: 'Default 256',
       editTitle: 'Edit goal',
       enterRun: 'Start',
       lineBreak: 'new line',
@@ -747,17 +755,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       runtimeDesc:
         'Default permission mode for new conversations plus the sandbox status; when no sandbox backend is available, commands are refused instead of running unconfined.'
     },
-    main: {
-      defaultTools: 'Default tools',
-      defaultToolsDescription:
-        'System tools available to the main agent. Each MCP server is picked as one group (named after the server); which tools it contains is toggled on the MCP settings page',
-      defaultToolsPlaceholder: 'Select tools',
-      mcpToolsCount: '{{enabled}}/{{total}} enabled',
-      defaultSkills: 'Default skills',
-      defaultSkillsDescription: 'Choose the skills available to the main agent',
-      defaultSkillsPlaceholder: 'Select skills (none if left empty)',
-      saved: 'Main agent saved'
-    },
     list: {
       description_one: '{{count}} total. Only enabled agents take effect in conversations',
       description_other: '{{count}} total. Only enabled agents take effect in conversations',
@@ -1052,6 +1049,20 @@ export const harnessEnUS: typeof harnessZhCN = {
       importFailedWithReason: 'Import failed: {{reason}}',
       importPartial: 'Some entries were not imported',
       saveHint: 'Saving reconnects this server right away'
+    },
+    /** Resource browser (server row "resources" action → modal) */
+    resources: {
+      open: 'Browse resources',
+      title: 'Resources · {{name}}',
+      listTitle: 'Resources',
+      templatesTitle: 'Resource templates',
+      empty: 'This server exposes no resources',
+      listFailed: 'Could not read resources: {{reason}}',
+      loadMore: 'Load more',
+      previewTitle: 'Preview',
+      previewEmpty: 'Pick a resource on the left to preview it',
+      emptyContent: '(this resource has no content)',
+      binaryNote: 'Binary content ({{mime}}, about {{bytes}} bytes) cannot be previewed yet'
     }
   },
 
@@ -1135,35 +1146,6 @@ export const harnessEnUS: typeof harnessZhCN = {
       titlePlaceholder: 'Display name (e.g. Pomodoro)',
       note: 'The draft comes with everything: page, settings page, an AI tool for the assistant, event push and data purge. Let the assistant delete what you do not need.'
     }
-  },
-
-  /* ── Scheduled tasks settings page ── */
-  scheduleSettings: {
-    pageTitle: 'Scheduled tasks',
-    pageDescription:
-      'Tasks created by the model start a new turn in their conversation when due. Pause, resume or delete them here.',
-    sectionTitle: 'Tasks',
-    sectionDescription: 'Tasks run only while the app is running; missed runs are not replayed.',
-    empty:
-      'No scheduled tasks yet. Ask the assistant in a conversation, e.g. "remind me every day at 9".',
-    refresh: 'Refresh',
-    stateEnabled: 'enabled',
-    statePaused: 'paused',
-    nextRun: 'Next run: {{time}}',
-    lastRun: 'Last run: {{time}} ({{status}})',
-    statusCompleted: 'succeeded',
-    statusCancelled: 'cancelled',
-    statusFailed: 'failed',
-    never: '—',
-    ruleOnce: 'once · {{at}}',
-    ruleEvery: 'every {{minutes}} min',
-    ruleDaily: 'daily at {{time}}',
-    pause: 'Pause',
-    resume: 'Resume',
-    delete: 'Delete',
-    prompt: 'Prompt: {{prompt}}',
-    loadFailed: 'Failed to load scheduled tasks: {{reason}}',
-    actionFailed: 'The action failed'
   },
 
   /* ── Schedules page (sidebar) ── */

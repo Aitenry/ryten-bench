@@ -1039,6 +1039,29 @@ body.home-resizing * {
   display: none !important;
 }
 
+/* 会话检索命中定位：滚到目标消息后短暂高亮（1.8s 后由组件移除类名） */
+@keyframes harness-jump-highlight {
+  0% {
+    background-color: rgba(77, 107, 254, 0.14);
+    box-shadow: 0 0 0 2px rgba(77, 107, 254, 0.28);
+  }
+  70% {
+    background-color: rgba(77, 107, 254, 0.08);
+    box-shadow: 0 0 0 2px rgba(77, 107, 254, 0.14);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.harness-jump-highlight {
+  animation: harness-jump-highlight 1.8s ease-out 1;
+  border-radius: 10px;
+}
+
+/* 侧栏检索命中行：标题 + 关键词片段，悬停浅底（与普通会话行同一套观感） */
+
 /* 技能页（More → skills）：hero + 目录区固定，技能列表吃满剩余高度并在内部滚动。
    页面本身不再随卡片数量出现整页滚动条（用户 2026-11-27）。 */
 .more-fill-view > * {

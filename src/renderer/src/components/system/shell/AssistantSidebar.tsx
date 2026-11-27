@@ -54,7 +54,8 @@ const AssistantSidebar: React.FC = () => {
     handleDeleteTopic,
     handleLoadMoreTopics,
     handleNewHarness,
-    refreshTopics
+    refreshTopics,
+    setPendingJumpDialogueId
   } = useHarness()
 
   return (
@@ -82,6 +83,7 @@ const AssistantSidebar: React.FC = () => {
       onRefreshTopics={refreshTopics}
       onNewHarness={handleNewHarness}
       onOpenHarness={openHarness}
+      onSetPendingJumpDialogue={setPendingJumpDialogueId}
       shellMode={effectiveTheme === 'dark'}
     />
   )

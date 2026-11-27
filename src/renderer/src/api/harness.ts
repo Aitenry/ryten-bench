@@ -58,6 +58,57 @@ export interface PermissionStateView {
   defaultMode: PermissionMode
 }
 
+/** 侧栏检索：标题命中的会话 */
+export interface WorkspaceSearchTopicHit {
+  id: number
+  title: string
+  updatedAt: string | null
+  archived: boolean
+  pinned: boolean
+}
+
+/** 侧栏检索：正文命中的消息片段 */
+export interface WorkspaceSearchMessageHit {
+  dialogueId: number
+  topicId: number
+  topicTitle: string
+  role: string
+  snippet: string
+  createdAt: string | null
+}
+
+/** 侧栏检索结果（按工作区隔离） */
+export interface WorkspaceSearchResult {
+  workspaceId: number
+  query: string
+  topics: WorkspaceSearchTopicHit[]
+  hits: WorkspaceSearchMessageHit[]
+}
+
+/** MCP 资源记录（设置页「资源」入口展示；与 runtime 的 listResources 投影一致） */
+export interface McpResourceEntry {
+  uri: string
+  name?: string
+  description?: string
+  mimeType?: string
+}
+
+/** MCP 资源模板记录（参数化 URI） */
+export interface McpResourceTemplateEntry {
+  uriTemplate: string
+  name?: string
+  description?: string
+  mimeType?: string
+}
+
+/** 读取 MCP 资源后的一段内容（text 或 base64 blob 二选一） */
+export interface McpResourceContentEntry {
+  uri?: string
+  mimeType?: string
+  text?: string
+  blob?: string
+}
+
 /** 定时任务视图（设置 →「定时任务」页；字段与主进程 schedule-store 一致） */
 export interface ScheduleView {
   id: string
@@ -696,6 +747,12 @@ export const harnessApi = {
       >,
     getTopicById: (id: number) =>
       invoke('harness:harness-topic-get-by-id', id) as Promise<HarnessTopicRow[]>,
+    /**
+     * 侧栏检索：当前工作区的「会话标题 + 消息正文」混合搜索。
+     * 不传 workspaceId 时主进程用当前活动工作区；正文按关键词截片段返回。
+     */
+    searchWorkspace: (payload: { query: string; workspaceId?: number; limit?: number }) =>
+      invoke('harness:harness-search-workspace', payload) as Promise<WorkspaceSearchResult>,
     createTopic: (
       workspaceId: number,
       title: string,
@@ -849,6 +906,22 @@ export const harnessApi = {
     /** 勾选/取消一台服务器带来的全部工具（写入 mainAgent.mcpTools） */
     setToolsEnabled: (toolNames: string[]) =>
       invoke('harness:mcp-tools-set', toolNames) as Promise<boolean>,
+    /* ── 资源浏览（只读，用户侧入口；模型侧对应 list_mcp_resources 等工具） ── */
+    listResources: (server: string, cursor?: string) =>
+      invoke('harness:mcp-resources-list', { server, cursor }) as Promise<
+        | { ok: true; resources: McpResourceEntry[]; nextCursor?: string }
+        | { ok: false; error: string; resources: McpResourceEntry[] }
+      >,
+    listResourceTemplates: (server: string, cursor?: string) =>
+      invoke('harness:mcp-resources-templates', { server, cursor }) as Promise<
+        | { ok: true; templates: McpResourceTemplateEntry[]; nextCursor?: string }
+        | { ok: false; error: string; templates: McpResourceTemplateEntry[] }
+      >,
+    readResource: (server: string, uri: string) =>
+      invoke('harness:mcp-resources-read', { server, uri }) as Promise<
+        | { ok: true; contents: McpResourceContentEntry[] }
+        | { ok: false; error: string; contents: McpResourceContentEntry[] }
+      >,
     /** 目录变化（连上/断开/增删工具）：MCP 页与智能体页的工具下拉都据此刷新 */
     onCatalogUpdated: (callback: () => void): (() => void) =>
       on('harness:harness-mcp-updated', () => callback())

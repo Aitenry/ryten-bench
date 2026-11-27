@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
-import { App, Button, Input, Modal, Popover, Switch, Tooltip, theme } from 'antd'
+import { App, Button, Input, InputNumber, Modal, Popover, Switch, Tooltip, theme } from 'antd'
 import type { InputRef } from 'antd'
 import {
   RiArrowUpLine,
@@ -230,6 +230,9 @@ interface HarnessInputProps {
   placeholder?: string
   /** 目标输入态：输入卡片高亮并显示模式标签（内容仍由当前编辑器承载） */
   goalCompose?: boolean
+  /** 目标轮次上限（null = 用后端默认 256；只在目标输入态可改） */
+  goalRoundsLimit?: number | null
+  onGoalRoundsLimitChange?: (rounds: number | null) => void
   /** 计划评审挂起时锁住输入框（不发送、不可编辑） */
   locked?: boolean
   /** 斜杠命令「目标」：由页面打开输入框上方的目标编辑区 */
@@ -273,6 +276,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   onPlanCommand,
   placeholder,
   goalCompose = false,
+  goalRoundsLimit = null,
+  onGoalRoundsLimitChange,
   locked = false,
   onAgentSelectionChange = () => {}
 }) => {
@@ -2299,10 +2304,33 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         )}
         {goalCompose ? (
           <div
-            className="flex items-center gap-1.5 px-4 pb-2"
+            className="flex items-center justify-between gap-2 px-4 pb-2"
             style={{ color: token.colorTextTertiary, fontSize: 10 }}
           >
             <span>{t('harness.goalInline.composeHint')}</span>
+            {/*
+             * 目标轮次上限（用户 2026-11-27 已选）：README 一直承诺「目标弹窗可设轮次上限」，
+             * 此前只有后端/词条、没有输入控件。目标输入态顺手给一个数字框，空 = 默认 256。
+             * 停止点击冒泡，避免点数字框时把焦点抢回编辑器。
+             */}
+            <span
+              className="flex items-center gap-1.5"
+              onClick={(event) => event.stopPropagation()}
+              style={{ fontSize: 11 }}
+            >
+              <span>{t('harness.goalInline.roundsLimit')}</span>
+              <InputNumber
+                size="small"
+                min={1}
+                max={9999}
+                style={{ width: 82 }}
+                value={goalRoundsLimit ?? undefined}
+                placeholder={t('harness.goalInline.roundsLimitDefault')}
+                onChange={(value) =>
+                  onGoalRoundsLimitChange?.(typeof value === 'number' ? value : null)
+                }
+              />
+            </span>
           </div>
         ) : null}
         <div className="flex items-center justify-between px-4 pb-4">

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Form, Input, InputNumber, Modal, Select, Switch, theme } from 'antd'
+import { App, Button, Form, Input, InputNumber, Modal, Select, Spin, Switch, theme } from 'antd'
 import { PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   RiAddLine,
   RiDeleteBin6Line,
   RiEditLine,
+  RiFileTextLine,
   RiPlug2Line,
   RiRefreshLine
 } from '@remixicon/react'
@@ -16,7 +17,12 @@ import {
   SettingsPageHeader,
   SettingsSection
 } from '@renderer/components/system/settings/SettingsUI'
-import { harnessApi } from '../../../api/harness'
+import {
+  harnessApi,
+  type McpResourceContentEntry,
+  type McpResourceEntry,
+  type McpResourceTemplateEntry
+} from '../../../api/harness'
 import type {
   McpServerInput,
   McpServerView,
@@ -100,7 +106,15 @@ const StatusDot: React.FC<{ color: string }> = ({ color }) => (
 
 const McpSettings: React.FC = () => {
   const {
-    token: { colorTextSecondary, colorTextTertiary, colorSuccess, colorError }
+    token,
+    token: {
+      colorText,
+      colorTextSecondary,
+      colorTextTertiary,
+      colorSuccess,
+      colorError,
+      colorBorderSecondary
+    }
   } = theme.useToken()
   const { t } = useTranslation()
   const { viewMessage } = useMessage()
@@ -127,6 +141,25 @@ const McpSettings: React.FC = () => {
   const [testing, setTesting] = useState(false)
   /** 试连结果：就地显示在「工具」字段上方（成功给清单，失败给原始错误） */
   const [testResult, setTestResult] = useState<TestResult | null>(null)
+
+  /**
+   * 资源浏览弹窗：模型侧早就能读 MCP resources（list_mcp_resources / read_mcp_resource），
+   * 用户侧一直没有入口。这里在服务器卡片上加「资源」按钮，弹窗里列资源 + 模板，
+   * 点一条就地预览文本 / 图片（二进制只给大小与 mime，不做下载）。
+   */
+  const [resourcesTarget, setResourcesTarget] = useState<McpServerView | null>(null)
+  const [resourceEntries, setResourceEntries] = useState<McpResourceEntry[]>([])
+  const [templateEntries, setTemplateEntries] = useState<McpResourceTemplateEntry[]>([])
+  const [resourcesLoading, setResourcesLoading] = useState(false)
+  const [resourcesError, setResourcesError] = useState<string | null>(null)
+  const [resourceCursor, setResourceCursor] = useState<string | undefined>(undefined)
+  const [resourcePreview, setResourcePreview] = useState<{
+    uri: string
+    text?: string
+    imageUrl?: string
+    binaryNote?: string
+  } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -435,6 +468,112 @@ const McpSettings: React.FC = () => {
       : (config.url ?? '')
   }
 
+  /** 拉资源清单（首页覆盖、cursor 续页追加） */
+  const loadResources = useCallback(
+    async (server: string, cursor?: string): Promise<void> => {
+      setResourcesLoading(true)
+      setResourcesError(null)
+      try {
+        const result = await harnessApi.mcp.listResources(server, cursor)
+        if (!result.ok) {
+          setResourcesError(result.error)
+          return
+        }
+        setResourceEntries((prev) =>
+          cursor ? [...prev, ...result.resources] : result.resources
+        )
+        setResourceCursor(result.nextCursor)
+      } catch (error) {
+        setResourcesError(String(error))
+      } finally {
+        setResourcesLoading(false)
+      }
+    },
+    []
+  )
+
+  /** 打开「资源」弹窗：资源 + 模板并行拉取（模板失败不挡住资源列表） */
+  const openResources = useCallback(
+    (view: McpServerView): void => {
+      setResourcesTarget(view)
+      setResourceEntries([])
+      setTemplateEntries([])
+      setResourceCursor(undefined)
+      setResourcePreview(null)
+      setResourcesError(null)
+      void loadResources(view.config.name)
+      void harnessApi.mcp
+        .listResourceTemplates(view.config.name)
+        .then((result) => {
+          if (result.ok) setTemplateEntries(result.templates)
+        })
+        .catch(() => {
+          // 模板是补充信息：失败静默（资源列表自己会显示连接错误）
+        })
+    },
+    [loadResources]
+  )
+
+  const closeResources = useCallback((): void => {
+    setResourcesTarget(null)
+    setResourceEntries([])
+    setTemplateEntries([])
+    setResourceCursor(undefined)
+    setResourcePreview(null)
+    setResourcesError(null)
+  }, [])
+
+  /** 读一条资源并就地预览：文本直接显示；图片把 base64 blob 转 data URL；其它二进制给说明 */
+  const previewResource = useCallback(
+    async (uri: string): Promise<void> => {
+      if (!resourcesTarget) return
+      setPreviewLoading(true)
+      setResourcesError(null)
+      try {
+        const result = await harnessApi.mcp.readResource(resourcesTarget.config.name, uri)
+        if (!result.ok) {
+          setResourcesError(result.error)
+          setResourcePreview(null)
+          return
+        }
+        const parts = result.contents
+        const text = parts
+          .map((part: McpResourceContentEntry) => part.text)
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n\n')
+        const binary = parts.find(
+          (part: McpResourceContentEntry) => typeof part.blob === 'string' && !part.text
+        )
+        if (text) {
+          setResourcePreview({ uri, text })
+          return
+        }
+        if (binary?.blob) {
+          const mime = binary.mimeType ?? ''
+          if (/^image\/(png|jpe?g|webp|gif)$/i.test(mime)) {
+            setResourcePreview({ uri, imageUrl: `data:${mime};base64,${binary.blob}` })
+          } else {
+            setResourcePreview({
+              uri,
+              binaryNote: t('mcpSettings.resources.binaryNote', {
+                mime: mime || 'application/octet-stream',
+                bytes: String(Math.round((binary.blob.length * 3) / 4))
+              })
+            })
+          }
+          return
+        }
+        setResourcePreview({ uri, text: t('mcpSettings.resources.emptyContent') })
+      } catch (error) {
+        setResourcesError(String(error))
+        setResourcePreview(null)
+      } finally {
+        setPreviewLoading(false)
+      }
+    },
+    [resourcesTarget, t]
+  )
+
   return (
     <div>
       <SettingsPageHeader
@@ -526,6 +665,15 @@ const McpSettings: React.FC = () => {
                       <Button
                         type="text"
                         size="small"
+                        data-mcp-row-action="resources"
+                        aria-label={t('mcpSettings.resources.open')}
+                        title={t('mcpSettings.resources.open')}
+                        icon={<RiFileTextLine size={14} />}
+                        onClick={() => openResources(view)}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
                         data-mcp-row-action="edit"
                         aria-label={t('mcpSettings.list.edit')}
                         icon={<RiEditLine size={14} />}
@@ -592,6 +740,186 @@ const McpSettings: React.FC = () => {
           onTest={(values) => void handleTest(values)}
         />
       )}
+
+      {/* ── 资源浏览（只读）：服务器暴露的 resources / resource templates ── */}
+      <Modal
+        open={resourcesTarget !== null}
+        onCancel={closeResources}
+        footer={null}
+        width={780}
+        destroyOnHidden
+        title={t('mcpSettings.resources.title', { name: resourcesTarget?.config.name ?? '' })}
+      >
+        <div style={{ display: 'flex', gap: 16, height: 440 }}>
+          {/* 左列：资源清单 + 模板 */}
+          <div
+            style={{
+              width: 300,
+              flexShrink: 0,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: colorText }}>
+              {t('mcpSettings.resources.listTitle')}
+            </div>
+            <div
+              className="custom-scrollbar app-modal-scroll"
+              style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+              data-mcp-resources-list
+            >
+              {resourcesLoading && resourceEntries.length === 0 ? (
+                <SkeletonSettingRows rows={3} />
+              ) : null}
+              {resourcesError ? (
+                <div style={{ fontSize: 12, color: colorError, lineHeight: 1.6 }}>
+                  {t('mcpSettings.resources.listFailed', { reason: resourcesError })}
+                </div>
+              ) : null}
+              {!resourcesLoading && !resourcesError && resourceEntries.length === 0 ? (
+                <div style={{ fontSize: 12, color: colorTextTertiary, padding: '12px 0' }}>
+                  {t('mcpSettings.resources.empty')}
+                </div>
+              ) : null}
+              {resourceEntries.map((entry) => (
+                <button
+                  key={entry.uri}
+                  type="button"
+                  data-mcp-resource-uri={entry.uri}
+                  title={entry.uri}
+                  onClick={() => void previewResource(entry.uri)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 'none',
+                    background:
+                      resourcePreview?.uri === entry.uri
+                        ? token.colorFillTertiary
+                        : 'transparent',
+                    borderRadius: 7,
+                    padding: '6px 8px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ fontSize: 12.5, color: colorText }}>
+                    {entry.name || entry.uri}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: colorTextTertiary,
+                      wordBreak: 'break-all',
+                      marginTop: 1
+                    }}
+                  >
+                    {entry.uri}
+                    {entry.mimeType ? ` · ${entry.mimeType}` : ''}
+                  </div>
+                </button>
+              ))}
+              {resourceCursor ? (
+                <Button
+                  size="small"
+                  loading={resourcesLoading}
+                  style={{ marginTop: 6 }}
+                  onClick={() =>
+                    void loadResources(resourcesTarget?.config.name ?? '', resourceCursor)
+                  }
+                >
+                  {t('mcpSettings.resources.loadMore')}
+                </Button>
+              ) : null}
+            </div>
+            {templateEntries.length > 0 && (
+              <div style={{ marginTop: 12, flexShrink: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, color: colorText }}>
+                  {t('mcpSettings.resources.templatesTitle')}
+                </div>
+                <div
+                  className="custom-scrollbar"
+                  style={{ maxHeight: 110, overflowY: 'auto' }}
+                >
+                  {templateEntries.map((template) => (
+                    <div
+                      key={template.uriTemplate}
+                      style={{ padding: '3px 0', wordBreak: 'break-all' }}
+                    >
+                      <div style={{ fontSize: 11.5, color: colorTextSecondary }}>
+                        {template.name || template.uriTemplate}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: colorTextTertiary }}>
+                        {template.uriTemplate}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 右列：资源内容预览 */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: colorText }}>
+              {t('mcpSettings.resources.previewTitle')}
+            </div>
+            <div
+              className="custom-scrollbar app-modal-scroll"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                border: `1px solid ${colorBorderSecondary}`,
+                borderRadius: 8,
+                padding: 10
+              }}
+              data-mcp-resource-preview
+            >
+              {previewLoading ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+                  <Spin size="small" />
+                </div>
+              ) : resourcePreview?.imageUrl ? (
+                <img
+                  src={resourcePreview.imageUrl}
+                  alt={resourcePreview.uri}
+                  style={{ maxWidth: '100%', borderRadius: 6 }}
+                />
+              ) : resourcePreview?.binaryNote ? (
+                <div style={{ fontSize: 12, color: colorTextSecondary }}>
+                  {resourcePreview.binaryNote}
+                </div>
+              ) : resourcePreview?.text ? (
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    color: colorText
+                  }}
+                >
+                  {resourcePreview.text}
+                </pre>
+              ) : (
+                <div style={{ fontSize: 12, color: colorTextTertiary, padding: '12px 0' }}>
+                  {t('mcpSettings.resources.previewEmpty')}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

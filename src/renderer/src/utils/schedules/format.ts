@@ -64,13 +64,3 @@ export function computeNextRunPreview(
   if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
   return next
 }
-
-/** 从提示词自动取一个标题（用户没填名称时） */
-export function deriveTaskTitle(prompt: string): string {
-  const firstLine = prompt
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0)
-  if (!firstLine) return '定时任务'
-  return firstLine.length > 30 ? `${firstLine.slice(0, 30)}…` : firstLine
-}

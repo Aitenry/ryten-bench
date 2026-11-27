@@ -100,10 +100,13 @@ import {
   updateDialogueContent,
   addDialogueUsage,
   getDialoguesByTopicId,
+  getAllTopics,
   getTopicById,
-  getWorkspaceById
+  getWorkspaceById,
+  searchDialogues
 } from '../../database/mapper/harness/harness'
 import { listTeamTaskEvents } from '../../database/mapper/harness/team-task-event'
+import { buildSnippet } from '../../runtime/harness/session-search-core'
 import {
   memoryScopeRoot,
   parseMemoryScope,
@@ -2508,6 +2511,58 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   // ── 工具清单（设置 →「智能体」页的工具下拉）───────────────────────────────
   // 清单每次请求现取（本地工具 + 各插件当前贡献），因此插件启停立刻反映到设置页；
   // label/description 是**界面元数据**，按当前界面语言覆盖后下发。
+  // ── 侧栏检索：当前工作区的「会话标题 + 消息正文」混合搜索（只读） ─────────
+  // 侧栏搜索此前只在渲染层过滤已加载的会话标题；正文搜索只有模型工具能用。
+  // 这里给用户侧一个只读入口：标题命中 + 正文命中（带关键词片段）一次返回，
+  // 按工作区隔离，与 session_search 工具同一套数据（mapper.searchDialogues）。
+  handle(
+    'harness-search-workspace',
+    async (payload: { query?: unknown; workspaceId?: unknown; limit?: unknown }) => {
+      const query = typeof payload?.query === 'string' ? payload.query.trim() : ''
+      const requested = Number(payload?.workspaceId)
+      const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+      const workspaceId =
+        Number.isFinite(requested) && requested > 0
+          ? Math.floor(requested)
+          : (harnessSettings?.activeWorkspaceId ?? 0)
+      const empty = { workspaceId, query, topics: [], hits: [] }
+      if (!query || !workspaceId) return empty
+      const limit = Math.max(1, Math.min(30, Math.floor(Number(payload?.limit) || 12)))
+      try {
+        const [topics, rows] = await Promise.all([
+          getAllTopics(workspaceId),
+          searchDialogues(workspaceId, query, limit)
+        ])
+        const needle = query.toLowerCase()
+        return {
+          workspaceId,
+          query,
+          topics: topics
+            .filter((topic) => (topic.title ?? '').toLowerCase().includes(needle))
+            .slice(0, 8)
+            .map((topic) => ({
+              id: topic.id,
+              title: topic.title ?? '',
+              updatedAt: topic.updated_at ?? null,
+              archived: Boolean(topic.archived_at),
+              pinned: Boolean(topic.pinned_at)
+            })),
+          hits: rows.map((row) => ({
+            dialogueId: row.id,
+            topicId: row.topic_id,
+            topicTitle: row.topic_title ?? '',
+            role: row.role,
+            snippet: buildSnippet(row.content, query),
+            createdAt: row.created_at ?? null
+          }))
+        }
+      } catch (error) {
+        logger.warn('[Harness] Workspace search failed:', error)
+        return empty
+      }
+    }
+  )
+
   // ── 会话级运行选择（输入框下面的工具/技能/MCP 选择）──────────────────
   handle('harness-topic-agent-selection-get', async (payload: { topicId: number }) => {
     const topicId = Number(payload?.topicId)

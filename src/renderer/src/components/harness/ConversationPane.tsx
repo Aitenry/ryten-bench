@@ -42,6 +42,10 @@ interface ConversationPaneProps {
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   pendingByPath?: Map<string, number>
   onOpenChangedFile?: (path: string) => void
+  /** 会话检索命中后要定位的对话行 id（主对话用；子代理会话不传） */
+  jumpToDialogueId?: number | null
+  /** 定位消费完成（父级清空待定位目标） */
+  onJumpToDialogueConsumed?: () => void
   /**
    * 无消息时的占位（子代理会话用：加载中 / 空 / 会话不存在）。
    * 主对话的非空会话不会走到这里；空白会话仍由 Harness 页的欢迎布局处理。
@@ -76,6 +80,8 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
   messagesEndRef,
   pendingByPath,
   onOpenChangedFile,
+  jumpToDialogueId,
+  onJumpToDialogueConsumed,
   empty,
   footer
 }) => {
@@ -111,6 +117,8 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
           messagesEndRef={messagesEndRef}
           pendingByPath={pendingByPath}
           onOpenChangedFile={onOpenChangedFile}
+          jumpToDialogueId={jumpToDialogueId}
+          onJumpToDialogueConsumed={onJumpToDialogueConsumed}
         />
       )}
       {footer}

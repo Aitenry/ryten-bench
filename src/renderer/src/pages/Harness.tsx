@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { theme, Button, Spin, App } from 'antd'
 import { RiAiAgentLine, RiChatAiLine, RiFoldersLine, RiListSettingsLine } from '@remixicon/react'
 import { useTheme } from '@renderer/hooks/useTheme'
@@ -111,7 +111,10 @@ const Harness: React.FC = () => {
     handleUpdateQueued,
     handleSteerQueued,
     agentSelection,
-    setAgentSelection
+    setAgentSelection,
+    /** 会话检索命中后的待定位消息（侧栏搜索 → 打开会话并滚到那条） */
+    pendingJumpDialogueId,
+    clearPendingJumpDialogueId
   } = useHarness()
 
   /** 目标编辑 / 计划模式切换的触发计数器：斜杠命令只负责递增，具体内联区自己处理 */
@@ -121,6 +124,8 @@ const Harness: React.FC = () => {
    * 点目标铅笔 / `/goal` 进入；Enter 保存目标并立即发起一轮 LLM，Esc 退出。
    */
   const [goalCompose, setGoalCompose] = useState(false)
+  /** 目标输入态的轮次上限（null = 后端默认 256） */
+  const [goalRoundsLimit, setGoalRoundsLimit] = useState<number | null>(null)
   /** 计划评审挂起：锁目标操作与输入框，评审反馈只在计划卡内 */
   const [planReviewPending, setPlanReviewPending] = useState(false)
 
@@ -407,11 +412,10 @@ const Harness: React.FC = () => {
         return
       }
       if (planReviewPending) return
-      let text = prefill
-      if (text === undefined) {
-        const goal = await harnessApi.harness.getGoal(currentTopicId).catch(() => null)
-        text = goal?.objective ?? ''
-      }
+      // 无论是否带 prefill 都读一次目标：轮次上限要以已保存的值为准（新建则留空 = 默认）
+      const goal = await harnessApi.harness.getGoal(currentTopicId).catch(() => null)
+      const text = prefill ?? goal?.objective ?? ''
+      setGoalRoundsLimit(goal?.maxGoalRounds ?? null)
       setInputValue(text)
       setGoalCompose(true)
     },
@@ -420,6 +424,7 @@ const Harness: React.FC = () => {
 
   const cancelGoalCompose = useCallback((): void => {
     setGoalCompose(false)
+    setGoalRoundsLimit(null)
     setInputValue('')
   }, [setInputValue])
 
@@ -429,18 +434,30 @@ const Harness: React.FC = () => {
     const text = inputValue.trim()
     if (topicId == null || !text) return
     const existing = await harnessApi.harness.getGoal(topicId).catch(() => null)
+    // 轮次上限：输入框里填了就带上；留空 = 不改（新建时走后端默认 256）
+    const rounds = goalRoundsLimit ?? undefined
     const result =
       existing && existing.phase !== 'complete'
-        ? await harnessApi.harness.updateGoal({ topicId, action: 'edit', objective: text })
-        : await harnessApi.harness.createGoal({ topicId, objective: text })
+        ? await harnessApi.harness.updateGoal({
+            topicId,
+            action: 'edit',
+            objective: text,
+            maxGoalRounds: rounds
+          })
+        : await harnessApi.harness.createGoal({
+            topicId,
+            objective: text,
+            maxGoalRounds: rounds
+          })
     if (!result.ok) {
       message.error(result.error ?? t('harness.goalInline.saveFailed'))
       return
     }
     setGoalCompose(false)
+    setGoalRoundsLimit(null)
     setInputValue('')
     await handleStartGoal(text)
-  }, [currentTopicId, handleStartGoal, inputValue, message, setInputValue, t])
+  }, [currentTopicId, goalRoundsLimit, handleStartGoal, inputValue, message, setInputValue, t])
 
   /** 输入框在目标输入态下的发送入口（Enter 与发送按钮共用） */
   const handleComposerSend = useCallback((): void => {
@@ -581,6 +598,8 @@ const Harness: React.FC = () => {
         onKeyDown={handleComposerKeyDown}
         placeholder={goalCompose ? t('harness.goalInline.composePlaceholder') : undefined}
         goalCompose={goalCompose}
+        goalRoundsLimit={goalRoundsLimit}
+        onGoalRoundsLimitChange={setGoalRoundsLimit}
         locked={planReviewPending}
         onGoalCommand={() => void beginGoalCompose()}
         onPlanCommand={() => setPlanToggleSignal((value) => value + 1)}
@@ -956,6 +975,8 @@ const Harness: React.FC = () => {
                         // 段头徽标 → 直接打开该文件的差异视图（工作区内的真实路径）
                         runOnPanel((handle) => handle.openVirtualFile(realPath, realPath))
                       }}
+                      jumpToDialogueId={pendingJumpDialogueId}
+                      onJumpToDialogueConsumed={clearPendingJumpDialogueId}
                       footer={currentTopicArchived ? null : inputArea}
                     />
                   )}

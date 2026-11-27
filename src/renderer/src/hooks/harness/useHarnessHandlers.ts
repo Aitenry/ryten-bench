@@ -165,6 +165,13 @@ export interface UseHarnessHandlersReturn {
    */
   agentSelection: AgentSelectionView | null
   setAgentSelection: React.Dispatch<React.SetStateAction<AgentSelectionView | null>>
+  /**
+   * 会话检索命中项要定位的对话行 id（侧栏搜索 → 打开会话后滚到那条消息并高亮）。
+   * HarnessMessageArea 消费后调用 `clearPendingJumpDialogueId` 清空，避免下次切话题重复定位。
+   */
+  pendingJumpDialogueId: number | null
+  setPendingJumpDialogueId: React.Dispatch<React.SetStateAction<number | null>>
+  clearPendingJumpDialogueId: () => void
 }
 
 /**
@@ -313,6 +320,11 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const messagesSnapshotRef = useRef<Message[]>([])
   messagesSnapshotRef.current = messages
   const [topics, setTopics] = useState<HarnessTopicRow[]>([])
+  /** 会话检索命中后的待定位消息（dialogueId）：MessageArea 滚到位后清空 */
+  const [pendingJumpDialogueId, setPendingJumpDialogueId] = useState<number | null>(null)
+  const clearPendingJumpDialogueId = useCallback((): void => {
+    setPendingJumpDialogueId(null)
+  }, [])
   /** topics 当前属于哪个工作区（切换工作区时用于避免把旧列表挂到新工作区下） */
   const [topicsWorkspaceId, setTopicsWorkspaceId] = useState<number | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -1825,6 +1837,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     handleUpdateQueued,
     handleSteerQueued,
     agentSelection,
-    setAgentSelection
+    setAgentSelection,
+    // 会话检索命中定位
+    pendingJumpDialogueId,
+    setPendingJumpDialogueId,
+    clearPendingJumpDialogueId
   }
 }

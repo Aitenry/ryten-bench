@@ -17,12 +17,10 @@ import {
   publish,
   readFile,
   removeDraft,
-  removeFile,
   renameDraft,
   unpublish,
   verify,
-  workshopState,
-  writeFile
+  workshopState
 } from '../../workshop/service'
 import { configurePluginsRoot } from '../../workshop/paths'
 import { remapWorkspacePathsUnderRoot } from '../../storage/workspace-refs'
@@ -249,26 +247,6 @@ export function workshopIpcHandlers(): IpcHandlerMap {
         }
         broadcastWorkshopChanged()
         return result
-      })
-  )
-
-  handle(
-    'workshop-write-file',
-    async (id: string, relPath: string, content: string) =>
-      await act(async () => {
-        const file = writeFile(id, relPath, content)
-        broadcastWorkshopChanged()
-        return file
-      })
-  )
-
-  handle(
-    'workshop-remove-file',
-    async (id: string, relPath: string) =>
-      await act(async () => {
-        removeFile(id, relPath)
-        broadcastWorkshopChanged()
-        return true
       })
   )
 
