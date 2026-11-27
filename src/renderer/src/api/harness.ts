@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AgentConfigInput,
   AgentConfigRow,
   AgentPaginatedResult,
@@ -90,6 +90,37 @@ export interface ScheduleRunView {
 export type ScheduleMutationResult =
   | { ok: true; task: ScheduleView }
   | { ok: false; error: string }
+
+/** 联网搜索服务 id */
+export type SearchProviderId = 'builtin' | 'deepseek' | 'tavily'
+
+/** 单个搜索服务的对外状态（密钥只给掩码） */
+export interface SearchProviderState {
+  provider: SearchProviderId
+  requiresKey: boolean
+  configured: boolean
+  maskedKey?: string
+  /** 「设置 → 模型」里已有同厂商 Key，可提示复用 */
+  canReuseModelKey?: boolean
+}
+
+/** 设置页读取的完整搜索设置 */
+export interface SearchSettingsView {
+  defaultProvider: SearchProviderId
+  autoFallback: boolean
+  includeContent: boolean
+  providers: SearchProviderState[]
+}
+
+/** 搜索服务测试结果 */
+export interface SearchProviderTestResult {
+  ok: boolean
+  provider: SearchProviderId
+  elapsedMs: number
+  itemCount: number
+  code?: string
+  message?: string
+}
 
 /**
  * 目标动作的返回形状：界面入口（创建/编辑/暂停/恢复/完成/清除）统一走它。
@@ -327,6 +358,27 @@ export const harnessApi = {
         runs: ScheduleRunView[]
         total: number
       }>,
+
+    // 联网搜索设置（设置 →「联网搜索」页）
+    getSearchSettings: () =>
+      invoke('harness:harness-search-settings-get') as Promise<SearchSettingsView | null>,
+    saveSearchProviderKey: (provider: SearchProviderId, apiKey: string) =>
+      invoke('harness:harness-search-provider-save-key', { provider, apiKey }) as Promise<
+        { ok: true; maskedKey: string } | { ok: false; error: string }
+      >,
+    clearSearchProviderKey: (provider: SearchProviderId) =>
+      invoke('harness:harness-search-provider-clear-key', { provider }) as Promise<{
+        ok: boolean
+        error?: string
+      }>,
+    setSearchDefault: (provider: SearchProviderId) =>
+      invoke('harness:harness-search-default-set', { provider }) as Promise<
+        { ok: true; provider: SearchProviderId } | { ok: false; error: string }
+      >,
+    setSearchBehaviors: (patch: { autoFallback?: boolean; includeContent?: boolean }) =>
+      invoke('harness:harness-search-behavior-set', patch) as Promise<{ ok: boolean }>,
+    testSearchProvider: (provider: SearchProviderId) =>
+      invoke('harness:harness-search-provider-test', { provider }) as Promise<SearchProviderTestResult>,
 
     // 后台任务系统（jobs）
     onJobsUpdated: (

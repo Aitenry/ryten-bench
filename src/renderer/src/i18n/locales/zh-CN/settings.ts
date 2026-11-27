@@ -13,6 +13,7 @@ export const zhCNSettings = {
     memory: '记忆',
     mcp: 'MCP',
     schedules: '定时任务',
+    search: '联网搜索',
     workshop: '插件工坊'
   },
   plugins: {

@@ -4,12 +4,14 @@ import {
   RiBrain4Line,
   RiFileAi2Line,
   RiMindMap,
-  RiPlug2Line
+  RiPlug2Line,
+  RiSearchLine
 } from '@remixicon/react'
 import AgentSettings from '@renderer/components/harness/settings/AgentSettings'
 import SkillsSettings from '@renderer/components/harness/settings/SkillsSettings'
 import MemorySettings from '@renderer/components/harness/settings/MemorySettings'
 import McpSettings from '@renderer/components/harness/settings/McpSettings'
+import SearchSettings from '@renderer/components/harness/settings/SearchSettings'
 import GraphSettings from '@renderer/components/notes/settings/GraphSettings'
 
 /**
@@ -69,6 +71,15 @@ export const systemSettingsSections: SystemSettingsSection[] = [
     group: 'assistant',
     order: 40,
     Component: McpSettings
+  },
+  {
+    tabKey: 'search',
+    labelKey: 'settings.nav.search',
+    descriptionKey: 'searchSettings.pageDescription',
+    icon: <RiSearchLine size={16} />,
+    group: 'general',
+    order: 30,
+    Component: SearchSettings
   },
   {
     tabKey: 'graph',

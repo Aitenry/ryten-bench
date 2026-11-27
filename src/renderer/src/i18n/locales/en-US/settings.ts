@@ -14,6 +14,7 @@ export const enUSSettings: typeof zhCNSettings = {
     memory: 'Memory',
     mcp: 'MCP',
     schedules: 'Schedules',
+    search: 'Web search',
     workshop: 'Workshop'
   },
   plugins: {
