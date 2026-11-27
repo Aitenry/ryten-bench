@@ -1,4 +1,4 @@
-import type { zhCNShell } from '../zh-CN/shell'
+﻿import type { zhCNShell } from '../zh-CN/shell'
 
 /* App shell copy: window frame, route skeleton and build-progress notifications. */
 export const enUSShell: typeof zhCNShell = {
@@ -11,6 +11,7 @@ export const enUSShell: typeof zhCNShell = {
   nav: {
     library: 'Library',
     pluginRepo: 'Plugin repository',
+    schedules: 'Schedules',
     more: 'More'
   },
   titleBar: {
@@ -64,6 +65,7 @@ export const enUSShell: typeof zhCNShell = {
   windowTitle: {
     library: 'Library',
     pluginRepo: 'Plugin repository',
+    schedules: 'Schedules',
     more: 'More',
     chatMode: 'Chat mode',
     workMode: 'Work mode',

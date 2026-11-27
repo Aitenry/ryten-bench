@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from 'react'
+﻿import React, { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import RouteSkeleton from './RouteSkeleton'
 import { lazyViewFor } from './lazyViewCache'
@@ -17,6 +17,7 @@ import type { RegisteredRoute } from '@renderer/plugin-host/types'
 const HarnessView = lazy(() => import('@renderer/pages/Harness'))
 const NotesView = lazy(() => import('@renderer/pages/Notes'))
 const MoreView = lazy(() => import('@renderer/pages/More'))
+const SchedulesView = lazy(() => import('@renderer/pages/Schedules'))
 
 const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // lazy 实例必须来自模块级缓存（见 lazyViewCache.ts）：在渲染期新建 lazy 会让
@@ -67,6 +68,15 @@ const MainRoutes: React.FC = () => {
         element={
           <Suspense fallback={<RouteSkeleton variant="generic" />}>
             <NotesView />
+          </Suspense>
+        }
+      />
+      {/* 定时任务独立页（侧边栏「插件仓库」下方） */}
+      <Route
+        path="/schedules"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <SchedulesView />
           </Suspense>
         }
       />

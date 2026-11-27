@@ -2,7 +2,6 @@
 import {
   RiAiAgentLine,
   RiBrain4Line,
-  RiCalendar2Line,
   RiFileAi2Line,
   RiMindMap,
   RiPlug2Line
@@ -11,7 +10,6 @@ import AgentSettings from '@renderer/components/harness/settings/AgentSettings'
 import SkillsSettings from '@renderer/components/harness/settings/SkillsSettings'
 import MemorySettings from '@renderer/components/harness/settings/MemorySettings'
 import McpSettings from '@renderer/components/harness/settings/McpSettings'
-import ScheduleSettings from '@renderer/components/harness/settings/ScheduleSettings'
 import GraphSettings from '@renderer/components/notes/settings/GraphSettings'
 
 /**
@@ -71,15 +69,6 @@ export const systemSettingsSections: SystemSettingsSection[] = [
     group: 'assistant',
     order: 40,
     Component: McpSettings
-  },
-  {
-    tabKey: 'schedules',
-    labelKey: 'settings.nav.schedules',
-    descriptionKey: 'scheduleSettings.pageDescription',
-    icon: <RiCalendar2Line size={16} />,
-    group: 'assistant',
-    order: 50,
-    Component: ScheduleSettings
   },
   {
     tabKey: 'graph',

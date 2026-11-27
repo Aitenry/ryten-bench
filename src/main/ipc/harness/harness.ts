@@ -12,6 +12,7 @@ import {
 } from '../../runtime/harness/schedule-store'
 import type { ScheduledTask } from '../../runtime/harness/schedule-types'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
+import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
 import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
@@ -2473,8 +2474,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return next
   })
 
-  // ── 定时任务管理（设置 →「定时任务」页）─────────────────────────────────
-  // 只做列表与暂停/恢复/删除：创建仍走模型工具（需要会话归属与自然语言提示词）。
+  // ── 定时任务管理（侧边栏 →「定时任务」页）─────────────────────────────
+  // 列表 / 新建 / 完整编辑 / 暂停恢复删除 / 执行记录。
+  // 模型工具 `schedule_*` 与页面共用同一个存储后端。
   handle('harness-schedule-list', async () => {
     if (!isScheduleStoreConfigured()) return []
     try {
@@ -2484,6 +2486,114 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       return []
     }
   })
+
+  /** 页面新建任务：固定会话 + 标题 + 提示词 + 规则 */
+  handle(
+    'harness-schedule-create',
+    async (payload: { topicId: number; title: string; prompt: string; when: unknown }) => {
+      if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
+      const topicId = Number(payload?.topicId)
+      const title = typeof payload?.title === 'string' ? payload.title.trim() : ''
+      const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim() : ''
+      if (!Number.isFinite(topicId) || topicId <= 0 || !title || !prompt) {
+        return { ok: false, error: 'invalid-input' }
+      }
+      const validated = validateScheduleWhen(payload.when as ScheduleWhen)
+      if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
+      try {
+        const task = await scheduleStore.create({
+          title,
+          prompt,
+          when: payload.when as ScheduleWhen,
+          topicId,
+          workspaceId: null,
+          nextRunAt: validated.nextRunAt
+        })
+        return { ok: true, task }
+      } catch (err) {
+        logger.warn('[Schedule] Failed to create task:', err)
+        return { ok: false, error: 'create-failed' }
+      }
+    }
+  )
+
+  /** 页面完整编辑：标题 / 提示词 / 规则 / 启用态（规则变化时重算下次触发） */
+  handle(
+    'harness-schedule-update-full',
+    async (payload: {
+      id: string
+      title?: string
+      prompt?: string
+      when?: unknown
+      enabled?: boolean
+    }) => {
+      if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
+      const id = typeof payload?.id === 'string' ? payload.id : ''
+      if (!id) return { ok: false, error: 'invalid-input' }
+      try {
+        const task = await scheduleStore.get(id)
+        if (!task) return { ok: false, error: 'not-found' }
+        const patch: {
+          title?: string
+          prompt?: string
+          when?: ScheduleWhen
+          enabled?: boolean
+          nextRunAt?: string | null
+        } = {}
+        if (typeof payload.title === 'string' && payload.title.trim()) {
+          patch.title = payload.title.trim()
+        }
+        if (typeof payload.prompt === 'string' && payload.prompt.trim()) {
+          patch.prompt = payload.prompt.trim()
+        }
+        const nextWhen =
+          payload.when !== undefined ? (payload.when as ScheduleWhen) : task.when
+        if (payload.when !== undefined) {
+          const validated = validateScheduleWhen(nextWhen)
+          if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
+          patch.when = nextWhen
+          patch.nextRunAt = validated.nextRunAt
+          patch.enabled = true
+        }
+        if (payload.enabled === false) {
+          patch.enabled = false
+          patch.nextRunAt = null
+        } else if (payload.enabled === true) {
+          const validated = validateScheduleWhen(nextWhen)
+          if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
+          patch.enabled = true
+          patch.nextRunAt = validated.nextRunAt
+        }
+        const updated = await scheduleStore.update(id, patch)
+        return updated ? { ok: true, task: updated } : { ok: false, error: 'not-found' }
+      } catch (err) {
+        logger.warn('[Schedule] Failed to update task:', err)
+        return { ok: false, error: 'update-failed' }
+      }
+    }
+  )
+
+  /** 执行记录（永久保存，倒序分页） */
+  handle(
+    'harness-schedule-runs',
+    async (payload: { id: string; limit?: number; offset?: number }) => {
+      if (!isScheduleStoreConfigured()) return { runs: [], total: 0 }
+      const id = typeof payload?.id === 'string' ? payload.id : ''
+      if (!id) return { runs: [], total: 0 }
+      try {
+        const limit = typeof payload.limit === 'number' ? payload.limit : 20
+        const offset = typeof payload.offset === 'number' ? payload.offset : 0
+        const [runs, total] = await Promise.all([
+          scheduleStore.listRuns(id, limit, offset),
+          scheduleStore.countRuns(id)
+        ])
+        return { runs, total }
+      } catch (err) {
+        logger.warn('[Schedule] Failed to list runs:', err)
+        return { runs: [], total: 0 }
+      }
+    }
+  )
 
   handle(
     'harness-schedule-update',

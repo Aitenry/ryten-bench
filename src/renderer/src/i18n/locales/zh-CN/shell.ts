@@ -1,4 +1,4 @@
-/* 应用外壳（主窗口框架、路由骨架、构建进度通知）词条。
+﻿/* 应用外壳（主窗口框架、路由骨架、构建进度通知）词条。
    注意 errorBoundary.eyebrow 与 routing.loading 是**等宽全大写的装饰性标签**，
    按项目字体规则（等宽只给拉丁与数字）两种语言都保持拉丁大写，不译中文——
    中文落进等宽族会回退成宋体，和页面其它中文不是一套字。 */
@@ -12,6 +12,7 @@ export const zhCNShell = {
   nav: {
     library: '资料库',
     pluginRepo: '插件仓库',
+    schedules: '定时任务',
     /** 设置从侧栏收起成一个入口（菜单 + 内容都在这一页里） */
     more: '更多内容'
   },
@@ -66,6 +67,7 @@ export const zhCNShell = {
   windowTitle: {
     library: '资料库',
     pluginRepo: '插件仓库',
+    schedules: '定时任务',
     more: '更多内容',
     chatMode: '对话模式',
     workMode: '工作模式',

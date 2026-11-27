@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { App, Badge, Dropdown, Modal, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
@@ -8,6 +8,7 @@ import {
   RiApps2Line,
   RiBellLine,
   RiBook2Line,
+  RiCalendar2Line,
   RiBrain4Line,
   RiFileAi2Line,
   RiLoader4Line,
@@ -639,6 +640,13 @@ const AppShell: React.FC = () => {
             >
               <RiApps2Line size={16} />
               {t('shell.nav.pluginRepo')}
+            </NavLink>
+            <NavLink
+              to="/schedules"
+              className={({ isActive }) => `shell-nav-item${isActive ? ' active' : ''}`}
+            >
+              <RiCalendar2Line size={16} />
+              {t('shell.nav.schedules')}
             </NavLink>
             {/* 助手设置收在「更多」下拉里（插件仓库下面）：选一项 → 整页显示它的内容 */}
             <Dropdown

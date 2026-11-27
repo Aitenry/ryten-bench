@@ -76,6 +76,21 @@ export interface ScheduleView {
   lastStatus?: 'completed' | 'cancelled' | 'failed'
 }
 
+/** 规则（页面表单与 IPC 共用） */
+export type ScheduleWhenView = ScheduleView['when']
+
+/** 一条执行记录（永久保存） */
+export interface ScheduleRunView {
+  at: string
+  status: 'completed' | 'cancelled' | 'failed'
+  detail?: string | null
+}
+
+/** 新建/编辑结果：预期失败不抛错，`error` 是稳定代码（页面负责翻译） */
+export type ScheduleMutationResult =
+  | { ok: true; task: ScheduleView }
+  | { ok: false; error: string }
+
 /**
  * 目标动作的返回形状：界面入口（创建/编辑/暂停/恢复/完成/清除）统一走它。
  *
@@ -293,6 +308,25 @@ export const harnessApi = {
     listSchedules: () => invoke('harness:harness-schedule-list') as Promise<ScheduleView[]>,
     updateSchedule: (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) =>
       invoke('harness:harness-schedule-update', payload) as Promise<{ ok: boolean }>,
+    // 侧边栏「定时任务」页：新建 / 完整编辑 / 执行记录
+    createSchedule: (payload: {
+      topicId: number
+      title: string
+      prompt: string
+      when: ScheduleWhenView
+    }) => invoke('harness:harness-schedule-create', payload) as Promise<ScheduleMutationResult>,
+    updateScheduleFull: (payload: {
+      id: string
+      title?: string
+      prompt?: string
+      when?: ScheduleWhenView
+      enabled?: boolean
+    }) => invoke('harness:harness-schedule-update-full', payload) as Promise<ScheduleMutationResult>,
+    getScheduleRuns: (id: string, limit?: number, offset?: number) =>
+      invoke('harness:harness-schedule-runs', { id, limit, offset }) as Promise<{
+        runs: ScheduleRunView[]
+        total: number
+      }>,
 
     // 后台任务系统（jobs）
     onJobsUpdated: (
