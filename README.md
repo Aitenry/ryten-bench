@@ -141,8 +141,9 @@ from the hub or from a local package, and both paths end in the same host instal
   continues instead of hanging.
 - **Multi-file patches** — `apply_patch` applies Add / Update / Delete sections across several files
   in one call (`*** Begin Patch` … `*** End Patch`); the whole patch is validated in memory first, so
-  a hunk that does not match writes nothing, and accepted changes still land in change review. A
-  companion `str_replace_editor` adds line-numbered `view`, `create`, unique `str_replace` and
+  a hunk that does not match writes nothing, and accepted changes still land in change review.
+  Context matching tolerates trailing whitespace only (indentation stays strict). A companion
+  `str_replace_editor` adds line-numbered `view`, `create`, unique `str_replace` and
   line-indexed `insert` for smaller line-oriented edits.
 - **Image results** — `read_image` returns the picture itself to the model; the tool card shows a
   thumbnail with click-to-preview, the image is stored with the message so it survives a restart,

@@ -206,10 +206,24 @@ export function applyHunks(content: string, hunks: PatchHunk[], path = ''): Appl
 
 /** 在 lines 中从 from 开始查找一段连续序列，返回起始下标；找不到返回 -1 */
 function findSequence(lines: string[], sequence: string[], from: number): number {
+  const exact = findSequenceWith(lines, sequence, from, (line, expected) => line === expected)
+  if (exact >= 0) return exact
+  // 容错回退：只忽略**行尾**空白（模型从编辑器复制时常见）。行首缩进仍然严格匹配——
+  // 代码里前导空白有语义，宽容它会把补丁打到错误的分支/缩进层级上。
+  return findSequenceWith(lines, sequence, from, (line, expected) => line.trimEnd() === expected.trimEnd())
+}
+
+/** 按给定的行比较器查找连续序列 */
+function findSequenceWith(
+  lines: string[],
+  sequence: string[],
+  from: number,
+  equals: (line: string, expected: string) => boolean
+): number {
   for (let start = Math.max(0, from); start <= lines.length - sequence.length; start++) {
     let match = true
     for (let offset = 0; offset < sequence.length; offset++) {
-      if (lines[start + offset] !== sequence[offset]) {
+      if (!equals(lines[start + offset], sequence[offset])) {
         match = false
         break
       }
