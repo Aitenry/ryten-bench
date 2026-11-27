@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { theme } from 'antd'
 import { useMessage } from '@renderer/hooks/useMessage'
-import { Window } from '../../../../resource/types/window'
 import type { SystemSettings } from '@renderer/types/settings'
 import { useTranslation } from '@renderer/i18n'
 import { SettingsPageHeader, SettingsSection, SettingRow } from './SettingsUI'
@@ -18,7 +17,7 @@ const SystemInfo: React.FC = () => {
   const loadSettings = useCallback(async () => {
     const msgKey = 'system-info-load'
     try {
-      const result = await (window as unknown as Window).api.systemSettings.getAll()
+      const result = await window.api.systemSettings.getAll()
       setSettings(result)
     } catch (error) {
       viewMessage(

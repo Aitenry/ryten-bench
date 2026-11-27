@@ -3,7 +3,6 @@ import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 import type { ThemeMode } from '@renderer/types/settings'
-import { Window } from '../../resource/types/window'
 import { useLanguage } from '../hooks/useLanguage'
 import { ThemeContext, type ThemeContextType } from './ThemeContextCore'
 
@@ -56,7 +55,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const loadTheme = async (): Promise<void> => {
       try {
-        const settings = await (window as unknown as Window).api.systemSettings.getAll()
+        const settings = await window.api.systemSettings.getAll()
         const savedTheme = settings.theme as ThemeMode | undefined
         const mode = savedTheme || 'auto'
         setThemeModeState(mode)
@@ -101,7 +100,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setThemeModeState(mode)
     setEffectiveTheme(next)
     try {
-      await (window as unknown as Window).api.systemSettings.update({ theme: mode })
+      await window.api.systemSettings.update({ theme: mode })
     } catch {
       // 静默处理
     }

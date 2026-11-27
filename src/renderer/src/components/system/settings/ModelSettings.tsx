@@ -39,7 +39,6 @@ import {
 } from '@ant-design/icons'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation, Trans } from '@renderer/i18n'
-import { Window } from '../../../../resource/types/window'
 import {
   type LlmProviderConfig,
   type LlmProviderInput,
@@ -559,7 +558,7 @@ const ModelSettings: React.FC = () => {
   const applyProfileAutofill = useCallback(
     async (modelId: string): Promise<void> => {
       try {
-        const profile = (await (window as unknown as Window).api.providers.lookupProfile(
+        const profile = (await window.api.providers.lookupProfile(
           modelId
         )) as ModelMetadata | null
         if (!profile) {
@@ -663,7 +662,7 @@ const ModelSettings: React.FC = () => {
     const msgKey = 'providers-load'
     try {
       setLoading(true)
-      const result = await (window as unknown as Window).api.providers.getAll()
+      const result = await window.api.providers.getAll()
       setProviders(result)
     } catch (error) {
       viewMessage(
@@ -869,12 +868,12 @@ const ModelSettings: React.FC = () => {
           input.api_key = values.api_key as string
         }
         viewMessage(msgKey, 'loading', t('modelSettings.messages.updating'))
-        await (window as unknown as Window).api.providers.update(editingProvider.id, input)
+        await window.api.providers.update(editingProvider.id, input)
         viewMessage(msgKey, 'success', t('modelSettings.messages.updated'), 2)
       } else {
         input.api_key = (values.api_key as string) || null
         viewMessage(msgKey, 'loading', t('modelSettings.messages.creating'))
-        await (window as unknown as Window).api.providers.create(input)
+        await window.api.providers.create(input)
         viewMessage(msgKey, 'success', t('modelSettings.messages.created'), 2)
       }
 
@@ -894,7 +893,7 @@ const ModelSettings: React.FC = () => {
     const msgKey = 'provider-delete'
     try {
       viewMessage(msgKey, 'loading', t('common.action.deleting'))
-      await (window as unknown as Window).api.providers.delete(id)
+      await window.api.providers.delete(id)
       viewMessage(msgKey, 'success', t('common.action.deleteSuccess'), 2)
       await loadProviders()
     } catch (error) {
@@ -915,7 +914,7 @@ const ModelSettings: React.FC = () => {
         return
       }
       viewMessage(msgKey, 'loading', t('modelSettings.messages.settingDefault'))
-      await (window as unknown as Window).api.providers.setDefault(id)
+      await window.api.providers.setDefault(id)
       viewMessage(msgKey, 'success', t('modelSettings.messages.defaultUpdated'), 2)
       await loadProviders()
     } catch (error) {
@@ -933,7 +932,7 @@ const ModelSettings: React.FC = () => {
     setFetchModels([])
     setCheckedModels([])
     try {
-      const result = (await (window as unknown as Window).api.providers.fetchModels(
+      const result = (await window.api.providers.fetchModels(
         fetchProviderType,
         fetchBaseUrl || undefined,
         fetchApiKey || undefined
@@ -998,7 +997,7 @@ const ModelSettings: React.FC = () => {
         is_enabled: true,
         is_default: false
       }))
-      const result = await (window as unknown as Window).api.providers.createBatch(inputs)
+      const result = await window.api.providers.createBatch(inputs)
       viewMessage(
         msgKey,
         'success',
@@ -1226,7 +1225,7 @@ const ModelSettings: React.FC = () => {
       onOk: async () => {
         setDeletingBatch(true)
         try {
-          const count = await (window as unknown as Window).api.providers.deleteBatch(selectedIds)
+          const count = await window.api.providers.deleteBatch(selectedIds)
           viewMessage(
             msgKey,
             'success',

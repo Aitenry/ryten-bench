@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Window } from '../../resource/types/window'
 import type { LanguageContextType, ResolvedLanguage } from '@renderer/types/language'
 import { changeLanguage, detectSystemLanguage, isSupportedLanguage } from '@renderer/i18n'
 import { LanguageContext } from './LanguageContextCore'
@@ -18,7 +17,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     let cancelled = false
     const load = async (): Promise<void> => {
       try {
-        const settings = await (window as unknown as Window).api.systemSettings.getAll()
+        const settings = await window.api.systemSettings.getAll()
         if (cancelled) return
         // 存过就听用户的；没存过（或存的是已废弃的值）保持按系统语言选中的默认项
         if (isSupportedLanguage(settings.language)) {
@@ -42,7 +41,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const setLanguage = useCallback(async (next: ResolvedLanguage): Promise<void> => {
     // 先落盘再切界面；落盘失败也照切，避免「点了没反应」
     try {
-      await (window as unknown as Window).api.systemSettings.update({ language: next })
+      await window.api.systemSettings.update({ language: next })
     } catch {
       // 静默处理：本地仍切换，重启后回到旧值
     }

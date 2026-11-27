@@ -121,6 +121,21 @@ interface Api {
     close: () => void
     isMaximized: () => Promise<boolean>
     onMaximized: (callback: (maximized: boolean) => void) => () => void
+    /**
+     * 自绘标题栏与系统窗口按钮覆盖层（Window Controls Overlay）的主题同步。
+     * 只影响系统绘制按钮的配色与标题栏底色，不改变按钮行为。
+     */
+    setTitleBarOverlay: (options: { color?: string; symbolColor?: string; height?: number }) => void
+    /** 让系统窗口边框/标题栏明暗跟随应用主题 */
+    setNativeTheme: (mode: 'light' | 'dark' | 'system') => void
+    /** 设置窗口标题（原生标题栏：内容 - RytenBench） */
+    setTitle: (title: string) => void
+    /** 重新加载当前窗口（标题栏「应用 → 重新加载」） */
+    reload: () => void
+    /** 退出应用（走正常退出清理，不是隐藏到托盘） */
+    quit: () => void
+    /** 编辑命令（标题栏「编辑」菜单）：交给主进程调用 webContents 的原生编辑动作 */
+    edit: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => void
   }
   /** 当前运行平台（win32 / darwin / linux），与主进程的 `process.platform` 同值 */
   platform: NodeJS.Platform

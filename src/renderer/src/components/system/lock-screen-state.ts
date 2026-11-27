@@ -83,7 +83,7 @@ export function useLockScreenState(): LockScreenSnapshot {
 }
 
 function ipc(): NonNullable<Window['api']['lock']> {
-  return (window as unknown as Window).api.lock
+  return window.api.lock
 }
 
 /**

@@ -257,7 +257,7 @@ function createMermaidNodeView(props: NodeViewRendererProps): ReturnType<NodeVie
   btnFullscreen.addEventListener('click', () => {
     const svgEl = viewport.querySelector('svg')
     if (!svgEl) return
-    void (window as unknown as Window).api.mermaid.preview(svgEl.outerHTML)
+    void window.api.mermaid.preview(svgEl.outerHTML)
   })
 
   btnCenter.addEventListener('mousedown', prevent)

@@ -11,7 +11,6 @@ import { useMessage } from '@renderer/hooks/useMessage'
 import { useTheme } from '@renderer/hooks/useTheme'
 import { useLanguage } from '@renderer/hooks/useLanguage'
 import { useTranslation } from '@renderer/i18n'
-import { Window } from '../../../../resource/types/window'
 import type { SystemSettings, ThemeMode, AppLanguage } from '@renderer/types/settings'
 import { SettingsPageHeader, SettingsSection, SettingRow } from './SettingsUI'
 import {
@@ -56,7 +55,7 @@ const GeneralSettings: React.FC = () => {
   const loadSettings = useCallback(async () => {
     const msgKey = 'general-settings-load'
     try {
-      const result = await (window as unknown as Window).api.systemSettings.getAll()
+      const result = await window.api.systemSettings.getAll()
       setSettings(result)
     } catch (error) {
       viewMessage(
@@ -75,7 +74,7 @@ const GeneralSettings: React.FC = () => {
     const msgKey = 'general-settings-save'
     try {
       viewMessage(msgKey, 'loading', t('common.action.saving'))
-      await (window as unknown as Window).api.systemSettings.update(updates)
+      await window.api.systemSettings.update(updates)
       viewMessage(msgKey, 'success', t('common.action.saveSuccess'), 2)
       await loadSettings()
     } catch (error) {

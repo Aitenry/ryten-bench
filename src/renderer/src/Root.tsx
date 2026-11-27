@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react'
 import App from './App'
 import StartupSplash from './components/system/StartupSplash'
 import { useWindowTitle } from './window-title'
-import type { Window } from '../resource/types/window'
 
 /**
  * 把当前窗口标题同步给主进程（原生标题栏显示 `内容 - RytenBench`）。
@@ -14,7 +13,7 @@ const WindowTitleSync: React.FC = () => {
   const title = useWindowTitle()
   useEffect(() => {
     try {
-      ;(window as unknown as Window).api.window.setTitle(title)
+      ;window.api.window.setTitle(title)
     } catch {
       // 平台不支持时忽略
     }

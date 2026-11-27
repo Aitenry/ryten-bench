@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { App, Badge, Dropdown, Modal, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
@@ -447,7 +447,7 @@ const NativeThemeSync: React.FC = () => {
   const { effectiveTheme } = useTheme()
   useLayoutEffect(() => {
     try {
-      ;(window as unknown as Window).api.window.setNativeTheme(effectiveTheme)
+      ;window.api.window.setNativeTheme(effectiveTheme)
     } catch {
       // 平台不支持时忽略（Linux 等）
     }
@@ -594,7 +594,7 @@ const AppShell: React.FC = () => {
     '--shell-primary': token.colorPrimary
   } as React.CSSProperties
 
-  const platform = (window as unknown as Window).api.platform
+  const platform = window.api.platform
   // Windows 改用系统原生标题栏（不再渲染自绘标题条）；macOS 仍保留自绘条 + 交通灯留白
   const showTitleBar = platform === 'darwin'
 
