@@ -5,6 +5,16 @@ import logger from 'electron-log'
 import { isSenderAlive, safeSend } from '../../safe-send'
 import { mainFormat, mainMessages } from '../../i18n'
 import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
+import {
+  mergeAgentSelection,
+  normalizeAgentSelection,
+  type AgentSelection
+} from '../../../shared/harness/agent-config'
+import {
+  getTopicAgentSelection,
+  setTopicAgentSelection
+} from '../../database/mapper/topic-agent-config'
+import { chatTopicDir, ensureChatTopicDir } from '../../services/harness/chat/workspace'
 import { scheduleRunner } from '../../runtime/harness/schedule-runner'
 import {
   isScheduleStoreConfigured,
@@ -14,6 +24,7 @@ import type { ScheduledTask } from '../../runtime/harness/schedule-types'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
+import { normalizeMemoryScope } from '../../../shared/harness/memory-scope'
 import {
   asSearchProviderId,
   clearSearchProviderKey,
@@ -84,7 +95,8 @@ import {
   updateDialogueContent,
   addDialogueUsage,
   getDialoguesByTopicId,
-  getTopicById
+  getTopicById,
+  getWorkspaceById
 } from '../../database/mapper/harness/harness'
 import { listTeamTaskEvents } from '../../database/mapper/harness/team-task-event'
 import {
@@ -174,24 +186,95 @@ function headlessSender(): Electron.WebContents {
 }
 
 /**
- * 定时任务到点后的执行入口：在任务归属的话题里起一轮无头对话。
+ * 解析定时任务的目标：固定会话（可能是对话/工作/插件模式下任一会话）或「每次新建会话」。
  *
- * 同一话题已有回合在跑时不并发（返回 cancelled，由 runner 顺延到下一个周期）。
+ * 跨模式运行必须带本轮的**工作区上下文**：文件工具、记忆作用域、子代理都要用目标会话的
+ * 目录，而不是「当前界面停在哪个工作区」。
+ */
+async function resolveScheduledTarget(task: ScheduledTask): Promise<{
+  topicId: number
+  workspaceContext?: { workspaceId?: number; workspacePath?: string }
+} | null> {
+  if (task.topicId != null) {
+    const rows = await getTopicById(task.topicId)
+    const topic = rows[0]
+    if (!topic) return null
+    const workspaceId = topic.workspace_id ?? task.workspaceId ?? task.targetWorkspaceId ?? 0
+    if (String(topic.memory_scope ?? '') === 'chat') {
+      return {
+        topicId: task.topicId,
+        workspaceContext: { workspaceId, workspacePath: chatTopicDir(task.topicId) }
+      }
+    }
+    const workspace = workspaceId ? await getWorkspaceById(workspaceId) : null
+    return { topicId: task.topicId, workspaceContext: { workspaceId, workspacePath: workspace?.path } }
+  }
+  // 新会话型任务：每轮触发新建一条会话；工作区/记忆作用域由任务上存的目标决定
+  if (!task.targetWorkspaceId) return null
+  const memoryScope = task.targetMemoryScope
+  const topicId = await createTopic(
+    task.targetWorkspaceId,
+    (task.title || task.prompt).slice(0, 50),
+    undefined,
+    undefined,
+    memoryScope || null
+  )
+  if (!topicId) return null
+  if (memoryScope === 'chat') {
+    try {
+      await ensureChatTopicDir(topicId)
+    } catch (err) {
+      logger.warn('[Chat] Failed to prepare scheduled session directory:', err)
+    }
+    return {
+      topicId,
+      workspaceContext: { workspaceId: task.targetWorkspaceId, workspacePath: chatTopicDir(topicId) }
+    }
+  }
+  const workspace = await getWorkspaceById(task.targetWorkspaceId)
+  return {
+    topicId,
+    workspaceContext: { workspaceId: task.targetWorkspaceId, workspacePath: workspace?.path }
+  }
+}
+
+/**
+ * 定时任务到点后的执行入口：在目标会话里起一轮无头对话。
+ *
+ * - 固定会话型：直接在该话题里跑（跨模式同样可以）；
+ * - 新会话型：先按任务上的目标模式/工作区新建一条会话，再在该会话里跑；
+ * - 同一话题已有回合在跑时不并发（返回 cancelled，由 runner 顺延到下一个周期）。
  */
 async function runScheduledTurn(
   task: ScheduledTask,
   question: string
 ): Promise<{ cancelled: boolean }> {
-  if (harnessQueue.isTurnActive(task.topicId)) return { cancelled: true }
+  let target: Awaited<ReturnType<typeof resolveScheduledTarget>>
+  try {
+    target = await resolveScheduledTarget(task)
+  } catch (err) {
+    logger.warn('[Schedule] Failed to resolve scheduled target:', err)
+    return { cancelled: true }
+  }
+  if (!target) {
+    logger.warn('[Schedule] Target conversation/workspace is gone, skipping this run:', task.id)
+    return { cancelled: true }
+  }
+  const { topicId, workspaceContext } = target
+  if (harnessQueue.isTurnActive(topicId)) return { cancelled: true }
   const sender = primarySender() ?? headlessSender()
-  const turnId = harnessQueue.beginTurn(task.topicId)
+  const turnId = harnessQueue.beginTurn(topicId)
   try {
     const result = await runHarnessTurn({
       event: { sender },
       question,
       turnId,
       options: {
-        topicId: task.topicId,
+        topicId,
+        workspaceContext,
+        // 任务级选择只作用于这一轮，不写回会话（用户口径：会话选择归输入框管）
+        agentConfig: task.agentConfig,
+        persistAgentConfig: false,
         turnMeta: {
           source: 'schedule',
           scheduleId: task.id,
@@ -204,7 +287,7 @@ async function runScheduledTurn(
     logger.warn('[Schedule] Scheduled turn failed:', err)
     return { cancelled: false }
   } finally {
-    harnessQueue.endTurn(task.topicId, turnId)
+    harnessQueue.endTurn(topicId, turnId)
   }
 }
 
@@ -241,6 +324,15 @@ interface RunHarnessTurnParams {
      * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
      */
     memoryScope?: string | null
+    /**
+     * 本轮运行选择（工具 / 技能 / MCP 工具）：非 null 的维度覆盖会话配置。
+     * 来自输入框下面的选择，或定时任务上存的任务级选择。
+     */
+    agentConfig?: AgentSelection | null
+    /** 本轮工作区上下文（定时任务跨模式运行时由调用方指定；缺省用当前设置） */
+    workspaceContext?: { workspaceId?: number; workspacePath?: string }
+    /** 是否把本轮选择写回会话（用户发送 = true；定时任务/内部轮 = false） */
+    persistAgentConfig?: boolean
   }
 }
 
@@ -361,6 +453,11 @@ async function runHarnessTurn(
   let harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
   logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
 
+  // 本轮工作区上下文：定时任务可以跨模式/跨工作区运行，由调用方显式指定，缺省用当前设置。
+  const turnWorkspaceId =
+    options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
+  const turnWorkspacePath = options?.workspaceContext?.workspacePath ?? harnessSettings?.workspacePath
+
   // 0. 本轮的记忆作用域与「插件模式」。**必须在建话题、建工具之前定下来**：
   //    插件模式决定工坊那 4 个工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），
   //    话题上的工具快照与真正挂载的工具集必须是同一个口径。
@@ -368,17 +465,29 @@ async function runHarnessTurn(
   const memoryScope = await resolveTurnMemoryScope(
     options?.topicId,
     options?.memoryScope,
-    harnessSettings?.activeWorkspaceId ?? 0
+    turnWorkspaceId
   )
   const pluginMode = memoryScope.kind === 'plugin'
+
+  // 本轮运行选择（工具 / 技能 / MCP）：请求上带的优先，其次会话级配置。
+  // 技能与 MCP 的默认值都是「一个都不启用」（用户口径：新增时不能默认开启）。
+  const requestSelection = normalizeAgentSelection(options?.agentConfig)
+  const topicSelection = options?.topicId ? await getTopicAgentSelection(options.topicId) : null
+  const turnSelection = mergeAgentSelection(topicSelection, requestSelection)
 
   // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具。
   // 「发布版本」要插件中心会话（未登录时连名字都不追加），所以登录态必须在这里现取：
   // 用户中途登录/退出后，下一轮的工具集随之变化，不需要重启。
-  const selectedTools = effectiveMainAgentTools(mainAgentDefaults, {
-    pluginMode,
-    signedIn: hasLatticeSession()
-  })
+  const selectedTools = effectiveMainAgentTools(
+    {
+      tools: turnSelection.tools ?? mainAgentDefaults?.tools ?? [],
+      mcpTools: turnSelection.mcpTools ?? []
+    },
+    {
+      pluginMode,
+      signedIn: hasLatticeSession()
+    }
+  )
   const tools = buildTools(selectedTools)
   logger.info(
     `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
@@ -388,7 +497,7 @@ async function runHarnessTurn(
   let topicId = options?.topicId
   if (!topicId) {
     const title = question.slice(0, 50)
-    const workspaceId = harnessSettings?.activeWorkspaceId ?? 0
+    const workspaceId = turnWorkspaceId
     try {
       // 话题上记一份「本轮启用的工具」快照（含 MCP 页勾选的 MCP 工具与模式工具，与真正挂载的口径一致）
       topicId = await createTopic(
@@ -415,6 +524,15 @@ async function runHarnessTurn(
     } catch (err) {
       logger.error('Failed to create topic:', err)
       topicId = 0
+    }
+  }
+
+  // 把本轮选择写回会话（用户发送 = 持久化；定时任务/内部轮 = 只作用于本轮）
+  if (topicId && requestSelection && options?.persistAgentConfig !== false) {
+    try {
+      await setTopicAgentSelection(topicId, turnSelection)
+    } catch (err) {
+      logger.warn('[Harness] Failed to persist session agent selection:', err)
     }
   }
 
@@ -592,21 +710,21 @@ async function runHarnessTurn(
     })
   }
 
-  // 技能优先级：harnessSettings.enabledSkills > mainAgent.skills
-  const effectiveSkills = harnessSettings?.enabledSkills ?? mainAgentDefaults?.skills
+  // 技能：只启用会话级选择里的技能（默认不启用）
+  const effectiveSkills = turnSelection.skills ?? []
 
   let harnessService: HarnessService
   try {
     harnessService = new HarnessService(
       model,
       tools,
-      await listEnabledSubAgents(harnessSettings?.activeWorkspaceId ?? 0),
+      await listEnabledSubAgents(turnWorkspaceId),
       getDialoguesByTopicId,
       harnessSettings?.skillsPath || undefined,
       effectiveSkills,
-      harnessSettings?.workspacePath || undefined,
+      turnWorkspacePath || undefined,
       harnessSettings?.memoryPath || undefined,
-      harnessSettings?.activeWorkspaceId ?? 0,
+      turnWorkspaceId,
       maxToolRounds,
       memoryScope,
       modelDescriptor,
@@ -1288,6 +1406,15 @@ interface StartStreamOptions {
    * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
    */
   memoryScope?: string | null
+  /**
+   * 本轮运行选择（工具 / 技能 / MCP 工具）：非 null 的维度覆盖会话配置。
+   * 来自输入框下面的选择，或定时任务上存的任务级选择。
+   */
+  agentConfig?: AgentSelection | null
+  /** 本轮工作区上下文（定时任务跨模式运行时由调用方指定；缺省用当前设置） */
+  workspaceContext?: { workspaceId?: number; workspacePath?: string }
+  /** 是否把本轮选择写回会话（用户发送 = true；定时任务/内部轮 = false） */
+  persistAgentConfig?: boolean
 }
 
 /**
@@ -1545,6 +1672,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         providerId?: number
         images?: string[]
         documents?: { fileName: string; filePath: string }[]
+        agentConfig?: AgentSelection | null
+        workspaceContext?: { workspaceId?: number; workspacePath?: string }
+        persistAgentConfig?: boolean
       }
     ) => {
       // 加载主智能体默认配置（electron-store）
@@ -1552,18 +1682,34 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
       logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
 
+      const syncWorkspaceId =
+        options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
+      const syncWorkspacePath =
+        options?.workspaceContext?.workspacePath ?? harnessSettings?.workspacePath
+      const syncRequestSelection = normalizeAgentSelection(options?.agentConfig)
+      const syncTopicSelection = options?.topicId
+        ? await getTopicAgentSelection(options.topicId)
+        : null
+      const syncSelection = mergeAgentSelection(syncTopicSelection, syncRequestSelection)
+
       // 这条同步路径也要认话题的记忆作用域（插件会话 → 那份插件自己的记忆），
       // 并据此决定插件模式的模式工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES）
       const syncMemoryScope = await resolveTurnMemoryScope(
         options?.topicId,
         undefined,
-        harnessSettings?.activeWorkspaceId ?? 0
+        syncWorkspaceId
       )
       const pluginMode = syncMemoryScope.kind === 'plugin'
-      const selectedTools = effectiveMainAgentTools(mainAgentDefaults, {
-        pluginMode,
-        signedIn: hasLatticeSession()
-      })
+      const selectedTools = effectiveMainAgentTools(
+        {
+          tools: syncSelection.tools ?? mainAgentDefaults?.tools ?? [],
+          mcpTools: syncSelection.mcpTools ?? []
+        },
+        {
+          pluginMode,
+          signedIn: hasLatticeSession()
+        }
+      )
       const tools = buildTools(selectedTools)
       logger.info(
         `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
@@ -1571,8 +1717,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
       const model = await getProviderService().createModel(options?.providerId)
 
-      // 技能优先级：harnessSettings.enabledSkills > mainAgent.skills
-      const effectiveSkills = harnessSettings?.enabledSkills ?? mainAgentDefaults?.skills
+      // 技能：只启用会话级选择里的技能（默认不启用）
+      const effectiveSkills = syncSelection.skills ?? []
 
       // 该模型的「工具调用轮数」上限（取不到则用工程默认值，由 HarnessService 兜底）；
       // 同时记录 provider/model 描述符，供后台子代理持久化与冷恢复回到同一模型
@@ -1590,16 +1736,23 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         logger.warn('[Harness] Failed to read model max tool call rounds, using default:', err)
       }
 
+      if (options?.topicId && syncRequestSelection && options?.persistAgentConfig !== false) {
+        try {
+          await setTopicAgentSelection(options.topicId, syncSelection)
+        } catch (err) {
+          logger.warn('[Harness] Failed to persist session agent selection:', err)
+        }
+      }
       const harnessService = new HarnessService(
         model,
         tools,
-        await listEnabledSubAgents(harnessSettings?.activeWorkspaceId ?? 0),
+        await listEnabledSubAgents(syncWorkspaceId),
         getDialoguesByTopicId,
         harnessSettings?.skillsPath || undefined,
         effectiveSkills,
-        harnessSettings?.workspacePath || undefined,
+        syncWorkspacePath || undefined,
         harnessSettings?.memoryPath || undefined,
-        harnessSettings?.activeWorkspaceId ?? 0,
+        syncWorkspaceId,
         maxToolRounds,
         syncMemoryScope,
         syncModelDescriptor,
@@ -2483,6 +2636,76 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return next
   })
 
+
+/** 定时任务页面提交的目标配置（固定会话 或 每次新建会话） */
+interface ScheduleTargetPayload {
+  topicId?: number | null
+  targetMode?: unknown
+  targetWorkspaceId?: number | null
+  targetMemoryScope?: unknown
+}
+
+/**
+ * 校验并解析任务目标：固定会话型从话题反查工作区；新会话型要求模式与工作区匹配。
+ *
+ * 返回 null = 参数不合法（handler 统一回 invalid-input）。
+ */
+async function resolveScheduleTargetPayload(
+  payload: ScheduleTargetPayload
+): Promise<{
+  topicId: number | null
+  workspaceId: number | null
+  targetMode: 'chat' | 'work' | 'plugin' | null
+  targetWorkspaceId: number | null
+  targetMemoryScope: string | null
+} | null> {
+  const topicId =
+    typeof payload.topicId === 'number' && Number.isFinite(payload.topicId) && payload.topicId > 0
+      ? payload.topicId
+      : null
+  const mode =
+    payload.targetMode === 'chat' || payload.targetMode === 'work' || payload.targetMode === 'plugin'
+      ? payload.targetMode
+      : null
+  if (topicId != null) {
+    const rows = await getTopicById(topicId).catch(() => [])
+    const topic = rows[0]
+    if (!topic) return null
+    return {
+      topicId,
+      workspaceId: topic.workspace_id ?? null,
+      targetMode: mode,
+      targetWorkspaceId: topic.workspace_id ?? null,
+      targetMemoryScope: null
+    }
+  }
+  // 新会话型：模式与工作区必须匹配，插件模式还必须带 plugin:<id> 作用域
+  const workspaceId =
+    typeof payload.targetWorkspaceId === 'number' &&
+    Number.isFinite(payload.targetWorkspaceId) &&
+    payload.targetWorkspaceId > 0
+      ? payload.targetWorkspaceId
+      : null
+  if (!mode || !workspaceId) return null
+  const workspace = await getWorkspaceById(workspaceId).catch(() => null)
+  if (!workspace) return null
+  const kind = workspace.kind ?? 'user'
+  if (mode === 'chat' && kind !== 'chat') return null
+  if (mode === 'plugin' && kind !== 'plugin') return null
+  if (mode === 'work' && kind !== 'user') return null
+  const scope = normalizeMemoryScope(payload.targetMemoryScope)
+  if (mode === 'chat' && scope !== 'chat') return null
+  if (mode === 'plugin' && !String(scope ?? '').startsWith('plugin:')) return null
+  if (mode === 'work' && scope !== null) return null
+  return {
+    topicId: null,
+    workspaceId: null,
+    targetMode: mode,
+    targetWorkspaceId: workspaceId,
+    targetMemoryScope: scope
+  }
+}
+
   // ── 定时任务管理（侧边栏 →「定时任务」页）─────────────────────────────
   // 列表 / 新建 / 完整编辑 / 暂停恢复删除 / 执行记录。
   // 模型工具 `schedule_*` 与页面共用同一个存储后端。
@@ -2496,17 +2719,23 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  /** 页面新建任务：固定会话 + 标题 + 提示词 + 规则 */
+  /** 页面新建任务：目标（固定会话/新会话）+ 标题 + 提示词 + 规则 + 任务级选择 */
   handle(
     'harness-schedule-create',
-    async (payload: { topicId: number; title: string; prompt: string; when: unknown }) => {
+    async (
+      payload: {
+        title: string
+        prompt: string
+        when: unknown
+        agentConfig?: unknown
+      } & ScheduleTargetPayload
+    ) => {
       if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
-      const topicId = Number(payload?.topicId)
       const title = typeof payload?.title === 'string' ? payload.title.trim() : ''
       const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim() : ''
-      if (!Number.isFinite(topicId) || topicId <= 0 || !title || !prompt) {
-        return { ok: false, error: 'invalid-input' }
-      }
+      if (!title || !prompt) return { ok: false, error: 'invalid-input' }
+      const target = await resolveScheduleTargetPayload(payload ?? {})
+      if (!target) return { ok: false, error: 'invalid-target' }
       const validated = validateScheduleWhen(payload.when as ScheduleWhen)
       if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
       try {
@@ -2514,8 +2743,12 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           title,
           prompt,
           when: payload.when as ScheduleWhen,
-          topicId,
-          workspaceId: null,
+          topicId: target.topicId,
+          workspaceId: target.workspaceId,
+          targetMode: target.targetMode,
+          targetWorkspaceId: target.targetWorkspaceId,
+          targetMemoryScope: target.targetMemoryScope,
+          agentConfig: normalizeAgentSelection(payload.agentConfig),
           nextRunAt: validated.nextRunAt
         })
         return { ok: true, task }
@@ -2529,13 +2762,16 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   /** 页面完整编辑：标题 / 提示词 / 规则 / 启用态（规则变化时重算下次触发） */
   handle(
     'harness-schedule-update-full',
-    async (payload: {
-      id: string
-      title?: string
-      prompt?: string
-      when?: unknown
-      enabled?: boolean
-    }) => {
+    async (
+      payload: {
+        id: string
+        title?: string
+        prompt?: string
+        when?: unknown
+        enabled?: boolean
+        agentConfig?: unknown
+      } & ScheduleTargetPayload
+    ) => {
       if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
       const id = typeof payload?.id === 'string' ? payload.id : ''
       if (!id) return { ok: false, error: 'invalid-input' }
@@ -2548,7 +2784,30 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           when?: ScheduleWhen
           enabled?: boolean
           nextRunAt?: string | null
+          topicId?: number | null
+          targetMode?: 'chat' | 'work' | 'plugin' | null
+          targetWorkspaceId?: number | null
+          targetMemoryScope?: string | null
+          agentConfig?: ReturnType<typeof normalizeAgentSelection>
+          workspaceId?: number | null
         } = {}
+        const wantsTargetChange =
+          payload.topicId !== undefined ||
+          payload.targetMode !== undefined ||
+          payload.targetWorkspaceId !== undefined ||
+          payload.targetMemoryScope !== undefined
+        if (wantsTargetChange) {
+          const target = await resolveScheduleTargetPayload(payload ?? {})
+          if (!target) return { ok: false, error: 'invalid-target' }
+          patch.topicId = target.topicId
+          patch.targetMode = target.targetMode
+          patch.targetWorkspaceId = target.targetWorkspaceId
+          patch.targetMemoryScope = target.targetMemoryScope
+          patch.workspaceId = target.workspaceId
+        }
+        if (payload.agentConfig !== undefined) {
+          patch.agentConfig = normalizeAgentSelection(payload.agentConfig)
+        }
         if (typeof payload.title === 'string' && payload.title.trim()) {
           patch.title = payload.title.trim()
         }

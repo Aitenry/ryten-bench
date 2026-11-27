@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 定时任务数据库 mapper（PGlite / Drizzle）。
  *
  * 约定：所有时间列在数据库里是 `timestamp`，读出后统一归一化为 **ISO 字符串**
@@ -9,6 +9,7 @@
 import { desc, eq, sql } from 'drizzle-orm'
 import { withOrm } from '../orm'
 import { scheduled_task_runs, scheduled_tasks } from '../schema'
+import { normalizeAgentSelection, type AgentSelection } from '../../../shared/harness/agent-config'
 import type {
   ScheduleCreateInput,
   ScheduleRunRecord,
@@ -52,6 +53,22 @@ function parseWhen(kind: string, json: string): ScheduleWhen | null {
 }
 
 type TaskRow = typeof scheduled_tasks.$inferSelect
+
+/** JSON 列 → 任务级运行选择（非法按 null） */
+function parseAgentConfig(raw: string | null): AgentSelection | null {
+  if (!raw) return null
+  try {
+    return normalizeAgentSelection(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
+/** 任务级运行选择 → JSON 列（null 存 null） */
+function serializeAgentConfig(selection: AgentSelection | null | undefined): string | null {
+  if (!selection) return null
+  return JSON.stringify(selection)
+}
 type RunRow = typeof scheduled_task_runs.$inferSelect
 
 /** 行 → 领域对象（规则非法时返回 null） */
@@ -65,8 +82,12 @@ function toTask(row: TaskRow): ScheduledTask | null {
     prompt: row.prompt,
     when,
     enabled: row.enabled,
-    topicId: row.topic_id,
+    topicId: row.topic_id ?? null,
     workspaceId: row.workspace_id ?? null,
+    targetMode: (row.target_mode as ScheduledTask["targetMode"]) ?? null,
+    targetWorkspaceId: row.target_workspace_id ?? null,
+    targetMemoryScope: row.target_memory_scope ?? null,
+    agentConfig: parseAgentConfig(row.agent_config),
     createdAt,
     updatedAt: toIso(row.updated_at) ?? createdAt,
     nextRunAt: toIso(row.next_run_at),
@@ -114,6 +135,10 @@ export async function createScheduledTask(
       id: input.id,
       workspace_id: input.workspaceId ?? null,
       topic_id: input.topicId,
+      target_mode: input.targetMode ?? null,
+      target_workspace_id: input.targetWorkspaceId ?? null,
+      target_memory_scope: input.targetMemoryScope ?? null,
+      agent_config: serializeAgentConfig(input.agentConfig),
       title: input.title,
       prompt: input.prompt,
       when_kind: when.kind,
@@ -142,6 +167,10 @@ export async function updateScheduledTask(
     if (patch.title !== undefined) values.title = patch.title
     if (patch.prompt !== undefined) values.prompt = patch.prompt
     if (patch.topicId !== undefined) values.topic_id = patch.topicId
+    if (patch.targetMode !== undefined) values.target_mode = patch.targetMode
+    if (patch.targetWorkspaceId !== undefined) values.target_workspace_id = patch.targetWorkspaceId
+    if (patch.targetMemoryScope !== undefined) values.target_memory_scope = patch.targetMemoryScope
+    if (patch.agentConfig !== undefined) values.agent_config = serializeAgentConfig(patch.agentConfig)
     if (patch.workspaceId !== undefined) values.workspace_id = patch.workspaceId ?? null
     if (patch.enabled !== undefined) values.enabled = patch.enabled
     if (patch.nextRunAt !== undefined) values.next_run_at = patch.nextRunAt
@@ -248,8 +277,12 @@ export async function importScheduledTasks(
     prompt: string
     when: ScheduleWhen
     enabled: boolean
-    topicId: number
+    topicId: number | null
     workspaceId: number | null
+    targetMode?: "chat" | "work" | "plugin" | null
+    targetWorkspaceId?: number | null
+    targetMemoryScope?: string | null
+    agentConfig?: AgentSelection | null
     nextRunAt: string | null
     createdAt: string
     updatedAt: string
@@ -270,6 +303,10 @@ export async function importScheduledTasks(
           id: task.id,
           workspace_id: task.workspaceId,
           topic_id: task.topicId,
+          target_mode: task.targetMode ?? null,
+          target_workspace_id: task.targetWorkspaceId ?? null,
+          target_memory_scope: task.targetMemoryScope ?? null,
+          agent_config: serializeAgentConfig(task.agentConfig),
           title: task.title,
           prompt: task.prompt,
           when_kind: when.kind,

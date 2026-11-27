@@ -26,6 +26,7 @@ export * from './harness/subagent-session'
 export * from './harness/team-board'
 export * from './harness/team-task-event'
 export * from './harness/scheduled'
+export * from './harness/topic-agent-config'
 // 资料库（document 依赖 wiki，graph 依赖 wiki）
 export * from './notes/todo'
 export * from './notes/wiki'

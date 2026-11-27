@@ -1,4 +1,4 @@
-import {
+﻿import {
   boolean,
   check,
   foreignKey,
@@ -32,7 +32,22 @@ export const scheduled_tasks = pgTable(
   {
     id: text().primaryKey().notNull(),
     workspace_id: integer(),
-    topic_id: integer().notNull(),
+    /**
+     * 目标会话（null = 每次触发新建一条会话，见 target_mode / target_workspace_id）。
+     * 删会话时任务随之级联删除；新会话型任务不绑定具体话题。
+     */
+    topic_id: integer(),
+    /**
+     * 目标模式（对话 / 工作 / 插件）：任务不绑定「创建时当前模式」，可以跨模式选会话。
+     * null = 旧数据（按 topic_id 所属模式运行）。
+     */
+    target_mode: text().$type<'chat' | 'work' | 'plugin'>(),
+    /** 新会话型任务的目标工作区（对话模式 = 对话根工作区；插件模式 = 插件工作区） */
+    target_workspace_id: integer(),
+    /** 新会话型任务的记忆作用域字符串（chat / plugin:<id> / null=工作区） */
+    target_memory_scope: text(),
+    /** 任务级运行选择（JSON：{tools,skills,mcpTools}；null = 跟随会话/默认） */
+    agent_config: text(),
     title: text().notNull(),
     prompt: text().notNull(),
     /** once / every / daily */
@@ -69,6 +84,10 @@ export const scheduled_tasks = pgTable(
     check(
       'scheduled_tasks_last_status_check',
       sql`${table.last_status} is null or ${table.last_status} in ('completed', 'cancelled', 'failed')`
+    ),
+    check(
+      'scheduled_tasks_target_mode_check',
+      sql`${table.target_mode} is null or ${table.target_mode} in ('chat', 'work', 'plugin')`
     )
   ]
 )

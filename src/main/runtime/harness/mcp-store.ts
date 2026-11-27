@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP 服务器配置的持久化（electron-store 的 `mcpServers` 键）。
  *
  * 为什么与 harness 设置分开存：`HarnessSettings` 是「目录/工作区」这类全局项，

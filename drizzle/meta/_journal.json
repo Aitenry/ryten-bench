@@ -155,6 +155,13 @@
       "when": 1795760255949,
       "tag": "0021_search_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795761201578,
+      "tag": "0022_topic_agent_config_and_schedule_targets",
+      "breakpoints": true
     }
   ]
 }

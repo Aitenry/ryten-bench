@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
  *
  * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
@@ -111,7 +111,8 @@ export function normalizeMcpServer(input: McpServerInput): McpServerConfig {
     id: id || name,
     name,
     description: input.description?.trim() || undefined,
-    enabled: input.enabled ?? true,
+    // 用户口径（2026-11-27）：新增 MCP 不能默认开启使用，要在输入框下面选。
+    enabled: input.enabled ?? false,
     transport,
     url,
     headers: cleanMap(input.headers),
