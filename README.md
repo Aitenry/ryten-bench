@@ -222,9 +222,11 @@ from the hub or from a local package, and both paths end in the same host instal
   More → Memory.
 - **Skills** — a local directory of skills, where every sub-directory containing a `SKILL.md`
   (YAML frontmatter with `name` / `description`) is a skill. Skills are **never enabled by default**:
-  pick them under the chat input (or in a scheduled task), and only the picked ones enter the system
-  prompt as a short name/description index; their full instructions load on demand through a
-  `skill` tool, so the prompt never carries every skill body at once. Managed under More → Skills.
+  pick them under the chat input (or in a scheduled task); only picked skills enter the system
+  prompt as a short name/description index, and their full instructions load on demand through a
+  `skill` tool, so the prompt never carries every skill body at once. More → Skills lists every
+  skill with search; click a card to read the full `SKILL.md`, or use its edit/delete actions to
+  manage the file.
   In tool pickers the four scheduled-task tools appear as one **Schedules** choice and the MCP
   tools/resources as one **MCP** choice; selecting a choice expands to the underlying tools at run
   time, so the lists stay short and readable.
@@ -232,7 +234,7 @@ from the hub or from a local package, and both paths end in the same host instal
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers). Servers connect when added but their tools are
   **not injected by default**: choose the servers to use under the chat input (the MCP picker next
-  to Tools/Skills) or in a scheduled task; the tools then join the same tool-call loop as the
+  to Tools) or in a scheduled task; the tools then join the same tool-call loop as the
   built-in and plugin tools. Connected servers' **resources** are readable too:
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` return text inline and
   turn image resources into viewable attachments. Managed under More → MCP.

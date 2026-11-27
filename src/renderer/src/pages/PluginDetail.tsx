@@ -1659,8 +1659,8 @@ const PluginDetail: React.FC = () => {
         destroyOnHidden
       >
         <div
-          className="custom-scrollbar"
-          style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 6 }}
+          className="custom-scrollbar app-modal-scroll"
+          style={{ maxHeight: '68vh', overflowY: 'auto' }}
         >
           {settingsSections.map((section) => (
             <PluginBoundary key={section.tabKey} pluginId={section.pluginId} surface="settings">

@@ -965,7 +965,10 @@ const ServerFormModal: React.FC<{
                 )}
               </div>
               {catalog.length > 0 && (
-                <div className="custom-scrollbar" style={{ maxHeight: 208, overflowY: 'auto' }}>
+                <div
+                  className="custom-scrollbar app-modal-scroll"
+                  style={{ maxHeight: 208, overflowY: 'auto' }}
+                >
                   {catalog.map((tool, index) => {
                     const on = isEnabled(tool.rawName)
                     return (

@@ -42,7 +42,7 @@ const PAGE_SIZE = 5
 
 const AgentSettings: React.FC = () => {
   const {
-    token: { colorTextSecondary }
+    token: { colorTextSecondary, colorError }
   } = theme.useToken()
 
   const { viewMessage } = useMessage()
@@ -306,10 +306,16 @@ const AgentSettings: React.FC = () => {
   }
 
   const handleSave = async (): Promise<void> => {
-    try {
-      const values = await form.validateFields()
-      setSaving(true)
+    /**
+     * 校验失败时字段下方已经有 antd 的红色提示；此前这一步和保存放在同一个 try 里，
+     * catch 还会再弹一条「保存失败: [object Object]」，看起来像后端出了错。先单独
+     * 校验，失败就直接返回，只有真正的保存错误才弹错误条。
+     */
+    const values = await form.validateFields().catch(() => null)
+    if (!values) return
 
+    setSaving(true)
+    try {
       const input: AgentConfigInput = {
         workspace_id: workspaceId,
         name: values.name,
@@ -589,6 +595,17 @@ const AgentSettings: React.FC = () => {
     label: `${getProviderDisplayName(p)} (${p.provider}:${p.model})`
   }))
 
+  /**
+   * 字段标签与定时任务弹窗同一套排版：12px 次要色、标签在控件上方、必填星号跟在
+   * 文字后面（antd 默认星号在文字前面且字号 14px，和其余表单并排看差异明显）。
+   */
+  const fieldLabel = (text: string, required = false): React.ReactNode => (
+    <span style={{ fontSize: 12, color: colorTextSecondary }}>
+      {text}
+      {required && <span style={{ color: colorError, marginLeft: 2 }}>*</span>}
+    </span>
+  )
+
   return (
     <div>
       <SettingsPageHeader
@@ -739,18 +756,32 @@ const AgentSettings: React.FC = () => {
         cancelText={t('common.action.cancel')}
         styles={{ body: { padding: 0 } }}
       >
-        <div className="py-4 px-5 custom-scrollbar" style={{ maxHeight: 480, overflowY: 'auto' }}>
-          <Form form={form} layout="vertical" size="small">
+        {/*
+          滚动区与弹窗标题同一条左边线（此前 `px-5` 让字段比标题多缩进 20px，看起来
+          表单被挤在弹窗中间），右侧只留 `app-modal-scroll` 的 6px 滑块槽——与插件设置
+          弹窗同一口径。高度与其它表单弹窗一致：上限 560px，矮窗口再按视口高度兜底，
+          只让表单区滚动，标题与按钮栏始终留在屏幕内。
+        */}
+        <div
+          className="custom-scrollbar app-modal-scroll"
+          style={{
+            maxHeight: 'min(560px, calc(100vh - 220px))',
+            overflowY: 'auto',
+            paddingTop: 16,
+            paddingBottom: 16
+          }}
+        >
+          <Form form={form} className="agent-form" layout="vertical" requiredMark={false}>
             <div className="flex gap-3 items-end">
               <Form.Item
-                label={t('agentSettings.form.chineseName')}
+                label={fieldLabel(t('agentSettings.form.chineseName'))}
                 name="rename"
                 style={{ flex: 1 }}
               >
                 <Input placeholder={t('agentSettings.form.chineseNamePlaceholder')} />
               </Form.Item>
               <Form.Item
-                label={t('agentSettings.form.identifier')}
+                label={fieldLabel(t('agentSettings.form.identifier'), true)}
                 name="name"
                 rules={[
                   { required: true, message: t('agentSettings.form.identifierRequired') },
@@ -764,7 +795,7 @@ const AgentSettings: React.FC = () => {
                 <Input placeholder={t('agentSettings.form.identifierPlaceholder')} />
               </Form.Item>
               <Form.Item
-                label={t('agentSettings.form.enabled')}
+                label={fieldLabel(t('agentSettings.form.enabled'))}
                 name="enable"
                 valuePropName="checked"
               >
@@ -773,7 +804,7 @@ const AgentSettings: React.FC = () => {
             </div>
 
             <Form.Item
-              label={t('agentSettings.form.description')}
+              label={fieldLabel(t('agentSettings.form.description'), true)}
               name="description"
               rules={[{ required: true, message: t('agentSettings.form.descriptionRequired') }]}
             >
@@ -781,14 +812,14 @@ const AgentSettings: React.FC = () => {
             </Form.Item>
 
             <Form.Item
-              label={t('agentSettings.form.systemPrompt')}
+              label={fieldLabel(t('agentSettings.form.systemPrompt'), true)}
               name="prompt"
               rules={[{ required: true, message: t('agentSettings.form.systemPromptRequired') }]}
             >
               <TextArea rows={6} placeholder={t('agentSettings.form.systemPromptPlaceholder')} />
             </Form.Item>
 
-            <Form.Item label={t('agentSettings.form.tools')} name="tools">
+            <Form.Item label={fieldLabel(t('agentSettings.form.tools'))} name="tools">
               <Select
                 mode="multiple"
                 placeholder={t('agentSettings.form.toolsPlaceholder')}
@@ -802,7 +833,7 @@ const AgentSettings: React.FC = () => {
             </Form.Item>
 
             <Form.Item
-              label={t('agentSettings.form.model')}
+              label={fieldLabel(t('agentSettings.form.model'))}
               name="model"
               tooltip={t('agentSettings.form.modelTooltip')}
             >
@@ -816,7 +847,7 @@ const AgentSettings: React.FC = () => {
             </Form.Item>
 
             <Form.Item
-              label={t('agentSettings.form.skills')}
+              label={fieldLabel(t('agentSettings.form.skills'))}
               name="skills"
               tooltip={t('agentSettings.form.skillsTooltip')}
             >

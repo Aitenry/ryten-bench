@@ -58,6 +58,8 @@ body {
 :root {
   --app-scrollbar-thumb: rgba(128, 128, 128, 0.32);
   --app-scrollbar-thumb-hover: rgba(128, 128, 128, 0.52);
+  /** 弹窗滚动区：内容与滑块之间留的槽宽（见 `.app-modal-scroll`） */
+  --app-modal-scroll-gutter: 6px;
 }
 
 .dark {
@@ -110,6 +112,59 @@ body {
 .custom-scrollbar:hover::-webkit-scrollbar-thumb {
   background-color: var(--app-scrollbar-thumb-hover);
   border-radius: 100px;
+}
+
+/**
+ * 弹窗滚动区统一留白（用户 2026-11-27：「所有的弹出窗口的滚动条设计要和插件设计
+ * 里面的一样」；配图里定时任务弹窗的滑块直接压着输入框）。
+ *
+ * 口径来自插件设置弹窗（PluginDetail / PluginRepository）：滚动容器是
+ * `.custom-scrollbar` + `paddingRight: 6`，滑块与内容之间留 6px，滑块再往右是弹窗
+ * 自己的内容留白。这里把那 6px 抽成一个类，弹窗正文（antd `classNames.body`）和
+ * 弹窗内自绘的滚动列表都挂它，避免每个弹窗各写一个数、又慢慢漂回去。
+ *
+ * ⚠️ 不要和 `padding` 简写写在同一个元素的内联样式里：内联简写会连
+ * `padding-right` 一起覆盖掉。需要上下/左侧内边距时用 paddingTop / paddingBottom /
+ * paddingLeft 长写。
+ */
+.app-modal-scroll {
+  padding-right: var(--app-modal-scroll-gutter);
+}
+
+/**
+ * antd v6 的 `.ant-modal-body` 自带 `padding: 0`，选择器（0,2,0）压过单个类名
+ * （0,1,0）。弹窗正文直接当滚动容器时用更高一层的组合选择器把右侧留白补回来；
+ * 弹窗内自己画的滚动 div 仍然只靠上面那条规则。
+ */
+.ant-modal .ant-modal-body.app-modal-scroll {
+  padding-right: var(--app-modal-scroll-gutter);
+}
+
+/* ======== 智能体弹窗（AgentSettings）表单 ======== */
+
+/**
+ * 用户 2026-11-27：「智能体表单里面每一项和其他表单样式看起来不一样」。
+ *
+ * 智能体弹窗此前用 antd 的 `size="small"` + 默认 Form.Item：标签 14px、
+ * 行高 22px、控件 24px、字段间距 24px；而定时任务等表单的标签是 12px 次要色、
+ * 控件默认 32px、字段间距 14px。两边并排看，智能体每一项都更粗、更挤。
+ *
+ * 这里只把「行高/间距」交给 CSS，标签文字的字号与颜色在 JSX 里用 token 内联
+ * （标签内容里还有必填星号，不能靠选择器改）。控件尺寸由 Form 去掉 small 恢复
+ * 默认，跟定时任务弹窗一致。
+ */
+.agent-form .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.agent-form .ant-form-item-label {
+  height: auto;
+  padding-bottom: 7px;
+}
+
+.agent-form .ant-form-item-label > label {
+  height: auto;
+  line-height: 18px;
 }
 
 /* ======== 6 位数字输入（antd Input.OTP） ======== */
@@ -446,6 +501,25 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
 
 :root:not(.dark) .ant-tooltip .ant-tooltip-arrow::before {
   background: #fff;
+}
+
+/* ======== antd 下拉菜单（Dropdown）子菜单标题的行内对齐 ======== */
+
+/**
+ * 子菜单项里的图标要跟文字同一条中线（用户 2026-11-27 截图：「图标和内容没有居中」，
+ * 是会话行「⋯」→「在应用中打开」那一行）。
+ *
+ * 根因在 antd v6 的 dropdown 样式：普通项 `.ant-dropdown-menu-item` 声明了
+ * `display: flex; align-items: center`，而子菜单标题这一支**只给了 display:flex、
+ * 漏了 align-items**。flex 默认的 `align-items: normal` 等价于 stretch，14px 图标
+ * 于是贴着内容区上沿排——实测行高 32、内容区 22，图标中线比文字高 4px；右边的
+ * 展开箭头是绝对定位（top/bottom 各 5px）自己居中的，所以三项里只有图标歪。
+ *
+ * 用组件类名补齐（这是结构样式，antd 没有对应 token 可配），与普通项对齐；
+ * 不限定页面：会话行、工作区行、页头「更多」等所有 Dropdown 的子菜单一起生效。
+ */
+.ant-dropdown-menu-submenu-title {
+  align-items: center;
 }
 
 /* 模型选择弹窗（ModelRecoveryModal）目录滚动区：
@@ -963,6 +1037,13 @@ body.home-resizing * {
    避免同一屏出现两个标题 */
 .more-detail .sui-page-header {
   display: none !important;
+}
+
+/* 技能页（More → skills）：hero + 目录区固定，技能列表吃满剩余高度并在内部滚动。
+   页面本身不再随卡片数量出现整页滚动条（用户 2026-11-27）。 */
+.more-fill-view > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* 侧栏导航里的按钮项（例如「更多」下拉触发器）：外观与 NavLink 完全一致 */

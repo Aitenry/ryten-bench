@@ -79,7 +79,16 @@ const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
           {t('schedulesPage.runsEmpty')}
         </div>
       ) : (
-        <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div
+          className="custom-scrollbar app-modal-scroll"
+          style={{
+            maxHeight: 360,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }}
+        >
           {runs.map((run, index) => (
             <div
               key={`${run.at}-${index}`}

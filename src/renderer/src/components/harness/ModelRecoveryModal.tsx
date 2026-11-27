@@ -236,7 +236,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
         </div>
       }
       styles={{ body: { maxHeight: 'calc(100vh - 280px)', overflowY: 'auto' } }}
-      classNames={{ body: 'custom-scrollbar' }}
+      classNames={{ body: 'custom-scrollbar app-modal-scroll' }}
     >
       <div className="flex flex-col gap-3 pt-1">
         <div style={{ color: colorTextSecondary, fontSize: 13, lineHeight: 1.7 }}>

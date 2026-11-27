@@ -460,8 +460,14 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
       cancelText={t('schedulesPage.cancel')}
       onOk={() => void handleSave()}
       destroyOnHidden
-      /* 字段较多：弹窗内容区限高滚动，保证按钮栏始终可见 */
-      styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' } }}
+      /* 字段较多：弹窗内容区固定限高（与智能体 / MCP / 模型等表单弹窗同款 560px），
+         只有表单区滚动，标题和按钮栏始终留在屏幕内；矮窗口再用视口高度兜底。
+         右侧 6px 是滑块槽，滑块不压着输入框（与插件设置弹窗同一口径，
+         用户 2026-11-27） */
+      styles={{
+        body: { maxHeight: 'min(560px, calc(100vh - 220px))', overflowY: 'auto' }
+      }}
+      classNames={{ body: 'custom-scrollbar app-modal-scroll' }}
     >
       <div style={{ fontSize: 12.3, lineHeight: 1.6, color: token.colorTextSecondary }}>
         {t('schedulesPage.editorDesc')}

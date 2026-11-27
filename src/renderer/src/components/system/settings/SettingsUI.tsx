@@ -66,23 +66,37 @@ export const SettingsSection: React.FC<{
   extra?: React.ReactNode
   /** 无标题栏且直接放内容的场景，body 是否需要内边距 */
   bodyPadding?: number
+  /** 外层卡片样式（技能页用它把列表撑满剩余高度） */
+  style?: React.CSSProperties
+  /** 内容区样式（同上：`flex:1 + overflow` 让列表自己滚动） */
+  bodyStyle?: React.CSSProperties
+  bodyClassName?: string
   children: React.ReactNode
-}> = ({ title, description, icon, extra, bodyPadding = 0, children }) => {
+}> = ({
+  title,
+  description,
+  icon,
+  extra,
+  bodyPadding = 0,
+  style,
+  bodyStyle,
+  bodyClassName,
+  children
+}) => {
   const { token } = theme.useToken()
   return (
     <div
       className="sui-section"
-      style={
-        {
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: 14,
-          background: token.colorBgContainer,
-          overflow: 'hidden',
-          marginBottom: 14,
-          '--sui-hairline': token.colorBorderSecondary,
-          '--sui-bg': token.colorBgContainer
-        } as React.CSSProperties
-      }
+      style={{
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 14,
+        background: token.colorBgContainer,
+        overflow: 'hidden',
+        marginBottom: 14,
+        '--sui-hairline': token.colorBorderSecondary,
+        '--sui-bg': token.colorBgContainer,
+        ...style
+      } as React.CSSProperties}
     >
       <style>{ROW_DIVIDER_STYLE}</style>
       {title && (
@@ -120,7 +134,10 @@ export const SettingsSection: React.FC<{
           {extra && <span style={{ marginLeft: 'auto', flexShrink: 0 }}>{extra}</span>}
         </div>
       )}
-      <div className="sui-rows" style={bodyPadding ? { padding: bodyPadding } : undefined}>
+      <div
+        className={`sui-rows${bodyClassName ? ` ${bodyClassName}` : ''}`}
+        style={bodyStyle ?? (bodyPadding ? { padding: bodyPadding } : undefined)}
+      >
         {children}
       </div>
     </div>

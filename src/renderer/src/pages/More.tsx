@@ -38,6 +38,12 @@ const More: React.FC = () => {
 
   const active = known
   const ActiveView = active.Component
+  /**
+   * 技能页是唯一的「填满剩余高度」页面：目录区固定在顶部，技能卡片列表在下面自己
+   * 滚动。其它页仍按内容自然增高、整页滚动（用户 2026-11-27：技能页不能只占半屏、
+   * 小屏不要莫名出现整页滚动条）。
+   */
+  const fillPage = active.tabKey === 'skills'
 
   /** 页头图标：注册表里是 16px 的导航图标，hero 里放大到 22px */
   const heroIcon = React.isValidElement(active.icon)
@@ -55,7 +61,21 @@ const More: React.FC = () => {
         borderTopLeftRadius: token.borderRadiusLG
       }}
     >
-      <div style={{ width: '100%', padding: '18px 24px 44px' }}>
+      <div
+        style={{
+          width: '100%',
+          padding: fillPage ? '18px 24px 24px' : '18px 24px 44px',
+          ...(fillPage
+            ? {
+                height: '100%',
+                boxSizing: 'border-box' as const,
+                display: 'flex',
+                flexDirection: 'column' as const,
+                minHeight: 0
+              }
+            : {})
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <span
             style={{
@@ -101,7 +121,15 @@ const More: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ marginTop: 22 }}>
+        <div
+          className={fillPage ? 'more-fill-view' : undefined}
+          style={{
+            marginTop: 22,
+            ...(fillPage
+              ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' as const }
+              : {})
+          }}
+        >
           <ActiveView />
         </div>
       </div>

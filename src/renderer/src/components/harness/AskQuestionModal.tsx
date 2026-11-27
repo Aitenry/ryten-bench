@@ -154,7 +154,7 @@ const AskQuestionModal: React.FC<{
       onCancel={handleCancel}
       width={520}
       styles={{ body: { maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' } }}
-      classNames={{ body: 'custom-scrollbar' }}
+      classNames={{ body: 'custom-scrollbar app-modal-scroll' }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 4 }}>
         {pending.questions.map((q, qi) => {

@@ -145,7 +145,7 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
           )}
         </div>
         {/* 目录列表 */}
-        <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
+        <div className="custom-scrollbar app-modal-scroll" style={{ flex: 1, overflowY: 'auto' }}>
           <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
             {t('notes.archive.stepDirectory')}
           </div>

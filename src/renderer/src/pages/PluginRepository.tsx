@@ -2127,8 +2127,8 @@ const PluginRepository: React.FC = () => {
         destroyOnHidden
       >
         <div
-          className="custom-scrollbar"
-          style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 6 }}
+          className="custom-scrollbar app-modal-scroll"
+          style={{ maxHeight: '68vh', overflowY: 'auto' }}
         >
           <WorkshopSettings embedded />
         </div>
@@ -2144,8 +2144,8 @@ const PluginRepository: React.FC = () => {
         destroyOnHidden
       >
         <div
-          className="custom-scrollbar"
-          style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 6 }}
+          className="custom-scrollbar app-modal-scroll"
+          style={{ maxHeight: '68vh', overflowY: 'auto' }}
         >
           {settingsPlugin &&
             sectionsOf(settingsPlugin.id).map((section) => (

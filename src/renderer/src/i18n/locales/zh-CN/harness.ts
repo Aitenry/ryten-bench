@@ -172,14 +172,14 @@ export const harnessZhCN = {
       toolsEmpty: '没有可用工具',
       toolsSearchPlaceholder: '搜索工具',
       skillsLabel: '技能',
+      skillsAria: '选择技能',
+      skillsEmpty: '没有可用技能',
+      skillsSearchPlaceholder: '搜索技能',
     mcpLabel: 'MCP',
     mcpAria: '选择 MCP 服务器',
     mcpEmpty: '还没有 MCP 服务器，先去「更多 → MCP」添加',
     mcpSearchPlaceholder: '搜索 MCP 服务器',
-      skillsAria: '选择技能',
-      skillsEmpty: '没有可用技能',
-      skillsSearchPlaceholder: '搜索技能',
-      /** 工具 / 技能面板搜索不到时的空态 */
+      /** 工具 / MCP 面板搜索不到时的空态 */
       pickerNoMatch: '无匹配结果',
       pickerSaveFailed: '保存失败，请重试',
       /** 「/」命令面（输入框开头输入 / 唤起；目标 / 计划两项，样式参考 DSH 命令菜单） */
@@ -912,18 +912,6 @@ export const harnessZhCN = {
       empty:
         '暂无项目档案。模型对话中可通过 mnemon_document_manage 工具创建设计 / 流程 / 交接文档。',
       updatedAt: '更新于 {{time}} · revision {{revision}}'
-    },
-    mechanism: {
-      sectionTitle: '记忆机制说明',
-      runtimeTitle: '热记忆',
-      runtimeDesc:
-        'USER 用户画像（4 KiB）+ MEMORY 项目记忆（10 KiB），每轮自动注入；模型用 mnemon_runtime_memory 工具维护；MEMORY 写满自动归档到长期空间。',
-      bodiesTitle: '长期记忆空间',
-      bodiesDesc:
-        '跨会话稳定洞察，每空间独立数据库 + 四类关系；mnemon_recall 召回、mnemon_remember 沉淀；激活状态控制是否参与召回。',
-      documentsTitle: '项目档案',
-      documentsDesc:
-        '完整 Markdown 文档（设计/流程/交接），active 参与搜索、archived 冷层；mnemon_document_manage 创建，mnemon_document_search 检索。'
     }
   },
   /* ── skillsSettings（原 locales/zh-CN/skillsSettings.ts） ── */
@@ -931,13 +919,35 @@ export const harnessZhCN = {
   skillsSettings: {
     pageTitle: '技能（Skills）',
     pageDescription:
-      '配置全局技能存储目录，子文件夹将作为独立技能加载。技能不会在添加时默认启用：在对话输入框下面（或定时任务表单里）选择要用的技能。',
+      '配置全局技能存储目录，子文件夹将作为独立技能加载。技能不会在添加时默认启用：仍在对话输入框下面（或定时任务表单里）选择要用的技能。点卡片可查看 SKILL.md 正文；卡片右下角可编辑或删除。',
     dirSectionTitle: '技能存储目录',
     dirSectionDescription: '每个含 SKILL.md 的子目录即为一个技能',
     dirPlaceholder: '例如：D:\\skills（留空不启用）',
     dirCurrent: '当前已生效：{{path}}',
     listTitle: '已发现的技能（{{count}}）',
-    selectInComposer: '在输入框下面选择启用',
+    searchPlaceholder: '搜索技能',
+    searchNoMatch: '没有匹配的技能',
+    detailTitle: '技能内容',
+    detailEmpty: '这个技能没有正文内容。',
+    detailFailed: '读取技能内容失败',
+    detailFailedWithReason: '读取技能内容失败：{{reason}}',
+    edit: '编辑',
+    delete: '删除',
+    editTitle: '编辑技能「{{name}}」',
+    editHint:
+      'SKILL.md 原文（含 frontmatter）。保存后会原样写回；卡片标题/描述以文件里的 name / description 为准。',
+    editPlaceholder: '在此编辑 SKILL.md 原文',
+    editLoadFailed: '读取技能原文失败',
+    editLoadFailedWithReason: '读取技能原文失败：{{reason}}',
+    emptyContent: 'SKILL.md 不能为空',
+    saveFailed: '保存技能失败',
+    saveFailedWithReason: '保存技能失败：{{reason}}',
+    savedSkill: '技能已保存',
+    deleteConfirmTitle: '删除技能「{{name}}」？',
+    deleteConfirmBody: '会删除该技能目录及其中的 SKILL.md，操作不可撤销。',
+    deleteFailed: '删除技能失败',
+    deleteFailedWithReason: '删除技能失败：{{reason}}',
+    deleted: '技能已删除',
     listTitle_one: '已发现的技能（{{count}}）',
     listTitle_other: '已发现的技能（{{count}}）',
     emptyDescription: '此目录中未发现任何技能，请确保子目录中包含 {{filename}} 文件',

@@ -14,8 +14,7 @@ import { useMessage } from '@renderer/hooks/useMessage'
 import type { SystemSettings, HarnessSettings } from '@renderer/types/settings'
 import {
   SettingsPageHeader,
-  SettingsSection,
-  SettingRow
+  SettingsSection
 } from '@renderer/components/system/settings/SettingsUI'
 import EntityCard, { EntityChip } from '@renderer/components/system/EntityCard'
 import { harnessApi } from '../../../api/harness'
@@ -831,7 +830,10 @@ const MemorySettings: React.FC = () => {
             style={{ padding: '24px 0' }}
           />
         ) : (
-          <div className="custom-scrollbar" style={{ maxHeight: 420, overflowY: 'auto' }}>
+          <div
+            className="custom-scrollbar app-modal-scroll"
+            style={{ maxHeight: 420, overflowY: 'auto' }}
+          >
             {bodyInsights.map((item) => (
               <div
                 key={item.id}
@@ -1023,25 +1025,6 @@ const MemorySettings: React.FC = () => {
           )}
         </SettingsSection>
       )}
-
-      {/* 机制说明 */}
-      <SettingsSection title={translate('memorySettings.mechanism.sectionTitle')} bodyPadding={16}>
-        <SettingRow
-          title={translate('memorySettings.mechanism.runtimeTitle')}
-          description={translate('memorySettings.mechanism.runtimeDesc')}
-          control={<span />}
-        />
-        <SettingRow
-          title={translate('memorySettings.mechanism.bodiesTitle')}
-          description={translate('memorySettings.mechanism.bodiesDesc')}
-          control={<span />}
-        />
-        <SettingRow
-          title={translate('memorySettings.mechanism.documentsTitle')}
-          description={translate('memorySettings.mechanism.documentsDesc')}
-          control={<span />}
-        />
-      </SettingsSection>
     </div>
   )
 }

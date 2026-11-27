@@ -167,13 +167,13 @@ export const harnessEnUS: typeof harnessZhCN = {
       toolsEmpty: 'No tools available',
       toolsSearchPlaceholder: 'Search tools',
       skillsLabel: 'Skills',
+      skillsAria: 'Choose skills',
+      skillsEmpty: 'No skills available',
+      skillsSearchPlaceholder: 'Search skills',
     mcpLabel: 'MCP',
     mcpAria: 'Choose MCP servers',
     mcpEmpty: 'No MCP servers yet — add one under More → MCP',
     mcpSearchPlaceholder: 'Search MCP servers',
-      skillsAria: 'Choose skills',
-      skillsEmpty: 'No skills available',
-      skillsSearchPlaceholder: 'Search skills',
       pickerNoMatch: 'No matches',
       pickerSaveFailed: 'Failed to save, please retry',
       /** "/" command menu (opened by a leading slash in the composer; Goal / Plan rows) */
@@ -905,31 +905,42 @@ export const harnessEnUS: typeof harnessZhCN = {
       empty:
         'No project documents yet. The model can create design, process, or handover documents with the mnemon_document_manage tool during a conversation.',
       updatedAt: 'Updated {{time}} · revision {{revision}}'
-    },
-    mechanism: {
-      sectionTitle: 'How memory works',
-      runtimeTitle: 'Runtime memory',
-      runtimeDesc:
-        'USER profile (4 KiB) + MEMORY project memory (10 KiB), injected automatically every turn; the model maintains it with the mnemon_runtime_memory tool; when MEMORY is full, entries are archived to a memory space automatically.',
-      bodiesTitle: 'Long-term memory spaces',
-      bodiesDesc:
-        'Insights that stay stable across sessions, each space with its own database and four relation types; mnemon_recall retrieves and mnemon_remember stores; the active state controls whether a space takes part in recall.',
-      documentsTitle: 'Project documents',
-      documentsDesc:
-        'Full Markdown documents (design, process, handover); active takes part in search while archived stays cold; mnemon_document_manage creates and mnemon_document_search searches.'
     }
   },
   /* ── skillsSettings（原 locales/en-US/skillsSettings.ts） ── */
   skillsSettings: {
     pageTitle: 'Skills',
     pageDescription:
-      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill. Skills are never enabled by default: pick the ones to use under the chat input (or in a scheduled task).',
+      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill. Skills are never enabled by default: pick the ones to use under the chat input (or in a scheduled task). Click a card to read its SKILL.md; use the edit/delete actions on the card to manage it.',
     dirSectionTitle: 'Skills storage directory',
     dirSectionDescription: 'Every subdirectory containing a SKILL.md file counts as one Skill',
     dirPlaceholder: 'e.g. D:\\skills (leave empty to disable)',
     dirCurrent: 'Currently active: {{path}}',
     listTitle: 'Discovered skills ({{count}})',
-    selectInComposer: 'Enable it under the input',
+    searchPlaceholder: 'Search skills',
+    searchNoMatch: 'No matching skills',
+    detailTitle: 'Skill content',
+    detailEmpty: 'This skill has no body content.',
+    detailFailed: 'Failed to read the skill content',
+    detailFailedWithReason: 'Failed to read the skill content: {{reason}}',
+    edit: 'Edit',
+    delete: 'Delete',
+    editTitle: 'Edit skill "{{name}}"',
+    editHint:
+      'Raw SKILL.md (including frontmatter). It is written back as-is; the card title/description come from the name / description fields in the file.',
+    editPlaceholder: 'Edit the raw SKILL.md here',
+    editLoadFailed: 'Failed to read the raw skill file',
+    editLoadFailedWithReason: 'Failed to read the raw skill file: {{reason}}',
+    emptyContent: 'SKILL.md cannot be empty',
+    saveFailed: 'Failed to save the skill',
+    saveFailedWithReason: 'Failed to save the skill: {{reason}}',
+    savedSkill: 'Skill saved',
+    deleteConfirmTitle: 'Delete skill "{{name}}"?',
+    deleteConfirmBody:
+      'This removes the skill directory and its SKILL.md. The operation cannot be undone.',
+    deleteFailed: 'Failed to delete the skill',
+    deleteFailedWithReason: 'Failed to delete the skill: {{reason}}',
+    deleted: 'Skill deleted',
     listTitle_one: 'Discovered skill ({{count}})',
     listTitle_other: 'Discovered skills ({{count}})',
     emptyDescription:

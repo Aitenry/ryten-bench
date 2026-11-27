@@ -2633,7 +2633,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return { id: dirName, name, description }
   }
 
-  // 列出技能目录中的所有技能（工具页 / 技能选择器用；小数据量）
+  // 列出技能目录中的所有技能（技能页 / 技能选择器用；小数据量）
   handle('harness-list-skills', async () => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath) return []
@@ -2656,6 +2656,63 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         .slice(start, start + safeSize)
         .map((dirName) => readSkillMeta(skillsPath, dirName)),
       total: dirs.length
+    }
+  })
+
+  /**
+   * 读取单个技能（技能页卡片点开查看 / 编辑）。
+   *
+   * 只接受目录扫描结果里的 id：既挡住 `../` 之类的路径穿越，也不会把目录外任意文件
+   * 读给渲染层。返回两份正文：
+   * - `content`：剥掉 frontmatter 的正文，给 Markdown 预览；
+   * - `raw`：SKILL.md 原文（含 frontmatter），给「编辑」保存回去。
+   */
+  handle('harness-get-skill', async (skillId: string) => {
+    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
+    if (!skillsPath || typeof skillId !== 'string' || !skillId) return null
+    if (!listSkillDirNames(skillsPath).includes(skillId)) return null
+    try {
+      const raw = fs.readFileSync(join(skillsPath, skillId, 'SKILL.md'), 'utf-8')
+      const content = raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n)?/, '')
+      return { ...readSkillMeta(skillsPath, skillId), content, raw }
+    } catch (error) {
+      logger.warn('[Skills] Failed to read skill content:', error)
+      return null
+    }
+  })
+
+  /**
+   * 保存技能原文（技能页「编辑」）。写入的是完整 SKILL.md，因此 frontmatter 里的
+   * name / description 也可以一起改；保存后渲染层重新拉列表，卡片标题会跟着更新。
+   */
+  handle('harness-save-skill', async (skillId: string, content: string) => {
+    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
+    if (!skillsPath || typeof skillId !== 'string' || !skillId) return false
+    if (typeof content !== 'string' || content.trim().length === 0) return false
+    if (!listSkillDirNames(skillsPath).includes(skillId)) return false
+    try {
+      fs.writeFileSync(join(skillsPath, skillId, 'SKILL.md'), content, 'utf-8')
+      return true
+    } catch (error) {
+      logger.error('[Skills] Failed to save skill content:', error)
+      return false
+    }
+  })
+
+  /**
+   * 删除技能目录（技能页「删除」）。只删扫描结果里存在的技能目录，绝不接受任意路径。
+   * 删除前由渲染层弹二次确认；这里只做最后一道收口。
+   */
+  handle('harness-delete-skill', async (skillId: string) => {
+    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
+    if (!skillsPath || typeof skillId !== 'string' || !skillId) return false
+    if (!listSkillDirNames(skillsPath).includes(skillId)) return false
+    try {
+      fs.rmSync(join(skillsPath, skillId), { recursive: true, force: true })
+      return true
+    } catch (error) {
+      logger.error('[Skills] Failed to delete skill:', error)
+      return false
     }
   })
 

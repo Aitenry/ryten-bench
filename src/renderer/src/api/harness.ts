@@ -587,6 +587,21 @@ export const harnessApi = {
         items: { id: string; name: string; description: string }[]
         total: number
       }>,
+    /** 单个技能（content = 预览正文；raw = SKILL.md 原文，编辑用） */
+    getSkill: (skillId: string) =>
+      invoke('harness:harness-get-skill', skillId) as Promise<{
+        id: string
+        name: string
+        description: string
+        content: string
+        raw: string
+      } | null>,
+    /** 保存 SKILL.md 原文（含 frontmatter） */
+    saveSkill: (skillId: string, content: string) =>
+      invoke('harness:harness-save-skill', skillId, content) as Promise<boolean>,
+    /** 删除技能目录（含 SKILL.md） */
+    deleteSkill: (skillId: string) =>
+      invoke('harness:harness-delete-skill', skillId) as Promise<boolean>,
     /** 技能启用/停用（完整目录判定在主进程） */
     setSkillEnabled: (skillId: string, enabled: boolean) =>
       invoke('harness:harness-set-skill-enabled', skillId, enabled) as Promise<
