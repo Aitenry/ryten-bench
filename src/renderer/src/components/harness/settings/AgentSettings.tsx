@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   ImportOutlined,
   RobotOutlined,
+  SafetyCertificateOutlined,
   TeamOutlined
 } from '@ant-design/icons'
 import { SkeletonSettingRows } from '@renderer/components/system/Skeleton'
@@ -18,14 +19,16 @@ import type { ProviderOption } from '@renderer/types/components'
 import { isEmbeddingProvider, getProviderDisplayName } from '@renderer/utils/providerMeta'
 import {
   SettingsPageHeader,
-  SettingsSection
+  SettingsSection,
+  SettingRow
 } from '@renderer/components/system/settings/SettingsUI'
-import { harnessApi } from '../../../api/harness'
+import { harnessApi, type SandboxStatusView } from '../../../api/harness'
 import type { HarnessToolInfo } from '../../../types/harness/types'
 import type {
   AgentConfigInput,
   AgentConfigRow,
-  McpServerView
+  McpServerView,
+  PermissionMode
 } from '../../../../../shared/harness/types'
 import {
   canonicalToolName,
@@ -83,6 +86,20 @@ const AgentSettings: React.FC = () => {
   // 导入 JSON
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [importLoading, setImportLoading] = useState(false)
+
+  /**
+   * 运行与安全（沙箱 + 新会话默认权限档位）。
+   *
+   * 这两项此前只有后端与词条：沙箱状态从没有界面展示（拿不到后端时命令会被直接
+   * 拒绝），新会话默认档位也只能在输入框里逐会话切。这里给一个最小但完整的只读状态
+   * + 唯一的写入口（默认档位、撤销工作区常驻授权）。
+   */
+  const [sandboxStatus, setSandboxStatus] = useState<SandboxStatusView | null>(null)
+  const [sandboxLoading, setSandboxLoading] = useState(true)
+  const [defaultPermission, setDefaultPermission] = useState<PermissionMode>('workspace-write')
+  const [permissionSaving, setPermissionSaving] = useState(false)
+  const [sandboxCleanupBusy, setSandboxCleanupBusy] = useState(false)
+  const [workspacePath, setWorkspacePath] = useState('')
 
   const loadPage = useCallback(
     async (page: number, wsId: number) => {
@@ -188,6 +205,64 @@ const AgentSettings: React.FC = () => {
       loadPage(1, wsId)
     })
   }, [loadPage, loadOptions])
+
+  // 运行与安全：沙箱后端状态 + 新会话默认权限档位（与子智能体列表独立加载，
+  // 后端取不到也不阻塞页面主体）
+  const loadRuntimeSecurity = useCallback(async (): Promise<void> => {
+    setSandboxLoading(true)
+    try {
+      const [permission, settings, sandbox] = await Promise.all([
+        harnessApi.harness.getPermission(),
+        window.api.systemSettings.getAll(),
+        harnessApi.harness.sandboxStatus().catch(() => null)
+      ])
+      setDefaultPermission(permission.defaultMode)
+      setWorkspacePath(settings.harness?.workspacePath ?? '')
+      setSandboxStatus(sandbox)
+    } catch (error) {
+      console.warn('[agent-settings] Failed to load sandbox/permission state:', error)
+    } finally {
+      setSandboxLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadRuntimeSecurity()
+  }, [loadRuntimeSecurity])
+
+  const handleDefaultPermissionChange = useCallback(
+    async (mode: PermissionMode): Promise<void> => {
+      setPermissionSaving(true)
+      try {
+        const state = await harnessApi.harness.setPermission({ mode, scope: 'default' })
+        setDefaultPermission(state.defaultMode)
+        viewMessage('agent-permission', 'success', t('harness.permission.defaultChanged'), 2)
+      } catch {
+        viewMessage('agent-permission', 'error', t('harness.permission.switchFailed'))
+      } finally {
+        setPermissionSaving(false)
+      }
+    },
+    [t, viewMessage]
+  )
+
+  const handleSandboxCleanup = useCallback(async (): Promise<void> => {
+    if (!workspacePath) return
+    setSandboxCleanupBusy(true)
+    try {
+      const cleaned = await harnessApi.harness.cleanupSandbox(workspacePath)
+      viewMessage(
+        'agent-sandbox',
+        cleaned ? 'success' : 'error',
+        cleaned ? t('harness.sandbox.cleanupDone') : t('harness.sandbox.cleanupFailed'),
+        2
+      )
+    } catch {
+      viewMessage('agent-sandbox', 'error', t('harness.sandbox.cleanupFailed'))
+    } finally {
+      setSandboxCleanupBusy(false)
+    }
+  }, [t, viewMessage, workspacePath])
 
   // MCP 服务器连接/断开会改变可用工具集：订阅后即时刷新下拉，
   // 用户不用先关掉设置再打开才看得到刚连上的 MCP 工具
@@ -620,6 +695,31 @@ const AgentSettings: React.FC = () => {
     </span>
   )
 
+  /** 沙箱状态文案：后端 + 强制级别（拿不到后端时明确说「命令会被拒绝」） */
+  const sandboxStatusLabel = sandboxLoading
+    ? t('harness.sandbox.loading')
+    : sandboxStatus?.usable !== true
+      ? t('harness.sandbox.unavailable')
+      : sandboxStatus?.enforcement === 'full'
+        ? t('harness.sandbox.full')
+        : t('harness.sandbox.partial')
+  const sandboxBackendLabel = ((): string => {
+    const backend = sandboxStatus?.backend ?? ''
+    if (backend.includes('windows')) return t('harness.sandbox.backendWindows')
+    if (backend.includes('bwrap') || backend.includes('bubblewrap'))
+      return t('harness.sandbox.backendBwrap')
+    if (backend.includes('landlock')) return t('harness.sandbox.backendLandlock')
+    if (backend.includes('seatbelt')) return t('harness.sandbox.backendSeatbelt')
+    return backend
+  })()
+  const sandboxDescription = sandboxLoading
+    ? ''
+    : sandboxStatus?.usable !== true
+      ? t('harness.sandbox.unavailableHint', { reason: sandboxStatus?.reason ?? '—' })
+      : sandboxStatus?.enforcement === 'full'
+        ? t('harness.sandbox.fullHint')
+        : t('harness.sandbox.partialHint')
+
   return (
     <div>
       <SettingsPageHeader
@@ -750,6 +850,81 @@ const AgentSettings: React.FC = () => {
             {t('agentSettings.empty.noAgents')}
           </div>
         )}
+      </SettingsSection>
+
+      {/* ====== 运行与安全：新会话默认权限档位 + 沙箱状态 ====== */}
+      <SettingsSection
+        title={t('agentSettings.sections.runtime')}
+        icon={<SafetyCertificateOutlined size={14} />}
+        description={t('agentSettings.sections.runtimeDesc')}
+      >
+        <SettingRow
+          title={t('harness.permission.defaultLabel')}
+          description={t('harness.permission.defaultHint')}
+          control={
+            <Select
+              size="small"
+              style={{ width: 172 }}
+              value={defaultPermission}
+              loading={permissionSaving}
+              onChange={(value: PermissionMode) => void handleDefaultPermissionChange(value)}
+              options={[
+                { value: 'read-only', label: t('harness.permission.readOnly') },
+                { value: 'workspace-write', label: t('harness.permission.workspaceWrite') },
+                { value: 'danger-full-access', label: t('harness.permission.fullAccess') }
+              ]}
+            />
+          }
+        />
+        <SettingRow
+          title={t('harness.sandbox.label')}
+          description={
+            sandboxBackendLabel
+              ? `${sandboxBackendLabel}${sandboxDescription ? ` · ${sandboxDescription}` : ''}`
+              : sandboxDescription
+          }
+          control={
+            <div className="flex items-center" style={{ gap: 10 }}>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12,
+                  color:
+                    sandboxStatus?.usable !== true
+                      ? colorError
+                      : sandboxStatus?.enforcement === 'full'
+                        ? '#49aa19'
+                        : '#d89614'
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'currentColor'
+                  }}
+                />
+                {sandboxStatusLabel}
+              </span>
+              <Button
+                size="small"
+                loading={sandboxCleanupBusy}
+                disabled={!workspacePath || sandboxLoading}
+                title={
+                  workspacePath
+                    ? t('harness.sandbox.cleanupHint', { path: workspacePath })
+                    : t('harness.sandbox.cleanupNoWorkspace')
+                }
+                onClick={() => void handleSandboxCleanup()}
+              >
+                {t('harness.sandbox.cleanup')}
+              </Button>
+            </div>
+          }
+        />
       </SettingsSection>
 
       {/* 编辑/创建弹窗 */}

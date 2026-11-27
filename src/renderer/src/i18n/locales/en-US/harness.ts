@@ -298,6 +298,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       defaultLabel: 'Default permission mode',
       defaultHint:
         'Applies to conversations created from now on; the current one can be switched in the composer',
+      defaultChanged: 'Default permission mode updated',
       switchFailed: 'Failed to switch the permission mode'
     },
     sandbox: {
@@ -305,6 +306,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       full: 'full enforcement',
       partial: 'partial enforcement',
       unavailable: 'unavailable',
+      loading: 'Loading…',
       fullHint:
         'Write restrictions are enforced by the operating system: everything outside the workspace is denied',
       partialHint:
@@ -314,7 +316,13 @@ export const harnessEnUS: typeof harnessZhCN = {
       backendWindows: 'Windows restricted token + ACL',
       backendBwrap: 'Linux bubblewrap',
       backendLandlock: 'Linux Landlock',
-      backendSeatbelt: 'macOS Seatbelt'
+      backendSeatbelt: 'macOS Seatbelt',
+      cleanup: 'Clean workspace grants',
+      cleanupHint:
+        'Removes the sandbox ACEs left on the workspace ({{path}}); only meaningful for the Windows backend',
+      cleanupNoWorkspace: 'No workspace selected yet — nothing to clean',
+      cleanupDone: 'Workspace sandbox grants cleaned',
+      cleanupFailed: 'Failed to clean the sandbox grants (backend unsupported or workspace unavailable)'
     },
     approval: {
       title: 'Your approval is required',
@@ -734,7 +742,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       'Manage the subagents that can take delegated work; pick tools and skills below the chat input',
     sections: {
       mainAgent: 'Main agent',
-      subagents: 'Subagents'
+      subagents: 'Subagents',
+      runtime: 'Runtime & security',
+      runtimeDesc:
+        'Default permission mode for new conversations plus the sandbox status; when no sandbox backend is available, commands are refused instead of running unconfined.'
     },
     main: {
       defaultTools: 'Default tools',

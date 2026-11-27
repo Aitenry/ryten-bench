@@ -299,6 +299,7 @@ export const harnessZhCN = {
       confirmCancel: '取消',
       defaultLabel: '默认权限模式',
       defaultHint: '之后新建的会话使用这个档位；当前会话可在输入框左下角单独切换',
+      defaultChanged: '新会话默认权限模式已更新',
       switchFailed: '权限模式切换失败'
     },
     sandbox: {
@@ -306,6 +307,7 @@ export const harnessZhCN = {
       full: '完整强制',
       partial: '部分强制',
       unavailable: '不可用',
+      loading: '读取中…',
       fullHint: '写入限制由操作系统强制执行：工作区之外一律拒绝',
       partialHint:
         '写入限制由操作系统强制执行；受限令牌保留了 Everyone 且 NTFS 硬链接可别名，因此属部分强制（已知边界）',
@@ -313,7 +315,12 @@ export const harnessZhCN = {
       backendWindows: 'Windows 受限令牌 + ACL',
       backendBwrap: 'Linux bubblewrap',
       backendLandlock: 'Linux Landlock',
-      backendSeatbelt: 'macOS Seatbelt'
+      backendSeatbelt: 'macOS Seatbelt',
+      cleanup: '清理工作区授权',
+      cleanupHint: '撤销沙箱在工作区上留下的常驻 ACE（{{path}}）；仅 Windows 后端有意义',
+      cleanupNoWorkspace: '尚未选择工作区，无需清理',
+      cleanupDone: '已清理工作区上的沙箱授权',
+      cleanupFailed: '清理沙箱授权失败（后端不支持或工作区不可用）'
     },
     approval: {
       title: '需要你的许可',
@@ -749,7 +756,10 @@ export const harnessZhCN = {
     pageDescription: '管理可委托任务的子智能体；工具与技能改在对话输入框下方选择',
     sections: {
       mainAgent: '主智能体',
-      subagents: '子智能体'
+      subagents: '子智能体',
+      runtime: '运行与安全',
+      runtimeDesc:
+        '新会话默认权限档位与沙箱状态；沙箱拿不到后端时命令会被拒绝执行，不会静默放行。'
     },
     main: {
       defaultTools: '默认工具',
