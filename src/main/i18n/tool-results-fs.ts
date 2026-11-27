@@ -45,6 +45,8 @@ export const zhCNFsToolTexts = {
     ok: '已读取图片 {{path}}（{{mime}}，{{width}}×{{height}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
     okNoDimensions:
       '已读取图片 {{path}}（{{mime}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
+    /** 规范化发生时的追加说明（原文件未改动） */
+    normalizedNote: '（已按上下文预算缩放/重编码；原文件未改动。）',
     /** 视觉门禁：当前路由的模型档案没有声明图片输入能力 */
     modelUnsupported:
       '当前模型不支持图片输入（模型档案未声明 supports_image_input），read_image 已拒绝执行。请切换到支持视觉的模型，或先在模型设置里为该模型补充图片输入能力。',
@@ -231,6 +233,7 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     ok: 'Read image {{path}} ({{mime}}, {{width}}×{{height}}, {{bytes}} bytes). The image is attached right after this tool result and can be viewed directly.',
     okNoDimensions:
       'Read image {{path}} ({{mime}}, {{bytes}} bytes). The image is attached right after this tool result and can be viewed directly.',
+    normalizedNote: ' (downscaled/re-encoded for the context budget; the original file is untouched.)',
     modelUnsupported:
       'The current model does not accept image input (its model profile does not declare supports_image_input), so read_image refused to run. Switch to a vision-capable model, or add image input to this model in the model settings first.',
     attached: 'Image read by tool {{tool}}: {{path}}'

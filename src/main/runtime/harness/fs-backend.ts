@@ -6,7 +6,8 @@ import logger from 'electron-log'
 import { mainFormat, mainPlural } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { recordToolFacts } from './tool-result-facts'
-import { MAX_IMAGE_BYTES, readImageFile, toolMedia } from './image-tool'
+import { MAX_IMAGE_BYTES, readImageFile, toolMedia, type ImageMimeType } from './image-tool'
+import { planImageNormalization } from './image-normalize'
 import { applyHunks, parsePatch } from './apply-patch'
 import { applyInsert, applyStrReplace, formatView } from './str-replace-core'
 import { recordFileChange } from '../../workspace/file-history'
@@ -16,6 +17,7 @@ import { permissionGate } from './permission-gate'
 import { isPermissionMode } from './permission'
 import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../../sandbox/exec'
 import type { SandboxMode } from '../../sandbox/types'
+import { nativeImage } from 'electron'
 import { jobsRegistry } from './jobs'
 import {
   MAX_EXEC_CHARS,
@@ -411,6 +413,60 @@ function walkDir(root: string, relDir: string, out: string[], cap = MAX_SCAN_ENT
 }
 
 /**
+ * 按像素/字节预算缩放或重编码图片（Electron nativeImage）。
+ *
+ * 与 DSH 的附件规范化同目标：让进入上下文的那一份图有界。三条硬规则：
+ * - 解码失败、编码为空、结果反而更大 → 一律退回原图（规范化绝不能把图弄坏/弄大）；
+ * - GIF 不处理（重编码会丢动画，决策层已排除）；
+ * - JPEG 仍出 JPEG（保证照片体积），其它格式出 PNG（保留可能的透明通道）。
+ */
+function normalizeImageForContext(image: {
+  dataUrl: string
+  mimeType: ImageMimeType
+  bytes: number
+  dimensions?: { width: number; height: number }
+}): {
+  dataUrl: string
+  mimeType: ImageMimeType
+  bytes: number
+  dimensions?: { width: number; height: number }
+  normalized: boolean
+} {
+  const original = { ...image, normalized: false }
+  if (!image.dimensions) return original
+  const decision = planImageNormalization({
+    width: image.dimensions.width,
+    height: image.dimensions.height,
+    bytes: image.bytes,
+    mimeType: image.mimeType
+  })
+  if (decision.action === 'keep') return original
+  try {
+    const base64 = image.dataUrl.slice(image.dataUrl.indexOf(',') + 1)
+    const decoded = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'))
+    if (decoded.isEmpty()) return original
+    const resized = decoded.resize({
+      width: decision.width,
+      height: decision.height,
+      quality: 'good'
+    })
+    const outputMime: ImageMimeType = image.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
+    const buffer = outputMime === 'image/jpeg' ? resized.toJPEG(85) : resized.toPNG()
+    if (!buffer || buffer.length === 0 || buffer.length >= image.bytes) return original
+    const size = resized.getSize()
+    return {
+      dataUrl: `data:${outputMime};base64,${buffer.toString('base64')}`,
+      mimeType: outputMime,
+      bytes: buffer.length,
+      dimensions: { width: size.width, height: size.height },
+      normalized: true
+    }
+  } catch {
+    return original
+  }
+}
+
+/**
  * 构建文件系统工具集。无任何挂载时返回空数组（组件不激活，对应论文「依赖缺失 = 不激活」）。
  */
 export function buildFsTools(options: FsBackendOptions): StructuredToolInterface[] {
@@ -549,28 +605,33 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           recordToolFacts(callId, { error: text })
           return text
         }
-        const text = result.dimensions
-          ? mainFormat(tr.readImage.ok, {
-              path: file_path,
-              mime: result.mimeType,
-              width: result.dimensions.width,
-              height: result.dimensions.height,
-              bytes: result.bytes.toLocaleString()
-            })
-          : mainFormat(tr.readImage.okNoDimensions, {
-              path: file_path,
-              mime: result.mimeType,
-              bytes: result.bytes.toLocaleString()
-            })
+        // 规范化：大图/大字节先缩放或重编码，再进上下文（失败自动退回原图）
+        const normalized = normalizeImageForContext(result)
+        const note = normalized.normalized ? tr.readImage.normalizedNote : ''
+        const text = (
+          normalized.dimensions
+            ? mainFormat(tr.readImage.ok, {
+                path: file_path,
+                mime: normalized.mimeType,
+                width: normalized.dimensions.width,
+                height: normalized.dimensions.height,
+                bytes: normalized.bytes.toLocaleString()
+              })
+            : mainFormat(tr.readImage.okNoDimensions, {
+                path: file_path,
+                mime: normalized.mimeType,
+                bytes: normalized.bytes.toLocaleString()
+              })
+        ) + note
         recordToolFacts(callId, {
           image: true,
-          bytes: result.bytes,
-          mimeType: result.mimeType,
-          width: result.dimensions?.width,
-          height: result.dimensions?.height
+          bytes: normalized.bytes,
+          mimeType: normalized.mimeType,
+          width: normalized.dimensions?.width,
+          height: normalized.dimensions?.height
         })
         return toolMedia(text, [
-          { dataUrl: result.dataUrl, path: file_path, mimeType: result.mimeType }
+          { dataUrl: normalized.dataUrl, path: file_path, mimeType: normalized.mimeType }
         ])
       },
       {

@@ -147,7 +147,8 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Image results** — `read_image` returns the picture itself to the model; the tool card shows a
   thumbnail with click-to-preview, the image is stored with the message so it survives a restart,
   and history replay re-attaches the most recent tool images (bounded, like user pastes) so later
-  turns can still look at them.
+  turns can still look at them. Before a picture enters the conversation it is downscaled /
+  re-encoded to the context budget (long edge ≤ 2048 px, ≤ 1.5 MB) — the file on disk is untouched.
 - **Deliverables** — a `present` tool lets the model declare the finished files of a turn (1–4
   workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
   each file in the workspace panel. Optional tool, enabled under Settings → Agents.
