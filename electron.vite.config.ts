@@ -11,7 +11,7 @@ export default defineConfig({
       }
     },
     build: {
-      // electron-vite v5: 使用 build.externalizeDeps 替代已弃用的 externalizeDepsPlugin
+      // electron-vite v6: 使用 build.externalizeDeps 替代已弃用的 externalizeDepsPlugin
       externalizeDeps: true
     }
   },

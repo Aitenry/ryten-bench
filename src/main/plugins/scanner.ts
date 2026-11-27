@@ -20,7 +20,7 @@ export interface ScannedExternalPlugin {
 /**
  * **宿主保留 id**：
  * - `host`：`plugin://host/ui.js` 渲染层宿主 UI 桥的地址段，用户插件不能占用；
- * - `harness` / `notes`：已升级为系统级功能，由 `src/main/system-services.ts` 直接装配，
+ * - `harness` / `notes`：已升级为系统级功能，由 `src/main/system/` 直接装配，
  *   不再从 `userData/plugins/**` 扫描或装载（旧版本残留的插件包会被忽略）。
  */
 export const RESERVED_PLUGIN_IDS: ReadonlySet<string> = new Set(['host', 'harness', 'notes'])
