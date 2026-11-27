@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, session, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import icon from '../../../resources/logo.png?asset'
@@ -61,6 +61,45 @@ function runRendererMemoryDumpHooks(reason: string, exitCode: number): void {
     } catch (err) {
       logger.warn(`[Memory] Memory snapshot hook failed (${hook.label}):`, err)
     }
+  }
+}
+
+/**
+ * 内置浏览器（`<webview>`）的持久化分区名，与渲染层 `BrowserPanel.tsx` 的
+ * `partition="persist:ryten-browser"` 保持一致。
+ */
+const BROWSER_PARTITION = 'persist:ryten-browser'
+
+/**
+ * 允许页面申请的权限（其余一律拒绝）。
+ *
+ * 为什么必须显式裁决：Electron 在**没有**安装 `setPermissionRequestHandler` 时，
+ * 默认会批准权限请求——访客页可以直接拿到摄像头/麦克风/地理位置/通知；而持久分区
+ * (`persist:`) 会让授权跨会话保留。这里只放行不影响隐私的浏览器基础能力：
+ * 全屏播放、指针锁定、剪贴板写入；摄像头/麦克风/定位/通知/MIDI/屏幕捕获等全部拒绝。
+ */
+const ALLOWED_PAGE_PERMISSIONS: ReadonlySet<string> = new Set([
+  'fullscreen',
+  'pointerLock',
+  'clipboard-sanitized-write'
+])
+
+let sessionPermissionsConfigured = false
+
+/** 为主窗口与内置浏览器的会话安装统一的权限裁决（全局只配一次） */
+function configureSessionPermissions(win: BrowserWindow): void {
+  if (sessionPermissionsConfigured) return
+  sessionPermissionsConfigured = true
+  const sessions = [win.webContents.session, session.fromPartition(BROWSER_PARTITION)]
+  for (const target of sessions) {
+    target.setPermissionRequestHandler((_webContents, permission, callback) => {
+      const allowed = ALLOWED_PAGE_PERMISSIONS.has(permission)
+      if (!allowed) logger.warn(`[Security] Denied page permission request: ${permission}`)
+      callback(allowed)
+    })
+    target.setPermissionCheckHandler((_webContents, permission) =>
+      ALLOWED_PAGE_PERMISSIONS.has(permission)
+    )
   }
 }
 
@@ -321,6 +360,9 @@ export function createMainWindow(): void {
     }
   })
   setMainWindow(win)
+  // 页面权限裁决（摄像头/麦克风/定位/通知等）：默认放行是 Electron 的历史行为，
+  // 内置浏览器会打开任意站点，必须在宿主侧显式收紧。
+  configureSessionPermissions(win)
 
   /**
    * 应用内浏览器 guest 的安全基线：无论页面怎么写 `<webview>` 属性，
