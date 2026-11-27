@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 
 import { useMessage } from '@renderer/hooks/useMessage'
@@ -900,6 +900,24 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             timestamp: Date.now()
           },
           `queue-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chunk.__turnId
+        )
+        return
+      }
+
+      // 定时任务轮：正文就是主进程投递的消息（与落库内容一致），实时气泡与刷新后一致
+      if (chunk.scheduleTurn) {
+        const { text } = chunk.scheduleTurn
+        mountExternalTurn(
+          topicId,
+          {
+            id: `schedule-user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            role: 'user',
+            content: text,
+            blocks: [],
+            timestamp: Date.now()
+          },
+          `schedule-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           chunk.__turnId
         )
       }

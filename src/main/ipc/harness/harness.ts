@@ -559,6 +559,16 @@ async function runHarnessTurn(
       }
     })
   }
+  // 定时任务轮：流首标记（用户没有点发送，前端据此挂用户气泡 + 助手占位）
+  if (options?.turnMeta?.source === 'schedule') {
+    sendChunk({
+      scheduleTurn: {
+        scheduleId: options.turnMeta.scheduleId ?? null,
+        title: options.turnMeta.scheduleTitle ?? '',
+        text: question
+      }
+    })
+  }
 
   // 技能优先级：harnessSettings.enabledSkills > mainAgent.skills
   const effectiveSkills = harnessSettings?.enabledSkills ?? mainAgentDefaults?.skills

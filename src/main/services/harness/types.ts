@@ -224,6 +224,13 @@ export interface StreamChunk extends StructuredMessage {
    * 用户当时并没有点发送，本地没有占位，所以必须由主进程告知。
    */
   queueTurn?: { itemId: string | null; text: string; attachments: string[] }
+  /**
+   * 定时任务触发轮的起始标记（流首 chunk；前端据此挂载用户消息与助手占位）。
+   *
+   * 用户没有点发送，本地没有占位；`text` 是主进程实际投递的消息正文（含调度说明），
+   * 与落库内容一致，保证实时显示与刷新后的历史一致。
+   */
+  scheduleTurn?: { scheduleId: string | null; title: string; text: string }
 }
 
 /** 智能体定义 */
