@@ -11,6 +11,8 @@ export const zhCNMcpToolTexts = {
     /** 没有连接任何服务器时给出的提示（列出可用的服务器名） */
     unknownServer: '没有已连接的 MCP 服务器名为 "{{server}}"。当前已连接：{{servers}}',
     noServers: '当前没有已连接的 MCP 服务器。请先在「设置 → MCP」里添加并连接一台服务器。',
+    /** 服务器已连接，但没被本轮勾选（资源工具只允许读本轮启用的服务器） */
+    notSelected: '服务器 "{{server}}" 不在本轮启用的 MCP 服务器里。本轮启用：{{servers}}',
     failed: '读取 MCP 服务器 "{{server}}" 失败: {{message}}'
   },
   listResources: {
@@ -40,6 +42,8 @@ export const enUSMcpToolTexts: typeof zhCNMcpToolTexts = {
       'No connected MCP server named "{{server}}". Currently connected: {{servers}}',
     noServers:
       'No MCP server is connected. Add and connect one under Settings → MCP first.',
+    notSelected:
+      'Server "{{server}}" is not one of the MCP servers enabled for this turn. Enabled: {{servers}}',
     failed: 'Failed to read MCP server "{{server}}": {{message}}'
   },
   listResources: {

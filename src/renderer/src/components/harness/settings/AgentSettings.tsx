@@ -24,6 +24,7 @@ import {
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi, type SandboxStatusView } from '../../../api/harness'
 import type { HarnessToolInfo } from '../../../types/harness/types'
+import ToolSourceTag, { type ToolSourceKind } from '../ToolSourceTag'
 import type {
   AgentConfigInput,
   AgentConfigRow,
@@ -328,7 +329,9 @@ const AgentSettings: React.FC = () => {
         label: group.name,
         description: '',
         icon: 'RiPlug2Line',
-        color: '#8c6b3f'
+        color: '#8c6b3f',
+        // MCP 服务器分组项：清单里同样要标出来源（既不是系统工具也不是插件）
+        source: 'mcp' as const
       }))
     ]
   }, [availableTools, mcpGroupOptions])
@@ -361,7 +364,8 @@ const AgentSettings: React.FC = () => {
           }
           continue
         }
-        migrated.push(name)
+        // 归一旧工具名：资料整理四合一、网页抓取/搜索合并成 `web-tools`（见 shared/harness/mcp.ts）
+        migrated.push(canonicalToolName(name))
       }
       form.setFieldsValue({
         name: agent.name,
@@ -1012,10 +1016,22 @@ const AgentSettings: React.FC = () => {
               <Select
                 mode="multiple"
                 placeholder={t('agentSettings.form.toolsPlaceholder')}
-                options={toolOptions.map((t) => ({
-                  value: t.name,
-                  label: `${t.label} (${t.description})`
+                options={toolOptions.map((tool) => ({
+                  value: tool.name,
+                  label: `${tool.label} (${tool.description})`,
+                  // 自定义字段：optionRender 里取出来摆行尾的来源标签
+                  source: tool.source
                 }))}
+                // 名称最右边标「系统 / 插件 / MCP」：之前两类工具混在一张清单里分不出来
+                optionRender={(option) => {
+                  const source = (option.data as { source?: ToolSourceKind } | undefined)?.source
+                  return (
+                    <div className="ryt-tool-option">
+                      <span className="ryt-tool-option__label">{option.label}</span>
+                      <ToolSourceTag source={source} />
+                    </div>
+                  )
+                }}
                 allowClear
                 maxTagCount={4}
               />

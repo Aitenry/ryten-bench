@@ -19,6 +19,17 @@ import type { StructuredToolInterface } from '../ai/tools'
 export const HARNESS_TOOL_CONTRIBUTION = 'harness.tool'
 
 /**
+ * 工具来源（设置页/输入框的工具清单里，名称右边的来源标签用）：
+ * - `system`：随应用编译进来的工具（harness 本地工具 + `registerBuiltinHarnessTools` 注册的内置功能）；
+ * - `plugin`：第三方插件经 `harness.tool` 贡献点注册的工具（停用插件即消失）；
+ * - `mcp`：外部 MCP 服务器暴露的工具（既不是系统也不是插件）。
+ *
+ * 由 harness 在组装工具清单时**按来源写入**（插件贡献的 info 里没有这个字段，
+ * 也不该由插件自己声明——说自己「系统」就等于伪装成内置工具）。
+ */
+export type ToolSourceKind = 'system' | 'plugin' | 'mcp'
+
+/**
  * 工具在设置页/提示词里的展示元数据（原 `harness/types.ts` 的 `ToolInfo`，定义搬到这里）。
  *
  * 注意：label/description 只是**兜底**界面文案，真正下发前会由 `ipc/misc.ts`
@@ -30,6 +41,8 @@ export interface ToolInfo {
   description: string
   icon: string
   color: string
+  /** 来源标签；缺省按未知处理（不显示标签），见 `ToolSourceKind` */
+  source?: ToolSourceKind
 }
 
 /** 一个贡献给 harness 的 AI 工具（第三方插件贡献，或内置功能注册） */

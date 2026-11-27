@@ -55,6 +55,7 @@ import {
   refreshCatalog,
   setMcpModuleBase,
   connectedMcpServerNames,
+  resourceCapableMcpServers,
   listMcpResources,
   listMcpResourceTemplates,
   readMcpResource
@@ -202,9 +203,12 @@ export function startHarness(): void {
     configureMcp(readMcpServers)
     setMcpModuleBase(app.getAppPath())
     setMcpToolProvider(currentMcpTools)
-    // MCP 资源三件套的数据源：与工具提供者同一套接线，未连接服务器时工具会给出可操作提示
+    // MCP 资源三件套的数据源：与工具提供者同一套接线。
+    // `resourceCapableServers` 决定「要不要挂」：只有声明了 resources 能力的服务器才挂，
+    // 一台都没有时这三个工具根本不进本轮工具集（不占上下文）。
     setMcpResourceOps({
       servers: connectedMcpServerNames,
+      resourceCapableServers: resourceCapableMcpServers,
       listResources: listMcpResources,
       listTemplates: listMcpResourceTemplates,
       read: readMcpResource

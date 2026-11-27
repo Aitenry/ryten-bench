@@ -38,7 +38,7 @@ export interface McpResourceTexts {
 
 /** 三个资源工具的完整文案（common + 各自子块），结构与 i18n 的 zhCNMcpToolTexts 兼容 */
 export interface McpToolTexts extends McpResourceTexts {
-  common: { unknownServer: string; noServers: string; failed: string }
+  common: { unknownServer: string; noServers: string; notSelected: string; failed: string }
 }
 
 /** 极简模板替换（`{{name}}`）：与主进程 i18n 的插值语法一致，抽出来避免依赖 electron */
@@ -52,16 +52,24 @@ export function fill(template: string, values: Record<string, string | number>):
 /**
  * 服务器名校验：返回 null 表示可用，否则是给模型看的提示文案。
  *
- * 一台都没连时给「先去设置里连一台」；名字写错时列出当前已连接的服务器名。
+ * 三种情况分开说：
+ *  - 一台都没连：「先去设置里连一台」；
+ *  - 名字写错：列出当前已连接的服务器名；
+ *  - 连上了、但不在本轮勾选范围（`allowed`）：列出本轮真正能用的服务器——
+ *    勾了 A 却让模型读 B 时，别让它以为 B 挂了，要让它知道该换哪台。
  */
 export function serverErrorMessage(
   texts: McpToolTexts,
   server: string,
-  servers: string[]
+  connected: string[],
+  allowed?: string[]
 ): string | null {
-  if (servers.length === 0) return texts.common.noServers
-  if (!servers.includes(server)) {
-    return fill(texts.common.unknownServer, { server, servers: servers.join(', ') })
+  if (connected.length === 0) return texts.common.noServers
+  if (!connected.includes(server)) {
+    return fill(texts.common.unknownServer, { server, servers: connected.join(', ') })
+  }
+  if (allowed && !allowed.includes(server)) {
+    return fill(texts.common.notSelected, { server, servers: allowed.join(', ') || '—' })
   }
   return null
 }

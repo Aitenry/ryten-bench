@@ -144,6 +144,10 @@ export const zhCN = {
     get_time: { label: '时间查询', description: '获取当前日期和时间' },
     web_fetch: { label: '网页抓取', description: '抓取一个 URL 并抽取可读正文' },
     web_search: { label: '网页搜索', description: '联网搜索并返回结果链接与摘要' },
+    'web-tools': {
+      label: '网页抓取与搜索',
+      description: '抓取网页正文并联网搜索（合并为一个选择）'
+    },
     present: { label: '交付文件', description: '把已完成的文件声明为本次交付物' },
     schedule_create: { label: '创建定时任务', description: '按定点/周期/每日规则自动执行提示词' },
     schedule_list: { label: '定时任务列表', description: '查看全部定时任务' },
@@ -153,7 +157,7 @@ export const zhCN = {
       label: '定时任务',
       description: '创建、查看、修改、暂停/删除定时任务（合并为一个选择）'
     },
-    mcp: { label: 'MCP', description: '使用所有已连接 MCP 服务器提供的工具与资源' },
+    mcp: { label: 'MCP 服务器', description: '使用所有已连接 MCP 服务器提供的工具与资源' },
     terminal_open: { label: '打开终端', description: '开启一条持久 shell 会话（仅完全权限档）' },
     terminal_send: { label: '终端执行', description: '在持久终端里执行命令并等待输出' },
     terminal_read: { label: '读取终端', description: '读取终端自上次读取以来的新输出' },
@@ -301,6 +305,10 @@ export const enUS: typeof zhCN = {
     get_time: { label: 'Time', description: 'Current date and time' },
     web_fetch: { label: 'Web fetch', description: 'Fetch a URL and read its readable text' },
     web_search: { label: 'Web search', description: 'Search the web and get result links' },
+    'web-tools': {
+      label: 'Web fetch & search',
+      description: 'Fetch a page and search the web (one selection)'
+    },
     present: { label: 'Present files', description: 'Declare finished files as deliverables' },
     schedule_create: {
       label: 'Create schedule',
@@ -316,7 +324,10 @@ export const enUS: typeof zhCN = {
       label: 'Schedules',
       description: 'Create, list, view and edit scheduled tasks (one selection)'
     },
-    mcp: { label: 'MCP', description: 'Use tools and resources from every connected MCP server' },
+    mcp: {
+      label: 'MCP servers',
+      description: 'Use tools and resources from every connected MCP server'
+    },
     terminal_open: {
       label: 'Open terminal',
       description: 'Open a persistent shell session (danger-full-access only)'

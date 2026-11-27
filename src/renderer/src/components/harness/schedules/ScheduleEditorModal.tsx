@@ -26,7 +26,13 @@ import {
   type ScheduleWhenView
 } from '../../../api/harness'
 import { computeNextRunPreview, formatRelativeDay } from '../../../utils/schedules/format'
-import { mcpNamespace, mcpServerGroupValue } from '../../../../../shared/harness/mcp'
+import {
+  MCP_TOOL_GROUP,
+  canonicalToolName,
+  mcpNamespace,
+  mcpServerGroupValue
+} from '../../../../../shared/harness/mcp'
+import ToolSourceTag, { type ToolSourceKind } from '../ToolSourceTag'
 
 type Mode = 'chat' | 'work' | 'plugin'
 
@@ -100,7 +106,9 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
-  const [toolOptions, setToolOptions] = useState<{ label: string; value: string }[]>([])
+  const [toolOptions, setToolOptions] = useState<
+    { label: string; value: string; source?: ToolSourceKind }[]
+  >([])
   const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([])
   const [mcpOptions, setMcpOptions] = useState<{ label: string; value: string }[]>([])
   // 标题 / 提示词
@@ -163,9 +171,11 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         setPluginWorkspaces(plugins)
         setDraftNames(nameMap)
         setToolOptions(
-          (tools as { name: string; label?: string }[]).map((tool) => ({
+          (tools as { name: string; label?: string; source?: ToolSourceKind }[]).map((tool) => ({
             value: tool.name,
-            label: tool.label || tool.name
+            label: tool.label || tool.name,
+            // 行尾来源标签：系统 / 插件 / MCP
+            source: tool.source
           }))
         )
         setSkillOptions(
@@ -174,8 +184,12 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
             label: skill.name || skill.id
           }))
         )
+        const serverList = servers as { config: { name: string } }[]
+        const mcpServerValues = serverList.map((server) =>
+          mcpServerGroupValue(mcpNamespace(server.config.name))
+        )
         setMcpOptions(
-          (servers as { config: { name: string } }[]).map((server) => ({
+          serverList.map((server) => ({
             value: mcpServerGroupValue(mcpNamespace(server.config.name)),
             label: server.config.name
           }))
@@ -212,7 +226,12 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
 
         // 预填：编辑用任务上的目标，找不到时推断所属模式
         const selectionArrays = selectionToArrays(task?.agentConfig)
-        setSelectedTools(selectionArrays.tools)
+        // 旧数据里的 `mcp`（全选标记）迁成「当前所有服务器」的分组值；web_fetch / web_search
+        // 归一到 `web-tools` 分组项（网页抓取与搜索已合并）。
+        const migratedTools = selectionArrays.tools.flatMap((name) =>
+          name === MCP_TOOL_GROUP ? mcpServerValues : [name]
+        )
+        setSelectedTools(Array.from(new Set(migratedTools.map((name) => canonicalToolName(name)))))
         setSelectedSkills(selectionArrays.skills)
         setSelectedMcp(selectionArrays.mcpTools)
         if (task) {
@@ -631,6 +650,15 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
           options={toolOptions}
           placeholder={t('schedulesPage.toolsPlaceholder')}
           optionFilterProp="label"
+          // 名称最右边标「系统 / 插件 / MCP」
+          optionRender={(option) => (
+            <div className="ryt-tool-option">
+              <span className="ryt-tool-option__label">{option.label}</span>
+              <ToolSourceTag
+                source={(option.data as { source?: ToolSourceKind } | undefined)?.source}
+              />
+            </div>
+          )}
         />
       </div>
 

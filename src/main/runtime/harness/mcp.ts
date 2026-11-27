@@ -136,6 +136,11 @@ interface McpServerEntry {
   status: McpServerStatus
   error?: string
   tools: McpToolInfo[]
+  /**
+   * 服务器有没有声明 resources 能力（MCP initialize 的 `capabilities.resources`）。
+   * 资源三件套只给声明了的服务器挂：没声明的调用只会拿到空清单，白占上下文。
+   */
+  supportsResources: boolean
 }
 
 interface McpSnapshot {
@@ -254,6 +259,21 @@ async function connectServer(config: McpServerConfig): Promise<McpClient> {
 }
 
 /**
+ * 服务器有没有声明 resources 能力（MCP initialize 结果里的 `capabilities.resources`）。
+ *
+ * 这是「要不要给这一台挂资源三件套」的唯一依据：没声明的服务器，`resources/list` 只会
+ * 拿到空清单，挂上去白占上下文（用户 2026-11-27 问「3 个资源工具有什么用」之后改成按能力挂）。
+ * 读不到 capabilities 时按「不支持」处理——不会挂错，顶多少一个本可用的能力。
+ */
+function readResourceCapability(client: McpClient): boolean {
+  try {
+    return Boolean(client.getServerCapabilities()?.resources)
+  } catch {
+    return false
+  }
+}
+
+/**
  * 读一台服务器暴露的工具（不含内置限制：MCP 服务器还支持 resources/prompts，这里只接工具）。
  *
  * 自己做而不是 `loadMcpTools`：需要**按台**控制命名与超时，并在单台失败时只标记这一台。
@@ -317,17 +337,24 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
       const namespace = mcpNamespace(config.name)
 
       if (!config.enabled) {
-        entries.push({ config, status: 'disabled', tools: [] })
+        entries.push({ config, status: 'disabled', tools: [], supportsResources: false })
         continue
       }
       if (config.transport === 'stdio' ? !config.command : !config.url) {
-        entries.push({ config, status: 'unconfigured', error: 'missing command/url', tools: [] })
+        entries.push({
+          config,
+          status: 'unconfigured',
+          error: 'missing command/url',
+          tools: [],
+          supportsResources: false
+        })
         continue
       }
 
       let client: McpClient | undefined
       try {
         client = await connectServer(config)
+        const supportsResources = readResourceCapability(client)
         const listed = await listServerTools(client, config)
         if (runGeneration !== generation) {
           await client.close().catch(() => undefined)
@@ -371,7 +398,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
           tools.push({ name: fullName, rawName: item.rawName, description: item.description })
         }
         tools.sort((a, b) => a.rawName.localeCompare(b.rawName, 'en'))
-        entries.push({ config, status: 'ok', tools })
+        entries.push({ config, status: 'ok', tools, supportsResources })
         loggedErrors.delete(config.id)
         logger.info(
           `[MCP] Connected ${config.name} (${config.transport}): ${tools.length} tools` +
@@ -380,7 +407,7 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         if (client) await client.close().catch(() => undefined)
-        entries.push({ config, status: 'error', error: message, tools: [] })
+        entries.push({ config, status: 'error', error: message, tools: [], supportsResources: false })
         if (!loggedErrors.has(config.id)) {
           loggedErrors.add(config.id)
           logger.warn(`[MCP] Failed to connect to ${config.name} (${config.transport}): ${message}`)
@@ -459,6 +486,23 @@ export function currentMcpTools(): { tools: StructuredToolInterface[]; infos: To
 export function connectedMcpServerNames(): string[] {
   return snapshot.entries
     .filter((entry) => entry.status === 'ok' && snapshot.clients.has(mcpNamespace(entry.config.name)))
+    .map((entry) => entry.config.name)
+}
+
+/**
+ * 已连接**且声明了 resources 能力**的服务器名。
+ *
+ * 资源三件套只按这个清单挂载：勾了 3 台、只有 1 台支持 resources 时，就只为这 1 台挂
+ * （工具内部的 `server` 参数也只允许它）。一台都没有时干脆不挂，省下 3 个工具定义。
+ */
+export function resourceCapableMcpServers(): string[] {
+  return snapshot.entries
+    .filter(
+      (entry) =>
+        entry.status === 'ok' &&
+        entry.supportsResources &&
+        snapshot.clients.has(mcpNamespace(entry.config.name))
+    )
     .map((entry) => entry.config.name)
 }
 

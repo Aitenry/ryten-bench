@@ -1357,6 +1357,21 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           // 作用域已经落进话题行，之后由主进程按话题读；用完就清，避免影响下一条新会话
           // （界面这一侧的作用域 store 保持不动：话题就是这条会话的作用域，等切会话时再改写）
           pendingMemoryScopeRef.current = undefined
+          /**
+           * **先把输入框当前的工具/技能/MCP 选择写进新话题，再切 currentTopicId**。
+           *
+           * 为什么顺序这么重要（用户 2026-11-27：「有时候选择会被取消，导致没有注册工具」）：
+           * `setCurrentTopicId` 会让输入框重新按话题读一次会话选择；而主进程要等这轮消息
+           * 真正开跑（startMessageStream 里）才把 `agentConfig` 写回话题。中间这段空窗里
+           * 读到的就是「这个新话题还没有选择」→ 输入框回落到主智能体默认（通常是空）→
+           * 刚勾的工具在界面上被清零、`agentSelection` 也被覆盖成 null；之后随手再勾一项，
+           * 又会用「只剩这一项」的选择覆盖数据库，看起来就是选择被吃掉了。
+           */
+          if (agentSelection) {
+            await harnessApi.harness
+              .setTopicAgentSelection(topicId, agentSelection)
+              .catch(() => undefined)
+          }
           currentTopicIdRef.current = topicId
           setCurrentTopicId(topicId)
           // 「对话」模式的会话目录按话题 id 分：主进程建话题时已把活动目录切过去，

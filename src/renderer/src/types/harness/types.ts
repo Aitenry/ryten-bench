@@ -57,4 +57,10 @@ export interface HarnessToolInfo {
   description: string
   icon: string
   color: string
+  /**
+   * 来源标签：`system` = 随应用编译（本地工具 + 内置资料整理），`plugin` = 第三方插件贡献，
+   * `mcp` = 外部 MCP 服务器。主进程在 `harness-get-tools` 里写入；缺省不显示标签。
+   * 定义与主进程 `ToolSourceKind` 保持一致（`main/plugins/tool-contract.ts`）。
+   */
+  source?: 'system' | 'plugin' | 'mcp'
 }

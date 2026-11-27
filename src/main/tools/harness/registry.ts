@@ -19,6 +19,11 @@ export interface ToolInfoLike {
   description: string
   icon: string
   color: string
+  /**
+   * 来源标签：`system` / `plugin` / `mcp`（与 core 的 `ToolSourceKind` 同值）。
+   * 本模块保持零依赖，故不 import 那份类型；字段只做透传，合并规则不关心它。
+   */
+  source?: 'system' | 'plugin' | 'mcp'
 }
 
 /** 一路工具来源：名字 + 展示元数据，以及「拿到可调用实例」的工厂 */

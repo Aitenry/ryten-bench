@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
  *
  * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
@@ -224,6 +224,24 @@ export function isScheduleToolGroup(value?: string): boolean {
   return value === SCHEDULE_TOOL_GROUP
 }
 
+/**
+ * 「网页抓取 + 网页搜索」合并分组选择项（用户口径 2026-11-27：「这两个合成一个注册，
+ * 像定时任务一样」）。
+ *
+ * 与定时任务同一套机制：列表里只出现这一项，运行前由 `buildTools` 展开成
+ * `web_fetch` / `web_search` 两个真实工具。旧配置里逐个存的两个名字经
+ * `canonicalToolName` 迁到分组项，避免升级后勾选凭空消失。
+ */
+export const WEB_TOOL_GROUP = 'web-tools'
+
+/** 网页分组里的真实工具名（顺序即展开顺序） */
+export const WEB_TOOL_NAMES = ['web_fetch', 'web_search'] as const
+
+/** 该选择项是不是「网页抓取与搜索」分组 */
+export function isWebToolGroup(value?: string): boolean {
+  return value === WEB_TOOL_GROUP
+}
+
 /** 该选择项是不是某台 MCP 服务器的分组项 */
 export function isMcpServerGroup(value?: string): boolean {
   return parseMcpServerGroup(value) !== null
@@ -231,7 +249,11 @@ export function isMcpServerGroup(value?: string): boolean {
 
 /**
  * 历史标记：最早那版只给一项笼统的「MCP」（所有服务器一起开关）。
- * 现在按服务器分开，但旧配置里可能还留着它——读到时按「全部已启用的 MCP 工具」处理。
+ *
+ * 现在 MCP 的唯一入口是输入框下方的 MCP 选择器（按服务器选），工具清单里**不再列这一项**
+ * （用户口径 2026-11-27：「这个 MCP 服务器不就是一个统一的内容吗」）。这个标记只用于
+ * **历史配置兼容**：旧话题/旧子智能体里存过的 `mcp` 读到时按「全部已连接的 MCP 工具 +
+ * 资源三件套」处理，不报错、不丢能力。
  */
 export const MCP_TOOL_GROUP = 'mcp'
 
@@ -345,11 +367,21 @@ export const LEGACY_MATERIAL_TOOL_NAMES = [
   'search_graph'
 ] as const
 
-const LEGACY_TOOL_ALIASES: Record<string, string> = Object.fromEntries(
-  LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_NAME])
-)
+const LEGACY_TOOL_ALIASES: Record<string, string> = {
+  ...Object.fromEntries(LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_NAME])),
+  // 2026-11-27：网页抓取 / 网页搜索合并成一个选择项（见 WEB_TOOL_GROUP），
+  // 旧配置里逐个勾的两个名字在这里归一到分组项，运行时再展开回两个真实工具。
+  web_fetch: WEB_TOOL_GROUP,
+  web_search: WEB_TOOL_GROUP
+}
 
-/** 旧工具名 → 现行工具名；其余名字原样返回 */
+/**
+ * 旧工具名 → 现行工具名；其余名字原样返回。
+ *
+ * 除了资料整理的四个旧名（→ `manage_materials`），2026-11-27 起 `web_fetch` /
+ * `web_search` 也归一成 `web-tools` 分组项（网页抓取与搜索合并成一个选择，见
+ * `WEB_TOOL_GROUP`）；运行时由 `expandSelectionToolNames` 再展开成两个真实工具。
+ */
 export function canonicalToolName(name: string): string {
   return LEGACY_TOOL_ALIASES[name] ?? name
 }
@@ -363,8 +395,8 @@ export function canonicalToolName(name: string): string {
  */
 export function isSelectableMainAgentTool(name?: string): boolean {
   if (typeof name !== 'string' || name.length === 0) return false
-  // 两个「分组项」本身可以保存：运行时展开成具体工具（见 buildTools）
-  if (isScheduleToolGroup(name) || isMcpToolGroup(name)) return true
+  // 可保存的「分组项」：定时任务、网页抓取与搜索；`mcp` 只是历史标记，新配置不会写它
+  if (isScheduleToolGroup(name) || isWebToolGroup(name) || isMcpToolGroup(name)) return true
   if (isMcpToolName(name) || isMcpServerGroup(name) || isPluginModeTool(name)) return false
   return true
 }
@@ -407,7 +439,7 @@ export function effectiveMainAgentTools(
     for (const name of names ?? []) {
       if (typeof name !== 'string' || !name) continue
       const canonical = canonicalToolName(name)
-      // 分组项（MCP 服务器 / 旧「MCP」标记 / 定时任务）保留到组装阶段再统一展开，
+      // 分组项（MCP 服务器 / 旧「MCP」标记 / 定时任务 / 网页抓取与搜索）保留到组装阶段再统一展开，
       // 这样「选择列表里的一项」与「真正挂载的工具」不会各写一套名单。
       if (isPluginModeTool(canonical)) continue
       if (!out.includes(canonical)) out.push(canonical)

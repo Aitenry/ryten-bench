@@ -44,6 +44,7 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import FileRef from './FileRefNode'
 import HarnessUsageMeter from './HarnessUsageMeter'
 import HarnessSlashMenu from './HarnessSlashMenu'
+import ToolSourceTag from './ToolSourceTag'
 import {
   filterSlashCommands,
   type HarnessSlashCommandDef,
@@ -61,7 +62,12 @@ import ProviderMark from '@renderer/components/provider/provider-mark'
 import type { Attachment, HarnessToolInfo } from '../../types/harness/types'
 import type { PermissionMode } from '../../../../shared/harness/types'
 import { harnessApi, type AgentSelectionView } from '../../api/harness'
-import { mcpNamespace, mcpServerGroupValue } from '../../../../shared/harness/mcp'
+import {
+  MCP_TOOL_GROUP,
+  canonicalToolName,
+  mcpNamespace,
+  mcpServerGroupValue
+} from '../../../../shared/harness/mcp'
 
 // TipTap 默认不加载标准键位绑定（退格/删除/回车等），必须显式加载 prosemirror-commands 的 baseKeymap
 const BaseKeymap = Extension.create({
@@ -447,17 +453,44 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         if (cancelled) return
         setToolCatalog(tools)
         setSkillCatalog(skills)
+        const mcpServerValues = servers.map((server) =>
+          mcpServerGroupValue(mcpNamespace(server.config.name))
+        )
         setMcpCatalog(
-          servers.map((server) => ({
-            value: mcpServerGroupValue(mcpNamespace(server.config.name)),
+          servers.map((server, index) => ({
+            value: mcpServerValues[index],
             label: server.config.name
           }))
         )
-        setSelectedTools(topicSelection?.tools ?? main.tools ?? [])
+        /**
+         * 老的「MCP」全选标记（工具面板里曾有一项 `mcp`，2026-11-27 已删掉）→ 迁成
+         * 「当前所有服务器」的按服务器分组值，覆盖范围与原来一致；一台服务器都没有时直接丢。
+         */
+        const migrateLegacyMcp = (names: string[]): string[] =>
+          names.includes(MCP_TOOL_GROUP)
+            ? names.flatMap((name) => (name === MCP_TOOL_GROUP ? mcpServerValues : [name]))
+            : names
+        setSelectedTools(
+          Array.from(
+            new Set(
+              // 旧会话里可能存着合并前的 web_fetch / web_search：先归一到分组项，
+              // 否则面板上勾选态对不上（分组项显示未勾选，但工具其实已经挂上）。
+              migrateLegacyMcp(topicSelection?.tools ?? main.tools ?? []).map((name) =>
+                canonicalToolName(name)
+              )
+            )
+          )
+        )
         setSelectedSkills(topicSelection?.skills ?? [])
         setSelectedMcp(topicSelection?.mcpTools ?? [])
         emitSelection({
-          tools: topicSelection?.tools ?? null,
+          tools: topicSelection?.tools
+            ? Array.from(
+                new Set(
+                  migrateLegacyMcp(topicSelection.tools).map((name) => canonicalToolName(name))
+                )
+              )
+            : null,
           skills: topicSelection?.skills ?? null,
           mcpTools: topicSelection?.mcpTools ?? null
         })
@@ -1610,7 +1643,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
    * 回车 = 勾/取消勾第一个命中项（键盘连续勾选时不用来回换手）。
    */
   const pickerMenu = (
-    items: { key: string; label: string; active: boolean; onToggle: () => void }[],
+    items: {
+      key: string
+      label: string
+      active: boolean
+      onToggle: () => void
+      /** 行尾展示位（工具清单用它摆「系统 / 插件 / MCP」来源标签；技能与 MCP 面板不用） */
+      tag?: React.ReactNode
+    }[],
     options: {
       empty: string
       placeholder: string
@@ -1664,6 +1704,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             filtered.map((item) => (
               <button key={item.key} type="button" className="hmm-item" onClick={item.onToggle}>
                 <span className="hmm-item-label">{item.label}</span>
+                {item.tag}
                 {item.active ? <RiCheckLine size={14} className="hmm-item-check" /> : null}
               </button>
             ))
@@ -1677,6 +1718,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     toolCatalog.map((tool) => ({
       key: tool.name,
       label: tool.label || tool.name,
+      // 名称最右：系统 / 插件 / MCP（用户口径 2026-11-27「加一个标签区分系统工具还是插件工具」）
+      tag: <ToolSourceTag source={tool.source} />,
       active: selectedTools.includes(tool.name),
       onToggle: () => toggleTool(tool.name)
     })),
@@ -2241,13 +2284,19 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           .harness-model-menu .hmm-item.is-focused { background: var(--hmm-hover); }
           .harness-model-menu .hmm-item.is-active { color: var(--hmm-accent); }
           .harness-model-menu .hmm-item-label {
-            flex: 1;
+            /* 名称后面紧跟来源标签，所以不抢剩余宽度；剩下的空间留给行尾勾选 */
+            flex: 0 1 auto;
             min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
           }
-          .harness-model-menu .hmm-item-check { flex-shrink: 0; color: var(--hmm-accent); }
+          .harness-model-menu .hmm-item-check {
+            flex-shrink: 0;
+            /* 行尾勾选贴右：名称 + 标签是左对齐的一组（用户口径 2026-11-27「标签要放到名称后面」） */
+            margin-left: auto;
+            color: var(--hmm-accent);
+          }
           .harness-model-menu .hmm-empty,
           .harness-model-menu .hmm-note {
             padding: 8px 10px;

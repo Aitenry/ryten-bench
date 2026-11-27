@@ -25,6 +25,11 @@ import {
 export interface McpResourceOps {
   /** 当前已连接的服务器名（配置名） */
   servers: () => string[]
+  /**
+   * 已连接且**声明了 resources 能力**的服务器名。
+   * 缺省视为「全都支持」（兼容旧注入/离线测试）；运行期由 mcp.ts 提供真实清单。
+   */
+  resourceCapableServers?: () => string[]
   listResources: (
     server: string,
     cursor?: string
@@ -41,21 +46,28 @@ export interface McpResourceOps {
  *
  * 未连接任何服务器 / 服务器名写错时直接返回可操作提示，不进入网络调用；服务器返回的
  * 内容按「文本 + 可选图片」投影——图片走与 read_image 相同的工具图像通道。
+ *
+ * `allowedServers` 是**本轮启用的服务器**：资源工具只允许读这几台（勾了 A 不能顺手读 B）。
+ * 缺省不限制（离线测试/旧调用）；运行期由 `builders.ts` 传「勾选 ∩ 声明了 resources」的清单，
+ * 一台都没有时干脆不构造这三个工具。
  */
 export function buildMcpResourceTools(
   ops: McpResourceOps,
-  texts: McpToolTexts
+  texts: McpToolTexts,
+  allowedServers?: string[]
 ): StructuredToolInterface[] {
+  const allowed = allowedServers ? new Set(allowedServers) : null
 
   /** 服务器名校验：返回 null 表示可用，否则是给模型看的提示文案 */
   const serverError = (server: string): string | null => {
-    let servers: string[] = []
+    let connected: string[] = []
     try {
-      servers = ops.servers()
+      connected = ops.servers()
     } catch {
-      servers = []
+      connected = []
     }
-    return serverErrorMessage(texts, server, servers)
+    const visible = allowed ? connected.filter((name) => allowed.has(name)) : connected
+    return serverErrorMessage(texts, server, connected, allowed ? visible : undefined)
   }
 
   const failureText = (server: string, err: unknown): string =>
@@ -82,7 +94,7 @@ export function buildMcpResourceTools(
       description:
         'List the resources an MCP server exposes (URIs that can be read as documents, data or images). Use the optional cursor from a previous result to continue when the server paginates.',
       schema: z.object({
-        server: z.string().describe('Connected MCP server name, exactly as configured'),
+        server: z.string().describe('MCP server name enabled for this turn, exactly as configured'),
         cursor: z.string().optional().describe('Pagination cursor returned by a previous call')
       })
     }
@@ -106,7 +118,7 @@ export function buildMcpResourceTools(
       description:
         'List the parameterized resource URI templates an MCP server exposes, then expand a template and read the concrete URI with read_mcp_resource.',
       schema: z.object({
-        server: z.string().describe('Connected MCP server name, exactly as configured'),
+        server: z.string().describe('MCP server name enabled for this turn, exactly as configured'),
         cursor: z.string().optional().describe('Pagination cursor returned by a previous call')
       })
     }
@@ -137,7 +149,7 @@ export function buildMcpResourceTools(
       description:
         'Read one MCP resource by URI (taken from list_mcp_resources or from an expanded template). Text content is returned inline; images become viewable attachments; other binary content is reported by type and size.',
       schema: z.object({
-        server: z.string().describe('Connected MCP server name, exactly as configured'),
+        server: z.string().describe('MCP server name enabled for this turn, exactly as configured'),
         uri: z.string().describe('Resource URI, as returned by list_mcp_resources')
       })
     }
