@@ -4,8 +4,9 @@ import { PGlite } from '@electric-sql/pglite'
 import * as fs from 'fs/promises'
 import logger from 'electron-log'
 
-logger.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}'
-logger.transports.file.fileName = 'database.log'
+// 注意：不要在数据库模块里改 `logger.transports.file.fileName`。
+// electron-log 是全进程单例，这里若再设一次（历史上曾设成 database.log），
+// 最终落盘文件会取决于模块求值顺序；统一由 src/main/index.ts 配置 main.log。
 
 /**
  * 数据库数据目录（备份/重建时由启动流程使用）。

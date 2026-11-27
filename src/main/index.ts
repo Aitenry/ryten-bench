@@ -40,6 +40,9 @@ if (!gotTheLock) {
 
 logger.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}'
 logger.transports.file.fileName = 'main.log'
+// 日志轮转：electron-log 默认 1MB + 单份 .old，长时间运行会把上一次崩溃现场挤出窗口。
+// 放宽到 5MB（仍保留一份 .old，总量有界），保证崩溃栈/错误上下文至少能留最近一轮。
+logger.transports.file.maxSize = 5 * 1024 * 1024
 
 // 崩溃转储本地收集（修复：渲染进程崩溃后只有 exitCode、无 dump 可查根因）。
 // 仅落盘不上传：dumps 保存于 userData/Crashpad/reports
