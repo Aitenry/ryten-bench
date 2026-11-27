@@ -206,7 +206,10 @@ export const zhCNFsToolTexts = {
       /** 命令里出现工作区以外的路径 */
       outsidePath: '命令里出现工作区以外的路径：{{evidence}}',
       /** 命令里出现危险操作 */
-      riskyCommand: '命令里出现危险操作：{{evidence}}'
+      riskyCommand: '命令里出现危险操作：{{evidence}}',
+      /** 插件工坊工具会构建/在主进程执行模型写的代码 */
+      codeExec:
+        '这个插件工坊工具会构建或在主进程执行模型写的代码，需要你确认后才能继续。'
     },
     escalation: {
       invalidMode:
@@ -378,7 +381,9 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
       readOnlyExternal:
         'Current permission is "read only": this external tool (MCP / plugin) cannot be verified as read-only.',
       outsidePath: 'Command references a path outside the workspace: {{evidence}}',
-      riskyCommand: 'Command contains a risky operation: {{evidence}}'
+      riskyCommand: 'Command contains a risky operation: {{evidence}}',
+      codeExec:
+        'This plugin workshop tool builds or runs code authored by the model inside the main process; it needs your approval.'
     },
     escalation: {
       invalidMode:

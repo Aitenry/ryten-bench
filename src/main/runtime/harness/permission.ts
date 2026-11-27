@@ -71,9 +71,12 @@ export function isStrictlyWider(next: PermissionMode, current: PermissionMode): 
  * - `read`     只读/无副作用（读文件、检索、计划清单、目标、后台任务、提问、记忆读写…）；
  * - `write`    写工作区文件（虚拟路径本身已被挂载表约束在工作区内）；
  * - `exec`     执行 shell 命令（唯一能碰到工作区之外的能力）；
+ * - `code`     **会构建/执行「模型写的代码」**（插件工坊的 build/verify/publish：
+ *              verify 会在主进程里 `require` 模型产出的 `main.cjs` 并执行 `install`，
+ *              build/publish 也会把它装进应用启用）——受限档一律要用户确认；
  * - `external` 语义未知的外部工具（MCP 服务器 / 插件贡献的工具）——无法判定它是否只读。
  */
-export type ToolAccess = 'read' | 'write' | 'exec' | 'external'
+export type ToolAccess = 'read' | 'write' | 'exec' | 'code' | 'external'
 
 /** 写类工具（工作区内写入由挂载表兜底，权限面只管「这个档位允不允许写」） */
 const WRITE_TOOLS = new Set([
@@ -85,8 +88,21 @@ const WRITE_TOOLS = new Set([
   'terminal_open',
   'terminal_send',
   // PTC：模型写的 JS 在进程内执行（工具层已限制只用 danger 档）
-  'run_code'
+  'run_code',
+  // 插件工坊：草稿读写发生在工坊自己的目录，但仍属于「写」，只读档应拒绝
+  'plugin_draft'
 ])
+
+/**
+ * 会构建/执行「模型写的代码」的工具（插件工坊）。
+ *
+ * 为什么不能按 `external`（未知工具）放行：`plugin_verify` 会对草稿产物的
+ * `main.cjs` 执行 `require` + `install(ctx)`，即**在主进程以完整用户权限执行模型写的
+ * 代码**；`plugin_build` / `plugin_publish` 则构建并把它装进应用启用。旧分类下它们
+ * 既不在 WRITE_TOOLS 也不在 READ_TOOLS，落进 `external`，在默认 `workspace-write`
+ * 档被判成 allow——等于绕过该档位本应生效的隔离。这里显式要求用户逐次批准。
+ */
+const CODE_EXEC_TOOLS = new Set(['plugin_build', 'plugin_verify', 'plugin_publish'])
 
 /** 执行类工具 */
 const EXEC_TOOLS = new Set(['execute'])
@@ -179,6 +195,7 @@ const READ_TOOLS = new Set([
 
 /** 按名字判定工具类别；未知名字落 `external`（MCP/插件工具走这条） */
 export function classifyTool(name: string): ToolAccess {
+  if (CODE_EXEC_TOOLS.has(name)) return 'code'
   if (WRITE_TOOLS.has(name)) return 'write'
   if (EXEC_TOOLS.has(name)) return 'exec'
   if (READ_TOOLS.has(name)) return 'read'
@@ -363,7 +380,12 @@ export function inspectCommand(command: string, workspaceRoot?: string): Command
 
 /** 拒绝 / 需要审批的原因码（文案由调用方本地化） */
 export type DenyReason =
-  'read-only-write' | 'read-only-exec' | 'read-only-external' | 'outside-path' | 'risky-command'
+  | 'read-only-write'
+  | 'read-only-exec'
+  | 'read-only-external'
+  | 'outside-path'
+  | 'risky-command'
+  | 'code-exec'
 
 /** 判定动作 */
 export type PermissionAction = 'allow' | 'approve' | 'deny'
@@ -392,11 +414,11 @@ export interface CallContext {
  *
  * 决策表（与 DSH 的沙箱模式 × 审批策略组合一致）：
  *
- * | 档位 \ 类别 | read | write | exec（安全命令） | exec（危险命令） | external |
- * |---|---|---|---|---|---|
- * | read-only        | 放行 | 拒绝+升权提示 | 放行 | 拒绝+升权提示 | 弹窗 |
- * | workspace-write  | 放行 | 放行 | 放行 | **弹窗** | 放行 |
- * | danger-full-access | 放行 | 放行 | 放行 | 放行 | 放行 |
+ * | 档位 \ 类别 | read | write | exec（安全命令） | exec（危险命令） | code（构建/执行模型写的代码） | external |
+ * |---|---|---|---|---|---|---|
+ * | read-only        | 放行 | 拒绝+升权提示 | 放行 | 拒绝+升权提示 | 拒绝+升权提示 | 弹窗 |
+ * | workspace-write  | 放行 | 放行 | 放行 | **弹窗** | **弹窗** | 放行 |
+ * | danger-full-access | 放行 | 放行 | 放行 | 放行 | 放行 | 放行 |
  *
  * read-only 之所以是「拒绝 + 升权提示」而不是直接弹窗：档位是用户明确选的「别碰」，
  * 每次越界都弹窗会变成噪音；模型可以按提示用同一次调用申请升权，那时才弹窗（DSH 同款）。
@@ -411,6 +433,15 @@ export function evaluateCall(input: CallContext): Verdict {
 
   if (access === 'read') {
     return { action: 'allow', effectiveMode: mode, access }
+  }
+
+  if (access === 'code') {
+    if (mode === 'read-only') {
+      return { action: 'deny', reason: 'read-only-exec', effectiveMode: mode, access }
+    }
+    // plugin_* 会构建/装载模型写的代码：受限档下必须逐次让用户确认，
+    // 不能因为「不是 execute 工具」就在 workspace-write 档静默放行。
+    return { action: 'approve', reason: 'code-exec', effectiveMode: mode, access }
   }
 
   if (access === 'write') {

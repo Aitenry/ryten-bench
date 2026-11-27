@@ -116,6 +116,8 @@ function reasonText(code: DenyReason, evidence?: string): string {
       return tr.reason.readOnlyExternal
     case 'outside-path':
       return mainFormat(tr.reason.outsidePath, { evidence: evidence ?? '' })
+    case 'code-exec':
+      return tr.reason.codeExec
     case 'risky-command':
     default:
       return evidence ? mainFormat(tr.reason.riskyCommand, { evidence }) : tr.reason.riskyCommand
