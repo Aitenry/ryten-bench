@@ -117,8 +117,8 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Sub-agents & background agents** — named agents with their own system prompt, tool selection
   and memory directory; the main agent can delegate through a task tool, and background agents run
   in parallel with a merged "team" entry in the top bar that summarises subagents and shared tasks.
-  Agents can be configured in Settings → Agents, or **built by the main agent itself** through an
-  `agent_create` tool (validated and persisted to the workspace, editable in Settings, usable by
+  Agents can be configured in More → Agents, or **built by the main agent itself** through an
+  `agent_create` tool (validated and persisted to the workspace, editable in More → Agents, usable by
   `task` in the same turn). Opening a background agent from that entry (or from its "dispatched"
   card in the transcript) switches the conversation pane to its **live streaming transcript** — same
   message rendering and tool cards as the main conversation, breadcrumb and one click back to the
@@ -175,7 +175,8 @@ from the hub or from a local package, and both paths end in the same host instal
   never modified.
 - **Deliverables** — a `present` tool lets the model declare the finished files of a turn (1–4
   workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
-  each file in the workspace panel. Optional tool, enabled under Settings → Agents.
+  each file in the workspace panel. Optional tool: pick it under the chat input (it is off until
+  selected there, like every other tool).
 - **Conversation recall** — `session_search` searches every conversation of the workspace for a
   literal keyword and returns the newest hits (topic id/title, role, time, a snippet around the
   match); `conversation_list` lists the most recent conversations (id, title, last update, archived
@@ -246,8 +247,8 @@ from the hub or from a local package, and both paths end in the same host instal
   **Settings → Web search**: the keyless built-in search (default fallback), DeepSeek's search API
   and Tavily (official SDK). Provider keys are AES-256-GCM encrypted with the machine key and only
   ever shown as a mask (first 6 + last 6); the default provider, automatic fallback and "request
-  page content" behaviour are global settings. Both tools are off until selected under
-  Settings → Agents.
+  page content" behaviour are global settings. Both tools are off until selected under the chat
+  input (or in a scheduled task).
 - **Document reading** — `read_document` extracts text so Office attachments stop being binary
   black boxes: Word (`.docx`) plain text, Excel (`.xlsx`) every sheet as tab-separated rows,
   PowerPoint (`.pptx`) text per slide, plus plain-text formats (`csv`/`tsv`/`md`/`txt`/`json`/`yaml`).
