@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 持久终端会话语义层：真正启动长驻 shell（pwsh / cmd / bash）并按完成标记切分输出。
  *
  * 安全边界（见 `docs/terminal-sandbox-design-2026-11.md`）：**只允许在
@@ -305,6 +305,45 @@ export class TerminalSessionManager {
       text,
       truncated: drained.truncated,
       droppedChars: drained.dropped,
+      binary: looksBinary(text)
+    }
+  }
+
+  /**
+   * 只读快照（用户侧终端面板轮询用）：返回最近 maxChars 的合并输出，**不消费**未读缓冲，
+   * 因此不会抢走模型 `terminal_read` 该读的内容；同时带回会话存活与 cwd 供面板展示。
+   */
+  peek(
+    sessionId: string,
+    maxChars: number = MAX_RESULT_CHARS
+  ):
+    | {
+        ok: true
+        sessionId: string
+        alive: boolean
+        shell: TerminalShell
+        cwd: string
+        createdAt: number
+        text: string
+        truncated: boolean
+        droppedChars: number
+        binary: boolean
+      }
+    | { ok: false; error: TerminalErrorCode } {
+    const session = this.sessions.get(sessionId)
+    if (!session) return { ok: false, error: 'session-not-found' }
+    const snap = session.ring.snapshot(maxChars)
+    const text = stripSentinelLines(stripAnsi(snap.text))
+    return {
+      ok: true,
+      sessionId: session.id,
+      alive: session.alive,
+      shell: session.shell.kind,
+      cwd: session.cwd,
+      createdAt: session.createdAt,
+      text,
+      truncated: snap.truncated,
+      droppedChars: snap.dropped,
       binary: looksBinary(text)
     }
   }

@@ -109,6 +109,32 @@ export interface McpResourceContentEntry {
   blob?: string
 }
 
+/** 持久终端会话（与主进程 terminal-sessions 的视图一致） */
+export type TerminalShellKind = 'pwsh' | 'cmd' | 'sh'
+
+export interface TerminalSessionView {
+  sessionId: string
+  shell: TerminalShellKind
+  cwd: string
+  createdAt: number
+  alive: boolean
+  unreadChars: number
+}
+
+/** 一次终端输出快照（非消费；面板轮询用） */
+export interface TerminalPeekView {
+  ok: true
+  sessionId: string
+  alive: boolean
+  shell: TerminalShellKind
+  cwd: string
+  createdAt: number
+  text: string
+  truncated: boolean
+  droppedChars: number
+  binary: boolean
+}
+
 /** 定时任务视图（设置 →「定时任务」页；字段与主进程 schedule-store 一致） */
 export interface ScheduleView {
   id: string
@@ -154,9 +180,7 @@ export interface ScheduleRunView {
 }
 
 /** 新建/编辑结果：预期失败不抛错，`error` 是稳定代码（页面负责翻译） */
-export type ScheduleMutationResult =
-  | { ok: true; task: ScheduleView }
-  | { ok: false; error: string }
+export type ScheduleMutationResult = { ok: true; task: ScheduleView } | { ok: false; error: string }
 
 /** 联网搜索服务 id */
 export type SearchProviderId = 'builtin' | 'deepseek' | 'tavily'
@@ -433,10 +457,13 @@ export const harnessApi = {
       targetWorkspaceId?: number | null
       targetMemoryScope?: string | null
       agentConfig?: AgentSelectionView | null
-    }) => invoke('harness:harness-schedule-update-full', payload) as Promise<ScheduleMutationResult>,
+    }) =>
+      invoke('harness:harness-schedule-update-full', payload) as Promise<ScheduleMutationResult>,
     // 会话级运行选择（输入框下面的工具/技能/MCP 选择，按话题持久化）
     getTopicAgentSelection: (topicId: number) =>
-      invoke('harness:harness-topic-agent-selection-get', { topicId }) as Promise<AgentSelectionView | null>,
+      invoke('harness:harness-topic-agent-selection-get', {
+        topicId
+      }) as Promise<AgentSelectionView | null>,
     setTopicAgentSelection: (topicId: number, selection: AgentSelectionView) =>
       invoke('harness:harness-topic-agent-selection-set', { topicId, selection }) as Promise<
         { ok: true; selection: AgentSelectionView } | { ok: false; error: string }
@@ -466,7 +493,9 @@ export const harnessApi = {
     setSearchBehaviors: (patch: { autoFallback?: boolean; includeContent?: boolean }) =>
       invoke('harness:harness-search-behavior-set', patch) as Promise<{ ok: boolean }>,
     testSearchProvider: (provider: SearchProviderId) =>
-      invoke('harness:harness-search-provider-test', { provider }) as Promise<SearchProviderTestResult>,
+      invoke('harness:harness-search-provider-test', {
+        provider
+      }) as Promise<SearchProviderTestResult>,
 
     // 后台任务系统（jobs）
     onJobsUpdated: (
@@ -902,8 +931,7 @@ export const harnessApi = {
       invoke('harness:mcp-servers-import-file') as Promise<{
         imported: string[]
         failed: { name: string; reason: string }[]
-      } | null>,
-    /** 勾选/取消一台服务器带来的全部工具（写入 mainAgent.mcpTools） */
+      } | null> /** 勾选/取消一台服务器带来的全部工具（写入 mainAgent.mcpTools） */,
     setToolsEnabled: (toolNames: string[]) =>
       invoke('harness:mcp-tools-set', toolNames) as Promise<boolean>,
     /* ── 资源浏览（只读，用户侧入口；模型侧对应 list_mcp_resources 等工具） ── */
@@ -925,6 +953,56 @@ export const harnessApi = {
     /** 目录变化（连上/断开/增删工具）：MCP 页与智能体页的工具下拉都据此刷新 */
     onCatalogUpdated: (callback: () => void): (() => void) =>
       on('harness:harness-mcp-updated', () => callback())
+  },
+
+  /**
+   * 持久终端（右侧面板）。
+   *
+   * 与模型的 terminal_* 工具共用同一个会话管理器；`open` / `send` 只在完全权限档执行
+   * （主进程会再校验一次，渲染层只是提前把按钮禁用），`peek` / `close` 永远可用。
+   */
+  terminal: {
+    list: (topicId: number) =>
+      invoke('harness:terminal-list', { topicId }) as Promise<{
+        ok: boolean
+        error?: string
+        sessions: TerminalSessionView[]
+        maxSessions: number
+      }>,
+    open: (payload: { topicId: number; cwd?: string; shell?: TerminalShellKind }) =>
+      invoke('harness:terminal-open', payload) as Promise<
+        | { ok: true; session: TerminalSessionView; initOutput: string }
+        | { ok: false; error: string; detail?: string }
+      >,
+    send: (payload: { topicId: number; sessionId: string; command: string; waitMs?: number }) =>
+      invoke('harness:terminal-send', payload) as Promise<
+        | {
+            ok: true
+            result: {
+              output: string
+              timedOut: boolean
+              binary: boolean
+              unreadChars: number
+            }
+          }
+        | { ok: false; error: string; detail?: string }
+      >,
+    peek: (payload: { sessionId: string; maxChars?: number }) =>
+      invoke('harness:terminal-peek', payload) as Promise<
+        TerminalPeekView | { ok: false; error: string }
+      >,
+    close: (sessionId: string) =>
+      invoke('harness:terminal-close', { sessionId }) as Promise<{
+        ok: boolean
+        found?: boolean
+        exitCode?: number | null
+        error?: string
+      }>,
+    closeTopic: (topicId: number) =>
+      invoke('harness:terminal-close-topic', { topicId }) as Promise<{
+        ok: boolean
+        error?: string
+      }>
   },
 
   /* ── 工作区文件与改动审查（AI 改动复核 + 文件浏览器） ── */

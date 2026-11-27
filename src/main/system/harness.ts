@@ -1,4 +1,4 @@
-﻿import { app } from 'electron'
+import { app } from 'electron'
 import { join } from 'path'
 import logger from 'electron-log'
 import { awaitInitialized } from '../database/instance'
@@ -45,6 +45,7 @@ import { workshopIpcHandlers } from '../ipc/harness/workshop'
 import { installWorkshopHost, uninstallWorkshopHost } from '../workshop/wiring'
 import { configureWorkshopDirReleaseHook } from '../workshop/dir-release'
 import { mcpIpcHandlers } from '../ipc/harness/mcp'
+import { terminalIpcHandlers } from '../ipc/harness/terminal'
 import {
   configureMcp,
   closeAllMcp,
@@ -138,7 +139,9 @@ export function startHarness(): void {
     registerIpcHandlers(workspaceIpcHandlers()),
     registerIpcHandlers(agentIpcHandlers()),
     registerIpcHandlers(workshopIpcHandlers()),
-    registerIpcHandlers(mcpIpcHandlers())
+    registerIpcHandlers(mcpIpcHandlers()),
+    // 持久终端的用户侧面板（与模型 terminal_* 工具共用同一会话管理器）
+    registerIpcHandlers(terminalIpcHandlers())
   ]
 
   // ── 启动接线：目录、工坊、MCP、文件监听 ─────────────────────────────────

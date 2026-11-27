@@ -95,6 +95,10 @@ from the hub or from a local package, and both paths end in the same host instal
   so unpinning or unarchiving puts the conversation back where it was.
   Rename / fork / archive are also bound to `Ctrl+Alt+G`, `Ctrl+Alt+F` and `Ctrl+Shift+A`
   (`⌘` on macOS) while the assistant page is open.
+  The search button in the sidebar header searches the current workspace by **conversation title
+  and message body**: title matches are listed as conversations, body matches show the topic plus a
+  snippet around the keyword; clicking a body match opens that conversation, scrolls to the exact
+  message (loading older pages when needed) and flashes it briefly.
 - **Streaming conversation** — token streaming with a typewriter renderer, reasoning (thinking)
   display, tool-call cards with an on-demand detail viewer, and a per-turn usage panel (provider /
   model, cached vs. uncached input, cache reads and writes, output, reasoning share, call count).
@@ -106,8 +110,9 @@ from the hub or from a local package, and both paths end in the same host instal
   (active / paused / blocked / complete) and round progress, and automatic continuations are
   rendered as their own rounds in the transcript. Typing `/` as the first character of the
   composer opens the **command menu** (a grouped "Add" list in the style of the reference:
-  icon, title, command alias and description): **Goal** opens a dialog that creates, edits,
-  pauses, resumes, completes or clears the objective and its round limit.
+  icon, title, command alias and description): **Goal** turns the composer into an objective
+  input with a **round-limit** field (empty = the default 256), and the goal bar's `⋯` menu
+  pauses, resumes, completes or clears the objective.
 - **Plan mode** — the same command menu's **Plan** entry toggles a per-topic mode (persisted
   across restarts). While it is active the system prompt asks the model to explore and design
   first, then submit the completed plan through an `exit_plan_mode` tool; the plan opens in a
@@ -140,6 +145,14 @@ from the hub or from a local package, and both paths end in the same host instal
   marker, splits output incrementally, keeps a bounded 256 KB ring buffer and terminates the whole
   process tree on close, on 10 minutes of idleness and on app quit. Because the shell is not
   sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
+  The same sessions are reachable from a **right-side terminal panel** (top-bar terminal button,
+  docked in the same column as the workspace panel): sessions opened by the model appear as tabs,
+  clicking the terminal surface types directly into it (no separate command box — Enter sends,
+  Backspace edits), output follows the app theme, and the panel reads non-destructively so the
+  model's `terminal_read` still sees the same unread output. The panel belongs to the human and is
+  **not limited by the conversation's permission mode** — only the model-facing
+  `terminal_open`/`terminal_send` tools require full access. When a conversation has no workspace
+  (or none is selected) the panel opens in the user's home directory.
 - **Programmable tool calls (PTC)** — `run_code` runs a JavaScript snippet in a `node:vm` context
   where `await tools.<name>(args)` calls the read-only tools (`read_file`, `grep`, `glob`, `ls`,
   `read_image`, `web_fetch`, `web_search`, `session_search`, …), so the model can loop, filter and
@@ -177,7 +190,8 @@ from the hub or from a local package, and both paths end in the same host instal
   workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
   each file in the workspace panel. Optional tool: pick it under the chat input (it is off until
   selected there, like every other tool).
-- **Conversation recall** — `session_search` searches every conversation of the workspace for a
+- **Conversation recall** — the sidebar search covers conversation titles and message bodies for
+  humans; for the model, `session_search` searches every conversation of the workspace for a
   literal keyword and returns the newest hits (topic id/title, role, time, a snippet around the
   match); `conversation_list` lists the most recent conversations (id, title, last update, archived
   flag) and `conversation_read` then reads the last N messages of a topic. All are read-only and
@@ -238,7 +252,9 @@ from the hub or from a local package, and both paths end in the same host instal
   to the Tools and Skills pickers) or in a scheduled task; the tools then join the same tool-call loop as the
   built-in and plugin tools. Connected servers' **resources** are readable too:
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` return text inline and
-  turn image resources into viewable attachments. Managed under More → MCP.
+  turn image resources into viewable attachments. Managed under More → MCP, where each server card
+  also has a **resource browser**: it lists that server's resources and resource templates and
+  previews text or image content in place (same read-only calls as the tools).
 - **Web access** — two optional tools join the same tool loop: `web_fetch` retrieves one HTTP(S)
   URL and returns its readable text (HTML is reduced to Markdown, JSON/plain text pass through;
   local and private addresses are refused, responses are capped at 2 MB and 24k characters) and
@@ -928,4 +944,3 @@ flowchart LR
 ## License
 
 [MIT](./LICENSE) © [Aitenry](https://github.com/Aitenry)
-

@@ -176,10 +176,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       skillsAria: 'Choose skills',
       skillsEmpty: 'No skills available',
       skillsSearchPlaceholder: 'Search skills',
-    mcpLabel: 'MCP',
-    mcpAria: 'Choose MCP servers',
-    mcpEmpty: 'No MCP servers yet — add one under More → MCP',
-    mcpSearchPlaceholder: 'Search MCP servers',
+      mcpLabel: 'MCP',
+      mcpAria: 'Choose MCP servers',
+      mcpEmpty: 'No MCP servers yet — add one under More → MCP',
+      mcpSearchPlaceholder: 'Search MCP servers',
       pickerNoMatch: 'No matches',
       pickerSaveFailed: 'Failed to save, please retry',
       /** "/" command menu (opened by a leading slash in the composer; Goal / Plan rows) */
@@ -330,7 +330,8 @@ export const harnessEnUS: typeof harnessZhCN = {
         'Removes the sandbox ACEs left on the workspace ({{path}}); only meaningful for the Windows backend',
       cleanupNoWorkspace: 'No workspace selected yet — nothing to clean',
       cleanupDone: 'Workspace sandbox grants cleaned',
-      cleanupFailed: 'Failed to clean the sandbox grants (backend unsupported or workspace unavailable)'
+      cleanupFailed:
+        'Failed to clean the sandbox grants (backend unsupported or workspace unavailable)'
     },
     approval: {
       title: 'Your approval is required',
@@ -363,7 +364,42 @@ export const harnessEnUS: typeof harnessZhCN = {
     header: {
       toggleSidebar: 'Sidebar',
       togglePanel: 'Workspace panel',
+      toggleTerminal: 'Terminal',
       generating: 'Generating'
+    },
+    /** Inline propose_action confirmation (same styling as sandbox approval) */
+    proposal: {
+      title: 'Next step',
+      subtitle:
+        'The model suggested actions; pick one to continue, or type your own instruction below',
+      fallbackQuestion: 'Continue?',
+      inlineHint: 'Your choice is sent as the next message',
+      picked: 'Picked: {{label}}'
+    },
+    /** Right-side persistent terminal panel (human UI) */
+    terminalPanel: {
+      title: 'Terminal',
+      runningCount: '{{count}} running',
+      newSession: 'New terminal',
+      closeSession: 'Close current terminal',
+      hidePanel: 'Hide terminal panel',
+      loading: 'Loading terminal sessions…',
+      empty: 'No terminal sessions yet',
+      emptyHint:
+        'Once opened, click the terminal area and type directly (Enter sends, Backspace deletes).',
+      notFullAccess: 'Full-access permission mode is required (switch it in the composer)',
+      stillRunning:
+        'Command still running; output keeps refreshing. Press Enter again once it finishes',
+      exited: 'Session exited',
+      truncated: '(earlier output scrolled out of the buffer)',
+      binary: '(output looks binary; some characters were omitted)',
+      busy: 'The previous command is still running — wait for it to finish',
+      emptyCommand: 'Command cannot be empty',
+      tooLong: 'Command too long (8000 characters max)',
+      tooMany: 'At most 3 terminals per conversation',
+      noShell: 'No usable shell found (pwsh / cmd / bash)',
+      noWorkspace: 'This conversation has no usable workspace directory yet',
+      failed: 'Terminal operation failed, please retry'
     },
     messageArea: {
       scrollToBottom: 'Back to bottom',
@@ -426,7 +462,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       changedFilesTip:
         '{{files}} file(s) changed in this step · {{pending}} awaiting review (click to diff)',
       toolOpenFile: 'Open file',
-    deliveredFiles: 'Delivered files',
+      deliveredFiles: 'Delivered files',
       toolRevealDir: 'Reveal in explorer',
       toolViewDetail: 'View result details',
       toolFailed: 'Failed',
@@ -1151,7 +1187,8 @@ export const harnessEnUS: typeof harnessZhCN = {
   /* ── Schedules page (sidebar) ── */
   schedulesPage: {
     title: 'Schedules',
-    description: 'Let the assistant run tasks in a chosen conversation on a schedule. Tasks run only while the app is running; missed runs are skipped, not replayed.',
+    description:
+      'Let the assistant run tasks in a chosen conversation on a schedule. Tasks run only while the app is running; missed runs are skipped, not replayed.',
     refresh: 'Refresh',
     newTask: 'New task',
     filterAll: 'All',
@@ -1192,9 +1229,11 @@ export const harnessEnUS: typeof harnessZhCN = {
     conversationUnknown: 'Conversation: {{id}}',
     editorNewTitle: 'New scheduled task',
     editorEditTitle: 'Edit scheduled task',
-    editorDesc: 'When due, the assistant starts a new turn in the chosen conversation. Tasks run only while the app is running; missed runs are skipped.',
+    editorDesc:
+      'When due, the assistant starts a new turn in the chosen conversation. Tasks run only while the app is running; missed runs are skipped.',
     fieldConversation: 'Conversation',
-    fieldConversationHint: 'The task runs in a conversation of the chosen mode, regardless of the mode currently open.',
+    fieldConversationHint:
+      'The task runs in a conversation of the chosen mode, regardless of the mode currently open.',
     fieldMode: 'Mode',
     modeChat: 'Chat',
     modeWork: 'Work',
@@ -1207,7 +1246,8 @@ export const harnessEnUS: typeof harnessZhCN = {
     fieldToolsHint: 'Tools: empty = follow conversation/default',
     fieldSkillsHint: 'Skills: empty = none enabled',
     fieldMcpHint: 'MCP servers: empty = none enabled',
-    fieldAgentConfigHint: 'Applies only to turns triggered by this task; empty = follow the target conversation.',
+    fieldAgentConfigHint:
+      'Applies only to turns triggered by this task; empty = follow the target conversation.',
     fieldTool: 'Tools',
     fieldSkill: 'Skills',
     fieldMcp: 'MCP',
@@ -1223,8 +1263,10 @@ export const harnessEnUS: typeof harnessZhCN = {
     fieldMinutes: 'Interval (minutes)',
     fieldDateTime: 'Date & time',
     fieldPrompt: 'Task prompt',
-    fieldPromptHint: 'Describe the goal, where to write the result and the expected format; nobody will be there to answer follow-ups.',
-    promptPlaceholder: 'e.g. Summarise this week\'s commits and todos into the weekly report doc, then list three takeaways.',
+    fieldPromptHint:
+      'Describe the goal, where to write the result and the expected format; nobody will be there to answer follow-ups.',
+    promptPlaceholder:
+      "e.g. Summarise this week's commits and todos into the weekly report doc, then list three takeaways.",
     previewNext: 'Next run: {{time}}',
     create: 'Create task',
     save: 'Save changes',
@@ -1253,7 +1295,8 @@ export const harnessEnUS: typeof harnessZhCN = {
   /* ── Settings → Web search ── */
   searchSettings: {
     pageTitle: 'Web search',
-    pageDescription: 'Choose the search service used by the assistant. Configuration stays on this machine and every search goes through the same interface.',
+    pageDescription:
+      'Choose the search service used by the assistant. Configuration stays on this machine and every search goes through the same interface.',
     sectionServices: 'Search services',
     sectionServicesDesc: 'Pick one default · built-in search is used when nothing is configured',
     sectionBehavior: 'Behavior',
@@ -1269,7 +1312,8 @@ export const harnessEnUS: typeof harnessZhCN = {
     currentDefault: 'Default',
     connected: 'Connected',
     notConfigured: 'Not configured',
-    reuseHint: 'A key for the same vendor is configured under Settings → Model; you can paste the same key here.',
+    reuseHint:
+      'A key for the same vendor is configured under Settings → Model; you can paste the same key here.',
     test: 'Test',
     configure: 'Configure',
     clearKey: 'Clear key',
@@ -1278,14 +1322,16 @@ export const harnessEnUS: typeof harnessZhCN = {
     testSuccess: 'Connected ({{ms}}ms)',
     testFailed: 'Connection failed: {{reason}}',
     autoFallback: 'Fall back to built-in search on failure',
-    autoFallbackHint: 'If the selected service fails or times out (10 seconds), use the built-in search and show a small hint once.',
+    autoFallbackHint:
+      'If the selected service fails or times out (10 seconds), use the built-in search and show a small hint once.',
     includeContent: 'Request page content',
     includeContentHint: 'More complete results, but uses more context and takes longer.',
     saveFailed: 'Failed to save',
     saveSuccess: 'Key saved',
     clearSuccess: 'Key cleared',
     clearConfirmTitle: 'Clear the key for {{name}}?',
-    clearConfirmBody: 'The service will stop working. If it was the default, built-in search is used instead.',
+    clearConfirmBody:
+      'The service will stop working. If it was the default, built-in search is used instead.',
     loadFailed: 'Failed to load search settings: {{reason}}',
     configTitle: 'Configure {{name}}',
     configDesc: 'Paste the key to enable it; it is tested before saving.',

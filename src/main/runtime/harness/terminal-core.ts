@@ -210,6 +210,27 @@ export class OutputRing {
     this.size = 0
     this.droppedChars = 0
   }
+
+  /**
+   * 只读快照：取最近 maxChars 字符，**不消费未读输出**。
+   *
+   * 用户侧终端面板靠轮询刷新输出；如果复用 `drain`，面板会把模型 `terminal_read` 该读的
+   * 内容提前吃掉。这里按「尾部 N 字符」返回，既不移动游标也不重置 dropped 计数。
+   */
+  snapshot(maxChars: number = MAX_OUTPUT_CHARS_PER_READ): {
+    text: string
+    truncated: boolean
+    dropped: number
+  } {
+    const limit = Math.max(1, Math.floor(maxChars))
+    const all = this.chunks.join('')
+    const truncated = all.length > limit
+    return {
+      text: truncated ? all.slice(-limit) : all,
+      truncated,
+      dropped: this.droppedChars
+    }
+  }
 }
 
 /** 输出截断（返回尾部：命令报错通常在最后） */

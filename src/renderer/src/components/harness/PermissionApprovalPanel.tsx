@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 import { theme } from 'antd'
 import { RiShieldKeyholeLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
@@ -137,7 +137,7 @@ const PermissionApprovalPanel: React.FC<PermissionApprovalPanelProps> = ({
   )
 }
 
-const approvalStyles = `
+export const approvalStyles = `
 .inline-approval-wrap { position: relative; }
 .inline-approval { display: flex; flex-direction: column; border: 1px solid; border-radius: 16px; padding: 14px 15px 13px; box-shadow: 0 18px 42px rgba(0,0,0,.32); }
 .inline-approval-head { display: flex; align-items: flex-start; gap: 10px; }

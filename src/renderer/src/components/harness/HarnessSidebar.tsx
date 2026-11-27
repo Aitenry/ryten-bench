@@ -79,8 +79,14 @@ interface HarnessSidebarProps {
   /**
    * 打开一条会话。**会完成把内容放上屏幕这件事**（命中缓存则同步，否则等第一页消息读完），
    * 所以返回 Promise：调用方要先 `await` 它、再切路由，见下面 `onOpenHarness` 的说明。
+   *
+   * 第二个参数是「打开后要定位到的那条对话行」：会话检索点正文命中时传，hooks 会按需
+   * 继续翻页直到把目标消息读进列表（首屏 20 条之外的命中也能滚到位）。
    */
-  onSelectTopic: (topic: HarnessTopicRow) => void | Promise<void>
+  onSelectTopic: (
+    topic: HarnessTopicRow,
+    options?: { focusDialogueId?: number }
+  ) => void | Promise<void>
   onDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   onLoadMoreTopics: () => void
   /** 整表刷新当前活动工作区的会话（置顶/重命名/归档/分叉后让列表与标题立刻跟上） */
@@ -1345,7 +1351,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
    * 跨工作区点开时会晚上一拍。
    */
   const handleOpenTopic = useCallback(
-    async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
+    async (
+      workspaceId: number,
+      topic: HarnessTopicRow,
+      focusDialogueId?: number
+    ): Promise<void> => {
       const isPluginSession = pluginWorkspaceIds.has(workspaceId)
       const isChatSession = !isPluginSession && chatWorkspaceIds.has(workspaceId)
       setMode(isPluginSession ? 'plugin' : isChatSession ? 'chat' : 'work')
@@ -1376,7 +1386,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         } else console.error('Failed to resolve the workspace to switch to:', workspaceId)
       }
       if (isPluginSession) setExpandedWorkspaceId(workspaceId)
-      await onSelectTopic(topic)
+      await onSelectTopic(
+        topic,
+        focusDialogueId != null ? { focusDialogueId } : undefined
+      )
       // 这条会话已经画在屏幕上了，再把主内容区带回对话页（见 onOpenHarness 的说明：
       // 顺序反过来的话，先挂载的 `/harness` 会先画上一条会话，闪一下）
       onOpenHarness()
@@ -2921,7 +2934,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       const workspaceId = searchWorkspaceId ?? activeWorkspaceId ?? topic.workspace_id
       resetSearch()
       if (dialogueId != null) onSetPendingJumpDialogue?.(dialogueId)
-      await handleOpenTopic(workspaceId, topic)
+      await handleOpenTopic(workspaceId, topic, dialogueId)
     },
     [
       activeWorkspaceId,

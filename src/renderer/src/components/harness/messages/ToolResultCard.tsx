@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { Trans, useTranslation } from '@renderer/i18n'
 import {
   RiArrowRightSLine,
@@ -9,7 +9,7 @@ import {
   RiTerminalBoxLine
 } from '@remixicon/react'
 import { ShinyIcon } from '@renderer/components/effects/ShinyText'
-import { Button, Image } from 'antd'
+import { Image } from 'antd'
 
 import { useWorkspaceBridge } from '../../../contexts/harness/workspace-bridge'
 import { formatBytes, TOOL_CARD_ICONS, toolIconFor } from '../../../utils/harness/toolIcons'
@@ -557,12 +557,18 @@ export const ToolImageStrip: React.FC<{
  * 点选后通过 `harness-propose-action` 事件把 reply（缺省为 label）交给会话发送逻辑——
  * 与手动发消息同一条路径（生成中则入队）。点过之后本卡片就地禁用并显示所选文本。
  */
+/**
+ * 动作确认的历史留痕（propose_action 完成后的消息卡片）。
+ *
+ * 2026-11-27 用户口径：确认 UI 要像沙箱授权一样放在**输入框区域**（见 ProposalActionPanel），
+ * 所以消息流里不再放可点按钮——这里只记录模型问过什么、给过哪些选项；真正可操作的
+ * 确认面板由输入区根据「最后一条用户消息之后的最新 propose_action」渲染。
+ */
 export const ProposeActionsCard: React.FC<{
   tool: ToolCall
   isNested?: boolean
   style: ToolCardStyle
 }> = ({ tool, isNested = false, style }) => {
-  const [picked, setPicked] = useState<string | null>(null)
   const input = tool.input as { question?: unknown; actions?: unknown } | undefined
   const question = typeof input?.question === 'string' ? input.question.trim() : ''
   const rawActions = Array.isArray(input?.actions) ? input.actions : []
@@ -577,13 +583,6 @@ export const ProposeActionsCard: React.FC<{
     .slice(0, 4)
   if (actions.length === 0) return null
 
-  const pick = (action: { label: string; reply?: string }): void => {
-    if (picked !== null) return
-    const text = (action.reply ?? action.label).trim()
-    setPicked(text)
-    window.dispatchEvent(new CustomEvent('harness-propose-action', { detail: { text } }))
-  }
-
   return (
     <div
       style={{
@@ -594,25 +593,24 @@ export const ProposeActionsCard: React.FC<{
         maxWidth: 620
       }}
     >
-      {question && (
-        <div style={{ fontSize: 13, color: style.colorTextSecondary }}>{question}</div>
-      )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      {question && <div style={{ fontSize: 13, color: style.colorTextSecondary }}>{question}</div>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {actions.map((action) => (
-          <Button
+          <span
             key={action.label}
-            size="small"
-            disabled={picked !== null}
             title={action.description}
-            onClick={() => pick(action)}
+            style={{
+              fontSize: 12,
+              color: style.colorTextTertiary,
+              border: `1px solid ${style.colorBorderSecondary}`,
+              borderRadius: 7,
+              padding: '2px 9px'
+            }}
           >
             {action.label}
-          </Button>
+          </span>
         ))}
       </div>
-      {picked && (
-        <div style={{ fontSize: 12, color: style.colorTextTertiary }}>✓ {picked}</div>
-      )}
     </div>
   )
 }
@@ -665,10 +663,7 @@ export const PresentedFilesCard: React.FC<{
               minWidth: 0
             }}
           >
-            <RiFileTextLine
-              size={14}
-              style={{ color: style.colorTextSecondary, flexShrink: 0 }}
-            />
+            <RiFileTextLine size={14} style={{ color: style.colorTextSecondary, flexShrink: 0 }} />
             <span
               style={{
                 fontFamily: MONO_FONT,

@@ -124,7 +124,10 @@ export interface UseHarnessHandlersReturn {
   /** 消息分页（当前话题） */
   messagesHasMore: boolean
   messagesLoadingMore: boolean
-  handleSelectTopic: (topic: HarnessTopicRow) => Promise<void>
+  handleSelectTopic: (
+    topic: HarnessTopicRow,
+    options?: { focusDialogueId?: number }
+  ) => Promise<void>
   handleDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   handleCopy: (text: string, id: string) => Promise<void>
   handleSend: () => Promise<void>
@@ -997,8 +1000,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     return () => window.removeEventListener('harness-focus-input', handler)
   }, [])
 
+  /**
+   * 打开一条会话。
+   *
+   * `options.focusDialogueId`：会话检索点「正文命中」时传目标对话行 id。目标可能落在首屏
+   * 20 条之外，这时继续向后翻页（最多 20 页 / 400 条）直到把目标读进列表，交给消息区滚动
+   * 高亮——否则搜索命中了却定位不到，等于链路断在最后一步。
+   */
   const handleSelectTopic = useCallback(
-    async (topic: HarnessTopicRow): Promise<void> => {
+    async (
+      topic: HarnessTopicRow,
+      options?: { focusDialogueId?: number }
+    ): Promise<void> => {
       // 不在加载时禁止切换，允许自由切换
 
       // 用户点开了这条会话 = 刚完成的绿点可以消失了（用户口径 2026-11-23
@@ -1023,8 +1036,11 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       // 归档的会话是只读的：打开只查看历史（输入框隐藏、发送被拒）
       markTopicArchived(Boolean(topic.archived_at))
 
-      // 先尝试从缓存恢复（进行中的会话）
-      const restored = restoreSessionFromCache(topic.id)
+      // 先尝试从缓存恢复（进行中的会话）。
+      // 但「检索命中要定位」时不走缓存早退：缓存里不一定含目标消息，统一按分页重读，
+      // 由下面的翻页逻辑保证目标行进入列表。
+      const restored =
+        options?.focusDialogueId == null ? restoreSessionFromCache(topic.id) : false
       if (restored) {
         // 从缓存恢复，同步 loading 状态
         setIsLoading(isLoadingMapRef.current.get(topic.id) ?? false)
@@ -1043,23 +1059,50 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       setMessagesPage(0)
       setMessagesHasMore(true)
 
+      const toMessage = (d: {
+        id: number
+        role: Message['role']
+        content: string
+        blocks: string | null
+        created_at: string | null
+      }): Message => ({
+        id: String(d.id),
+        role: d.role,
+        content: d.content,
+        blocks: d.blocks ? JSON.parse(d.blocks) : [],
+        // created_at 库列为可空（DEFAULT NOW()），缺失时退回当前时间
+        timestamp: d.created_at ? new Date(d.created_at).getTime() : Date.now(),
+        loading: false
+      })
+
       try {
         const result = await harnessApi.harness.getDialoguesByTopicPaginated(
           topic.id,
           0,
           MESSAGES_PAGE_SIZE
         )
-        const loadedMessages: Message[] = result.items.map((d) => ({
-          id: String(d.id),
-          role: d.role,
-          content: d.content,
-          blocks: d.blocks ? JSON.parse(d.blocks) : [],
-          // created_at 库列为可空（DEFAULT NOW()），缺失时退回当前时间
-          timestamp: d.created_at ? new Date(d.created_at).getTime() : Date.now(),
-          loading: false
-        }))
+        let loadedMessages = result.items.map(toMessage)
+        let loadedPage = 0
+        let hasMore = result.hasMore
+        const focusId = options?.focusDialogueId
+        if (focusId != null && !loadedMessages.some((m) => Number(m.id) === focusId)) {
+          // 目标不在首屏：逐页往回翻（page 0 是最新一页，page+1 更旧），命中即停
+          for (let guard = 0; guard < 20 && hasMore; guard += 1) {
+            const older = await harnessApi.harness.getDialoguesByTopicPaginated(
+              topic.id,
+              loadedPage + 1,
+              MESSAGES_PAGE_SIZE
+            )
+            loadedMessages = [...older.items.map(toMessage), ...loadedMessages]
+            loadedPage += 1
+            hasMore = older.hasMore
+            if (loadedMessages.some((m) => Number(m.id) === focusId)) break
+            if (older.items.length === 0) break
+          }
+        }
         setMessages(loadedMessages)
-        setMessagesHasMore(result.hasMore)
+        setMessagesPage(loadedPage)
+        setMessagesHasMore(hasMore)
       } catch (err) {
         console.error('Failed to load dialogues:', err)
         setMessages([])

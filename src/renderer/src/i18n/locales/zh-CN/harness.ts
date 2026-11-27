@@ -181,10 +181,10 @@ export const harnessZhCN = {
       skillsAria: '选择技能',
       skillsEmpty: '没有可用技能',
       skillsSearchPlaceholder: '搜索技能',
-    mcpLabel: 'MCP',
-    mcpAria: '选择 MCP 服务器',
-    mcpEmpty: '还没有 MCP 服务器，先去「更多 → MCP」添加',
-    mcpSearchPlaceholder: '搜索 MCP 服务器',
+      mcpLabel: 'MCP',
+      mcpAria: '选择 MCP 服务器',
+      mcpEmpty: '还没有 MCP 服务器，先去「更多 → MCP」添加',
+      mcpSearchPlaceholder: '搜索 MCP 服务器',
       /** 工具 / MCP 面板搜索不到时的空态 */
       pickerNoMatch: '无匹配结果',
       pickerSaveFailed: '保存失败，请重试',
@@ -359,7 +359,39 @@ export const harnessZhCN = {
     header: {
       toggleSidebar: '侧边栏',
       togglePanel: '工作区面板',
+      toggleTerminal: '终端',
       generating: '生成中'
+    },
+    /** propose_action 的输入区内联确认（与沙箱授权同一套样式） */
+    proposal: {
+      title: '下一步确认',
+      subtitle: '模型给出了可选动作；选一个继续，或直接在下方输入自己的指令',
+      fallbackQuestion: '要继续吗？',
+      inlineHint: '选择后作为下一条消息发送',
+      picked: '已选择：{{label}}'
+    },
+    /** 右侧持久终端面板（用户侧） */
+    terminalPanel: {
+      title: '终端',
+      runningCount: '运行中 {{count}}',
+      newSession: '新建终端',
+      closeSession: '关闭当前终端',
+      hidePanel: '收起终端面板',
+      loading: '正在读取终端会话…',
+      empty: '还没有终端会话',
+      emptyHint: '打开后点击终端区域即可直接输入命令（Enter 发送，Backspace 删除）。',
+      notFullAccess: '需要「完全权限」权限模式才能开终端（输入框左下角切换）',
+      stillRunning: '命令仍在运行，输出会继续刷新；可按 Enter 等它结束',
+      exited: '会话已结束',
+      truncated: '（更早的输出已滚出缓冲区）',
+      binary: '（输出看起来是二进制内容，已省略部分字符）',
+      busy: '上一条命令还在运行，等它结束后再发送',
+      emptyCommand: '命令不能为空',
+      tooLong: '命令过长（单条上限 8000 字符）',
+      tooMany: '每个会话最多 3 个终端',
+      noShell: '找不到可用的 shell（pwsh / cmd / bash）',
+      noWorkspace: '当前会话还没有可用的工作区目录',
+      failed: '终端操作失败，请重试'
     },
     messageArea: {
       scrollToBottom: '回到底部',
@@ -417,7 +449,7 @@ export const harnessZhCN = {
       changedFiles: '{{count}} 个文件已改',
       changedFilesTip: '这一段改了 {{files}} 个文件 · {{pending}} 处待审查（点击看差异）',
       toolOpenFile: '打开文件',
-    deliveredFiles: '交付文件',
+      deliveredFiles: '交付文件',
       toolRevealDir: '在资源管理器中定位',
       toolViewDetail: '查看结果详情',
       toolFailed: '执行失败',
@@ -766,8 +798,7 @@ export const harnessZhCN = {
       mainAgent: '主智能体',
       subagents: '子智能体',
       runtime: '运行与安全',
-      runtimeDesc:
-        '新会话默认权限档位与沙箱状态；沙箱拿不到后端时命令会被拒绝执行，不会静默放行。'
+      runtimeDesc: '新会话默认权限档位与沙箱状态；沙箱拿不到后端时命令会被拒绝执行，不会静默放行。'
     },
     list: {
       description_one: '共 {{count}} 个，只有开启的智能体才会在对话中生效',
@@ -1154,7 +1185,8 @@ export const harnessZhCN = {
   /* ── 定时任务独立页（侧边栏「定时任务」） ── */
   schedulesPage: {
     title: '定时任务',
-    description: '让助手按计划在指定会话里自动执行任务。任务只在本机运行；错过的触发会跳过、不补跑。',
+    description:
+      '让助手按计划在指定会话里自动执行任务。任务只在本机运行；错过的触发会跳过、不补跑。',
     refresh: '刷新',
     newTask: '新建任务',
     filterAll: '全部',
@@ -1195,7 +1227,8 @@ export const harnessZhCN = {
     conversationUnknown: '会话：{{id}}',
     editorNewTitle: '新建定时任务',
     editorEditTitle: '编辑定时任务',
-    editorDesc: '到点时，助手会在所选会话里自动发起一轮对话。任务只在本机运行；应用未启动时错过的触发会跳过。',
+    editorDesc:
+      '到点时，助手会在所选会话里自动发起一轮对话。任务只在本机运行；应用未启动时错过的触发会跳过。',
     fieldConversation: '会话',
     fieldConversationHint: '该任务在所选模式的会话里运行，与当前界面停在哪个模式无关。',
     fieldMode: '模式',
@@ -1227,7 +1260,8 @@ export const harnessZhCN = {
     fieldDateTime: '日期时间',
     fieldPrompt: '任务提示词',
     fieldPromptHint: '建议写清目标、产出位置与格式；到点自动执行时没有人工介入，避免依赖追问。',
-    promptPlaceholder: '例如：把本周的提交记录与待办整理成周报草稿，写入资料库「周报」文档，并在会话里给出 3 条重点。',
+    promptPlaceholder:
+      '例如：把本周的提交记录与待办整理成周报草稿，写入资料库「周报」文档，并在会话里给出 3 条重点。',
     previewNext: '下次触发：{{time}}',
     create: '创建任务',
     save: '保存修改',

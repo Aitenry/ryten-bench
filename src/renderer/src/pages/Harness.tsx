@@ -5,6 +5,7 @@ import { useTheme } from '@renderer/hooks/useTheme'
 import { useTranslation } from '@renderer/i18n'
 import { useHarness } from '../contexts/harness/HarnessContextCore'
 import HarnessHeader from '../components/harness/HarnessHeader'
+import TerminalPanel from '../components/harness/TerminalPanel'
 import ConversationPane from '../components/harness/ConversationPane'
 import ConversationFooter from '../components/harness/ConversationFooter'
 import SubagentInput from '../components/harness/SubagentInput'
@@ -12,6 +13,9 @@ import HarnessInput from '../components/harness/HarnessInput'
 import InlineGoalCard from '../components/harness/InlineGoalCard'
 import InlinePlanTray from '../components/harness/InlinePlanTray'
 import PermissionApprovalPanel from '../components/harness/PermissionApprovalPanel'
+import ProposalActionPanel, {
+  type ProposalActionItem
+} from '../components/harness/ProposalActionPanel'
 import { useTopicPending } from '../hooks/harness/useTopicPending'
 import WelcomeIntro from '../components/harness/WelcomeIntro'
 import QueueDock from '../components/harness/QueueDock'
@@ -129,6 +133,53 @@ const Harness: React.FC = () => {
   /** 计划评审挂起：锁目标操作与输入框，评审反馈只在计划卡内 */
   const [planReviewPending, setPlanReviewPending] = useState(false)
 
+  /**
+   * 待确认的 propose_action（输入区内联面板用）。
+   *
+   * 只认「最后一条用户消息之后的最新一条助手消息」里的 propose_action：一旦用户选了一个
+   * 动作（会先乐观上屏一条用户消息）或自己发了新消息，面板自动消失，历史仍旧由消息卡片
+   * 留痕。这样面板不会把几条旧的提议同时铺在输入框上方。
+   */
+  const pendingProposal = useMemo<{
+    question: string
+    actions: ProposalActionItem[]
+  } | null>(() => {
+    let lastUserIndex = -1
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'user') {
+        lastUserIndex = i
+        break
+      }
+    }
+    for (let i = messages.length - 1; i > lastUserIndex; i -= 1) {
+      const message = messages[i]
+      if (message.role !== 'assistant') continue
+      const blocks = message.blocks ?? []
+      for (let b = blocks.length - 1; b >= 0; b -= 1) {
+        const block = blocks[b]
+        if (block.type !== 'tool') continue
+        const tool = block.tool
+        if (!tool || tool.name !== 'propose_action') continue
+        if ((tool.status ?? 'completed') !== 'completed') continue
+        const input = (tool.input ?? {}) as { question?: unknown; actions?: unknown }
+        const question = typeof input.question === 'string' ? input.question.trim() : ''
+        const actions = (Array.isArray(input.actions) ? input.actions : [])
+          .filter(
+            (action): action is ProposalActionItem =>
+              typeof action === 'object' &&
+              action !== null &&
+              typeof (action as { label?: unknown }).label === 'string' &&
+              ((action as { label: string }).label ?? '').trim().length > 0
+          )
+          .slice(0, 4)
+        if (actions.length > 0) return { question, actions }
+      }
+      // 最新一条助手消息里没有待确认的动作 → 不再往前找（旧提议已经过期）
+      break
+    }
+    return null
+  }, [messages])
+
   /** 权限授权：挂起审批存在时，输入区整体让位给内联审批面板 */
   const fetchApprovalPending = useCallback(
     (topicId: number) => harnessApi.harness.getApproval(topicId),
@@ -169,6 +220,12 @@ const Harness: React.FC = () => {
   const [hasWorkspace, setHasWorkspace] = useState<boolean | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelHasEditor, setPanelHasEditor] = useState(false)
+  /**
+   * 右侧终端面板（持久终端）。与工作区面板**同一列二选一**：打开一个就收起另一个，
+   * 宽度复用同一份可拖拽面板宽度，观感与工作区面板一致。
+   */
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalRunningCount, setTerminalRunningCount] = useState(0)
   /**
    * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
    *
@@ -348,6 +405,7 @@ const Harness: React.FC = () => {
     const handle = workspacePanelRef.current
     if (handle) action(handle)
     else pendingPanelActionRef.current = action
+    setTerminalOpen(false)
     setPanelOpen(true)
   }, [])
   useEffect(() => {
@@ -358,6 +416,24 @@ const Harness: React.FC = () => {
     pendingPanelActionRef.current = null
     action(handle)
   }, [panelOpen, panelHasEditor])
+
+  /** 工作区面板开关：与终端面板互斥（同一列只显示一个） */
+  const toggleWorkspacePanel = useCallback((): void => {
+    setPanelOpen((prev) => {
+      const next = !prev
+      if (next) setTerminalOpen(false)
+      return next
+    })
+  }, [])
+
+  /** 终端面板开关：与工作区面板互斥 */
+  const toggleTerminalPanel = useCallback((): void => {
+    setTerminalOpen((prev) => {
+      const next = !prev
+      if (next) setPanelOpen(false)
+      return next
+    })
+  }, [])
 
   /**
    * 工具卡片 → 右侧工作区面板的桥（见 contexts/WorkspaceBridgeContext）。
@@ -540,6 +616,14 @@ const Harness: React.FC = () => {
       colorBorderSecondary={colorBorderSecondary}
       top={
         <>
+          {/* 动作确认：与沙箱授权同一套内联面板样式，放在输入框区域 */}
+          {pendingProposal ? (
+            <ProposalActionPanel
+              key={`proposal-${pendingProposal.actions.map((a) => a.label).join('|')}-${messages.length}`}
+              question={pendingProposal.question}
+              actions={pendingProposal.actions}
+            />
+          ) : null}
           <InlinePlanTray
             currentTopicId={currentTopicId}
             toggleSignal={planToggleSignal}
@@ -623,18 +707,24 @@ const Harness: React.FC = () => {
     return () => ro.disconnect()
   }, [])
 
-  // Workspace panel resizer
+  // Right panel (workspace editor or persistent terminal)
   const [panelWidth, setPanelWidth] = useState(() =>
     Math.max(500, Math.floor(window.innerWidth * 0.4))
   )
 
-  const panelMinWidth = panelMinWidthFor(panelHasEditor)
-  /* 面板宽度上限：比例上限（大屏会从 45% 放开到 65%）与「对话至少 MAIN_MIN_WIDTH」取小。
-     宽度策略与全部常量同源在 utils/panelLayout.ts——<main> 的 minWidth 也取同一个常量，
-     不再两处各写一份（曾经的 410/420 漂移会让面板多出 10px 被裁掉）。 */
+  /** 终端面板的最小可读宽度（命令/路径要放得下；工作区面板没有文件时只有 220） */
+  const TERMINAL_PANEL_MIN_WIDTH = 360
+  const workspaceMinWidth = panelMinWidthFor(panelHasEditor)
+  const panelMinWidth = terminalOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
+  /*
+   * 面板宽度上限：比例上限（大屏会从 45% 放开到 65%）与「对话至少 MAIN_MIN_WIDTH」取小。
+   * 终端面板按「有编辑器」那一档计算上限，否则会被工作区面板的 220px 无文件上限卡死。
+   * 宽度策略与全部常量同源在 utils/panelLayout.ts——<main> 的 minWidth 也取同一个常量，
+   * 不再两处各写一份（曾经的 410/420 漂移会让面板多出 10px 被裁掉）。
+   */
   const panelMaxWidth = computePanelMaxWidth({
     layoutWidth,
-    hasEditor: panelHasEditor,
+    hasEditor: panelHasEditor || terminalOpen,
     sidebarOpen: false,
     sidebarWidth: 0
   })
@@ -643,6 +733,11 @@ const Harness: React.FC = () => {
   // 只把宽度收敛回合法区间，保留用户拖拽结果，避免溢出出现横向滚动条
   const prevHasEditorRef = useRef(panelHasEditor)
   useEffect(() => {
+    // 终端打开时宽度由终端的 effect 负责（否则会被「无编辑器 → 220px」的规则压窄）
+    if (terminalOpen) {
+      setPanelWidth((prev) => clampWidth(prev, panelMinWidth, panelMaxWidth))
+      return
+    }
     if (panelHasEditor === prevHasEditorRef.current) {
       setPanelWidth((prev) => clampWidth(prev, panelMinWidth, panelMaxWidth))
       return
@@ -651,7 +746,22 @@ const Harness: React.FC = () => {
     setPanelWidth(
       panelHasEditor ? autoOpenPanelWidth(layoutWidth, panelMaxWidth) : PANEL_MIN_WITHOUT_EDITOR
     )
-  }, [panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth])
+  }, [panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth, terminalOpen])
+
+  // 打开终端时给一个命令面板级的默认宽度（之前停在文件树的 220px，标题/页签全被挤扁）
+  const prevTerminalOpenRef = useRef(terminalOpen)
+  useEffect(() => {
+    if (terminalOpen === prevTerminalOpenRef.current) return
+    prevTerminalOpenRef.current = terminalOpen
+    if (!terminalOpen) return
+    setPanelWidth((prev) =>
+      clampWidth(
+        Math.max(prev, Math.max(TERMINAL_PANEL_MIN_WIDTH, 420)),
+        panelMinWidth,
+        panelMaxWidth
+      )
+    )
+  }, [panelMaxWidth, panelMinWidth, terminalOpen])
 
   const panelDraggingRef = useRef(false)
 
@@ -847,7 +957,10 @@ const Harness: React.FC = () => {
                 <>
                   <HarnessHeader
                     panelOpen={panelOpen}
-                    onTogglePanel={() => setPanelOpen(!panelOpen)}
+                    onTogglePanel={toggleWorkspacePanel}
+                    terminalOpen={terminalOpen}
+                    onToggleTerminal={toggleTerminalPanel}
+                    terminalRunningCount={terminalRunningCount}
                     colorBorderSecondary={colorBorderSecondary}
                     currentTopicId={currentTopicId}
                     onSelectSubagent={handleSelectSubagent}
@@ -984,8 +1097,8 @@ const Harness: React.FC = () => {
               )}
             </main>
 
-            {/* Workspace panel resizer */}
-            {panelOpen && (
+            {/* Right column: workspace panel or persistent terminal (mutually exclusive) */}
+            {(panelOpen || terminalOpen) && (
               <>
                 <div className="harness-resizer" onMouseDown={handlePanelResizerMouseDown}>
                   <div className="harness-resizer-dragger" />
@@ -998,18 +1111,32 @@ const Harness: React.FC = () => {
                     flexShrink: 0
                   }}
                 >
-                  <WorkspacePanel
-                    ref={workspacePanelRef}
-                    workspacePath={workspacePath}
-                    isDarkMode={isDarkMode}
-                    colorBgContainer={colorBgContainer}
-                    borderRadiusLG={borderRadiusLG}
-                    colorText={colorText}
-                    colorTextSecondary={colorTextSecondary}
-                    colorTextTertiary={colorTextTertiary}
-                    onHasOpenFilesChange={setPanelHasEditor}
-                    onPendingByPathChange={setPendingByPath}
-                  />
+                  {terminalOpen ? (
+                    <TerminalPanel
+                      topicId={currentTopicId}
+                      isDarkMode={isDarkMode}
+                      colorBgContainer={colorBgContainer}
+                      colorText={colorText}
+                      colorTextSecondary={colorTextSecondary}
+                      colorTextTertiary={colorTextTertiary}
+                      colorBorderSecondary={colorBorderSecondary}
+                      onRunningCountChange={setTerminalRunningCount}
+                      onClosePanel={toggleTerminalPanel}
+                    />
+                  ) : (
+                    <WorkspacePanel
+                      ref={workspacePanelRef}
+                      workspacePath={workspacePath}
+                      isDarkMode={isDarkMode}
+                      colorBgContainer={colorBgContainer}
+                      borderRadiusLG={borderRadiusLG}
+                      colorText={colorText}
+                      colorTextSecondary={colorTextSecondary}
+                      colorTextTertiary={colorTextTertiary}
+                      onHasOpenFilesChange={setPanelHasEditor}
+                      onPendingByPathChange={setPendingByPath}
+                    />
+                  )}
                 </div>
               </>
             )}
