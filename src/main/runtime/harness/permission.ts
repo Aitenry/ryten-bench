@@ -114,6 +114,11 @@ const READ_TOOLS = new Set([
   'skill',
   // 交付物声明：只校验文件是否存在，不改文件
   'present',
+  // 定时任务：写的是应用自己的调度数据，不是用户文件
+  'schedule_create',
+  'schedule_list',
+  'schedule_view',
+  'schedule_edit',
   // 交互与编排
   'ask_user_question',
   // 计划评审：只向用户提交计划、不改文件（与提问同属交互面）

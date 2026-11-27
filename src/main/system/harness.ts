@@ -6,6 +6,8 @@ import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
 import { onAppEvent } from '../plugins/app-events'
 import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
+import { configureScheduleStore } from '../runtime/harness/schedule-store'
+import { scheduleRunner } from '../runtime/harness/schedule-runner'
 import { preloadHarnessData } from '../services/harness/preload-cache'
 import { clearSubAgentCache } from '../services/harness/subagents'
 import { clearProviderCache } from '../provider/cache'
@@ -195,6 +197,11 @@ export function startHarness(): void {
       read: readMcpResource
     })
 
+    // 定时任务：存储落在 userData/schedules/（JSON），执行入口由 IPC 层注入；
+    // 计时器只在应用运行期间生效，错过的触发不补跑（见 schedule-runner 设计说明）。
+    configureScheduleStore(join(app.getPath('userData'), 'schedules'))
+    scheduleRunner.start()
+
     // 工作区文件监听：数据库初始化完成（设置已加载）后跟随当前工作区启动。
     let stopped = false
     void awaitInitialized().then(() => {
@@ -228,6 +235,8 @@ export function startHarness(): void {
       uninstallWorkshopHost()
       setMcpToolProvider(undefined)
       setMcpResourceOps(undefined)
+      scheduleRunner.stop()
+      configureScheduleStore(undefined)
       configureMcp(undefined)
       setMcpModuleBase(undefined)
       void closeAllMcp()

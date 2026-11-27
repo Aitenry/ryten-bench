@@ -18,6 +18,7 @@ import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
 import { buildWebFetchTool, buildWebSearchTool } from './web'
 import { buildPresentTool } from './present'
+import { buildScheduleTools } from './schedule'
 import {
   buildMcpResourceTools,
   type McpResourceOps
@@ -60,6 +61,10 @@ export const toolBuilders: Record<string, ToolFactory> = {
   web_search: () => buildWebSearchTool(),
   // 交付物声明（read 只读校验 + 卡片展示；不写文件）
   present: () => buildPresentTool(),
+  // 定时任务（4 个）：到点由主进程无头起一轮（见 runtime/harness/schedule-runner.ts）
+  ...Object.fromEntries(
+    buildScheduleTools().map((instance) => [instance.name, () => instance])
+  ),
   ...workshopToolBuilders,
   ...latticeToolBuilders
 }
@@ -107,6 +112,34 @@ const localToolInfos: ToolInfo[] = [
     description: 'Declare finished files as deliverables for the user',
     icon: 'RiFileEditLine',
     color: '#c98a2b'
+  },
+  {
+    name: 'schedule_create',
+    label: 'Create schedule',
+    description: 'Run a prompt on a recurring or one-off schedule',
+    icon: 'RiCalendar2Line',
+    color: '#722ed1'
+  },
+  {
+    name: 'schedule_list',
+    label: 'List schedules',
+    description: 'List the scheduled tasks',
+    icon: 'RiCalendar2Line',
+    color: '#722ed1'
+  },
+  {
+    name: 'schedule_view',
+    label: 'View schedule',
+    description: 'Show one scheduled task in full',
+    icon: 'RiCalendar2Line',
+    color: '#722ed1'
+  },
+  {
+    name: 'schedule_edit',
+    label: 'Edit schedule',
+    description: 'Update, pause, resume or delete a scheduled task',
+    icon: 'RiCalendar2Line',
+    color: '#722ed1'
   },
   // 插件工坊（4 个）+ 插件中心发版（1 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
   ...workshopToolInfos,

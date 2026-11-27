@@ -144,6 +144,11 @@ export const zhCN = {
     get_time: { label: '时间查询', description: '获取当前日期和时间' },
     web_fetch: { label: '网页抓取', description: '抓取一个 URL 并抽取可读正文' },
     web_search: { label: '网页搜索', description: '联网搜索并返回结果链接与摘要' },
+    present: { label: '交付文件', description: '把已完成的文件声明为本次交付物' },
+    schedule_create: { label: '创建定时任务', description: '按定点/周期/每日规则自动执行提示词' },
+    schedule_list: { label: '定时任务列表', description: '查看全部定时任务' },
+    schedule_view: { label: '定时任务详情', description: '查看单个定时任务' },
+    schedule_edit: { label: '修改定时任务', description: '更新/暂停/恢复/删除定时任务' },
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -282,6 +287,17 @@ export const enUS: typeof zhCN = {
     get_time: { label: 'Time', description: 'Current date and time' },
     web_fetch: { label: 'Web fetch', description: 'Fetch a URL and read its readable text' },
     web_search: { label: 'Web search', description: 'Search the web and get result links' },
+    present: { label: 'Present files', description: 'Declare finished files as deliverables' },
+    schedule_create: {
+      label: 'Create schedule',
+      description: 'Run a prompt on a one-off or recurring schedule'
+    },
+    schedule_list: { label: 'List schedules', description: 'List the scheduled tasks' },
+    schedule_view: { label: 'View schedule', description: 'Show one scheduled task in full' },
+    schedule_edit: {
+      label: 'Edit schedule',
+      description: 'Update, pause, resume or delete a scheduled task'
+    },
     manage_materials: {
       label: 'Materials',
       description:

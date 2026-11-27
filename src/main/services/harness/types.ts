@@ -45,9 +45,13 @@ export interface TurnMeta {
    * - user = 用户直接发起的轮次（缺省）；
    * - goal-round = 目标自动续跑轮；
    * - queue = 排队消息在上一轮结束后被主进程自动接续发出的轮次（前端无本地占位，
-   *   需靠流首的 `queueTurn` 标记挂载气泡）。
+   *   需靠流首的 `queueTurn` 标记挂载气泡）；
+   * - schedule = 定时任务到点后由主进程无头发起的轮次（消息照常落库）。
    */
-  source?: 'user' | 'goal-round' | 'queue'
+  source?: 'user' | 'goal-round' | 'queue' | 'schedule'
+  /** schedule 轮次对应的任务（便于日志/排查，不参与权限判定） */
+  scheduleId?: string
+  scheduleTitle?: string
   /** queue 轮次对应的排队条目 id（前端据此把队列行抹掉并挂用户气泡） */
   queueItemId?: string
   /** goal-round 时携带的目标身份（精确匹配当前目标轮才有 complete/blocked 权威） */

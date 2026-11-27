@@ -3,7 +3,10 @@ import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
 import { isSenderAlive, safeSend } from '../../safe-send'
-import { mainMessages } from '../../i18n'
+import { mainFormat, mainMessages } from '../../i18n'
+import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
+import { scheduleRunner } from '../../runtime/harness/schedule-runner'
+import type { ScheduledTask } from '../../runtime/harness/schedule-store'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
 import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
 import { drainPendingTurns } from '../../services/harness/turn-drain'
@@ -134,6 +137,59 @@ interface HarnessSenderEvent {
 function primarySender(): Electron.WebContents | null {
   const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
   return win ? win.webContents : null
+}
+
+/**
+ * 无窗口时的最小 sender：定时任务在应用退到后台、没有可见窗口时仍要能起一轮。
+ *
+ * 流事件没有接收方（send 是空操作），但轮次本身照常执行并把消息落库；窗口重新打开后
+ * 从历史里就能看到这轮对话。只实现 runHarnessTurn 用到的最小面：id / isDestroyed /
+ * send / on / once（事件注册都是空操作）。
+ */
+function headlessSender(): Electron.WebContents {
+  const sender: Record<string, unknown> = {}
+  sender.id = 0
+  sender.isDestroyed = () => false
+  sender.send = () => true
+  sender.on = () => sender
+  sender.once = () => sender
+  sender.removeListener = () => sender
+  return sender as unknown as Electron.WebContents
+}
+
+/**
+ * 定时任务到点后的执行入口：在任务归属的话题里起一轮无头对话。
+ *
+ * 同一话题已有回合在跑时不并发（返回 cancelled，由 runner 顺延到下一个周期）。
+ */
+async function runScheduledTurn(
+  task: ScheduledTask,
+  question: string
+): Promise<{ cancelled: boolean }> {
+  if (harnessQueue.isTurnActive(task.topicId)) return { cancelled: true }
+  const sender = primarySender() ?? headlessSender()
+  const turnId = harnessQueue.beginTurn(task.topicId)
+  try {
+    const result = await runHarnessTurn({
+      event: { sender },
+      question,
+      turnId,
+      options: {
+        topicId: task.topicId,
+        turnMeta: {
+          source: 'schedule',
+          scheduleId: task.id,
+          scheduleTitle: task.title
+        }
+      }
+    })
+    return { cancelled: result.cancelled }
+  } catch (err) {
+    logger.warn('[Schedule] Scheduled turn failed:', err)
+    return { cancelled: false }
+  } finally {
+    harnessQueue.endTurn(task.topicId, turnId)
+  }
 }
 
 /** 单轮对话执行参数（用户轮 / 队列接续轮 / 目标自动轮共用 runHarnessTurn 管线） */
@@ -2395,5 +2451,16 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return next
   })
 
-  return registerIpcHandlers(handlers)
+  // 定时任务执行入口：runner 只负责「到点叫一下」，真正起轮仍走 runHarnessTurn 管线
+  scheduleRunner.configureQuestionBuilder((task) =>
+    mainFormat(getScheduleToolTexts().question, { title: task.title, prompt: task.prompt })
+  )
+  scheduleRunner.configureDrive(({ task, question }) => runScheduledTurn(task, question))
+
+  const unregister = registerIpcHandlers(handlers)
+  return () => {
+    scheduleRunner.configureDrive(undefined)
+    scheduleRunner.configureQuestionBuilder(undefined)
+    unregister()
+  }
 }

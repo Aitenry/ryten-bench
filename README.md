@@ -152,6 +152,11 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Deliverables** — a `present` tool lets the model declare the finished files of a turn (1–4
   workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
   each file in the workspace panel. Optional tool, enabled under Settings → Agents.
+- **Scheduled tasks** — `schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit` run a
+  prompt in its conversation on a one-off timestamp, every N minutes, or daily at `HH:MM`. Tasks live
+  under `userData/schedules/`, fire a fresh turn when due while the app is running (missed runs are
+  skipped, not replayed), and can be paused, resumed or deleted. Optional tools, enabled under
+  Settings → Agents.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic
