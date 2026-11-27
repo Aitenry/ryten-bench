@@ -1165,7 +1165,6 @@ const Harness: React.FC = () => {
                       colorText={colorText}
                       colorTextSecondary={colorTextSecondary}
                       colorTextTertiary={colorTextTertiary}
-                      colorBorderSecondary={colorBorderSecondary}
                       onRunningCountChange={setTerminalRunningCount}
                       onClosePanel={toggleTerminalPanel}
                     />

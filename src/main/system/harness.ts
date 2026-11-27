@@ -46,6 +46,8 @@ import { installWorkshopHost, uninstallWorkshopHost } from '../workshop/wiring'
 import { configureWorkshopDirReleaseHook } from '../workshop/dir-release'
 import { mcpIpcHandlers } from '../ipc/harness/mcp'
 import { terminalIpcHandlers } from '../ipc/harness/terminal'
+import { ptyTerminalIpcHandlers, wirePtyTerminalEvents } from '../ipc/harness/terminal-pty'
+import { ptyTerminals } from '../runtime/harness/pty-terminal'
 import {
   configureMcp,
   closeAllMcp,
@@ -141,11 +143,15 @@ export function startHarness(): void {
     registerIpcHandlers(workshopIpcHandlers()),
     registerIpcHandlers(mcpIpcHandlers()),
     // 持久终端的用户侧面板（与模型 terminal_* 工具共用同一会话管理器）
-    registerIpcHandlers(terminalIpcHandlers())
+    registerIpcHandlers(terminalIpcHandlers()),
+    // 用户侧真终端（node-pty + xterm.js，人类操作；与模型行模式终端独立）
+    registerIpcHandlers(ptyTerminalIpcHandlers())
   ]
 
   // ── 启动接线：目录、工坊、MCP、文件监听 ─────────────────────────────────
   effects.effect(() => {
+    // PTY 终端的输出/退出事件 → 渲染层 xterm（批处理后推送）
+    const unwirePtyTerminalEvents = wirePtyTerminalEvents()
     // 文件改动快照目录：放 userData 而不是工作区——工作区挂载为虚拟 '/'，
     // 写进去会污染用户项目，也会出现在模型自己的 ls/glob 结果里
     configureFileHistory(join(app.getPath('userData'), 'file-history'))
@@ -265,6 +271,9 @@ export function startHarness(): void {
       setWebSearchImplementation(undefined)
       // 退出前收掉所有持久终端（整树 kill，不留孤儿 shell）
       terminalSessions.closeAll()
+      // 用户侧真终端（PTY）也要收干净
+      unwirePtyTerminalEvents()
+      ptyTerminals.closeAll()
       configureMcp(undefined)
       setMcpModuleBase(undefined)
       void closeAllMcp()

@@ -147,15 +147,15 @@ from the hub or from a local package, and both paths end in the same host instal
   sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
   The same sessions are reachable from a **right-side terminal panel** (top-bar terminal button,
   docked in the same column as the workspace panel): opening the panel automatically creates a
-  session when there is none, sessions opened by the model appear as tabs, and the terminal itself
-  is rendered by the open-source **xterm.js** (`@xterm/xterm` + fit addon) rather than a hand-made
-  widget — ANSI colours, selection, copy/paste and scrollback come from it, while commands are
-  still executed through the persistent-session layer (line mode: full-screen interactive programs
-  are not supported). Output follows the app theme, and the panel reads non-destructively so the
-  model's `terminal_read` still sees the same unread output. The panel belongs to the human and is
-  **not limited by the conversation's permission mode** — only the model-facing
-  `terminal_open`/`terminal_send` tools require full access. When a conversation has no workspace
-  (or none is selected) the panel opens in the user's home directory.
+  session when there is none, and the terminal is a **real PTY** — rendered by the open-source
+  **xterm.js** (`@xterm/xterm` + fit addon) and backed by **node-pty** in the main process, so
+  prompts, echo, ANSI colours, Ctrl+C, window resizing, scrollback and full-screen interactive
+  programs (vim, top, …) behave like a native terminal. Hiding the panel keeps PTY processes alive
+  and replays their buffer on reopen; closing a tab kills that session. The panel belongs to the
+  human and is **not limited by the conversation's permission mode** — only the model-facing
+  `terminal_open`/`terminal_send` tools (which keep their own line-mode sessions) require full
+  access. When a conversation has no workspace (or none is selected) the terminal opens in the
+  user's home directory.
 - **Programmable tool calls (PTC)** — `run_code` runs a JavaScript snippet in a `node:vm` context
   where `await tools.<name>(args)` calls the read-only tools (`read_file`, `grep`, `glob`, `ls`,
   `read_image`, `web_fetch`, `web_search`, `session_search`, …), so the model can loop, filter and

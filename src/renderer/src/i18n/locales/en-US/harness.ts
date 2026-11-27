@@ -376,20 +376,9 @@ export const harnessEnUS: typeof harnessZhCN = {
       hidePanel: 'Hide terminal panel',
       loading: 'Loading terminal sessions…',
       empty: 'No terminal sessions yet',
-      emptyHint:
-        'Once opened, click the terminal area and type directly (Enter sends, Backspace deletes).',
-      notFullAccess: 'Full-access permission mode is required (switch it in the composer)',
-      stillRunning:
-        'Command still running; output keeps refreshing. Press Enter again once it finishes',
-      exited: 'Session exited',
-      truncated: '(earlier output scrolled out of the buffer)',
-      binary: '(output looks binary; some characters were omitted)',
-      busy: 'The previous command is still running — wait for it to finish',
-      emptyCommand: 'Command cannot be empty',
-      tooLong: 'Command too long (8000 characters max)',
+      emptyHint: 'Opening the panel creates a terminal automatically; use the button below to add another.',
       tooMany: 'At most 3 terminals per conversation',
       noShell: 'No usable shell found (pwsh / cmd / bash)',
-      noWorkspace: 'This conversation has no usable workspace directory yet',
       failed: 'Terminal operation failed, please retry'
     },
     messageArea: {

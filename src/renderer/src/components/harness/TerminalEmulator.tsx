@@ -7,70 +7,55 @@ import {
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { harnessApi } from '../../api/harness'
 
 /**
- * 终端渲染/输入组件（开源 xterm.js，MIT）——不再手写终端样式与光标。
+ * 终端组件：开源 xterm.js（MIT）+ 主进程 node-pty（真 PTY）。
  *
- * 分工：
- * - **xterm.js** 负责字体、选区、复制粘贴、ANSI 颜色/光标控制、滚动与输入事件；
- * - 本组件只做「行模式桥接」：把 xterm 的按键流攒成一行命令，Enter 时交给上层
- *   `onSend`（上层走已有 terminal-send 会话通道）。**不是真 PTY 流**：交互式全屏程序
- *   （vim/top 等）仍不支持，这一点与后端会话实现一致。
- * - 输出侧接收主进程的**原始快照**（保留 ANSI），按「新快照是否以旧快照开头」做增量
- *   write；被环形缓冲截断时 reset 重写。
+ * 与上一版「行模式桥接」不同：xterm 的 onData 原样写入 PTY（方向键、Ctrl+C、粘贴、
+ * Tab 补全都由 shell 自己处理），PTY 原始输出直接回写 xterm（颜色/prompt/进度条/全屏
+ * 程序都能工作）。切换页签或重开面板时先拉主进程的回放缓冲，再续实时流。
+ *
+ * 无障碍/E2E：xterm 用 canvas 渲染、DOM 里没有正文，因此维护一个 1px 隐藏文本镜像
+ * `[data-terminal-text]`，内容与缓冲同源。
  */
 
 export interface TerminalEmulatorHandle {
-  /** 追加一行系统提示（错误/超时等），走 xterm 自带换行 */
-  writeLine: (text: string) => void
-  /** 把焦点放回终端输入区 */
   focus: () => void
 }
 
 interface TerminalEmulatorProps {
-  /** 最新输出快照（保留 ANSI 的原始文本） */
-  output: string
+  sessionId: string
   isDarkMode: boolean
-  /** 命令发送：上层负责调用会话通道；返回后终端恢复输入 */
-  onSend: (command: string) => void
-  /** 命令执行中（期间仍可输入，但上层会拦截/报 busy） */
-  busy?: boolean
+  /** 进程退出（父组件刷新页签状态） */
+  onExited?: (exitCode: number | null) => void
 }
 
 const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProps>(
-  ({ output, isDarkMode, onSend, busy = false }, ref) => {
+  ({ sessionId, isDarkMode, onExited }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null)
+    const mirrorRef = useRef<HTMLDivElement>(null)
     const terminalRef = useRef<Terminal | null>(null)
     const fitRef = useRef<FitAddon | null>(null)
-    const lastOutputRef = useRef('')
-    const onSendRef = useRef(onSend)
-    onSendRef.current = onSend
-    const busyRef = useRef(busy)
-    busyRef.current = busy
+    const mirrorTextRef = useRef('')
+    const readyRef = useRef(false)
+    const queuedRef = useRef<string[]>([])
+    const onExitedRef = useRef(onExited)
+    onExitedRef.current = onExited
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        writeLine: (text: string): void => {
-          const terminal = terminalRef.current
-          if (!terminal) return
-          terminal.write(`\r\n${text.replace(/\r?\n/g, '\r\n')}`)
-        },
-        focus: (): void => terminalRef.current?.focus()
-      }),
-      []
-    )
+    useImperativeHandle(ref, () => ({
+      focus: (): void => terminalRef.current?.focus()
+    }))
 
-    // 创建 / 销毁 xterm 实例（只挂载一次）
     useEffect(() => {
       const container = containerRef.current
       if (!container) return
       const terminal = new Terminal({
-        convertEol: true,
+        convertEol: false,
         cursorBlink: true,
         cursorStyle: 'bar',
-        fontSize: 11.8,
-        lineHeight: 1.25,
+        fontSize: 12,
+        lineHeight: 1.2,
         fontFamily: '"Cascadia Mono", Consolas, "SFMono-Regular", monospace',
         scrollback: 5000,
         allowTransparency: true,
@@ -81,48 +66,75 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
       terminal.open(container)
       terminalRef.current = terminal
       fitRef.current = fit
+      readyRef.current = false
+      queuedRef.current = []
+      mirrorTextRef.current = ''
 
-      // 行模式输入：本地回显 + Enter 提交；Ctrl+C 只清当前行（不中断远端命令）
-      let line = ''
-      const dataDisposable = terminal.onData((data) => {
-        for (const char of data) {
-          if (char === '\r' || char === '\n') {
-            terminal.write('\r\n')
-            const command = line
-            line = ''
-            if (command.trim()) {
-              if (busyRef.current) {
-                terminal.write('\x1b[33m上一条命令还在运行，等它结束后再发送\x1b[0m\r\n')
-              } else {
-                onSendRef.current(command)
-              }
-            }
-            continue
-          }
-          if (char === '\u007f' || char === '\b') {
-            if (line.length > 0) {
-              line = line.slice(0, -1)
-              terminal.write('\b \b')
-            }
-            continue
-          }
-          if (char === '\u0003') {
-            line = ''
-            terminal.write('^C\r\n')
-            continue
-          }
-          if (char < ' ') continue
-          if (line.length >= 4000) continue
-          line += char
-          terminal.write(char)
+      const appendMirror = (data: string): void => {
+        mirrorTextRef.current += data
+        if (mirrorTextRef.current.length > 200_000) {
+          mirrorTextRef.current = mirrorTextRef.current.slice(-200_000)
         }
+        if (mirrorRef.current) mirrorRef.current.textContent = mirrorTextRef.current
+      }
+      const write = (data: string): void => {
+        if (!data) return
+        terminal.write(data)
+        appendMirror(data)
+      }
+
+      // xterm 输入 → PTY 原样写入
+      const dataDisposable = terminal.onData((data) => {
+        void harnessApi.ptyTerminal.write(sessionId, data)
       })
+      // 窗口尺寸 → PTY resize（fit 后会自动触发）
+      const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+        void harnessApi.ptyTerminal.resize(sessionId, cols, rows)
+      })
+
+      // 实时输出（先排队，回放缓冲写完再放行，避免顺序错乱）
+      const unsubscribeData = harnessApi.ptyTerminal.onData((payload) => {
+        if (payload.sessionId !== sessionId) return
+        if (!readyRef.current) {
+          queuedRef.current.push(payload.data)
+          return
+        }
+        write(payload.data)
+      })
+      const unsubscribeExit = harnessApi.ptyTerminal.onExit((payload) => {
+        if (payload.sessionId !== sessionId) return
+        const code = payload.exitCode
+        write(
+          code == null
+            ? '\r\n\x1b[33m[终端已关闭]\x1b[0m\r\n'
+            : `\r\n\x1b[33m[进程已退出，退出码 ${code}]\x1b[0m\r\n`
+        )
+        onExitedRef.current?.(code)
+      })
+
+      // 先回放历史缓冲，再放行实时流
+      void harnessApi.ptyTerminal
+        .buffer(sessionId)
+        .then((result) => {
+          if (terminalRef.current !== terminal) return
+          if (result.ok && result.data) write(result.data)
+          readyRef.current = true
+          const queued = queuedRef.current
+          queuedRef.current = []
+          for (const chunk of queued) write(chunk)
+        })
+        .catch(() => {
+          readyRef.current = true
+          const queued = queuedRef.current
+          queuedRef.current = []
+          for (const chunk of queued) write(chunk)
+        })
 
       const doFit = (): void => {
         try {
           fit.fit()
         } catch {
-          // 容器暂时不可见（页签切换/收起）时 fit 会抛错：忽略，下次可见时再算
+          // 容器暂时不可见（页签切换/收起）：忽略，下次可见再算
         }
       }
       doFit()
@@ -134,49 +146,32 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
       }, 30)
 
       return () => {
+        unsubscribeData()
+        unsubscribeExit()
         resizeObserver.disconnect()
         dataDisposable.dispose()
+        resizeDisposable.dispose()
         terminal.dispose()
         terminalRef.current = null
         fitRef.current = null
-        lastOutputRef.current = ''
       }
-      // isDarkMode 变化只更新主题，见下一个 effect；这里刻意不重建实例
+      // 主题切换只更新 options，见下一个 effect
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [sessionId])
 
-    // 主题切换：原地更新 xterm 主题
     useEffect(() => {
       if (terminalRef.current) terminalRef.current.options.theme = terminalTheme(isDarkMode)
     }, [isDarkMode])
 
-    // 输出同步：增量 write；快照回退（环形缓冲截断）时 reset 重写
-    useEffect(() => {
-      const terminal = terminalRef.current
-      if (!terminal) return
-      const previous = lastOutputRef.current
-      if (output === previous) return
-      if (output.startsWith(previous)) {
-        const delta = output.slice(previous.length)
-        if (delta) terminal.write(delta)
-      } else {
-        terminal.reset()
-        terminal.write(output)
-      }
-      lastOutputRef.current = output
-    }, [output])
-
     return (
       <div className="terminal-emulator" data-terminal-emulator="1">
         <div ref={containerRef} className="terminal-emulator-host" />
-        {/* 供 E2E / 无障碍读取的纯文本镜像（xterm 用 canvas 渲染，DOM 里没有正文） */}
         <div
+          ref={mirrorRef}
           className="terminal-emulator-mirror"
           data-terminal-text="1"
           aria-hidden="true"
-        >
-          {output}
-        </div>
+        />
         <style>{terminalEmulatorStyles}</style>
       </div>
     )

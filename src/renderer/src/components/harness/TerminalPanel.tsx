@@ -7,50 +7,34 @@ import {
   RiTerminalBoxLine
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
-import { harnessApi, type TerminalSessionView } from '../../api/harness'
-import TerminalEmulator, {
-  type TerminalEmulatorHandle
-} from './TerminalEmulator'
+import { harnessApi, type PtySessionView } from '../../api/harness'
+import TerminalEmulator from './TerminalEmulator'
 
 /**
- * 右侧「终端」面板（持久终端会话的用户侧入口）。
+ * 右侧「终端」面板（用户侧**真**终端）。
  *
- * 渲染/输入交给开源组件 **xterm.js**（TerminalEmulator），满足「不自己造轮子」；
- * 本组件只保留面板壳（标题栏 / 会话页签 / 空态 / 会话生命周期）。
+ * 渲染/输入：xterm.js；进程壳：主进程 node-pty（真 TTY）。打开面板且没有会话时默认
+ * 自动新建一个；关闭页签才杀进程，收起面板不会终止终端（重开可回放缓冲继续用）。
  *
- * 口径（2026-11-27 用户确认后持续迭代）：
- * - 打开面板且没有会话时**默认自动新建一个终端**（不再要求先点「新建」）；
- * - 与模型侧 `terminal_*` 工具共用会话管理器；peek 走非消费快照，不抢模型的未读输出；
- * - 用户侧终端不受会话权限档限制（模型侧工具仍限完全权限档）。
+ * 与模型侧 `terminal_*` 工具的行模式会话是两套实现：那套供模型调用，这套供人使用。
  */
 
 interface TerminalPanelProps {
-  /** 当前话题；null = 没有选中会话，也允许用（会话归属 0，cwd 落到用户主目录） */
+  /** 当前话题；null 也允许用（会话归属 0，cwd 落到用户主目录） */
   topicId: number | null
   isDarkMode: boolean
   colorBgContainer: string
   colorText: string
   colorTextSecondary: string
   colorTextTertiary: string
-  colorBorderSecondary: string
-  /** 运行中会话数量回传给顶栏按钮（角标用） */
   onRunningCountChange?: (count: number) => void
-  /** 顶部栏按钮收起面板 */
   onClosePanel?: () => void
 }
 
-/** 稳定错误码 → 界面文案（主进程返回的 error 是稳定代码） */
 const TERMINAL_ERROR_KEYS = {
-  'permission-denied': 'harness.terminalPanel.notFullAccess',
   'too-many-sessions': 'harness.terminalPanel.tooMany',
   'no-shell': 'harness.terminalPanel.noShell',
-  'session-busy': 'harness.terminalPanel.busy',
-  'session-exited': 'harness.terminalPanel.exited',
-  'invalid-topic': 'harness.terminalPanel.noWorkspace',
-  'topic-not-found': 'harness.terminalPanel.noWorkspace',
-  'workspace-not-found': 'harness.terminalPanel.noWorkspace',
-  'empty-command': 'harness.terminalPanel.emptyCommand',
-  'command-too-long': 'harness.terminalPanel.tooLong'
+  'spawn-failed': 'harness.terminalPanel.failed'
 } as const
 
 type TerminalErrorKey =
@@ -77,30 +61,20 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const { token } = theme.useToken()
   const { t } = useTranslation()
 
-  const [sessions, setSessions] = useState<TerminalSessionView[]>([])
+  const [sessions, setSessions] = useState<PtySessionView[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [snapshot, setSnapshot] = useState<{
-    text: string
-    cwd: string
-    shell: string
-    alive: boolean
-    truncated: boolean
-    binary: boolean
-  } | null>(null)
 
   const activeIdRef = useRef<string | null>(null)
   activeIdRef.current = activeId
-  const emulatorRef = useRef<TerminalEmulatorHandle>(null)
-  /** 自动新建只尝试一次（失败或用户手动关闭后不反复重建；重开面板时组件重挂载会复位） */
+  /** 自动新建只尝试一次（手动关掉最后一个会话后不反复重建；重开面板会复位） */
   const autoOpenedRef = useRef(false)
 
-  const loadSessions = useCallback(async (): Promise<TerminalSessionView[]> => {
+  const loadSessions = useCallback(async (): Promise<PtySessionView[]> => {
     try {
-      const result = await harnessApi.terminal.list(topicId ?? 0)
+      const result = await harnessApi.ptyTerminal.list(topicId ?? 0)
       const list = result.ok ? result.sessions : []
       setSessions(list)
       setActiveId((prev) =>
@@ -108,10 +82,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
           ? prev
           : (list[0]?.sessionId ?? null)
       )
-      onRunningCountChange?.(list.length)
+      onRunningCountChange?.(list.filter((session) => session.alive).length)
       return list
     } catch (err) {
-      console.warn('[terminal] Failed to list sessions:', err)
+      console.warn('[pty-terminal] Failed to list sessions:', err)
       return []
     }
   }, [onRunningCountChange, topicId])
@@ -121,7 +95,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setOpening(true)
     setError(null)
     try {
-      const result = await harnessApi.terminal.open({ topicId: topicId ?? 0 })
+      const result = await harnessApi.ptyTerminal.open({
+        topicId: topicId ?? 0,
+        // 初始尺寸给个常见值，挂载后 FitAddon 会立刻 resize
+        cols: 100,
+        rows: 30
+      })
       if (!result.ok) {
         setError(t(errorKey(result.error)))
         return
@@ -135,111 +114,49 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, [loadSessions, opening, t, topicId])
 
-  // 话题切换 / 首次挂载：清空列表与快照（自动新建标记复位）
+  const closeSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      try {
+        await harnessApi.ptyTerminal.close(sessionId)
+      } catch (err) {
+        console.warn('[pty-terminal] close failed:', err)
+      }
+      if (activeIdRef.current === sessionId) setActiveId(null)
+      await loadSessions()
+    },
+    [loadSessions]
+  )
+
+  // 话题切换 / 首次挂载：重新拉列表（自动新建标记复位）
   useEffect(() => {
     setSessions([])
     setActiveId(null)
-    setSnapshot(null)
     setError(null)
     autoOpenedRef.current = false
     setLoading(true)
     void loadSessions().finally(() => setLoading(false))
   }, [loadSessions])
 
-  // 打开面板且没有会话 → 默认自动新建一个终端（用户 2026-11-27 口径）
+  // 打开面板且没有会话 → 默认自动新建一个真终端（只发生在首次加载完成时；
+  // 之后用户手动关掉最后一个会话不再自动重建）
   useEffect(() => {
-    if (loading || opening || error) return
-    if (sessions.length > 0 || autoOpenedRef.current) return
+    if (loading || autoOpenedRef.current) return
     autoOpenedRef.current = true
-    void openSession()
-  }, [error, loading, openSession, opening, sessions.length])
+    if (sessions.length === 0 && !error) void openSession()
+  }, [error, loading, openSession, sessions.length])
 
-  // 轮询：会话列表（存活状态）+ 当前会话**原始**输出快照（保留 ANSI 给 xterm）
+  // 会话列表变化（模型/其他窗口新建、进程退出、关闭）时刷新页签
   useEffect(() => {
-    let cancelled = false
-    const tick = async (): Promise<void> => {
-      const list = await loadSessions()
-      if (cancelled) return
-      const id = activeIdRef.current
-      if (!id) {
-        if (list.length > 0) setActiveId(list[0].sessionId)
-        return
-      }
-      try {
-        const peek = await harnessApi.terminal.peek({
-          sessionId: id,
-          maxChars: 30_000,
-          raw: true
-        })
-        if (cancelled) return
-        if (peek.ok) {
-          setSnapshot({
-            text: peek.text,
-            cwd: peek.cwd,
-            shell: peek.shell,
-            alive: peek.alive,
-            truncated: peek.truncated,
-            binary: peek.binary
-          })
-        } else if (peek.error === 'session-not-found') {
-          setActiveId(null)
-          setSnapshot(null)
-        }
-      } catch (err) {
-        console.warn('[terminal] peek failed:', err)
-      }
-    }
-    void tick()
-    const timer = window.setInterval(() => void tick(), 900)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [loadSessions, topicId])
+    const unsubscribe = harnessApi.ptyTerminal.onSessionsChanged(() => {
+      void loadSessions()
+    })
+    return unsubscribe
+  }, [loadSessions])
 
-  const closeSession = useCallback(
-    async (sessionId: string): Promise<void> => {
-      try {
-        await harnessApi.terminal.close(sessionId)
-      } catch (err) {
-        console.warn('[terminal] close failed:', err)
-      }
-      if (activeIdRef.current === sessionId) {
-        setActiveId(null)
-        setSnapshot(null)
-      }
-      await loadSessions()
-    },
-    [loadSessions]
-  )
-
-  /** 命令发送：走已有会话通道；错误/超时以终端内一行提示呈现（不再是底部说明条） */
-  const handleSendCommand = useCallback(
-    async (command: string): Promise<void> => {
-      const id = activeIdRef.current
-      if (!id || busy) return
-      setBusy(true)
-      try {
-        const result = await harnessApi.terminal.send({
-          topicId: topicId ?? 0,
-          sessionId: id,
-          command,
-          waitMs: 400
-        })
-        if (!result.ok) {
-          emulatorRef.current?.writeLine(`\x1b[31m${t(errorKey(result.error))}\x1b[0m`)
-        } else if (result.result.timedOut) {
-          emulatorRef.current?.writeLine(`\x1b[33m${t('harness.terminalPanel.stillRunning')}\x1b[0m`)
-        }
-        emulatorRef.current?.focus()
-      } catch (err) {
-        emulatorRef.current?.writeLine(`\x1b[31m${String(err)}\x1b[0m`)
-      } finally {
-        setBusy(false)
-      }
-    },
-    [busy, t, topicId]
-  )
+  // alive 数量同步给顶栏角标
+  useEffect(() => {
+    onRunningCountChange?.(sessions.filter((session) => session.alive).length)
+  }, [onRunningCountChange, sessions])
 
   return (
     <div
@@ -278,7 +195,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
             }}
           >
             <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
-            {t('harness.terminalPanel.runningCount', { count: sessions.length })}
+            {t('harness.terminalPanel.runningCount', {
+              count: sessions.filter((session) => session.alive).length
+            })}
           </span>
         ) : null}
         <span style={{ flex: 1 }} />
@@ -398,7 +317,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         ) : null}
       </div>
 
-      {/* 终端主体：xterm.js */}
+      {/* 终端主体：xterm.js + node-pty */}
       {loading ? (
         <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
           {t('harness.terminalPanel.loading')}
@@ -423,11 +342,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
       ) : (
         <TerminalEmulator
           key={activeId ?? 'none'}
-          ref={emulatorRef}
-          output={snapshot?.text ?? ''}
+          sessionId={activeId ?? ''}
           isDarkMode={isDarkMode}
-          busy={busy}
-          onSend={(command) => void handleSendCommand(command)}
+          onExited={() => void loadSessions()}
         />
       )}
     </div>

@@ -135,6 +135,21 @@ export interface TerminalPeekView {
   binary: boolean
 }
 
+/** 用户侧真终端（node-pty）会话视图 */
+export type PtyShellKind = 'pwsh' | 'cmd' | 'sh'
+
+export interface PtySessionView {
+  sessionId: string
+  topicId: number
+  shell: PtyShellKind
+  cwd: string
+  cols: number
+  rows: number
+  alive: boolean
+  createdAt: number
+  pid: number
+}
+
 /** 定时任务视图（设置 →「定时任务」页；字段与主进程 schedule-store 一致） */
 export interface ScheduleView {
   id: string
@@ -1009,6 +1024,62 @@ export const harnessApi = {
         ok: boolean
         error?: string
       }>
+  },
+
+  /**
+   * 用户侧**真终端**（node-pty + xterm.js）。
+   *
+   * 与上面的 `terminal`（模型工具的行模式会话）独立：这里是最接近系统终端的交互——
+   * 真 TTY、回声、prompt、Ctrl+C、颜色与窗口 resize。输出通过
+   * `onData` 事件推给 xterm，切换页签/重开面板时用 `buffer` 回放。
+   */
+  ptyTerminal: {
+    list: (topicId: number) =>
+      invoke('harness:pty-terminal-list', { topicId }) as Promise<{
+        ok: boolean
+        sessions: PtySessionView[]
+      }>,
+    open: (payload: {
+      topicId: number
+      cwd?: string
+      shell?: PtyShellKind
+      cols?: number
+      rows?: number
+    }) =>
+      invoke('harness:pty-terminal-open', payload) as Promise<
+        | { ok: true; session: PtySessionView }
+        | { ok: false; error: string; detail?: string }
+      >,
+    write: (sessionId: string, data: string) =>
+      invoke('harness:pty-terminal-write', { sessionId, data }) as Promise<{ ok: boolean }>,
+    resize: (sessionId: string, cols: number, rows: number) =>
+      invoke('harness:pty-terminal-resize', { sessionId, cols, rows }) as Promise<{
+        ok: boolean
+      }>,
+    close: (sessionId: string) =>
+      invoke('harness:pty-terminal-close', { sessionId }) as Promise<{
+        ok: boolean
+        found: boolean
+      }>,
+    buffer: (sessionId: string) =>
+      invoke('harness:pty-terminal-buffer', { sessionId }) as Promise<{
+        ok: boolean
+        data: string
+      }>,
+    /** 实时输出（已按 ~12ms 合批） */
+    onData: (callback: (payload: { sessionId: string; data: string }) => void): (() => void) =>
+      on('harness:pty-terminal-data', (payload) =>
+        callback(payload as { sessionId: string; data: string })
+      ),
+    onExit: (
+      callback: (payload: { sessionId: string; exitCode: number | null }) => void
+    ): (() => void) =>
+      on('harness:pty-terminal-exit', (payload) =>
+        callback(payload as { sessionId: string; exitCode: number | null })
+      ),
+    /** 会话列表变化（新建/退出/关闭） */
+    onSessionsChanged: (callback: () => void): (() => void) =>
+      on('harness:pty-sessions-changed', callback)
   },
 
   /* ── 工作区文件与改动审查（AI 改动复核 + 文件浏览器） ── */

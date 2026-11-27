@@ -49,6 +49,8 @@ asarUnpack:
   - resources/**
   # koffi 是原生 FFI 绑定（沙箱 runner 用它调 Win32 API）：.node 不能从 asar 里加载
   - '**/koffi/**'
+  # node-pty 是用户侧真终端的原生 PTY 绑定（N-API 预编译）：.node 同样必须解包
+  - '**/node-pty/**'
   # 插件工坊在**打包后的应用里**也要构建插件：workshop/host.ts 的 createNodeLoader 从
   # app.asar.unpacked 解析 esbuild / tailwindcss / jszip。asar 里的文件既读不出来、
   # 也不能被 spawn，而 esbuild 的 JS 主模块要 spawn 平台二进制
