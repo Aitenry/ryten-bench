@@ -146,6 +146,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       modelEmpty: 'No matching model',
       modelMenuAria: 'Choose model and reasoning effort',
       effortLabel: 'Reasoning effort',
+      teamModeLabel: 'Enable agent teamwork',
+      teamModeHint:
+        'Lets the main agent and subagents share the task board (team_task_* tools and teamwork prompt); persisted per conversation, off by default.',
+      teamModeFailed: 'Failed to toggle agent teamwork',
       effortNotSentHint: 'This protocol does not send the parameter; the value is only stored',
       effortSaveFailed: 'Failed to save the reasoning effort',
       back: 'Back',
@@ -167,7 +171,113 @@ export const harnessEnUS: typeof harnessZhCN = {
       skillsEmpty: 'No skills available',
       skillsSearchPlaceholder: 'Search skills',
       pickerNoMatch: 'No matches',
-      pickerSaveFailed: 'Failed to save, please retry'
+      pickerSaveFailed: 'Failed to save, please retry',
+      /** "/" command menu (opened by a leading slash in the composer; Goal / Plan rows) */
+      commands: {
+        aria: 'Commands',
+        groupAdd: 'Add',
+        goalLabel: 'Goal',
+        goalDescription: 'Set or view a long-term task goal',
+        planLabel: 'Plan',
+        planDescription: 'Enter or leave plan mode',
+        empty: 'No matching commands',
+        noTopic: 'Send a message first to create the conversation, then use this command'
+      }
+    },
+    /** Plan mode: composer badge and enter/leave feedback */
+    planMode: {
+      badge: 'Plan mode',
+      badgeAria: 'Plan mode is on; click to leave',
+      activeHint: 'Plan mode: explore and plan first; work starts after you approve the plan',
+      enabled: 'Plan mode on: Rita plans first and waits for your approval',
+      disabled: 'Plan mode off',
+      switchFailed: 'Failed to switch plan mode'
+    },
+    /** Inline goal card (above the composer) */
+    goalInline: {
+      tag: 'Goal',
+      newTarget: 'New goal',
+      newTargetHint: 'Type it in the composer below',
+      newTargetAction: 'Enter to start · Esc to cancel',
+      editing: 'Editing',
+      add: 'Set a long-term goal for this conversation…',
+      editHint: 'Click to edit',
+      composePlaceholder: 'Type a goal…',
+      composeFlag: 'Goal · Enter to run · Esc to cancel',
+      composeHint: 'Enter to run · Esc to cancel',
+      editTitle: 'Edit goal',
+      enterRun: 'Start',
+      lineBreak: 'new line',
+      start: 'Start',
+      rounds: '{{rounds}} rounds',
+      saveFailed: 'Failed to save goal: ',
+      actionFailed: 'Goal action failed: '
+    },
+    /** Goal dialog (opened from the composer command menu) */
+    goalDialog: {
+      title: 'Goal',
+      subtitle:
+        "Set or view this conversation's long-term goal. A goal keeps running automatically until it completes, is paused, or reaches its round limit.",
+      emptyHint:
+        'No goal yet. Describe what should be pursued over multiple rounds; Rita continues automatically after each round.',
+      objectiveLabel: 'Objective',
+      objectivePlaceholder: 'e.g. implement the migration plan, add tests and open a PR',
+      roundsLabel: 'Round limit',
+      roundsHint: 'Maximum automatic continuation rounds (default 256)',
+      create: 'Create goal',
+      save: 'Save changes',
+      pause: 'Pause',
+      resume: 'Resume',
+      complete: 'Mark complete',
+      clear: 'Clear goal',
+      newGoal: 'New goal',
+      phaseActive: 'Active',
+      phasePaused: 'Paused',
+      phaseBlocked: 'Blocked',
+      phaseComplete: 'Complete',
+      rounds: '{{current}} / {{max}} rounds started',
+      blockedReason: 'Blocked: {{code}} · {{message}}',
+      activeHint:
+        'The goal continues automatically after each round until it is complete or paused.',
+      pausedHint: 'The goal is paused; click Resume to re-enable automatic continuation.',
+      completeHint: 'The goal is complete; you can start a new one.',
+      objectiveRequired: 'Describe the goal first',
+      missingGoal: 'This conversation has no goal',
+      created: 'Goal created',
+      saved: 'Goal saved',
+      cleared: 'Goal cleared',
+      close: 'Close',
+      createFailed: 'Failed to create the goal: {{message}}',
+      updateFailed: 'Failed to update the goal: {{message}}',
+      clearFailed: 'Failed to clear the goal: {{message}}',
+      clearConfirmTitle: 'Clear this goal?',
+      clearConfirmBody:
+        'The goal is deleted and automatic continuation stops; the conversation itself is untouched.',
+      clearConfirmOk: 'Clear',
+      cancel: 'Cancel'
+    },
+    /** Inline plan tray (above the composer) */
+    planInline: {
+      tag: 'Plan',
+      activeHint: 'Plan mode is on · a full plan is required before any code changes',
+      exit: 'Leave plan mode',
+      waiting: 'Awaiting approval',
+      editPlan: 'Edit plan',
+      save: 'save',
+      savePlan: 'Save changes',
+      cancel: 'Cancel',
+      feedbackPlaceholder: 'Want changes? Add feedback here — the composer stays free…',
+      editedNote: 'Plan edited; approving sends the revised plan as the final one.'
+    },
+    /** Plan review dialog (exit_plan_mode): full plan + approve / keep planning */
+    planReview: {
+      title: 'Plan review',
+      approve: 'Approve and start',
+      keepPlanning: 'Keep planning',
+      feedbackLabel: 'Feedback (optional)',
+      feedbackPlaceholder: 'What should change? Tell Rita how to revise the plan…',
+      hint: 'Approving turns plan mode off and Rita starts executing the plan; "Keep planning" sends your feedback back for another revision.',
+      emptyPlan: '(the plan is empty)'
     },
     permission: {
       readOnly: 'Read only',
@@ -209,7 +319,11 @@ export const harnessEnUS: typeof harnessZhCN = {
       deny: 'Deny',
       escalationNote: 'The model asks to escalate to "{{mode}}" for one call: {{justification}}',
       footerHint:
-        'This allows the call once; the same operation will ask again. Use "Stop" to end the turn.'
+        'This allows the call once; the same operation will ask again. Use "Stop" to end the turn.',
+      inlineSubtitle: 'This call exceeds the current permission — waiting for your decision',
+      inlineHint:
+        'Applies to this call only; change the persistent mode from the composer permission selector.',
+      deciding: 'Deciding…'
     },
     queue: {
       count: '{{count}} queued message(s)',
@@ -303,6 +417,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       toolFileCount_one: '{{count}} file',
       toolFileCount_other: '{{count}} files',
       toolExitCode: 'exit {{code}}',
+      toolBackgroundJob: 'background · {{id}}',
       toolReplacements: '<mono>{{count}}</mono> replacements',
       toolReplacements_one: '<mono>{{count}}</mono> replacement',
       toolReplacements_other: '<mono>{{count}}</mono> replacements',
@@ -396,7 +511,10 @@ export const harnessEnUS: typeof harnessZhCN = {
     usageMeter: {
       tokens: '{{value}} tok',
       cacheHit: 'Cache hit {{percent}}%',
-      contextAria: 'Context used {{percent}}% (current model window {{window}} tok)'
+      contextAria: 'Context used {{percent}}% (current model window {{window}} tok)',
+      turnLive: 'This turn: {{calls}} calls · {{value}} tok',
+      turnLiveHint:
+        'Live total for this turn (updated after each model call). The session total takes over once it ends.'
     },
     goalBar: {
       phaseActive: 'Active',
@@ -444,14 +562,70 @@ export const harnessEnUS: typeof harnessZhCN = {
       failed: 'Failed',
       killed: 'Stopped',
       completed: 'Completed',
+      inactive: 'Inactive',
+      conversation: {
+        backToMain: 'Back to main agent',
+        breadcrumbMain: 'Main agent',
+        loading: 'Loading conversation…',
+        empty: 'This subagent has no output yet',
+        missing:
+          'This subagent conversation no longer exists (it may have been removed with its topic or session)',
+        placeholder: 'Send a message to continue this subagent conversation…',
+        queuedCount: '{{count}} message(s) queued',
+        sendFailed: 'Failed to send: {{reason}}',
+        open: 'Open conversation'
+      }
+    },
+    collab: {
+      agentsCount: '{{count}} subagents',
+      tasksCount: '{{count}} tasks',
+      summarySeparator: ' · ',
+      sectionAgents: 'Subagents',
+      sectionTasks: 'Shared tasks',
+      taskProgress: '{{running}} in progress · {{pending}} pending · {{completed}} completed',
+      agentTaskCount: '{{count}} task(s)',
+      agentUsage: '{{tokens}} tok',
+      lastActivity: 'Recent: {{name}} {{action}} "{{task}}"',
+      eventCreated: 'created',
+      eventClaimed: 'claimed',
+      eventCompleted: 'completed',
+      eventUpdated: 'updated',
+      eventDeleted: 'deleted',
+      footerShared: 'Shared by the main agent and its subagents',
+      footerAgentsHint: 'Open a subagent to view its conversation',
+      taskOpenOwner: 'This task is owned by a subagent; click to open its session',
+      footerTasksHint: 'Tasks are maintained by the main agent and its subagents'
+    },
+    team: {
+      unowned: 'Unowned',
+      blockedBy: 'Waiting for {{tasks}}',
+      owner: 'Owner: {{name}}'
+    },
+    backgroundJobs: {
+      running: 'Running',
+      stopping: 'Stopping',
+      completed: 'Completed',
+      failed: 'Failed',
+      killed: 'Stopped',
       runningCount: '{{count}} running',
-      completedCount: '{{count}} completed',
-      failedCount: '{{count}} failed',
-      killedCount: '{{count}} stopped',
-      summarySeparator: ', ',
-      promptLabel: 'Task',
-      generating: 'Generating…',
-      noOutput: 'No output yet'
+      totalCount: '{{count}} total',
+      title: 'Background tasks',
+      stop: 'Stop task',
+      stopFailed: 'Failed to stop the task: {{reason}}',
+      alreadyFinished: 'The task has already finished',
+      output: 'Output',
+      noOutput: 'No output yet',
+      loadingOutput: 'Loading output…',
+      outputFailed: 'Failed to read the output: {{reason}}',
+      outputTruncated: '(output too long; showing the most recent part)',
+      autoFollow: 'Auto-follow',
+      backToBottom: 'Back to bottom',
+      startedAt: 'Started at {{time}}',
+      finishedAt: 'Finished at {{time}}',
+      durationUnderSecond: '<1s',
+      durationSeconds: '{{count}}s',
+      durationMinutes: '{{minutes}}m {{seconds}}s',
+      durationHours: '{{hours}}h {{minutes}}m'
     },
     fileExplorer: {
       title: 'Resource editor',

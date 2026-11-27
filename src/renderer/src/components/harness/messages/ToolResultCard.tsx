@@ -353,6 +353,14 @@ const ToolCardMeta: React.FC<{
         </Meta>
       )
     case 'execute':
+      // 后台运行：没有退出码，显示任务 id（状态/日志在顶部栏「后台任务」入口里）
+      if (card.jobId) {
+        return (
+          <Meta isNested={isNested} color={color}>
+            {t('harness.assistantMessage.toolBackgroundJob', { id: card.jobId })}
+          </Meta>
+        )
+      }
       return (
         <Meta isNested={isNested} color={card.exitCode ? '#ef4444' : color}>
           {card.exitCode !== undefined

@@ -85,6 +85,62 @@
       "when": 1795619158336,
       "tag": "0011_topic_pin_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795707264056,
+      "tag": "0012_topic_plan_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795708321467,
+      "tag": "0013_subagent_session",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795709243103,
+      "tag": "0014_team_board",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1795709604859,
+      "tag": "0015_agent_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795710142503,
+      "tag": "0016_team_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795710922703,
+      "tag": "0017_subagent_model_descriptor",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795711315764,
+      "tag": "0018_team_task_event",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795711960515,
+      "tag": "0019_subagent_usage",
+      "breakpoints": true
     }
   ]
 }

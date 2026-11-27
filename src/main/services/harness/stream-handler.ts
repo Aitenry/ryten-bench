@@ -3,6 +3,8 @@ import logger from 'electron-log'
 import { mainFormat, mainMessages } from '../../i18n'
 import { HarnessOptions, StructuredMessage, HistoryCompaction } from './types'
 import { Runtime } from '../../runtime/harness/runtime'
+import { planModeStore } from '../../runtime/harness/plan-mode'
+import { teamModeStore } from '../../runtime/harness/team-mode'
 import { buildHumanMessage } from './message-builder'
 import type { UploadedFileRef } from './message-builder'
 import type { ModelUsageRecord } from '../../runtime/harness/usage'
@@ -20,7 +22,9 @@ export interface StreamDeps {
     contextBudget?: number,
     signal?: AbortSignal,
     onCompactionRetry?: (attempt: number, retries: number) => void,
-    turnSource?: string
+    turnSource?: string,
+    /** 当前模型上下文窗口（token）：压缩压力按真实 token 判定时用 */
+    contextWindow?: number
   ): Promise<{ messages: BaseMessage[]; compaction?: HistoryCompaction }>
 
   /** 将上传文件复制到 agent 工作区，返回虚拟路径引用 */
@@ -52,6 +56,12 @@ export async function* runStream(
   const signal = options?.signal
 
   try {
+    // 计划模式按话题持久化：Runtime 的提示词 / 工具清单是同步拼装的，
+    // 这里先把开关回填进内存缓存，保证进程启动后的第一轮也带着正确的模式。
+    if (options?.topicId) {
+      await planModeStore.ensure(options.topicId)
+      await teamModeStore.ensure(options.topicId)
+    }
     const runtime = deps.createRuntime()
 
     // 首个 chunk 下发本轮注入的热记忆内容，前端在 AI 消息顶部显示「注入记忆」
@@ -69,7 +79,8 @@ export async function* runStream(
           options?.contextBudget,
           signal,
           options?.onCompactionRetry,
-          options?.turnMeta?.source
+          options?.turnMeta?.source,
+          options?.contextWindow
         )
       : undefined
     const contextMessages = context?.messages ?? []

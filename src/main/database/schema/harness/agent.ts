@@ -25,6 +25,8 @@ export const agent_config = pgTable(
     model: text(),
     tools: text(),
     enable: boolean().default(true),
+    /** 配置版本：每次更新 +1（DSH agent preset revision 的轻量对应物；会话快照可追溯） */
+    revision: integer().notNull().default(0),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
     updated_at: timestamp({ mode: 'string' }).defaultNow()
   },

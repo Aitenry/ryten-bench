@@ -385,6 +385,71 @@ async function setTopicArchived(id: number, archived: boolean): Promise<boolean>
 }
 
 /**
+ * 读取话题的计划模式（plan mode）。
+ *
+ * 话题不存在 / 查询失败一律按「未激活」处理：计划模式只影响提示词与工具清单，
+ * 读取失败时宁可少一段规划指引，也不能让整轮请求失败。
+ */
+async function getTopicPlanMode(id: number): Promise<boolean> {
+  return withOrm('getTopicPlanMode', async (db) => {
+    const rows = await db
+      .select({ plan_mode: harness_topic.plan_mode })
+      .from(harness_topic)
+      .where(eq(harness_topic.id, id))
+      .limit(1)
+    return rows[0]?.plan_mode ?? false
+  })
+}
+
+/**
+ * 写入话题的计划模式。
+ *
+ * 不碰 `updated_at`：计划模式是会话内的一个开关，不应该把它顶到会话列表最前面。
+ */
+async function setTopicPlanMode(id: number, active: boolean): Promise<boolean> {
+  return withOrm('setTopicPlanMode', async (db) => {
+    const updated = await db
+      .update(harness_topic)
+      .set({ plan_mode: active })
+      .where(eq(harness_topic.id, id))
+      .returning({ id: harness_topic.id })
+    logger.info(
+      `Set harness topic ID=${id} plan_mode=${active}, ${updated.length} row(s) affected.`
+    )
+    return updated.length > 0
+  })
+}
+
+/**
+ * 话题的 Agent Teams 开关（opt-in）。
+ *
+ * 与 plan_mode 同一口径：读取失败按「关闭」处理（团队工具/提示词是增强能力，
+ * 失败时宁可没有团队能力，也不能让整轮请求失败）；写入不碰 `updated_at`。
+ */
+async function getTopicTeamMode(id: number): Promise<boolean> {
+  return withOrm('getTopicTeamMode', async (db) => {
+    const rows = await db
+      .select({ team_mode: harness_topic.team_mode })
+      .from(harness_topic)
+      .where(eq(harness_topic.id, id))
+      .limit(1)
+    return rows[0]?.team_mode ?? false
+  })
+}
+
+async function setTopicTeamMode(id: number, enabled: boolean): Promise<boolean> {
+  return withOrm('setTopicTeamMode', async (db) => {
+    const updated = await db
+      .update(harness_topic)
+      .set({ team_mode: enabled })
+      .where(eq(harness_topic.id, id))
+      .returning({ id: harness_topic.id })
+    logger.info(`Set harness topic ID=${id} team_mode=${enabled}, ${updated.length} row(s) affected.`)
+    return updated.length > 0
+  })
+}
+
+/**
  * 分叉会话：把一条会话（话题行 + 全部对话）复制成一条**独立的**新会话。
  *
  * 复制的是数据快照，之后两条会话各走各的：父会话继续聊不会改到分叉，分叉里发消息也不回写父会话。
@@ -656,6 +721,10 @@ export {
   deleteTopic,
   setTopicPinned,
   setTopicArchived,
+  getTopicPlanMode,
+  setTopicPlanMode,
+  getTopicTeamMode,
+  setTopicTeamMode,
   forkTopic,
   getDialoguesByTopicId,
   getDialoguesByTopicIdPaginated,

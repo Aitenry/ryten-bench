@@ -1,0 +1,1 @@
+ALTER TABLE "harness_topic" ADD COLUMN "plan_mode" boolean DEFAULT false NOT NULL;

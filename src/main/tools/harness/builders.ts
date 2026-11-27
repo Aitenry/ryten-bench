@@ -221,13 +221,3 @@ function enabledMcpToolNames(): string[] {
     return []
   }
 }
-
-// ============================================================================
-// SubAgent Registry
-// ============================================================================
-
-/** 从数据库加载指定工作区下已启用的智能体定义 */
-export async function loadSubAgentDefinitions(workspaceId: number): Promise<SubAgentConfig[]> {
-  const { getEnabledSubAgentConfigs } = await import('../../database/mapper/harness/agent')
-  return getEnabledSubAgentConfigs(workspaceId)
-}

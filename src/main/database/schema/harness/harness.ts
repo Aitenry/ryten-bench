@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   integer,
+  boolean,
   index,
   foreignKey,
   check,
@@ -44,7 +45,18 @@ export const harness_topic = pgTable(
      * 归档时刻（null = 未归档）。归档的会话从会话列表主区收进「已归档」分组，
      * 不删数据；同样不碰 updated_at（取消归档后回到原来的位置）。
      */
-    archived_at: timestamp({ mode: 'string' })
+    archived_at: timestamp({ mode: 'string' }),
+    /**
+     * 计划模式（plan mode）：按话题持久化，重启后仍在。
+     *
+     * 激活时该话题的系统提示词追加一段规划指引，并额外提供 exit_plan_mode 工具：
+     * 模型先探索、设计，把计划交用户审阅；批准后才离开计划模式继续执行。
+     * 只影响提示词与工具集，不改变权限档位（沙箱与审批照常工作）。
+     */
+    plan_mode: boolean().notNull().default(false),
+
+    /** Agent Teams 团队协作开关（opt-in）：关闭时不注入 team_task_* 工具与团队提示词段 */
+    team_mode: boolean().notNull().default(false)
   },
   (table) => [
     index('idx_harness_topic_updated_at').using(
@@ -201,3 +213,4 @@ export const harness_dialogue_usage = pgTable(
     }).onDelete('cascade')
   ]
 )
+

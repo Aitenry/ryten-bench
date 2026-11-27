@@ -30,9 +30,35 @@ export interface JobSnapshot {
   finishedAt?: number
 }
 
+/**
+ * 前端查看用的任务输出快照（`peek`）。
+ *
+ * 与 `read` 的区别：**不推进模型侧的消费游标**——顶部栏按钮的轮询和模型调用
+ * job_output 是两条独立消费者，界面看一眼不能把模型该读的增量吃掉。
+ * 只保留尾部（`JOB_PEEK_MAX_CHARS`），避免一个话痨的 dev server 每秒把几百 KB
+ * 通过 IPC 搬进渲染进程。
+ */
+export interface JobOutputView {
+  text: string
+  /** 输出超过保留上限、只返回了尾部 */
+  truncated: boolean
+  job?: JobSnapshot
+}
+
+/** 前端 peek 的尾部上限（字符） */
+export const JOB_PEEK_MAX_CHARS = 40_000
+
 interface JobRecord extends JobSnapshot {
   topicId: number
   outputFrames: string[]
+  /**
+   * 输出帧之间的连接符。
+   *
+   * 语义帧（子代理文本/工具行）每段是独立的一句话，用换行连接；
+   * 命令输出是**字节流切片**，必须原样拼接（用换行会在每个 stdout chunk 之间
+   * 插入假换行，把 dev server 的进度条/日志拆碎）。
+   */
+  frameSeparator: string
   cancelFn?: (reason?: string) => void
   /** 输出游标（job_output 已读取到的帧位置） */
   cursor: number
@@ -67,7 +93,13 @@ export class JobsRegistry {
   onChange?: JobsUpdateListener
 
   /** 启动任务：返回句柄（ID 自动分配 `<kind>-N`；idOverride 用于会话型任务复用固定 ID） */
-  start(topicId: number, kind: string, label: string, idOverride?: string): JobHandle {
+  start(
+    topicId: number,
+    kind: string,
+    label: string,
+    idOverride?: string,
+    options?: { frameSeparator?: string }
+  ): JobHandle {
     const id =
       idOverride ??
       ((): string => {
@@ -92,6 +124,7 @@ export class JobsRegistry {
       startedAt: Date.now(),
       topicId,
       outputFrames: [],
+      frameSeparator: options?.frameSeparator ?? '\n',
       cursor: 0,
       reported: false,
       settleResolvers: []
@@ -149,7 +182,7 @@ export class JobsRegistry {
     }
     const frames = record.outputFrames.slice(record.cursor)
     record.cursor = record.outputFrames.length
-    let text = frames.join('\n')
+    let text = frames.join(record.frameSeparator)
     const terminal = record.status !== 'running' && record.status !== 'stopping'
     if (terminal && !record.reported) {
       record.reported = true
@@ -160,6 +193,29 @@ export class JobsRegistry {
       }
     }
     return { text, job: this.snapshot(record) }
+  }
+
+  /**
+   * 前端查看：返回当前全部输出（尾部截断），**不移动** job_output 的消费游标。
+   *
+   * 顶部栏「后台任务」弹窗在任务运行期间每秒轮询一次；如果复用 `read`，模型
+   * 之后再调 job_output 就只能拿到界面查看之后的新增内容，缺失前面几段。
+   */
+  peek(id: string, topicId: number): JobOutputView {
+    const record = this.jobs.get(id)
+    if (!record || record.topicId !== topicId) {
+      return {
+        text: mainFormat(getAgentToolTexts().jobs.notFoundInTopic, { id }),
+        truncated: false
+      }
+    }
+    const full = record.outputFrames.join(record.frameSeparator)
+    const truncated = full.length > JOB_PEEK_MAX_CHARS
+    return {
+      text: truncated ? full.slice(-JOB_PEEK_MAX_CHARS) : full,
+      truncated,
+      job: this.snapshot(record)
+    }
   }
 
   /** 等待任务至终态或超时（超时不取消任务） */
@@ -241,6 +297,24 @@ export class JobsRegistry {
     }
   }
 
+  /**
+   * 应用退出：终止全部仍在运行的任务并清空注册表。
+   *
+   * 后台 execute 是真正的系统进程（dev server / watcher），不随对话结束而消失；
+   * 退出时如果不主动取消，它们会变成孤儿进程占着端口。这里只做同步 abort，
+   * 不等进程退出（`before-quit` 不能被一个卡住的命令拖住）。
+   */
+  clearAll(): void {
+    for (const record of this.jobs.values()) {
+      if (record.status === 'running' || record.status === 'stopping') {
+        record.cancelFn?.()
+        record.status = 'killed'
+        record.finishedAt = Date.now()
+      }
+    }
+    this.jobs.clear()
+  }
+
   /** 裁剪已上报的终态任务：每个话题保留最近 MAX_TERMINAL_PER_TOPIC 条 */
   private pruneTerminal(topicId: number): void {
     const terminals = [...this.jobs.values()].filter(
@@ -310,7 +384,9 @@ export function buildJobTools(registry: JobsRegistry, topicId: number): Structur
         schema: z.object({
           job_id: z
             .string()
-            .describe('Job ID (returned by the tool that started the job, e.g. subagent-1)'),
+            .describe(
+              'Job ID returned by the tool that started the job (e.g. subagent-1 or exec-1)'
+            ),
           wait: z
             .boolean()
             .optional()
@@ -335,7 +411,7 @@ export function buildJobTools(registry: JobsRegistry, topicId: number): Structur
       {
         name: 'job_list',
         description:
-          'List all background jobs owned by this topic (running and terminal) and their statuses.',
+          'List all background jobs owned by this topic (background commands and subagent sessions) and their statuses.',
         schema: z.object({})
       }
     ),
@@ -347,7 +423,7 @@ export function buildJobTools(registry: JobsRegistry, topicId: number): Structur
       {
         name: 'job_kill',
         description:
-          'Terminate a background job by requesting cancellation; if the job already finished, returns already-finished.',
+          'Terminate a background job (a background command or subagent session) by requesting cancellation; if the job already finished, returns already-finished.',
         schema: z.object({
           job_id: z.string().describe('Job ID to terminate'),
           reason: z.string().optional().describe('Reason for termination (optional)')

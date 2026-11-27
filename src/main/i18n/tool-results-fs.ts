@@ -75,7 +75,21 @@ export const zhCNFsToolTexts = {
     /** 沙箱后端自身启动失败：命令**未执行**（与「命令失败」区分开） */
     sandboxRunnerFailed: '沙箱后端启动失败，命令未执行：{{detail}}',
     /** 沙箱在操作系统层拒绝了这次操作（越界写入等） */
-    sandboxDenied: '命令试图做沙箱允许范围之外的事（{{mode}} 模式），已被操作系统拒绝：'
+    sandboxDenied: '命令试图做沙箱允许范围之外的事（{{mode}} 模式），已被操作系统拒绝：',
+
+    /* ── 后台运行（run_in_background） ── */
+    /** 启动回执：告诉模型任务在后台继续、怎么读输出、怎么停 */
+    backgroundStarted:
+      '命令已在后台启动（job_id={{id}}）。你可以继续处理或总结本轮，不必等它结束；用 job_output(job_id="{{id}}") 增量读取输出，用 job_kill(job_id="{{id}}") 终止它。',
+    /** 没有话题上下文（子代理路径）时拒绝后台运行 */
+    backgroundNoTopic:
+      '后台运行只在主代理的会话中可用（缺少话题上下文）。请改为前台执行，或让主代理启动这个任务。',
+    /** 后台输出超过留存上限后补的一行 */
+    backgroundTruncated: '（后台输出超过留存上限，后续输出已丢弃）',
+    /** 命令退出时追加的终态行（模型/界面都能看到退出码） */
+    backgroundExitCode: '（命令已退出，退出码 {{code}}）',
+    /** 后台任务自身异常（启动/执行抛错，不是命令的非零退出） */
+    backgroundFailed: '后台任务执行失败：{{message}}'
   },
 
   output: {
@@ -106,7 +120,14 @@ export const zhCNFsToolTexts = {
     /** 摘要模型只返回空白 */
     summaryEmpty: '摘要输出为空',
     /** 历史回灌时工具结果的裁剪标记（完整内容保留在会话记录里） */
-    toolResultPruned: '……（{{omitted}} 字符已裁剪，完整内容保留在会话记录中）……'
+    toolResultPruned: '……（{{omitted}} 字符已裁剪，完整内容保留在会话记录中）……',
+    /** 旧工具结果被清理后的占位符：保留“调用过什么”，去掉原始字节（结构不能删） */
+    observationMasked:
+      '[旧工具结果已清理] {{call}}（callId={{callId}}）。如需原始内容，请重新读取该文件或重跑该命令。',
+    /** 压缩后重注入的标题（文件内容跟在后面） */
+    restoredContext: '以下是你压缩前读过/改过的文件（自动恢复，供继续工作参考）：',
+    /** 压缩后重注入的待办清单标题 */
+    restoredTodos: '当前待办清单：'
   },
 
   /**
@@ -191,7 +212,16 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     sandboxRunnerFailed:
       'The sandbox backend failed to start, so the command was NOT run: {{detail}}',
     sandboxDenied:
-      'The command tried to do something outside what the sandbox allows ({{mode}} mode) and the operating system denied it:'
+      'The command tried to do something outside what the sandbox allows ({{mode}} mode) and the operating system denied it:',
+
+    backgroundStarted:
+      'The command was started in the background (job_id={{id}}). Keep processing or summarizing this turn; use job_output(job_id="{{id}}") to read its output incrementally and job_kill(job_id="{{id}}") to terminate it.',
+    backgroundNoTopic:
+      'Background execution is only available to the main agent (no topic context). Run the command in the foreground instead, or have the main agent start it.',
+    backgroundTruncated:
+      '(background output exceeded the retention limit; further output was dropped)',
+    backgroundExitCode: '(the command exited with code {{code}})',
+    backgroundFailed: 'The background task failed: {{message}}'
   },
 
   output: {
@@ -214,7 +244,12 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
   compaction: {
     summaryEmpty: 'The summarizer returned an empty output',
     toolResultPruned:
-      '……({{omitted}} characters pruned; the full content is kept in the conversation record)……'
+      '……({{omitted}} characters pruned; the full content is kept in the conversation record)……',
+    observationMasked:
+      '[Old tool result cleared] {{call}} (callId={{callId}}). Re-read the file or re-run the command if you need the raw output.',
+    restoredContext:
+      'Files you read or edited before compaction (auto-restored as reference for continuing the work):',
+    restoredTodos: 'Current todo list:'
   },
 
   sandbox: {

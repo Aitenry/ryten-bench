@@ -8,10 +8,15 @@
  *      （spill.ts）负责内联上限；
  *    - 回放安全：原始完整结果保留在会话记录（harness_dialogue.blocks），裁剪文本只进
  *      本轮模型上下文（参考 dsh-compaction-tool-result-pruner）。
+ *    - 更早、可重放的结果在回灌时直接清成占位符（observation masking，见
+ *      runtime/harness/observation-mask.ts 与 history.ts）——保留调用结构、只清内容。
  * 2. LLM 摘要压缩（summarizeDialogues + topic_compactions 持久化 checkpoint）：
- *    - 压力触发：历史字符总量 ≥ 窗口 × PRESSURE_RATIO 时，把最老一段对话用一次
- *      LLM 调用压缩为结构化 checkpoint，最近 RETAIN_RATIO 段保持原样
- *      （参考 dsh-compaction-basic 的 thresholdRatio/retainRatio）；
+ *    - 压力触发：**优先按真实 token**——上一轮模型调用用掉的上下文 ≥ 窗口 × 79% 即触发
+ *      （见 context-pressure.ts；含系统提示词 / 工具 schema / 注入记忆）；
+ *      拿不到 usage_metadata 时退回字符启发式：历史字符总量 ≥ 窗口 × PRESSURE_RATIO（0.7）。
+ *      触发后把最老一段对话压缩为结构化 checkpoint，最近 RETAIN_RATIO 段保持原样
+ *      （参考 dsh-compaction-basic 的 thresholdRatio/retainRatio）；待压缩段超过
+ *      单次转录上限时按块增量合并，避免压缩请求本身超窗；
  *    - 持久化复用：checkpoint 落库（topic_compactions，每话题一行）。压缩边界
  *      未推进（无新对话进入压缩段）时直接复用既有摘要，不重复调用 LLM；
  *      边界推进（上下文又超预算）时只把新增的早期对话增量合并进既有摘要，
@@ -26,6 +31,7 @@ import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { invokeWithModelRecovery } from './model-recovery'
+import { extractCheckpointText } from './summary-format'
 
 /** 历史回灌时单个工具结果的内联预算（字符） */
 export const TOOL_RESULT_PRUNE_CHARS = 4_000
@@ -34,7 +40,10 @@ const PRUNE_HEAD_CHARS = 2_800
 /** 裁剪保留：尾部字符数 */
 const PRUNE_TAIL_CHARS = 1_000
 
-/** 压缩压力阈值比例：历史总量 ≥ 窗口 × 0.7 即触发摘要压缩（字符启发式，略保守于 DSH 的 0.8，补偿中文/JSON 低估） */
+/**
+ * 字符口径的压缩压力阈值（0.7）：**只在拿不到真实 token 时兜底**。
+ * 真实 token 口径的阈值是 context-pressure.ts 里的 TOKEN_PRESSURE_RATIO（0.79）。
+ */
 export const PRESSURE_RATIO = 0.7
 /** 保留比例：最近 20% 的对话保持原样不参与摘要（DSH retainRatio=0.16） */
 export const RETAIN_RATIO = 0.2
@@ -45,10 +54,12 @@ const SUMMARY_TARGET_CHARS = 2_000
 const CHECKPOINT_PREAMBLE =
   'The following is an automatic compacted summary (checkpoint) of earlier conversation. Treat it as established background and continue the task directly; do not restate or acknowledge it:'
 
-/** 压缩指令（结构逐字保留 DSH COMPACTION_INSTRUCTION，统一英文） */
+/** 压缩指令（结构沿用 DSH；新增 `<analysis>` 草稿与「用户原话」一节，提升召回） */
 const COMPACTION_INSTRUCTION = `You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.
 
-Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section. Write the content in the same language as the conversation.
+First think in a private <analysis> block: walk the transcript briefly and note (a) what the user asked for, (b) what was actually completed, (c) what failed and why, (d) what is still pending. Use a few terse bullets. The analysis is a scratchpad: it is stripped before the checkpoint is shown to the resumed model, so use it to avoid missing important details.
+
+Then output the checkpoint inside <summary></summary>, using EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section. Write the content in the same language as the conversation.
 
 ## Primary Request and Intent
 - [the user's original and evolving goals; quote verbatim where the exact wording matters]
@@ -58,6 +69,8 @@ Output EXACTLY the Markdown structure below: keep every section, in order. Use t
 - [exact path: why it matters, key changes or snippets]
 ## Errors and Fixes
 - [error: how it was resolved, plus any related user feedback]
+## User Messages
+- [verbatim quotes of the user's explicit instructions, corrections and preferences, in order; keep exact wording where it matters]
 ## Pending Jobs
 - [explicitly requested work not yet completed]
 ## Current Work
@@ -71,9 +84,9 @@ Rules:
 - Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.
 - Capture user feedback and explicit instructions faithfully, especially corrections.
 - Do NOT mention this summarization request or that the context was compacted.
-- Output only the checkpoint text: do not call any tool or take any other action.
+- Output only the <analysis> and <summary> blocks: do not call any tool or take any other action.
 - If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.
-Complete the output within ${SUMMARY_TARGET_CHARS} characters.`
+Keep the checkpoint within ${SUMMARY_TARGET_CHARS} characters (the analysis is stripped, but keep it short anyway).`
 
 /** 摘要输入单条记录形态 */
 export interface TranscriptDialogue {
@@ -158,7 +171,8 @@ export async function summarizeDialogues(
           .filter((c) => c && c.type === 'text')
           .map((c) => c.text || '')
           .join('')
-  const summary = text.trim()
+  // 只取 <summary> 正文（<analysis> 草稿不进上下文）；模型没按格式输出时降级保留全文
+  const summary = extractCheckpointText(text)
   if (!summary) throw new Error(getFsToolTexts().compaction.summaryEmpty)
   return summary
 }

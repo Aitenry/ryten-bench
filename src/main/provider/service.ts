@@ -49,7 +49,7 @@ class ProviderService {
    * 根据供应商 ID 创建 ChatModel 实例。
    * 不再回退到默认供应商——要求前端显式传入 providerId。
    */
-  async createModel(providerId?: number): Promise<BaseChatModel> {
+  async createModel(providerId?: number, modelOverride?: string): Promise<BaseChatModel> {
     if (providerId == null) {
       throw new Error(mainMessages().error.modelNotSelected)
     }
@@ -60,11 +60,14 @@ class ProviderService {
       throw new Error(mainFormat(mainMessages().error.providerNotFound, { id: providerId }))
     }
 
-    if (!config.model || config.model.trim() === '') {
+    // 允许调用方覆盖模型名（冷恢复按 spawn 时 descriptor 还原具体模型）：
+    // 其余供应商配置（baseUrl / apiKey / 协议）仍取自当前 provider 行。
+    const effectiveModel = (modelOverride ?? '').trim() || config.model
+    if (!effectiveModel || effectiveModel.trim() === '') {
       throw new Error(mainFormat(mainMessages().error.modelNameMissing, { name: config.name }))
     }
 
-    return this.buildModel(config)
+    return this.buildModel({ ...config, model: effectiveModel })
   }
 
   /**

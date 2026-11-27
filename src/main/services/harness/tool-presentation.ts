@@ -284,6 +284,23 @@ export function buildToolProjection(params: {
         }
       }
       if (!parsed) return fallback()
+      // 后台运行：工具立刻返回 jobId，没有退出码/stdout；卡片展示「后台 · job id」，
+      // 真正的状态与日志在顶部栏「后台任务」入口里（卡片不随任务更新，避免落库后失真）
+      if (typeof parsed.jobId === 'string') {
+        return {
+          input,
+          output: '',
+          card: {
+            kind: 'command',
+            command,
+            status: 'ok',
+            jobId: parsed.jobId,
+            background: true,
+            detail: true
+          },
+          detailText: output
+        }
+      }
       const stdout = typeof parsed.stdout === 'string' ? parsed.stdout : ''
       const card: ToolCard = {
         kind: 'command',

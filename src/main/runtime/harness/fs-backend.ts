@@ -13,6 +13,7 @@ import { permissionGate } from './permission-gate'
 import { isPermissionMode } from './permission'
 import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../../sandbox/exec'
 import type { SandboxMode } from '../../sandbox/types'
+import { jobsRegistry } from './jobs'
 import {
   MAX_EXEC_CHARS,
   MAX_FILE_CHARS,
@@ -100,6 +101,130 @@ function sandboxModeOf(config: unknown, topicId?: number): SandboxMode {
 
 /** execute 的单次执行时限（毫秒）与终止提示 */
 const EXEC_TIMEOUT_MS = 30_000
+
+/**
+ * 后台 execute 任务的输出留存上限（字符）。
+ *
+ * 前台 execute 只留 8K（`MAX_EXEC_CHARS`，直接进模型上下文）；后台任务的日志是
+ * 按需增量读取的，需要留得更久（例如 dev server 启动日志、构建进度），但也不能
+ * 让一个话痨进程无限吃内存。超过后丢弃后续输出并补一行提示。
+ */
+const MAX_BACKGROUND_OUTPUT_CHARS = 200_000
+
+/** 后台任务标签长度上限（任务列表只做展示；完整命令在工具调用参数里） */
+const BACKGROUND_JOB_LABEL_CHARS = 160
+
+/** 把命令压成一行、截断成任务标签（多行 heredoc 不能把任务列表撑开） */
+function backgroundJobLabel(command: string): string {
+  const oneLine = command.replace(/\s+/g, ' ').trim()
+  return oneLine.length > BACKGROUND_JOB_LABEL_CHARS
+    ? `${oneLine.slice(0, BACKGROUND_JOB_LABEL_CHARS)}…`
+    : oneLine
+}
+
+/**
+ * 启动一次后台命令，立即返回任务 id（不等待命令结束）。
+ *
+ * 与前台 execute 的三点差别：
+ * 1. **不占用工具的取消信号**：后台任务要活过本轮对话/工具调用，因此用独立的
+ *    AbortController，只由 job_kill / 停止按钮 / 话题删除 / 退出触发；
+ * 2. **不设超时**：dev server 这类命令本来就不会自己退出（`timeoutMs: 0`）；
+ * 3. **不占「命令执行窗口」**：文件监听把窗口内的落盘变化归给最近一次调用，
+ *    一个跑几十分钟的后台进程会把之后用户和其他工具的改动都算到它头上。
+ *    工作区监听仍会广播刷新，只是不记为「本次 execute 的改动」。
+ *
+ * 输出按块追加进任务注册表：模型可 job_output 增量读取，界面可 peek 查看；
+ * 超过 `MAX_BACKGROUND_OUTPUT_CHARS` 后丢弃后续输出并补一行说明。
+ */
+function startBackgroundCommand(params: {
+  command: string
+  mode: SandboxMode
+  workspacePath: string
+  topicId: number
+}): string {
+  const { command, mode, workspacePath, topicId } = params
+  const tr = getFsToolTexts()
+  // 命令输出是字节流切片：帧之间原样拼接（不能像子代理文本那样插换行）
+  const job = jobsRegistry.start(topicId, 'exec', backgroundJobLabel(command), undefined, {
+    frameSeparator: ''
+  })
+  const controller = new AbortController()
+  jobsRegistry.attachCancel(job.id, () => controller.abort())
+
+  void (async () => {
+    let captured = 0
+    let truncated = false
+    const onOutput = (chunk: string): void => {
+      if (captured >= MAX_BACKGROUND_OUTPUT_CHARS) {
+        truncated = true
+        return
+      }
+      const room = MAX_BACKGROUND_OUTPUT_CHARS - captured
+      const kept = chunk.length > room ? chunk.slice(0, room) : chunk
+      captured += kept.length
+      if (kept) job.appendOutput(kept)
+      if (kept.length < chunk.length) truncated = true
+    }
+
+    try {
+      const result = await runConfinedShell({
+        command,
+        mode,
+        workspaceRoot: workspacePath,
+        maxChars: MAX_EXEC_CHARS,
+        // 后台命令没有默认时限：停止由用户（顶部栏 / job_kill）或话题删除决定
+        timeoutMs: 0,
+        signal: controller.signal,
+        onOutput
+      })
+
+      if (result.unavailable) {
+        // 命令根本没跑：与「命令失败」区分开，detail 会随任务一起展示
+        job.settle(
+          'failed',
+          undefined,
+          sandboxUnavailableText(
+            mainFormat(tr.exec.sandboxUnavailable, { reason: result.unavailable })
+          )
+        )
+        return
+      }
+      if (result.runnerFailure) {
+        job.settle(
+          'failed',
+          undefined,
+          mainFormat(tr.exec.sandboxRunnerFailed, {
+            detail: result.runnerFailure.slice(0, 400)
+          })
+        )
+        return
+      }
+      if (truncated) job.appendOutput(`\n${tr.exec.backgroundTruncated}`)
+      // 用户点了停止：取消信号先于「正常退出」判定，任务记为 killed 而不是 failed
+      if (controller.signal.aborted) {
+        job.settle('killed')
+        return
+      }
+      if (result.timedOut) job.appendOutput(`\n${tr.exec.timedOut}`)
+      if (result.denied) {
+        job.appendOutput(
+          `\n${sandboxDenialText(mode, mainFormat(tr.exec.sandboxDenied, { mode }))}`
+        )
+      }
+      const exitCode = result.exitCode ?? 1
+      job.appendOutput(`\n${mainFormat(tr.exec.backgroundExitCode, { code: exitCode })}`)
+      job.settle(result.denied || result.timedOut || exitCode !== 0 ? 'failed' : 'completed')
+    } catch (error) {
+      job.settle(
+        'failed',
+        undefined,
+        mainFormat(tr.exec.backgroundFailed, { message: (error as Error).message })
+      )
+    }
+  })()
+
+  return job.id
+}
 
 interface FsMount {
   /** 虚拟前缀，如 '/' 或 '/memories/' */
@@ -648,12 +773,40 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
   if (options.workspacePath) {
     tools.push(
       tool(
-        async ({ command }, config) => {
+        async ({ command, run_in_background }, config) => {
           const { callId, topicId } = runContextOf(config)
+          const mode = sandboxModeOf(config, topicId)
+
+          /**
+           * 后台运行：立即返回任务 id，模型可以继续处理/总结，不阻塞本轮。
+           *
+           * 任务归属当前话题（顶部栏按 topicId 过滤）：没有话题上下文（例如子代理图）
+           * 就拒绝——挂到 0 号话题的任务既不可见也不可管理，比明确报错更糟。
+           */
+          if (run_in_background) {
+            if (topicId == null || topicId <= 0) {
+              const text = tr.exec.backgroundNoTopic
+              recordToolFacts(callId, { error: text })
+              return text
+            }
+            const jobId = startBackgroundCommand({
+              command,
+              mode,
+              workspacePath: options.workspacePath as string,
+              topicId
+            })
+            return JSON.stringify({
+              jobId,
+              background: true,
+              status: 'running',
+              command,
+              note: mainFormat(tr.exec.backgroundStarted, { id: jobId })
+            })
+          }
+
           // 命令执行窗口：这期间被磁盘监听捕获的文件变化归到这次调用名下
           // （命令没有精确的前后快照，只能如实记录「被命令改过、不可回溯」）
           beginToolWriteWindow({ topicId, callId })
-          const mode = sandboxModeOf(config, topicId)
           try {
             // 真正在沙箱里跑（档位 → OS 隔离原语；拿不到后端就拒绝执行，见 sandbox/exec.ts）
             const result = await runConfinedShell({
@@ -704,9 +857,15 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
         {
           name: 'execute',
           description:
-            'Run a shell command (Windows) with the workspace directory as the working directory, returning stdout/stderr and the exit code. The command runs inside an OS-level sandbox: under "workspace-write" it may write inside the workspace (and its private temp directory) but every write outside is denied by the operating system, and under "read-only" no write is possible at all. A denied write returns a [sandbox: ...] marker plus an escalation hint. Prefer `read_file`, `write_file`, `ls`, `glob` and `grep` for file and directory work.',
+            'Run a shell command (Windows) with the workspace directory as the working directory, returning stdout/stderr and the exit code. The command runs inside an OS-level sandbox: under "workspace-write" it may write inside the workspace (and its private temp directory) but every write outside is denied by the operating system, and under "read-only" no write is possible at all. A denied write returns a [sandbox: ...] marker plus an escalation hint. Set run_in_background=true for long-running processes (dev servers, watchers, builds that never exit): the call returns immediately with a job id instead of blocking the turn; read its output incrementally with job_output(job_id=..., wait=...) and stop it with job_kill(job_id=...). Prefer `read_file`, `write_file`, `ls`, `glob` and `grep` for file and directory work.',
           schema: z.object({
             command: z.string().describe('Shell command to execute'),
+            run_in_background: z
+              .boolean()
+              .optional()
+              .describe(
+                'Run the command as a background job and return immediately with a job id (default false: wait for the command to exit, up to 30 s). Use this for long-running processes that never exit on their own; continue working without waiting, use job_output to read new output and job_kill to stop it.'
+              ),
             ...sandboxPermissionField
           })
         }

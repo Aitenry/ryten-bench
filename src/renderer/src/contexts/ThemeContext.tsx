@@ -10,6 +10,35 @@ import { ThemeContext, type ThemeContextType } from './ThemeContextCore'
 const { defaultAlgorithm, darkAlgorithm } = theme
 
 /**
+ * 主按钮（`type="primary"`）改用**中性反色**，不再使用 antd 默认的亮蓝实心块。
+ *
+ * 用户 2026-11-27 口径（附「批准并开始执行」按钮截图）：「移除项目里面所有使用这个样式的
+ * 按钮，不要这种样式太丑了」。按钮样式是全项目共用的，所以改在 ConfigProvider 的 Button
+ * 组件 token 上——所有 `type="primary"`（含 Modal 默认 OK、确认框、发送按钮）一次生效，
+ * 不逐个组件改、也不会漏掉新加的按钮。
+ *
+ * 取值：
+ * - 暗色：浅底深字（`#f2f2f2` / `#141414`），悬停更亮、按下稍暗；
+ * - 亮色：深底白字（`#1f1f1f` / `#ffffff`），悬停更黑、按下稍浅。
+ *
+ * 另外把 `primaryShadow` 置空：antd 默认给主按钮一层主色投影，在深色界面上是一圈蓝光，
+ * 与中性按钮冲突。`danger` 主按钮仍走错误色，不受这里影响（危险操作保留红色语义）。
+ */
+const NEUTRAL_PRIMARY_BUTTON_DARK = {
+  colorPrimary: '#f2f2f2',
+  colorPrimaryHover: '#ffffff',
+  colorPrimaryActive: '#d9d9d9',
+  primaryColor: '#141414'
+} as const
+
+const NEUTRAL_PRIMARY_BUTTON_LIGHT = {
+  colorPrimary: '#1f1f1f',
+  colorPrimaryHover: '#000000',
+  colorPrimaryActive: '#3d3d3d',
+  primaryColor: '#ffffff'
+} as const
+
+/**
  * 根据当前时间（小时）判断应该使用亮色还是暗色主题。
  * 6:00 ~ 18:00 为白天 → 亮色，其余时间为夜间 → 暗色。
  */
@@ -87,6 +116,20 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [themeMode, effectiveTheme, setThemeMode]
   )
 
+  /** antd 主题配置：算法 + 主按钮的中性样式（见上方常量注释） */
+  const themeConfig = useMemo(
+    () => ({
+      algorithm: isDark ? darkAlgorithm : defaultAlgorithm,
+      components: {
+        Button: {
+          ...(isDark ? NEUTRAL_PRIMARY_BUTTON_DARK : NEUTRAL_PRIMARY_BUTTON_LIGHT),
+          primaryShadow: 'none'
+        }
+      }
+    }),
+    [isDark]
+  )
+
   /**
    * 全局弹窗垂直居中（用户 2026-11-23：「页面所有的弹出框没有居中」）。
    *
@@ -99,7 +142,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <ThemeContext.Provider value={contextValue}>
       <ConfigProvider
         locale={language === 'en-US' ? enUS : zhCN}
-        theme={{ algorithm: isDark ? darkAlgorithm : defaultAlgorithm }}
+        theme={themeConfig}
         getPopupContainer={() => document.body}
         modal={{ centered: true }}
       >

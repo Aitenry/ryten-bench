@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { theme } from 'antd'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../../api/harness'
+import type { TurnUsageView } from '../../../../shared/harness/types'
 import {
   buildUsageSummary,
   formatCompactTokens,
@@ -9,18 +10,22 @@ import {
 } from '../../utils/harness/usage'
 
 /**
- * 输入框底栏右侧的会话用量状态条：`2.5M tok · 缓存命中 98%  ◯ 8%`
+ * 输入框底栏右侧的用量状态条，两种形态：
  *
- * 结构（左 → 右）：累计 token → 缓存命中率 → 上下文占用圆环。
- * **不带行首图标**（用户口径：图标多余，只留数字）。
+ * - **生成中**：`本轮 3 次调用 · 12.4k tok` —— 主进程每结束一次模型往返就推一条
+ *   `harness-turn-usage`（本轮累计），这里直接显示；数字只增不减，不做插值。
+ * - **空闲**：`2.5M tok · 缓存命中 98%  ◯ 8%` —— 累计 token → 缓存命中率 → 上下文占用圆环。
  *
- * 数值全部来自 `harness_dialogue_usage`（模型真实回传的 token，按话题整段累加）：
+ * 空闲形态的数值全部来自 `harness_dialogue_usage`（模型真实回传的 token，按话题整段累加）：
  * - 累计 token：各轮 total 之和；
  * - 缓存命中：缓存读取 / 输入 token；
  * - 圆环：最近一次模型调用的上下文规模 / 模型档案里的 `context_window`。
  *
  * 任何一项拿不到就不画那一项（没有缓存明细 → 不显示「缓存命中」；模型档案没填
  * 上下文窗口 → 不画圆环；整段会话没有用量 → 整条不渲染），不做估算。
+ *
+ * 两种形态的切换点是一轮结束（`streaming` 变 false）：实时数字作废，重新读库里的账本
+ * ——落库发生在 `harness-stream-done` 之前，所以这一拉拿到的就是刚跑完的那一轮。
  */
 
 /**
@@ -88,7 +93,7 @@ interface HarnessUsageMeterProps {
   topicId: number | null
   /** 当前模型的上下文窗口（供应商档案 metadata.context_window）；null = 未知 */
   contextWindow: number | null
-  /** 生成中：本轮还没落库，保留上一次的数字，等结束再拉 */
+  /** 生成中：显示本轮实时累计；结束（false）时切回库里的会话汇总 */
   streaming: boolean
 }
 
@@ -101,20 +106,32 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
   const { t } = useTranslation()
   /** 汇总连同它属于哪个话题一起存：切话题时旧数值立刻失效，不会串到新会话上 */
   const [snapshot, setSnapshot] = useState<{ topicId: number; summary: UsageSummary } | null>(null)
+  /** 生成中的本轮累计（主进程每次模型调用结束时推一条）；null = 这一轮还没有可显示的数字 */
+  const [turnUsage, setTurnUsage] = useState<TurnUsageView | null>(null)
+  /**
+   * 已经拉到（或确认拉空）汇总的话题。
+   *
+   * 用它来区分「同一个话题在生成中」（保留旧数字，不重复拉）与「刚换到的话题在生成中」
+   * （必须立刻拉）——只按 `streaming` 拦截的话，切到一条后台正在跑的会话时，
+   * 整段生成期间底栏都会空着，哪怕它前面几轮早就有用量。
+   */
+  const fetchedTopicRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (topicId === null) {
+      fetchedTopicRef.current = null
       setSnapshot(null)
       return
     }
-    // 生成中这一轮还没写库：先留着当前的数值，等流结束再拉一次，底栏不会闪空
-    if (streaming) return
+    // 生成中且这个话题的账本已经拉过：保留上一轮的数字，等流结束再刷新（不闪空、也不多发请求）
+    if (streaming && fetchedTopicRef.current === topicId) return
     let cancelled = false
     void harnessApi.harness
       .getUsageByTopic(topicId)
       .then((rows) => {
-        const summary = buildUsageSummary(rows)
         if (cancelled) return
+        fetchedTopicRef.current = topicId
+        const summary = buildUsageSummary(rows)
         setSnapshot(summary ? { topicId, summary } : null)
       })
       .catch((err) => {
@@ -126,17 +143,34 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
     }
   }, [topicId, streaming])
 
+  // 生成中的实时进度：换话题先清空，之后只认当前话题的事件（同话题的后台轮次照常显示）
+  useEffect(() => {
+    setTurnUsage(null)
+    if (topicId === null) return
+    return harnessApi.harness.onTurnUsage((data) => {
+      if (data.topicId !== topicId) return
+      setTurnUsage(data)
+    })
+  }, [topicId])
+
+  // 一轮结束：实时数字作废，下面的 effect 会重新拉库里的汇总（落库在 stream-done 之前完成）
+  useEffect(() => {
+    if (!streaming) setTurnUsage(null)
+  }, [streaming])
+
   // 切话题后旧快照不再作数（还没有新数就整条不画，宁可空一下也不显示别的会话的用量）
   const summary = snapshot && snapshot.topicId === topicId ? snapshot.summary : null
-  if (!summary) return null
+  /** 生成中才显示实时数字；流一停就切回会话汇总 */
+  const live = streaming && turnUsage && turnUsage.topicId === topicId ? turnUsage : null
+  if (!live && !summary) return null
 
   /** 缓存命中率按百分比四舍五入；个别协议的缓存字段口径会超过 100%，显示上封顶 */
   const cachePercent =
-    summary.cacheHitRate === null
-      ? null
-      : Math.min(100, Math.max(0, Math.round(summary.cacheHitRate * 100)))
+    summary && summary.cacheHitRate !== null
+      ? Math.min(100, Math.max(0, Math.round(summary.cacheHitRate * 100)))
+      : null
   const contextPercent =
-    contextWindow !== null && contextWindow > 0 && summary.contextTokens !== null
+    summary && contextWindow !== null && contextWindow > 0 && summary.contextTokens !== null
       ? Math.min(100, Math.max(0, Math.round((summary.contextTokens / contextWindow) * 100)))
       : null
 
@@ -155,30 +189,45 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
         color: token.colorTextTertiary
       }}
     >
-      <span>
-        {t('harness.usageMeter.tokens', { value: formatCompactTokens(summary.totalTokens) })}
-      </span>
-      {cachePercent !== null && (
-        <>
-          <span aria-hidden="true">·</span>
-          <span>{t('harness.usageMeter.cacheHit', { percent: cachePercent })}</span>
-        </>
-      )}
-      {contextPercent !== null && contextWindow !== null && (
-        <span
-          title={t('harness.usageMeter.contextAria', {
-            percent: contextPercent,
-            window: formatCompactTokens(contextWindow)
+      {live ? (
+        <span title={t('harness.usageMeter.turnLiveHint')}>
+          {t('harness.usageMeter.turnLive', {
+            calls: live.calls,
+            value: formatCompactTokens(live.totalTokens)
           })}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 2 }}
-        >
-          {/* 轨道用 colorBorder、进度用 colorText：两档都不透明到「看不见」的程度，
-              黑白主题下都读得出「用了多少」。原先 colorFillTertiary(≈4%) 在白底上
-              几乎消失，只剩一小段弧，看着像凭空挂了个逗号。 */}
-          <ContextRing percent={contextPercent} color={token.colorText} track={token.colorBorder} />
-          <span>{contextPercent}%</span>
         </span>
-      )}
+      ) : summary ? (
+        <>
+          <span>
+            {t('harness.usageMeter.tokens', { value: formatCompactTokens(summary.totalTokens) })}
+          </span>
+          {cachePercent !== null && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{t('harness.usageMeter.cacheHit', { percent: cachePercent })}</span>
+            </>
+          )}
+          {contextPercent !== null && contextWindow !== null && (
+            <span
+              title={t('harness.usageMeter.contextAria', {
+                percent: contextPercent,
+                window: formatCompactTokens(contextWindow)
+              })}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 2 }}
+            >
+              {/* 轨道用 colorBorder、进度用 colorText：两档都不透明到「看不见」的程度，
+                  黑白主题下都读得出「用了多少」。原先 colorFillTertiary(≈4%) 在白底上
+                  几乎消失，只剩一小段弧，看着像凭空挂了个逗号。 */}
+              <ContextRing
+                percent={contextPercent}
+                color={token.colorText}
+                track={token.colorBorder}
+              />
+              <span>{contextPercent}%</span>
+            </span>
+          )}
+        </>
+      ) : null}
     </div>
   )
 }

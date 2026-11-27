@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
-import { App, Button, Input, Modal, Popover, Tooltip, theme } from 'antd'
+import { App, Button, Input, Modal, Popover, Switch, Tooltip, theme } from 'antd'
 import type { InputRef } from 'antd'
 import {
   RiArrowUpLine,
@@ -16,7 +16,8 @@ import {
   RiShieldKeyholeLine,
   RiShieldFlashLine,
   RiToolsLine,
-  RiFileAi2Line
+  RiFileAi2Line,
+  RiInformationLine
 } from '@remixicon/react'
 import {
   OpenAIFilled,
@@ -41,6 +42,12 @@ import type { EditorView } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import FileRef from './FileRefNode'
 import HarnessUsageMeter from './HarnessUsageMeter'
+import HarnessSlashMenu from './HarnessSlashMenu'
+import {
+  filterSlashCommands,
+  type HarnessSlashCommandDef,
+  type HarnessSlashCommandId
+} from './slashCommands'
 import { useTranslation } from '@renderer/i18n'
 import mascot from '@renderer/assets/mascot.png'
 
@@ -78,6 +85,30 @@ const providerIconMap: Record<string, React.ComponentType<{ style?: React.CSSPro
 // 与正文/占位符字号一致（14px），保证空内容时与提示文字同高同位。
 // 如需微调高度改这里即可。
 const CARET_HEIGHT = 14
+
+/**
+ * 「/」命令面的查询词上限（字符）。
+ *
+ * 超过就当普通文本：用户可能真的想发一条以 `/` 开头的长消息（路径、命令示例），
+ * 菜单不能一直压在输入框上方。
+ */
+const SLASH_QUERY_MAX_CHARS = 32
+
+/**
+ * 从输入文本解析命令查询词。
+ *
+ * 用户口径（2026-11-26）：**只有在一开始输入 `/` 才会唤起**命令面。
+ * 因此只认「文本以 `/` 开头」这一种形态；`/` 出现在句中/行中一律按普通文字处理。
+ * 查询词（`/` 之后的部分）含空白即视为用户开始写正文，菜单收起；
+ * 未通过校验返回 null。
+ */
+function parseSlashQuery(text: string): string | null {
+  if (!text.startsWith('/')) return null
+  const rest = text.slice(1)
+  if (rest.length > SLASH_QUERY_MAX_CHARS) return null
+  if (/[\s\u3000]/.test(rest)) return null
+  return rest
+}
 
 /**
  * 权限档位（沙箱）选项表 —— 与主进程 runtime/permission.ts 的档位一一对应。
@@ -188,6 +219,21 @@ interface HarnessInputProps {
   onSend: () => void
   onStop: () => void
   onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void
+  /**
+   * 子代理会话的输入框：复用同一个组件，但隐藏主代理专属控件
+   * （附件 / 权限档位 / 模型选择 / 工具技能 / 用量条）——这些只作用于主代理轮次。
+   */
+  simpleMode?: boolean
+  /** 自定义 placeholder（子代理续聊用；缺省用主对话文案） */
+  placeholder?: string
+  /** 目标输入态：输入卡片高亮并显示模式标签（内容仍由当前编辑器承载） */
+  goalCompose?: boolean
+  /** 计划评审挂起时锁住输入框（不发送、不可编辑） */
+  locked?: boolean
+  /** 斜杠命令「目标」：由页面打开输入框上方的目标编辑区 */
+  onGoalCommand?: () => void
+  /** 斜杠命令「计划」：由页面切换输入框上方的计划模式 */
+  onPlanCommand?: () => void
 }
 
 const HarnessInput: React.FC<HarnessInputProps> = ({
@@ -213,7 +259,13 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   colorBorderSecondary,
   onSend,
   onStop,
-  onKeyDown
+  onKeyDown,
+  simpleMode = false,
+  onGoalCommand,
+  onPlanCommand,
+  placeholder,
+  goalCompose = false,
+  locked = false
 }) => {
   const [isDragOver, setIsDragOver] = useState(false)
   // 自定义光标元素（原生光标已隐藏，见 updateCaret）
@@ -231,6 +283,54 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   /** 模型列表的键盘高亮下标（搜索结果扁平化后的下标） */
   const [activeIndex, setActiveIndex] = useState(0)
   const [savingEffort, setSavingEffort] = useState(false)
+
+  // ── Agent Teams 团队协作（opt-in，按话题持久化）────────────────────────────
+  // 入口放在「模型 / 推理等级」面板里（用户口径：团队协作开关属于本轮运行配置，
+  // 不再散落在侧栏会话菜单）；关闭时不注入 team_task_* 工具与团队提示词段。
+  const [teamModeEnabled, setTeamModeEnabled] = useState(false)
+  const [teamModeBusy, setTeamModeBusy] = useState(false)
+
+  useEffect(() => {
+    if (currentTopicId == null || simpleMode) {
+      setTeamModeEnabled(false)
+      return
+    }
+    let cancelled = false
+    void harnessApi.harness
+      .getTeamMode(currentTopicId)
+      .then((view) => {
+        if (!cancelled) setTeamModeEnabled(view.enabled)
+      })
+      .catch(() => {
+        /* 读取失败按关闭展示；下一轮 Runtime 仍按后端状态执行 */
+      })
+    const unsubscribe = harnessApi.harness.onTeamModeUpdated((view) => {
+      if (view.topicId === currentTopicId) setTeamModeEnabled(view.enabled)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [currentTopicId, simpleMode])
+
+  const handleToggleTeamMode = useCallback(
+    async (next: boolean): Promise<void> => {
+      if (currentTopicId == null) return
+      setTeamModeBusy(true)
+      try {
+        const view = await harnessApi.harness.setTeamMode({
+          topicId: currentTopicId,
+          enabled: next
+        })
+        setTeamModeEnabled(view.enabled)
+      } catch {
+        message.error(t('harness.input.teamModeFailed'))
+      } finally {
+        setTeamModeBusy(false)
+      }
+    },
+    [currentTopicId, message, t]
+  )
 
   // ── 权限档位（沙箱）：仅可查看 / 工作区内修改 / 完全权限 ──────────────────
   // 档位按话题存在主进程（electron-store），这里只缓存一份用于显示；
@@ -680,6 +780,102 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const handlePasteFilesRef = useRef(handlePasteFiles)
   handlePasteFilesRef.current = handlePasteFiles
 
+  // ── 「/」命令面（目标 / 计划）────────────────────────────────────────────
+  // 只有输入框开头是 `/` 时才唤起；行内容参考 DSH 的输入框命令菜单。
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashQuery, setSlashQuery] = useState('')
+  const [slashIndex, setSlashIndex] = useState(0)
+  /** 用户按 Esc 关掉后，直到文本不再以 `/` 开头前不自动重新唤起 */
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const slashMenuRef = useRef<HTMLDivElement | null>(null)
+  /** 输入区外层（判断点击是否落在输入框内部：点输入框不关菜单） */
+  const composerRef = useRef<HTMLDivElement | null>(null)
+
+  const slashRows = useMemo(() => filterSlashCommands((key) => t(key), slashQuery), [slashQuery, t])
+  /** 键盘处理里读最新状态（editor 只创建一次，闭包不会跟着重渲染更新） */
+  const slashRef = useRef<{
+    open: boolean
+    index: number
+    rows: HarnessSlashCommandDef[]
+  }>({ open: false, index: 0, rows: [] })
+  slashRef.current = { open: slashOpen, index: slashIndex, rows: slashRows }
+
+  /** 上一次的查询词：查询变化时把高亮拉回第一行 */
+  const previousSlashQueryRef = useRef('')
+
+  useEffect(() => {
+    if (simpleMode) {
+      setSlashOpen(false)
+      return
+    }
+    // 编辑器第一个行内节点必须是**以 `/` 开头的文字**：文件引用 chip 的序列化路径
+    // 也以 `/` 开头（`/uploads/...`），只看 inputValue 会把「chip 在开头」误判成命令输入。
+    const ed = editorRef.current
+    const firstInline = ed?.state.doc.firstChild?.firstChild
+    const startsWithSlashText =
+      !!firstInline && firstInline.isText && (firstInline.text ?? '').startsWith('/')
+    const query = startsWithSlashText ? parseSlashQuery(inputValue) : null
+    if (query === null) {
+      setSlashOpen(false)
+      setSlashDismissed(false)
+      previousSlashQueryRef.current = ''
+      return
+    }
+    if (slashDismissed) return
+    if (previousSlashQueryRef.current !== query) {
+      previousSlashQueryRef.current = query
+      setSlashIndex(0)
+    }
+    setSlashQuery(query)
+    setSlashOpen(true)
+  }, [inputValue, simpleMode, slashDismissed])
+
+  // 点菜单和输入区以外的地方关闭（与 DSH 的命令菜单同一手感）
+  useEffect(() => {
+    if (!slashOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (slashMenuRef.current?.contains(target)) return
+      if (composerRef.current?.contains(target)) return
+      setSlashOpen(false)
+      setSlashDismissed(true)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [slashOpen])
+
+  /**
+   * 选中一条命令：先消费掉 `/` + 查询词（命令面不是普通消息），再执行动作。
+   *
+   * 目标 / 计划都已移到输入框上方的内联区域：这里只把动作交给页面，
+   * 输入框本身不再拥有目标弹窗或计划徽标。
+   */
+  const pickSlashCommand = useCallback(
+    (id: HarnessSlashCommandId): void => {
+      setSlashOpen(false)
+      setSlashDismissed(false)
+      setSlashQuery('')
+      setSlashIndex(0)
+      previousSlashQueryRef.current = ''
+      onInputChangeRef.current('')
+      const topicId = currentTopicIdRef.current
+      if (topicId == null) {
+        message.info(t('harness.input.commands.noTopic'))
+        return
+      }
+      if (id === 'goal') {
+        onGoalCommand?.()
+        return
+      }
+      onPlanCommand?.()
+    },
+    [message, onGoalCommand, onPlanCommand, t]
+  )
+  // editor 的 keydown 只创建一次：经 ref 取最新实现
+  const pickSlashRef = useRef(pickSlashCommand)
+  pickSlashRef.current = pickSlashCommand
+
   const editor = useEditor(
     {
       extensions: [
@@ -688,7 +884,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         Text,
         HardBreak,
         History,
-        Placeholder.configure({ placeholder: t('harness.input.placeholder') }),
+        Placeholder.configure({ placeholder: placeholder ?? t('harness.input.placeholder') }),
         BaseKeymap,
         FileRef
       ],
@@ -697,6 +893,31 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         // Enter 发送（Shift+Enter 由 HardBreak 处理换行）；输入法组合期间不拦截
         handleKeyDown: (view, event) => {
           if (event.isComposing || event.keyCode === 229) return false
+          // 「/」命令面打开时先接管按键：↑/↓ 移动高亮，回车 / Tab 选中，Esc 收起。
+          // 选中走命令动作而不是发送消息——命令面不是普通文本。
+          if (slashRef.current.open) {
+            const rows = slashRef.current.rows
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              if (rows.length > 0) {
+                const delta = event.key === 'ArrowDown' ? 1 : -1
+                setSlashIndex((slashRef.current.index + delta + rows.length) % rows.length)
+              }
+              return true
+            }
+            if ((event.key === 'Enter' || event.key === 'Tab') && rows.length > 0) {
+              event.preventDefault()
+              const row = rows[Math.min(slashRef.current.index, rows.length - 1)]
+              if (row) pickSlashRef.current(row.id)
+              return true
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setSlashOpen(false)
+              setSlashDismissed(true)
+              return true
+            }
+          }
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault()
             onKeyDownRef.current(event as unknown as React.KeyboardEvent<HTMLDivElement>)
@@ -818,6 +1039,23 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   )
   editorRef.current = editor ?? null
 
+  // 计划评审挂起时锁住输入框：不可编辑、不可发送，评审反馈只在计划卡内。
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    editor.setEditable(!locked)
+  }, [editor, locked])
+
+  // placeholder 也要跟着外部模式变化（普通对话 ↔ 目标输入）：TipTap 的 Placeholder
+  // 只在创建时取一次字符串，目标选中态切换时需要手动更新并重绘装饰。
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    const extension = editor.extensionManager.extensions.find(
+      (item) => item.name === 'placeholder'
+    ) as { options?: { placeholder?: string } } | undefined
+    if (!extension?.options) return
+    extension.options.placeholder = placeholder ?? t('harness.input.placeholder')
+    editor.view.dispatch(editor.state.tr)
+  }, [editor, placeholder, t])
   /**
    * 安全读取编辑器视图 DOM。
    * TipTap v3.30 的 view 在视图未挂载/编辑器已销毁时返回一个仅含少量桩字段的 Proxy，
@@ -1084,7 +1322,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
    * 变成一个点了没反应的按钮（用户 2026-09-29 报的「会话进行中时，输入框里面没有内容，
    * 但是不能暂停」）。生成中带内容的那一档仍然是发送（进插话队列），不受影响。
    */
-  const primaryDisabled = !primaryStops && !hasContent
+  const primaryDisabled = locked || (!primaryStops && !hasContent)
 
   // chip 主题色经 CSS 变量注入 FileRef NodeView
   const chipCssVars = useMemo(
@@ -1111,9 +1349,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const providerOptionIcon = (providerType: string, size: number): React.ReactNode => {
     const Icon = providerIconMap[providerType]
-    const color = getProviderColor(providerType, isDarkMode) ?? '#888888'
+    // 品牌图标才吃品牌色；没有图标的降级走 ProviderMark 自己的「自定义端点」主色阶
+    const color = getProviderColor(providerType, isDarkMode)
     return Icon ? (
-      <Icon style={{ fontSize: size, color }} />
+      <Icon style={{ fontSize: size, color: color ?? '#888888' }} />
     ) : (
       <ProviderMark providerType={providerType} size={size} color={color} />
     )
@@ -1173,6 +1412,26 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               </span>
               <RiArrowRightSLine size={16} className="hmm-row-chev" />
             </button>
+          ) : null}
+          {/* Agent Teams opt-in：按话题持久化，关闭时不注入团队工具/提示词 */}
+          {currentTopicId != null ? (
+            <div className="hmm-row hmm-row-switch">
+              <span className="hmm-row-label">
+                {t('harness.input.teamModeLabel')}
+                <Tooltip title={t('harness.input.teamModeHint')}>
+                  <RiInformationLine size={13} className="hmm-row-info" />
+                </Tooltip>
+              </span>
+              <span className="hmm-row-control">
+                <Switch
+                  size="small"
+                  checked={teamModeEnabled}
+                  loading={teamModeBusy}
+                  disabled={teamModeBusy}
+                  onChange={(checked) => void handleToggleTeamMode(checked)}
+                />
+              </span>
+            </div>
           ) : null}
         </>
       )}
@@ -1503,6 +1762,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   return (
     <div
+      ref={composerRef}
       /* 外层托底：把输入卡片和下面那排选择器包成一块（参考形态：卡片浮在浅一档的底上） */
       style={{
         ...menuVars,
@@ -1513,6 +1773,27 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)'
       }}
     >
+      {/* 「/」命令面：贴着输入卡片上沿弹出（左侧/右侧与卡片对齐）。
+          只在输入框开头输入 `/` 时出现；Esc / 点击外部收起。 */}
+      {!simpleMode && slashOpen ? (
+        <div
+          style={{
+            position: 'absolute',
+            left: 6,
+            right: 6,
+            bottom: '100%',
+            zIndex: 60
+          }}
+        >
+          <HarnessSlashMenu
+            query={slashQuery}
+            activeIndex={slashIndex}
+            onActiveIndexChange={setSlashIndex}
+            onPick={pickSlashCommand}
+            menuRef={slashMenuRef}
+          />
+        </div>
+      ) : null}
       {/* 助手形象：只在空白会话里趴在输入框右上角；有对话内容就收起，
           免得压在消息 / 思考过程上（不拦截鼠标，纯装饰） */}
       {showMascot && (
@@ -1537,9 +1818,13 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       <div
         className="rounded-2xl input-scrollbar"
         style={{
+          position: 'relative',
           background: token.colorBgContainer,
-          border: `1px solid ${isDragOver ? '#4d6bfe' : colorBorder}`,
-          transition: 'border-color 0.2s',
+          border: `1px solid ${isDragOver ? '#4d6bfe' : goalCompose ? token.colorPrimaryBorder : colorBorder}`,
+          boxShadow: goalCompose
+            ? `0 0 0 3px ${token.colorPrimaryBg}, 0 0 28px ${token.colorPrimaryBg}`
+            : undefined,
+          transition: 'border-color 0.2s, box-shadow 0.2s',
           ...chipCssVars,
           // 触发条在容器内、面板在 portal 里，两边共用同一套 --hmm-* 主题变量
           ...menuVars
@@ -1550,11 +1835,29 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       >
         {/* overflow hidden：光标滚出编辑区可视范围时被裁切 */}
         <div
-          className="p-4 relative overflow-hidden"
+          className={`p-4 relative overflow-hidden${goalCompose ? ' is-goal-compose' : ''}`}
           onClick={handleContainerClick}
           ref={textareaRef}
+          style={{ paddingRight: goalCompose ? 132 : undefined }}
         >
           <EditorContent editor={editor} className="harness-input-editor" />
+          {goalCompose && !inputValue ? (
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: 16,
+                top: 16,
+                zIndex: 1,
+                pointerEvents: 'none',
+                fontSize: 13.5,
+                lineHeight: '19px',
+                color: token.colorTextTertiary
+              }}
+            >
+              {t('harness.goalInline.composePlaceholder')}
+            </span>
+          ) : null}
           {/* 自定义光标：固定高度、随光标位置移动、闪烁动画 */}
           <span
             ref={caretRef}
@@ -1583,6 +1886,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             caret-color: transparent;
           }
           .harness-input-editor .ProseMirror p { margin: 0; }
+          .is-goal-compose .harness-input-editor .ProseMirror p.is-editor-empty:first-child::before { content: none; }
           .harness-input-editor .ProseMirror p.is-editor-empty:first-child::before {
             content: attr(data-placeholder);
             color: #bfbfbf;
@@ -1661,6 +1965,15 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             background: var(--hmm-hover);
             border-color: var(--hmm-border);
           }
+          /* 13px 文本的行盒按字体 ascent/descent 居中后，字面仍比图标 / 徽章低约 1px
+             （Segoe UI 的 ascent 明显大于 descent，中文回退字形也跟着偏下）。
+             补 1px 下内边距，flex 居中时整块上移 0.5px：不缩放字形、不触发重绘模糊，
+             在 125% 缩放下正好把用户看到的那 1 个设备像素抵消掉。 */
+          .harness-model-trigger-name,
+          .harness-permission-trigger-name,
+          .harness-model-trigger-effort {
+            padding-bottom: 1px;
+          }
           .harness-model-trigger-name {
             min-width: 0;
             overflow: hidden;
@@ -1734,6 +2047,20 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             cursor: pointer;
           }
           .harness-model-menu .hmm-row:hover { background: var(--hmm-hover); }
+          /* 团队协作开关行是配置项不是可点入口：不显示 hover 高亮，开关自己承担交互 */
+          .harness-model-menu .hmm-row.hmm-row-switch { cursor: default; }
+          .harness-model-menu .hmm-row.hmm-row-switch:hover { background: transparent; }
+          .harness-model-menu .hmm-row-switch .hmm-row-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+          }
+          .harness-model-menu .hmm-row-info { color: var(--hmm-tertiary); }
+          .harness-model-menu .hmm-row-control {
+            margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+          }
           .harness-model-menu .hmm-row.is-disabled { cursor: default; }
           .harness-model-menu .hmm-row.is-disabled:hover { background: transparent; }
           .harness-model-menu .hmm-row-label { color: var(--hmm-text); }
@@ -1864,71 +2191,83 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             )}
           </div>
         )}
+        {goalCompose ? (
+          <div
+            className="flex items-center gap-1.5 px-4 pb-2"
+            style={{ color: token.colorTextTertiary, fontSize: 10 }}
+          >
+            <span>{t('harness.goalInline.composeHint')}</span>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between px-4 pb-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Tooltip title={t('harness.input.attachTooltip')}>
-              <Button
-                type="dashed"
-                shape="circle"
-                icon={<RiAttachment2 size={16} />}
-                onClick={async () => {
-                  const result = await window.api.file.selectImageFile(modelSupportsVision)
-                  if (result) {
-                    onAttachmentsChange([
-                      ...attachments,
-                      {
-                        dataUrl: result.dataUrl,
-                        fileName: result.fileName,
-                        isImage: result.isImage
-                      }
-                    ])
-                  }
-                }}
-              />
-            </Tooltip>
-            {permissionSelector}
+            {simpleMode ? null : (
+              <Tooltip title={t('harness.input.attachTooltip')}>
+                <Button
+                  type="dashed"
+                  shape="circle"
+                  icon={<RiAttachment2 size={16} />}
+                  onClick={async () => {
+                    const result = await window.api.file.selectImageFile(modelSupportsVision)
+                    if (result) {
+                      onAttachmentsChange([
+                        ...attachments,
+                        {
+                          dataUrl: result.dataUrl,
+                          fileName: result.fileName,
+                          isImage: result.isImage
+                        }
+                      ])
+                    }
+                  }}
+                />
+              </Tooltip>
+            )}
+            {simpleMode ? null : permissionSelector}
             {/* 模型选择：收起时一行（模型名 + 推理等级），点开是「模型 / 推理等级」两行入口。
               推理等级直接写进该模型的配置列，下一轮请求即按协议族翻译成各家字段。 */}
-            <Popover
-              open={menuOpen}
-              onOpenChange={handleMenuOpenChange}
-              trigger="click"
-              placement="topLeft"
-              arrow={false}
-              content={modelMenu}
-              styles={{
-                container: { padding: 0 },
-                content: { padding: 0, background: 'transparent', boxShadow: 'none' }
-              }}
-            >
-              <button
-                type="button"
-                className="harness-model-trigger"
-                aria-label={t('harness.input.modelMenuAria')}
-                aria-expanded={menuOpen}
+            {simpleMode ? null : (
+              <Popover
+                open={menuOpen}
+                onOpenChange={handleMenuOpenChange}
+                trigger="click"
+                placement="topLeft"
+                arrow={false}
+                content={modelMenu}
+                styles={{
+                  container: { padding: 0 },
+                  content: { padding: 0, background: 'transparent', boxShadow: 'none' }
+                }}
               >
-                {SelectedIcon ? (
-                  <SelectedIcon style={{ fontSize: 14, color: selectedColor }} />
-                ) : selectedProviderType ? (
-                  <ProviderMark
-                    providerType={selectedProviderType}
-                    size={14}
-                    color={selectedColor}
-                  />
-                ) : null}
-                <span className="harness-model-trigger-name">
-                  {selectedOption?.label ?? t('harness.input.modelPlaceholder')}
-                </span>
-                {effortTriggerText ? (
-                  <span className="harness-model-trigger-effort">{effortTriggerText}</span>
-                ) : null}
-                {menuOpen ? (
-                  <RiArrowUpSLine size={14} className="harness-model-trigger-chev" />
-                ) : (
-                  <RiArrowDownSLine size={14} className="harness-model-trigger-chev" />
-                )}
-              </button>
-            </Popover>
+                <button
+                  type="button"
+                  className="harness-model-trigger"
+                  aria-label={t('harness.input.modelMenuAria')}
+                  aria-expanded={menuOpen}
+                >
+                  {SelectedIcon ? (
+                    <SelectedIcon style={{ fontSize: 14, color: selectedColor }} />
+                  ) : selectedProviderType ? (
+                    <ProviderMark
+                      providerType={selectedProviderType}
+                      size={16}
+                      color={selectedColor}
+                    />
+                  ) : null}
+                  <span className="harness-model-trigger-name">
+                    {selectedOption?.label ?? t('harness.input.modelPlaceholder')}
+                  </span>
+                  {effortTriggerText ? (
+                    <span className="harness-model-trigger-effort">{effortTriggerText}</span>
+                  ) : null}
+                  {menuOpen ? (
+                    <RiArrowUpSLine size={14} className="harness-model-trigger-chev" />
+                  ) : (
+                    <RiArrowDownSLine size={14} className="harness-model-trigger-chev" />
+                  )}
+                </button>
+              </Popover>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
@@ -1974,14 +2313,18 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           padding: '6px 6px 2px'
         }}
       >
-        {inputSelectors}
-        {/* 会话用量状态条：靠右（与工具 / 技能同一行，右侧留白与左侧对称）。
+        {simpleMode ? null : (
+          <>
+            {inputSelectors}
+            {/* 会话用量状态条：靠右（与工具 / 技能同一行，右侧留白与左侧对称）。
             数据全部来自 harness_dialogue_usage，拿不到的项目不画。 */}
-        <HarnessUsageMeter
-          topicId={currentTopicId}
-          contextWindow={modelContextWindow}
-          streaming={isLoading}
-        />
+            <HarnessUsageMeter
+              topicId={currentTopicId}
+              contextWindow={modelContextWindow}
+              streaming={isLoading}
+            />
+          </>
+        )}
       </div>
     </div>
   )

@@ -22,9 +22,15 @@ export * from './workspace'
 export * from './harness/harness'
 export * from './harness/file-change'
 export * from './harness/agent'
+export * from './harness/subagent-session'
+export * from './harness/team-board'
+export * from './harness/team-task-event'
 // 资料库（document 依赖 wiki，graph 依赖 wiki）
 export * from './notes/todo'
 export * from './notes/wiki'
 export * from './notes/document'
 export * from './notes/graph'
 export * from './provider'
+
+
+

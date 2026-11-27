@@ -6,12 +6,27 @@ import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
 import { onAppEvent } from '../plugins/app-events'
 import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
-import { preloadHarnessData, clearAgentCache } from '../services/harness/preload-cache'
+import { preloadHarnessData } from '../services/harness/preload-cache'
+import { clearSubAgentCache } from '../services/harness/subagents'
 import { clearProviderCache } from '../provider/cache'
 import { todoStore } from '../runtime/harness/todo'
 import { goalStore } from '../runtime/harness/goal'
 import { harnessQueue } from '../services/harness/queue-store'
 import { goalRoundDriver } from '../services/harness/goal-driver'
+import { jobsRegistry } from '../runtime/harness/jobs'
+import { subagentSessions } from '../runtime/harness/subagent-sessions'
+import { buildResumedSubagentRuntime } from '../runtime/harness/subagent-resume'
+import { teamModeStore } from '../runtime/harness/team-mode'
+import { teamStore } from '../runtime/harness/team'
+import {
+  deleteTeamBoard,
+  getTeamBoard,
+  upsertTeamBoard
+} from '../database/mapper/harness/team-board'
+import {
+  appendTeamTaskEvent,
+  deleteTeamTaskEventsByTopic
+} from '../database/mapper/harness/team-task-event'
 import { dumpRendererMemory } from '../services/harness/renderer-memory'
 import { closeAllMnemon } from '../services/harness/mnemon-singleton'
 import { syncWorkspaceWatcher, stopWorkspaceWatcher, isWatchingPath } from '../workspace'
@@ -61,6 +76,44 @@ let scope: EffectScope | null = null
 export function startHarness(): void {
   if (started) return
   started = true
+
+  // 冷恢复接线：恢复的 inactive 会话第一次 send 时按话题/配置重建 runtime
+  subagentSessions.setRuntimeFactory(buildResumedSubagentRuntime)
+
+  // 任务板持久化接线：运行时只依赖 TeamBoardPersistence 接口，DB 实现放在这里装配。
+  // 整板 JSON 快照（含 deleted tombstone）+ revision/counter，重启后懒加载恢复。
+  teamStore.setPersistence({
+    load: async (topicId) => {
+      const row = await getTeamBoard(topicId)
+      if (!row) return null
+      try {
+        const tasks = JSON.parse(row.tasks) as unknown
+        if (!Array.isArray(tasks)) return null
+        return { revision: row.revision, counter: row.counter, tasks }
+      } catch {
+        return null
+      }
+    },
+    save: (topicId, snapshot) =>
+      upsertTeamBoard({
+        topic_id: topicId,
+        revision: snapshot.revision,
+        counter: snapshot.counter,
+        tasks: JSON.stringify(snapshot.tasks)
+      }),
+    remove: (topicId) => deleteTeamBoard(topicId),
+    appendEvent: (event) =>
+      appendTeamTaskEvent({
+        topic_id: event.topicId,
+        task_id: event.taskId,
+        action: event.action,
+        actor_id: event.actorId,
+        actor_name: event.actorName,
+        subject: event.subject,
+        task_revision: event.taskRevision
+      }),
+    removeEvents: (topicId) => deleteTeamTaskEventsByTopic(topicId)
+  })
 
   const effects = new EffectScope()
   scope = effects
@@ -188,9 +241,13 @@ export function stopHarness(): void {
 
 // ── 应用生命周期钩子（core 在固定时机直接调用）──────────────────────────────
 
-/** 加载页预取：初始化完成后、主窗口交接前，把常用数据读进缓存 */
+/** 加载页预取：初始化完成后、主窗口交接前，把常用数据读进缓存并恢复子代理会话历史 */
 export function preloadHarness(): Promise<void> {
-  return preloadHarnessData()
+  return Promise.all([
+    preloadHarnessData(),
+    // 恢复历史会话（inactive）：先只读可看；第一次续聊时再按快照冷恢复 runtime
+    subagentSessions.restorePersistedSessions()
+  ]).then(() => undefined)
 }
 
 /**
@@ -205,12 +262,22 @@ export function preloadHarness(): Promise<void> {
  * 单独关闭后重新按新库装载。
  */
 export function resetHarnessAccountState(): void {
-  clearAgentCache()
+  clearSubAgentCache()
   clearProviderCache()
   todoStore.reset()
   goalStore.reset()
+  teamModeStore.reset()
   harnessQueue.reset()
   goalRoundDriver.reset()
+  // 后台命令按 topicId 归属，换账号后同一个 id 可能属于另一个会话：
+  // 不清掉会出现「新账号的顶部栏里挂着上一个账号的 dev server」
+  jobsRegistry.clearAll()
+  // 后台子代理会话同样按 topicId 索引（含会话事件流）：换账号后必须清掉，否则串号
+  subagentSessions.clearAll()
+  // 换库后从新账号库恢复子代理会话历史（旧库数据保留，只清内存）
+  void subagentSessions.restorePersistedSessions()
+  // 共享任务板同样按 topicId 索引，换账号必须清空
+  teamStore.clearAll()
   logger.info('[Harness] Account-scoped in-memory state cleared for profile switch')
 }
 
@@ -221,6 +288,11 @@ export function dumpHarnessMemory(reason: string, exitCode: number): void {
 
 /** 退出前释放：Mnemon 会话与 MCP stdio 子进程都不能留在系统里 */
 export function closeHarnessResources(): void {
+  // 后台 execute 是真实系统进程（dev server / watcher）：退出时不取消会留下孤儿进程
+  jobsRegistry.clearAll()
+  // 后台子代理会话：退出时中止在途运行，避免闭包继续写已销毁的窗口/任务
+  subagentSessions.clearAll()
+  teamStore.clearAll()
   closeAllMnemon()
   void closeAllMcp()
 }

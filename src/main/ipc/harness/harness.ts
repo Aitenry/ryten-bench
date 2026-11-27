@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog } from 'electron'
+﻿import { BrowserWindow, app, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
@@ -21,18 +21,26 @@ import type {
   SubAgentEvent,
   MemoryInjection,
   TurnMeta,
-  HistoryCompaction
+  HistoryCompaction,
+  SubAgentMainModelDescriptor
 } from '../../services/harness/types'
 import type { QueueAttachments } from '../../services/harness/queue-store'
 import type { BaseChatModel } from '../../ai/chat-model'
 import { getProviderService } from '../../provider/service'
-import { getSubAgentDefs } from '../../services/harness/preload-cache'
+import { listEnabledSubAgents } from '../../services/harness/subagents'
 import { todoStore } from '../../runtime/harness/todo'
 import { closeOutInProgress, decideCloseOutOnTurnEnd } from '../../runtime/harness/todo-closeout'
 import { answerTrailingCount, type TurnFinal } from '../../services/harness/answer-boundary'
 import { goalStore } from '../../runtime/harness/goal'
+import { planModeStore } from '../../runtime/harness/plan-mode'
+import { teamModeStore } from '../../runtime/harness/team-mode'
 import { jobsRegistry } from '../../runtime/harness/jobs'
 import { subagentSessions } from '../../runtime/harness/subagent-sessions'
+import { teamStore } from '../../runtime/harness/team'
+import type {
+  SubagentConversationEvent,
+  SubagentPromptResult
+} from '../../runtime/harness/subagent-conversation'
 import { startMemoryAgent, type StartMemoryAgentResult } from '../../runtime/harness/memory-agent'
 import { questionService } from '../../runtime/harness/ask'
 import {
@@ -59,6 +67,7 @@ import {
   getDialoguesByTopicId,
   getTopicById
 } from '../../database/mapper/harness/harness'
+import { listTeamTaskEvents } from '../../database/mapper/harness/team-task-event'
 import {
   memoryScopeRoot,
   parseMemoryScope,
@@ -85,15 +94,28 @@ export const HARNESS_EVENTS = {
   queueUpdated: 'harness:harness-queue-updated',
   queueSteered: 'harness:harness-queue-steered',
   goalUpdated: 'harness:harness-goal-updated',
+  /** 计划模式开关变更（输入框的计划模式徽标实时刷新） */
+  planUpdated: 'harness:harness-plan-updated',
+  teamModeUpdated: 'harness:harness-team-mode-updated',
   jobsUpdated: 'harness:harness-jobs-updated',
   agentsUpdated: 'harness:harness-agents-updated',
-  agentOutputUpdated: 'harness:harness-agent-output-updated',
+  /** 子代理会话事件增量（打开会话视图时只推给正在查看该子代理的窗口） */
+  agentConversationUpdated: 'harness:harness-agent-conversation-updated',
+  /** 共享任务板变更（主智能体 / 子代理协作的 team/task 投影，整板快照） */
+  teamUpdated: 'harness:harness-team-updated',
   questionAsked: 'harness:harness-question-asked',
   approvalAsked: 'harness:harness-approval-asked',
   /** 某条会话「是否正挂着等用户确认」（侧栏黄点）：提问 / 审批挂起时 true，结算时 false */
   topicPending: 'harness:harness-topic-pending',
   permissionUpdated: 'harness:harness-permission-updated',
-  todosUpdated: 'harness:harness-todos-updated'
+  todosUpdated: 'harness:harness-todos-updated',
+  /**
+   * 生成中本轮累计用量（每次模型调用结束推一条）。
+   *
+   * 只用于输入框底栏的「本轮 N 次调用 · X tok」实时数字；权威账本仍是流结束后
+   * 落库的 harness_dialogue_usage（渲染层在一轮结束时切回它）。
+   */
+  turnUsage: 'harness:harness-turn-usage'
 } as const
 
 /**
@@ -210,7 +232,10 @@ async function persistTurnUsage(params: {
       providerMark = config?.provider ?? null
       configuredModel = config?.model ?? null
     } catch (err) {
-      logger.warn('[Harness] Failed to read provider config, usage row will only record tokens:', err)
+      logger.warn(
+        '[Harness] Failed to read provider config, usage row will only record tokens:',
+        err
+      )
     }
     await addDialogueUsage({
       workspace_id: getActiveWorkspaceId(),
@@ -247,7 +272,9 @@ async function runHarnessTurn(
 
   // 渲染进程已失效（崩溃/窗口关闭）时跳过本轮：不再创建模型、不保存消息、不向死帧发送
   if (!isSenderAlive(event.sender)) {
-    logger.warn(`[Harness] Renderer process is gone (senderId=${event.sender.id}), skipping this turn`)
+    logger.warn(
+      `[Harness] Renderer process is gone (senderId=${event.sender.id}), skipping this turn`
+    )
     return { topicId: options?.topicId ?? 0, cancelled: true, turnId: 0 }
   }
 
@@ -301,7 +328,10 @@ async function runHarnessTurn(
           await activateChatTopic(topicId)
           harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
         } catch (err) {
-          logger.warn('[Chat] Failed to switch session directory for this turn (turn unaffected):', err)
+          logger.warn(
+            '[Chat] Failed to switch session directory for this turn (turn unaffected):',
+            err
+          )
         }
       }
     } catch (err) {
@@ -386,21 +416,29 @@ async function runHarnessTurn(
 
   // 按模型上下文窗口换算历史上下文字符预算（默认 20,000 token；1 token ≈ 1 字符的保守换算）
   // 同时取出该模型的「工具调用轮数」上限，注入本轮运行时护栏
+  let modelDescriptor: SubAgentMainModelDescriptor | undefined
   let contextBudget: number | undefined
   let maxToolRounds: number | undefined
+  /** 原始窗口（token）：压缩压力按真实 token 判定时用，与上面按 1:1 换算的字符预算分开存 */
+  let contextWindowTokens: number | undefined
   try {
     const providerConfig = await getProviderService().getConfig(options?.providerId)
+    modelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
     const windowTokens =
       typeof providerConfig.metadata?.context_window === 'number'
         ? providerConfig.metadata.context_window
         : 0
     contextBudget = Math.max(20_000, windowTokens)
+    contextWindowTokens = windowTokens > 0 ? windowTokens : undefined
     maxToolRounds = providerConfig.max_tool_rounds
     logger.info(
       `[Harness] Model context window=${windowTokens} tokens → history budget=${contextBudget} chars, maxToolRounds=${maxToolRounds}`
     )
   } catch (err) {
-    logger.warn('[Harness] Failed to read model context window, using default history budget 20000:', err)
+    logger.warn(
+      '[Harness] Failed to read model context window, using default history budget 20000:',
+      err
+    )
   }
 
   // 创建 AbortController 用于取消流式输出
@@ -426,7 +464,9 @@ async function runHarnessTurn(
   const onSenderGone = (): void => {
     if (senderDead) return
     senderDead = true
-    logger.warn(`[Harness] Renderer process is gone (senderId=${event.sender.id}), aborting streaming output`)
+    logger.warn(
+      `[Harness] Renderer process is gone (senderId=${event.sender.id}), aborting streaming output`
+    )
     abortController.abort()
   }
   event.sender.on('render-process-gone', onSenderGone)
@@ -467,7 +507,7 @@ async function runHarnessTurn(
     harnessService = new HarnessService(
       model,
       tools,
-      await getSubAgentDefs(harnessSettings?.activeWorkspaceId ?? 0),
+      await listEnabledSubAgents(harnessSettings?.activeWorkspaceId ?? 0),
       getDialoguesByTopicId,
       harnessSettings?.skillsPath || undefined,
       effectiveSkills,
@@ -475,7 +515,9 @@ async function runHarnessTurn(
       harnessSettings?.memoryPath || undefined,
       harnessSettings?.activeWorkspaceId ?? 0,
       maxToolRounds,
-      memoryScope
+      memoryScope,
+      modelDescriptor,
+      options?.turnMeta?.source === 'goal-round'
     )
   } catch (err) {
     // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
@@ -556,6 +598,9 @@ async function runHarnessTurn(
       topicId,
       signal: abortController.signal,
       contextBudget,
+      // 原始窗口（token）：压缩压力优先按上一轮真实 token ÷ 窗口 ≥ 79% 判定，
+      // 字符预算只做兜底（见 runtime/harness/context-pressure.ts）
+      contextWindow: contextWindowTokens,
       // 摘要压缩开始：立即推送「压缩中」过渡 chunk（不落库，结果由流尾 historyCompacted 携带，
       // 渲染进程收到结果块后原地替换过渡块，形成「压缩中 → 压缩结果」的转变）
       onCompactionStart: () => {
@@ -572,7 +617,9 @@ async function runHarnessTurn(
       drainInjections: async (): Promise<AgentInjection[] | null> => {
         const items = harnessQueue.takeInjections(topicId)
         if (items.length === 0) return null
-        logger.info(`[HarnessQueue] Draining ${items.length} queued message(s) for injection (topic=${topicId})`)
+        logger.info(
+          `[HarnessQueue] Draining ${items.length} queued message(s) for injection (topic=${topicId})`
+        )
         return items.map((item) => {
           sendChunk({ steered: { text: item.text } })
           // 队列已摘除该条：广播给所有窗口（含发起窗口）抹掉队列行
@@ -583,6 +630,20 @@ async function runHarnessTurn(
     },
     (records) => {
       usageRecords = records
+    },
+    // 生成中的实时进度：只发「本轮累计」，不落库、不参与结算。拿不到 token 数字的调用
+    // （模型没回传 usage_metadata）不发，免得底栏跳出一条 0 tok 的假消息。
+    (records) => {
+      const totals = sumUsage(records)
+      if (!totals.hasTokens) return
+      safeSend(event.sender, HARNESS_EVENTS.turnUsage, {
+        topicId,
+        turnId,
+        calls: totals.calls,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        totalTokens: totals.totalTokens
+      })
     }
   )
 
@@ -601,7 +662,10 @@ async function runHarnessTurn(
       // 部分输出后流失败：转发错误事件给前端，并标记跳过落库
       if (chunk.streamError) {
         acc.failed = true
-        logger.error('[Harness] Stream failed (partial output already produced):', chunk.streamError.message)
+        logger.error(
+          '[Harness] Stream failed (partial output already produced):',
+          chunk.streamError.message
+        )
         safeSend(event.sender, HARNESS_EVENTS.streamError, {
           error: chunk.streamError.message,
           topicId,
@@ -1149,7 +1213,10 @@ async function resolveTurnMemoryScope(
       const raw = rows[0]?.memory_scope
       if (raw) return parseMemoryScope(raw, workspaceId)
     } catch (err) {
-      logger.warn('[Harness] Failed to read topic memory scope, falling back to workspace memory:', err)
+      logger.warn(
+        '[Harness] Failed to read topic memory scope, falling back to workspace memory:',
+        err
+      )
     }
   }
   return parseMemoryScope(fallback, workspaceId)
@@ -1267,7 +1334,7 @@ async function drainPendingQueue(
 
 /**
  * 对话发送 / 流式输出 / 目录选择 / 技能列表 IPC：收成 `harness:*` 处理器表，
- * 连同助手依赖的全局订阅（onChange / onAsk / onLiveOutput）一起装配。
+ * 连同助手依赖的全局订阅（onChange / onAsk / 会话事件流）一起装配。
  *
  * - 通道名一律 `harness:<原扁平名>`，由 `registerIpcHandlers` 挂到 ipcMain；
  * - 原先的 `ipcMain.on`（start-stream / cancel-stream / agent-watch）改成普通 invoke 通道，
@@ -1412,10 +1479,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       // 技能优先级：harnessSettings.enabledSkills > mainAgent.skills
       const effectiveSkills = harnessSettings?.enabledSkills ?? mainAgentDefaults?.skills
 
-      // 该模型的「工具调用轮数」上限（取不到则用工程默认值，由 HarnessService 兜底）
+      // 该模型的「工具调用轮数」上限（取不到则用工程默认值，由 HarnessService 兜底）；
+      // 同时记录 provider/model 描述符，供后台子代理持久化与冷恢复回到同一模型
       let maxToolRounds: number | undefined
+      let syncModelDescriptor: SubAgentMainModelDescriptor | undefined
       try {
-        maxToolRounds = (await getProviderService().getConfig(options?.providerId)).max_tool_rounds
+        const providerConfig = await getProviderService().getConfig(options?.providerId)
+        maxToolRounds = providerConfig.max_tool_rounds
+        syncModelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
       } catch (err) {
         logger.warn('[Harness] Failed to read model max tool call rounds, using default:', err)
       }
@@ -1423,7 +1494,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       const harnessService = new HarnessService(
         model,
         tools,
-        await getSubAgentDefs(harnessSettings?.activeWorkspaceId ?? 0),
+        await listEnabledSubAgents(harnessSettings?.activeWorkspaceId ?? 0),
         getDialoguesByTopicId,
         harnessSettings?.skillsPath || undefined,
         effectiveSkills,
@@ -1431,7 +1502,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         harnessSettings?.memoryPath || undefined,
         harnessSettings?.activeWorkspaceId ?? 0,
         maxToolRounds,
-        syncMemoryScope
+        syncMemoryScope,
+        syncModelDescriptor,
+        false
       )
       return await harnessService.sendMessage(question, options)
     }
@@ -1439,10 +1512,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
   handle(
     'harness-start-stream',
-    (
-      question: string,
-      options?: StartStreamOptions
-    ): { started: boolean; queued?: boolean } => {
+    (question: string, options?: StartStreamOptions): { started: boolean; queued?: boolean } => {
       // 原 ipcMain.on('harness-start-stream') 的 event.sender：新契约不透传事件对象
       const sender = primarySender()
       if (!sender) return { started: false }
@@ -1480,7 +1550,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           if (cancelled) {
             // 用户停止本轮：disarm 目标并跳过自动续跑调度（修复：此前 cancelled 被丢弃，
             // 停止后立即白烧一轮自动轮；目标保持 active，用户要求「继续」时经 resume 重新武装）
-            logger.info('[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation')
+            logger.info(
+              '[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation'
+            )
             goalStore.disarm(topicId)
             return
           }
@@ -1579,6 +1651,116 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return await goalStore.load(topicId)
   })
 
+  /**
+   * 目标写入（输入框 / 目标弹窗的人工入口）。
+   *
+   * 创建、编辑、暂停、恢复、完成、清除全部走同一份 GoalStore（与目标工具共用状态机、
+   * 单目标语义与 CAS），只是 authority 不走工具层——界面上的操作本身就是「人类直接请求」。
+   * 失败不抛错，返回 `{ ok:false, error }` 由渲染层按本语言展示（与工坊动作同一套约定）。
+   */
+  handle(
+    'harness-goal-create',
+    async (payload: { topicId: number; objective: string; maxGoalRounds?: number }) => {
+      try {
+        const objective = payload.objective?.trim() ?? ''
+        if (!objective) return { ok: false, error: 'goal-objective-required' }
+        const goal = await goalStore.create(payload.topicId, objective, payload.maxGoalRounds)
+        return { ok: true, goal }
+      } catch (err) {
+        logger.warn('[Goal] Failed to create goal from the UI:', err)
+        return { ok: false, error: (err as Error).message }
+      }
+    }
+  )
+
+  handle(
+    'harness-goal-update',
+    async (payload: {
+      topicId: number
+      action: 'edit' | 'pause' | 'resume' | 'complete'
+      objective?: string
+      maxGoalRounds?: number
+    }) => {
+      try {
+        const current = await goalStore.load(payload.topicId)
+        if (!current) return { ok: false, error: 'goal-missing' }
+        const goal = await goalStore.update(
+          payload.topicId,
+          current.id,
+          current.revision,
+          payload.action,
+          { objective: payload.objective, maxGoalRounds: payload.maxGoalRounds }
+        )
+        return { ok: true, goal }
+      } catch (err) {
+        logger.warn('[Goal] Failed to update goal from the UI:', err)
+        return { ok: false, error: (err as Error).message }
+      }
+    }
+  )
+
+  handle('harness-goal-clear', async (topicId: number) => {
+    try {
+      await goalStore.delete(topicId)
+      // GoalStore.delete 只清缓存与数据库行（话题删除时也走它）：界面上的目标条
+      // 靠广播收回，所以这里补一条 null 目标，避免清理后横幅还挂在输入框上方。
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed())
+          safeSend(win.webContents, HARNESS_EVENTS.goalUpdated, { topicId, goal: null })
+      }
+      return { ok: true }
+    } catch (err) {
+      logger.warn('[Goal] Failed to clear goal from the UI:', err)
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  // 计划模式：读取（顺带回填内存缓存）/ 切换（持久化 + 广播）
+  handle('harness-plan-get', async (topicId: number) => {
+    const active = await planModeStore.ensure(topicId)
+    return { topicId, active }
+  })
+
+  handle('harness-plan-set', async (payload: { topicId: number; active: boolean }) => {
+    const active = await planModeStore.setActive(payload.topicId, payload.active)
+    return { topicId: payload.topicId, active }
+  })
+
+  // 计划模式变更 → 广播到所有窗口（输入框徽标实时刷新）
+  scope.effect(() => {
+    planModeStore.onChange = (topicId, active) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed())
+          safeSend(win.webContents, HARNESS_EVENTS.planUpdated, { topicId, active })
+      }
+    }
+    return () => {
+      planModeStore.onChange = undefined
+    }
+  })
+
+  // Agent Teams 模式（opt-in，按话题）：读取（顺带回填内存缓存）/ 切换（持久化 + 广播）
+  handle('harness-team-mode-get', async (topicId: number) => {
+    const enabled = await teamModeStore.ensure(topicId)
+    return { topicId, enabled }
+  })
+
+  handle('harness-team-mode-set', async (payload: { topicId: number; enabled: boolean }) =>
+    teamModeStore.setEnabled(payload.topicId, payload.enabled)
+  )
+
+  // 团队模式变更 → 广播到所有窗口（侧栏菜单勾选/顶部栏提示实时刷新）
+  scope.effect(() => {
+    teamModeStore.onChange = (view) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.teamModeUpdated, view)
+      }
+    }
+    return () => {
+      teamModeStore.onChange = undefined
+    }
+  })
+
   // 目标变更 → 广播到所有窗口（GoalBar 实时刷新）
   scope.effect(() => {
     goalStore.onChange = (topicId, goal) => {
@@ -1605,6 +1787,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
+  // 顶部栏「后台任务」入口：列表 / 手动停止 / 输出快照（peek 不消费模型的游标）
+  handle('harness-jobs-list', (topicId: number) => jobsRegistry.list(topicId))
+  handle('harness-job-kill', (topicId: number, jobId: string) => {
+    const result = jobsRegistry.kill(jobId, topicId)
+    // undefined 经 IPC 结构化克隆后语义不明确，统一成 null（渲染层按 null 判空）
+    return { outcome: result.outcome, job: result.job ?? null }
+  })
+  handle('harness-job-output-peek', (topicId: number, jobId: string) =>
+    jobsRegistry.peek(jobId, topicId)
+  )
+
   // 后台子代理会话变更 → 广播（顶部栏代理列表实时刷新）
   scope.effect(() => {
     subagentSessions.onChange = (topicId, rows) => {
@@ -1618,8 +1811,186 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
   handle('harness-agents-list', (topicId: number) => subagentSessions.list(topicId))
-  handle('harness-agent-output', (topicId: number, agentId: string) =>
-    subagentSessions.readOutput(agentId, topicId)
+
+  // 共享任务板（Agent Teams / 超级智能体）：整板快照推送 + 按话题拉取。
+  // 板子很小（单话题上限 200 条），整板替换比增量协议简单可靠，渲染层按 revision 去旧。
+  scope.effect(() => {
+    teamStore.onChange = (snapshot) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue
+        safeSend(win.webContents, HARNESS_EVENTS.teamUpdated, snapshot)
+      }
+    }
+    return () => {
+      teamStore.onChange = undefined
+    }
+  })
+  // 任务板读取：先懒加载持久化快照（重启后第一次打开协作面板/调用工具时恢复）
+  handle('harness-team-tasks', async (topicId: number) => {
+    await teamStore.ensureLoaded(topicId)
+    return teamStore.snapshot(topicId)
+  })
+
+  // Agent Teams 最近活动（任务事件日志；追加写，面板 footer 展示最近一条）
+  handle('harness-team-events', async (topicId: number, limit = 20) => {
+    const rows = await listTeamTaskEvents(topicId, limit)
+    return rows.map((row) => ({
+      id: row.id,
+      taskId: row.task_id,
+      action: row.action,
+      actorId: row.actor_id,
+      actorName: row.actor_name,
+      subject: row.subject,
+      taskRevision: row.task_revision,
+      createdAt: row.created_at
+    }))
+  })
+
+  // 子代理会话视图（2026-11-26）：watch 即返回快照；此后把事件增量按 40ms 合批推送，
+  // 轮次结束（turn_end）立即 flush，保证「进行中 → 已完成/失败」状态翻转及时可见。
+  const AGENT_CONVERSATION_FLUSH_MS = 40
+  const conversationWatchSet = new Set<string>()
+  const conversationBuffers = new Map<string, SubagentConversationEvent[]>()
+  const conversationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const conversationKey = (topicId: number, agentId: string): string => `${topicId}:${agentId}`
+  const flushAgentConversation = (topicId: number, agentId: string): void => {
+    const key = conversationKey(topicId, agentId)
+    const timer = conversationTimers.get(key)
+    if (timer) {
+      clearTimeout(timer)
+      conversationTimers.delete(key)
+    }
+    const events = conversationBuffers.get(key)
+    conversationBuffers.delete(key)
+    if (!events || events.length === 0) return
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      safeSend(win.webContents, HARNESS_EVENTS.agentConversationUpdated, {
+        topicId,
+        agentId,
+        events
+      })
+    }
+  }
+  scope.effect(() => {
+    subagentSessions.onConversationEvent = (topicId, agentId, event) => {
+      const key = conversationKey(topicId, agentId)
+      if (!conversationWatchSet.has(key)) return
+      let buffer = conversationBuffers.get(key)
+      if (!buffer) {
+        buffer = []
+        conversationBuffers.set(key, buffer)
+      }
+      buffer.push(event)
+      // 轮次结束是状态翻转，必须尽快送达；其余 token 级事件按 40ms 合批
+      if (event.kind === 'turn_end') {
+        flushAgentConversation(topicId, agentId)
+        return
+      }
+      if (!conversationTimers.has(key)) {
+        conversationTimers.set(
+          key,
+          setTimeout(() => flushAgentConversation(topicId, agentId), AGENT_CONVERSATION_FLUSH_MS)
+        )
+      }
+    }
+    return () => {
+      subagentSessions.onConversationEvent = undefined
+      for (const timer of conversationTimers.values()) clearTimeout(timer)
+      conversationTimers.clear()
+      conversationBuffers.clear()
+      conversationWatchSet.clear()
+    }
+  })
+  handle(
+    'harness-agent-conversation',
+    (topicId: number, agentId: string) =>
+      subagentSessions.readConversation(agentId, topicId) ?? null
+  )
+  /** 会话视图向前翻页：取 beforeSeq 之前最近一页完整轮次（滚动到顶部时调用） */
+  handle(
+    'harness-agent-conversation-older',
+    (topicId: number, agentId: string, beforeSeq: number, maxTurns?: number) =>
+      subagentSessions.readOlderConversation(agentId, topicId, beforeSeq, maxTurns) ?? null
+  )
+  /**
+   * 打开/关闭子代理会话视图：
+   * - watch=true：登记关注并**直接返回快照**（渲染层先订阅事件再 invoke，快照之前的
+   *   增量事件会按 seq 丢弃，不存在丢失窗口）；
+   * - watch=false：取消关注并丢弃未发送的缓冲（离开会话视图后不再产生 IPC）。
+   */
+  handle('harness-agent-conversation-watch', (topicId: number, agentId: string, watch: boolean) => {
+    const key = conversationKey(topicId, agentId)
+    if (watch) {
+      conversationWatchSet.add(key)
+      return subagentSessions.readConversation(agentId, topicId) ?? null
+    }
+    conversationWatchSet.delete(key)
+    const timer = conversationTimers.get(key)
+    if (timer) clearTimeout(timer)
+    conversationTimers.delete(key)
+    conversationBuffers.delete(key)
+    return null
+  })
+
+  // 清理联动：话题删除 / 切换账号时，主进程不能给已不存在的会话继续保留 watch 状态
+  // 与合批定时器（此前只在渲染层主动 unwatch 时清理，刷新/删话题会留下悬挂项）。
+  scope.effect(() => {
+    const clearTopicWatches = (topicId: number): void => {
+      const prefix = `${topicId}:`
+      for (const key of [...conversationWatchSet]) {
+        if (!key.startsWith(prefix)) continue
+        conversationWatchSet.delete(key)
+        const timer = conversationTimers.get(key)
+        if (timer) clearTimeout(timer)
+        conversationTimers.delete(key)
+        conversationBuffers.delete(key)
+      }
+    }
+    const clearAllWatches = (): void => {
+      conversationWatchSet.clear()
+      for (const timer of conversationTimers.values()) clearTimeout(timer)
+      conversationTimers.clear()
+      conversationBuffers.clear()
+    }
+    subagentSessions.onTopicCleared = clearTopicWatches
+    subagentSessions.onAllCleared = clearAllWatches
+    return () => {
+      subagentSessions.onTopicCleared = undefined
+      subagentSessions.onAllCleared = undefined
+      clearAllWatches()
+    }
+  })
+
+  /**
+   * 从会话视图向子代理投递一条消息（人工续聊）。
+   *
+   * 复用主代理 `send_message` 同一个 registry.send：空闲立即开新一轮、运行中进 FIFO
+   * 收件箱；投递本身返回回执，不等待子代理回复（新轮的事件走 conversation 通道）。
+   */
+  handle(
+    'harness-agent-prompt',
+    async (payload: {
+      topicId: number
+      agentId: string
+      message: string
+    }): Promise<SubagentPromptResult> => {
+      const topicId = typeof payload?.topicId === 'number' ? payload.topicId : -1
+      const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
+      const text = typeof payload?.message === 'string' ? payload.message.trim() : ''
+      if (!text) return { ok: false, error: 'empty message' }
+      try {
+        // inactive 会话会在这里冷恢复（重建 runtime）后继续；失败返回可读错误
+        const { messageId } = await subagentSessions.send(agentId, topicId, text)
+        return { ok: true, messageId }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+  /** 停止该子代理当前这一轮（keepInbox：已排队但未开始的消息保留，可继续续聊） */
+  handle('harness-agent-interrupt', (topicId: number, agentId: string) =>
+    subagentSessions.interrupt(agentId, topicId)
   )
 
   /**
@@ -1655,7 +2026,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
           }
         }
       } catch (err) {
-        logger.warn('[Harness] Failed to read the question for this turn, memory consolidation will only include the answer:', err)
+        logger.warn(
+          '[Harness] Failed to read the question for this turn, memory consolidation will only include the answer:',
+          err
+        )
       }
 
       // 与主轮次同源的工具调用轮数护栏（取不到则由 startMemoryAgent 用默认值兜底）
@@ -1663,7 +2037,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       try {
         maxToolRounds = (await getProviderService().getConfig(undefined)).max_tool_rounds
       } catch (err) {
-        logger.warn('[Harness] Failed to read model max tool call rounds, memory consolidation will use the default:', err)
+        logger.warn(
+          '[Harness] Failed to read model max tool call rounds, memory consolidation will use the default:',
+          err
+        )
       }
 
       // 「存入记忆」也要落进**这条会话自己的**记忆作用域（插件会话 → 那份插件的记忆）
@@ -1691,57 +2068,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  // 后台子代理输出推送（弹窗监听后端，替代手动刷新/轮询）：
-  // 仅在渲染端 watch 该 agent 时消费 onLiveOutput，并按 500ms 节流（防 token 级 IPC 风暴）
-  const agentWatchSet = new Set<string>() // `${topicId}:${agentId}`
-  const agentPushTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const agentLastPush = new Map<string, number>()
-  const AGENT_OUTPUT_PUSH_MS = 500
-  const pushAgentOutput = (topicId: number, agentId: string): void => {
-    const output = subagentSessions.readOutput(agentId, topicId)
-    if (!output) return
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        safeSend(win.webContents, HARNESS_EVENTS.agentOutputUpdated, { topicId, agentId, output })
-      }
-    }
-  }
-  scope.effect(() => {
-    subagentSessions.onLiveOutput = (topicId, agentId) => {
-      const key = `${topicId}:${agentId}`
-      if (!agentWatchSet.has(key)) return
-      const now = Date.now()
-      const last = agentLastPush.get(key) ?? 0
-      if (now - last >= AGENT_OUTPUT_PUSH_MS) {
-        agentLastPush.set(key, now)
-        pushAgentOutput(topicId, agentId)
-      } else if (!agentPushTimers.has(key)) {
-        agentPushTimers.set(
-          key,
-          setTimeout(() => {
-            agentPushTimers.delete(key)
-            agentLastPush.set(key, Date.now())
-            pushAgentOutput(topicId, agentId)
-          }, AGENT_OUTPUT_PUSH_MS)
-        )
-      }
-    }
-    return () => {
-      subagentSessions.onLiveOutput = undefined
-    }
-  })
-  handle('harness-agent-watch', (topicId: number, agentId: string, watch: boolean) => {
-    const key = `${topicId}:${agentId}`
-    if (watch) {
-      agentWatchSet.add(key)
-      pushAgentOutput(topicId, agentId) // 打开弹窗即推一次当前快照
-    } else {
-      agentWatchSet.delete(key)
-      const timer = agentPushTimers.get(key)
-      if (timer) clearTimeout(timer)
-      agentPushTimers.delete(key)
-    }
-  })
+  // 后台子代理会话的实时内容走「会话事件流」通道（subagent-conversation），
+  // 旧的纯文本输出 watch/节流链路已删除（无消费者，且与会话事件流重复）。
 
   // 提问系统：新提问 → 广播到所有窗口（前端弹窗）；回答/查询走 handle
   scope.effect(() => {
@@ -1783,7 +2111,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       requestId,
       decision === 'allow-once' ? 'allow-once' : ('deny' as ApprovalDecision)
     )
-    logger.info(`[Permission] Approval decision requestId=${requestId} decision=${decision} matched=${allowed}`)
+    logger.info(
+      `[Permission] Approval decision requestId=${requestId} decision=${decision} matched=${allowed}`
+    )
     return allowed
   })
   // 切话题 / 重新加载时拉一次当前挂起的审批（弹窗可能是在别的界面挂起的）

@@ -1,25 +1,36 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { theme, Button } from 'antd'
-import { RiChatAiLine, RiFoldersLine, RiListSettingsLine } from '@remixicon/react'
+import { theme, Button, Spin, App } from 'antd'
+import { RiAiAgentLine, RiChatAiLine, RiFoldersLine, RiListSettingsLine } from '@remixicon/react'
 import { useTheme } from '@renderer/hooks/useTheme'
 import { useTranslation } from '@renderer/i18n'
 import { useHarness } from '../contexts/harness/HarnessContextCore'
 import HarnessHeader from '../components/harness/HarnessHeader'
-import HarnessMessageArea from '../components/harness/HarnessMessageArea'
+import ConversationPane from '../components/harness/ConversationPane'
+import ConversationFooter from '../components/harness/ConversationFooter'
+import SubagentInput from '../components/harness/SubagentInput'
 import HarnessInput from '../components/harness/HarnessInput'
+import InlineGoalCard from '../components/harness/InlineGoalCard'
+import InlinePlanTray from '../components/harness/InlinePlanTray'
+import PermissionApprovalPanel from '../components/harness/PermissionApprovalPanel'
+import { useTopicPending } from '../hooks/harness/useTopicPending'
 import WelcomeIntro from '../components/harness/WelcomeIntro'
 import QueueDock from '../components/harness/QueueDock'
 import TaskProgressCard from '../components/harness/TaskProgressCard'
-import GoalBar from '../components/harness/GoalBar'
 import AskQuestionModal from '../components/harness/AskQuestionModal'
-import PermissionApprovalModal from '../components/harness/PermissionApprovalModal'
 import ModelRecoveryModal from '../components/harness/ModelRecoveryModal'
 import WorkspacePanel, { type WorkspacePanelHandle } from '../components/harness/WorkspacePanel'
+import { useSubagentConversation } from '../hooks/harness/useSubagentConversation'
+import type {
+  ApprovalDecision,
+  ApprovalRequestView,
+  SubagentSessionRow
+} from '../../../shared/harness/types'
 import {
   WorkspaceBridgeContext,
   type WorkspaceBridge,
   type ToolDetailRequest
 } from '../contexts/harness/workspace-bridge'
+import { SubagentViewContext } from '../contexts/harness/subagent-view-bridge'
 import {
   MAIN_MIN_WIDTH,
   PANEL_MIN_WITHOUT_EDITOR,
@@ -56,6 +67,7 @@ const Harness: React.FC = () => {
   const { effectiveTheme } = useTheme()
   const isDarkMode = effectiveTheme === 'dark'
   const { t } = useTranslation()
+  const { message } = App.useApp()
 
   const {
     messages,
@@ -91,6 +103,7 @@ const Harness: React.FC = () => {
     handleBranchConversation,
     handleKeyDown,
     handleStop,
+    handleStartGoal,
     handleLoadMoreMessages,
     queuedMessages,
     steeredNotice,
@@ -99,6 +112,49 @@ const Harness: React.FC = () => {
     handleSteerQueued
   } = useHarness()
 
+  /** 目标编辑 / 计划模式切换的触发计数器：斜杠命令只负责递增，具体内联区自己处理 */
+  const [planToggleSignal, setPlanToggleSignal] = useState(0)
+  /**
+   * 目标输入态：不在目标卡片里再开一个 textarea，而是复用底部对话输入框。
+   * 点目标铅笔 / `/goal` 进入；Enter 保存目标并立即发起一轮 LLM，Esc 退出。
+   */
+  const [goalCompose, setGoalCompose] = useState(false)
+  /** 计划评审挂起：锁目标操作与输入框，评审反馈只在计划卡内 */
+  const [planReviewPending, setPlanReviewPending] = useState(false)
+
+  /** 权限授权：挂起审批存在时，输入区整体让位给内联审批面板 */
+  const fetchApprovalPending = useCallback(
+    (topicId: number) => harnessApi.harness.getApproval(topicId),
+    []
+  )
+  const subscribeApproval = useCallback(
+    (listener: (pending: ApprovalRequestView) => void) =>
+      harnessApi.harness.onApprovalAsked(listener),
+    []
+  )
+  const { pending: approvalPending, clear: clearApprovalPending } =
+    useTopicPending<ApprovalRequestView>({
+      currentTopicId,
+      fetchPending: fetchApprovalPending,
+      subscribe: subscribeApproval
+    })
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false)
+  const handleDecideApproval = useCallback(
+    async (decision: ApprovalDecision): Promise<void> => {
+      if (!approvalPending || approvalSubmitting) return
+      setApprovalSubmitting(true)
+      try {
+        await harnessApi.harness.decideApproval(approvalPending.requestId, decision)
+        clearApprovalPending()
+      } catch (err) {
+        message.error((err as Error).message)
+      } finally {
+        setApprovalSubmitting(false)
+      }
+    },
+    [approvalPending, approvalSubmitting, clearApprovalPending, message]
+  )
+
   // 模型就绪检查：应用即开即用，只有「助手」页依赖模型配置——未配置时在本页内引导
   const hasModels = providers.length > 0
   const [workspacePath, setWorkspacePath] = useState<string>('')
@@ -106,6 +162,74 @@ const Harness: React.FC = () => {
   const [hasWorkspace, setHasWorkspace] = useState<boolean | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelHasEditor, setPanelHasEditor] = useState(false)
+  /**
+   * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
+   *
+   * 非空时主对话区（用户圈中的区域）整体切换成该子代理的流式会话视图；
+   * 「返回主智能体」把这里置回 null，主对话的 messages/流式状态在 Provider 里
+   * 原样保留，切回来不会丢内容或中断主代理。
+   */
+  const [subagentView, setSubagentView] = useState<{
+    topicId: number
+    agentId: string
+    label: string
+  } | null>(null)
+  /** 切换会话：子代理会话按话题隔离，换话题必须回到主对话 */
+  useEffect(() => {
+    setSubagentView(null)
+  }, [currentTopicId])
+
+  const handleSelectSubagent = useCallback(
+    (agent: SubagentSessionRow): void => {
+      if (currentTopicId == null) return
+      setSubagentView({ topicId: currentTopicId, agentId: agent.id, label: agent.label })
+    },
+    [currentTopicId]
+  )
+  const handleBackToMainAgent = useCallback((): void => setSubagentView(null), [])
+  /** 主对话「已派发」卡片 → 打开对应子代理的会话视图（agentId 来自 block.subAgent.subagentId） */
+  const handleOpenSubagentById = useCallback(
+    (agentId: string): void => {
+      if (currentTopicId == null || !agentId) return
+      setSubagentView({ topicId: currentTopicId, agentId, label: '' })
+    },
+    [currentTopicId]
+  )
+  /** 引用稳定的桥对象：AssistantMessage 的块级渲染缓存不感知函数 props（见 subagent-view-bridge 注释） */
+  const subagentViewBridge = useMemo(
+    () => ({ openSubagent: handleOpenSubagentById }),
+    [handleOpenSubagentById]
+  )
+  /**
+   * 子代理会话数据：顶部栏面包屑与会话视图共用同一份订阅（一个 agent 只 watch 一次）。
+   * 非查看态传入 null，hook 返回空状态，不产生 IPC。
+   */
+  const subagentConversation = useSubagentConversation(
+    subagentView?.topicId ?? null,
+    subagentView?.agentId ?? null
+  )
+  /** 子代理会话消息区的底部锚点（与主对话各用各的 ref，切 target 时 ConversationPane 实例复用） */
+  const subagentMessagesEndRef = useRef<HTMLDivElement | null>(null)
+  /** 子代理会话是只读视图：编辑/删除/分支/分页一律 no-op */
+  const subagentNoop = useCallback((): void => {}, [])
+  const subagentNoopAsync = useCallback(async (): Promise<void> => {}, [])
+  /** 查看子代理会话时 Esc = 返回主智能体（输入框内不拦截，避免吞掉输入法/取消语义） */
+  useEffect(() => {
+    if (!subagentView) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      const target = document.activeElement
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')
+      ) {
+        return
+      }
+      handleBackToMainAgent()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleBackToMainAgent, subagentView])
   /**
    * 待审查改动（路径 → 条数），由右侧面板回传。
    * 用途只有一个：任务段头上的改动徽标——段折起后段里的编辑卡片会被卸载，
@@ -273,80 +397,193 @@ const Harness: React.FC = () => {
    * 发第一条消息后自动切回「消息列表 + 底部输入框」的常规布局。
    */
   const isWelcomeMode = messages.length === 0
-  /** 输入区：两种布局共用同一份 JSX，切换时输入组件不会重挂（打字/附件状态不丢） */
-  const inputArea = (
-    <div
-      /* 空白会话里欢迎语和输入框之间多留一点距离（用户 2026-11-20「距离上面的内容再远一点」） */
-      className={`relative px-8 pb-6 ${isWelcomeMode ? 'pt-4' : 'pt-2'}`}
-      style={{
-        background: colorBgContainer,
-        borderTop: isWelcomeMode ? 'none' : `1px solid ${colorBorderSecondary}`
-      }}
+  /** 进入目标输入态：把目标正文放进底部输入框（不额外造输入控件） */
+  const beginGoalCompose = useCallback(
+    async (prefill?: string): Promise<void> => {
+      if (currentTopicId == null) {
+        message.info(t('harness.input.commands.noTopic'))
+        return
+      }
+      if (planReviewPending) return
+      let text = prefill
+      if (text === undefined) {
+        const goal = await harnessApi.harness.getGoal(currentTopicId).catch(() => null)
+        text = goal?.objective ?? ''
+      }
+      setInputValue(text)
+      setGoalCompose(true)
+    },
+    [currentTopicId, message, planReviewPending, setInputValue, t]
+  )
+
+  const cancelGoalCompose = useCallback((): void => {
+    setGoalCompose(false)
+    setInputValue('')
+  }, [setInputValue])
+
+  /** 目标输入态回车：先写 GoalStore，再把输入框原文当作执行指令发出去 */
+  const submitGoalFromInput = useCallback(async (): Promise<void> => {
+    const topicId = currentTopicId
+    const text = inputValue.trim()
+    if (topicId == null || !text) return
+    const existing = await harnessApi.harness.getGoal(topicId).catch(() => null)
+    const result =
+      existing && existing.phase !== 'complete'
+        ? await harnessApi.harness.updateGoal({ topicId, action: 'edit', objective: text })
+        : await harnessApi.harness.createGoal({ topicId, objective: text })
+    if (!result.ok) {
+      message.error(result.error ?? t('harness.goalInline.saveFailed'))
+      return
+    }
+    setGoalCompose(false)
+    setInputValue('')
+    await handleStartGoal(text)
+  }, [currentTopicId, handleStartGoal, inputValue, message, setInputValue, t])
+
+  /** 输入框在目标输入态下的发送入口（Enter 与发送按钮共用） */
+  const handleComposerSend = useCallback((): void => {
+    if (planReviewPending) return
+    if (goalCompose) {
+      void submitGoalFromInput()
+      return
+    }
+    void handleSend()
+  }, [goalCompose, handleSend, planReviewPending, submitGoalFromInput])
+
+  const handleComposerKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>): void => {
+      if (planReviewPending) return
+      if (goalCompose) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelGoalCompose()
+          return
+        }
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault()
+          void submitGoalFromInput()
+          return
+        }
+      }
+      handleKeyDown(event)
+    },
+    [cancelGoalCompose, goalCompose, handleKeyDown, planReviewPending, submitGoalFromInput]
+  )
+
+  // 目标输入态：切换话题时退出；挂全局 Esc（HarnessInput 只在 Enter 时回调）
+  useEffect(() => {
+    if (!goalCompose) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      cancelGoalCompose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [cancelGoalCompose, goalCompose])
+
+  useEffect(() => {
+    if (!goalCompose) return
+    const timer = window.setTimeout(() => {
+      const editor = textareaRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')
+      editor?.focus()
+    }, 40)
+    return () => window.clearTimeout(timer)
+  }, [goalCompose, textareaRef])
+
+  useEffect(() => {
+    setGoalCompose(false)
+  }, [currentTopicId])
+
+  useEffect(() => {
+    if (!planReviewPending || !goalCompose) return
+    setGoalCompose(false)
+    setInputValue('')
+  }, [goalCompose, planReviewPending, setInputValue])
+
+  /** 输入区：主对话与子代理共用同一个 ConversationFooter 外壳，只有内层控件不同 */
+  const inputArea = approvalPending ? (
+    <ConversationFooter
+      welcome={false}
+      colorBgContainer={colorBgContainer}
+      colorBorderSecondary={colorBorderSecondary}
     >
-      {/* 输入区上方的渐隐遮罩：滚到边界时消息淡出，不再像被输入框硬生生切断。
-          空白会话没有消息可淡出，遮罩只在常规布局里生效。 */}
-      {!isWelcomeMode && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: -28,
-            left: 0,
-            right: 0,
-            height: 28,
-            zIndex: 2,
-            pointerEvents: 'none',
-            background: `linear-gradient(to bottom, transparent, ${colorBgContainer})`
-          }}
-        />
-      )}
-      {/* 空白会话（欢迎页）里输入框收窄一点，显得更聚焦；有对话内容后回到正常宽度
-          （用户 2026-11-20：「输入框的宽度小一点，等有内容的时候再放到现在这种宽度」） */}
-      <div className={`${isWelcomeMode ? 'max-w-2xl' : 'max-w-4xl'} mx-auto`}>
-        <TaskProgressCard currentTopicId={currentTopicId} />
-        <GoalBar currentTopicId={currentTopicId} />
-        <QueueDock
-          queue={queuedMessages}
-          running={isLoading}
-          steeredNotice={steeredNotice}
-          colorBorderSecondary={colorBorderSecondary}
-          colorText={colorText}
-          colorTextSecondary={colorTextSecondary}
-          colorTextTertiary={colorTextTertiary}
-          colorFillAlter={colorFillAlter}
-          onRemove={handleRemoveQueued}
-          onUpdate={handleUpdateQueued}
-          onSteer={handleSteerQueued}
-        />
-        <HarnessInput
-          inputValue={inputValue}
-          onInputChange={setInputValue}
-          focusInputToken={focusInputToken}
-          textareaRef={textareaRef}
-          inputHistoryRef={inputHistoryRef}
-          attachments={attachments}
-          onAttachmentsChange={setAttachments}
-          isLoading={isLoading}
-          selectedProviderId={selectedProviderId}
-          onSelectProvider={(value) => setSelectedProviderId(value)}
-          groupedProviderOptions={groupedProviderOptions}
-          modelSupportsTools={modelSupportsTools}
-          modelSupportsVision={modelSupportsVision}
-          currentTopicId={currentTopicId}
-          /* 助手形象只在空白会话里出现：有对话内容时会压住消息/思考过程 */
-          showMascot={isWelcomeMode}
-          modelContextWindow={modelContextWindow}
-          isDarkMode={isDarkMode}
-          colorBgLayout={colorBgLayout}
-          colorBorder={colorBorder}
-          colorText={colorText}
-          colorBorderSecondary={colorBorderSecondary}
-          onSend={handleSend}
-          onStop={handleStop}
-          onKeyDown={handleKeyDown}
-        />
-      </div>
-    </div>
+      <PermissionApprovalPanel
+        pending={approvalPending}
+        submitting={approvalSubmitting}
+        onDecide={handleDecideApproval}
+      />
+    </ConversationFooter>
+  ) : (
+    <ConversationFooter
+      welcome={isWelcomeMode}
+      colorBgContainer={colorBgContainer}
+      colorBorderSecondary={colorBorderSecondary}
+      top={
+        <>
+          <InlinePlanTray
+            currentTopicId={currentTopicId}
+            toggleSignal={planToggleSignal}
+            onCancelTurn={handleStop}
+            onReviewPendingChange={setPlanReviewPending}
+            isDarkMode={isDarkMode}
+          />
+          <InlineGoalCard
+            currentTopicId={currentTopicId}
+            selected={goalCompose}
+            disabled={planReviewPending}
+            onRequestEdit={(objective) => void beginGoalCompose(objective)}
+          />
+          <TaskProgressCard currentTopicId={currentTopicId} />
+          <QueueDock
+            queue={queuedMessages}
+            running={isLoading}
+            steeredNotice={steeredNotice}
+            colorBorderSecondary={colorBorderSecondary}
+            colorText={colorText}
+            colorTextSecondary={colorTextSecondary}
+            colorTextTertiary={colorTextTertiary}
+            colorFillAlter={colorFillAlter}
+            onRemove={handleRemoveQueued}
+            onUpdate={handleUpdateQueued}
+            onSteer={handleSteerQueued}
+          />
+        </>
+      }
+    >
+      <HarnessInput
+        inputValue={inputValue}
+        onInputChange={setInputValue}
+        focusInputToken={focusInputToken}
+        textareaRef={textareaRef}
+        inputHistoryRef={inputHistoryRef}
+        attachments={attachments}
+        onAttachmentsChange={setAttachments}
+        isLoading={isLoading}
+        selectedProviderId={selectedProviderId}
+        onSelectProvider={(value) => setSelectedProviderId(value)}
+        groupedProviderOptions={groupedProviderOptions}
+        modelSupportsTools={modelSupportsTools}
+        modelSupportsVision={modelSupportsVision}
+        currentTopicId={currentTopicId}
+        /* 助手形象只在空白会话里出现：有对话内容时会压住消息/思考过程 */
+        showMascot={isWelcomeMode}
+        modelContextWindow={modelContextWindow}
+        isDarkMode={isDarkMode}
+        colorBgLayout={colorBgLayout}
+        colorBorder={colorBorder}
+        colorText={colorText}
+        colorBorderSecondary={colorBorderSecondary}
+        onSend={handleComposerSend}
+        onStop={handleStop}
+        onKeyDown={handleComposerKeyDown}
+        placeholder={goalCompose ? t('harness.goalInline.composePlaceholder') : undefined}
+        goalCompose={goalCompose}
+        locked={planReviewPending}
+        onGoalCommand={() => void beginGoalCompose()}
+        onPlanCommand={() => setPlanToggleSignal((value) => value + 1)}
+      />
+    </ConversationFooter>
   )
 
   // 对话区实际可用宽度（主内容区宽度）；面板宽度上限以它为准
@@ -429,46 +666,10 @@ const Harness: React.FC = () => {
   )
 
   return (
-    <WorkspaceBridgeContext.Provider value={workspaceBridge}>
-      <div className="h-full flex-1">
-        <style>{`
-        /* 任务段折叠头（消息内容按任务折叠）：外观沿用既有 Collapse，只收紧布局——
-           标签必须撑满 header 且自身可压缩，否则长任务名会顶出容器、右侧的
-           清单按钮也贴不到右边（antd 的标签容器是 .ant-collapse-title，没法定 inline 样式）。 */
-        /* 折叠头统一垂直居中：文字装在 .ant-collapse-title 里，它默认是块级盒子，
-           里面的行内文字按基线排版 → 看着偏上（用户反馈「思考过程这几个字并没有居中」）。
-           任务段此前单独修过（下面的 .task-segment-collapse 规则），其余折叠头没有，
-           于是同一屏里两种对齐并存。这两条把整个聊天区统一。 */
-        .harness-message-list .ant-collapse-header { align-items: center; }
-        /* 消息之间与折叠步骤之间留出呼吸空间：长任务里连续工具调用不再挤成一片 */
-        .harness-message-list .harness-message-row { margin-bottom: 14px; }
-        /* 最后一条消息不留尾巴：底部只需要给悬浮「回到底部」按钮留出空间（见消息区的 pb-14）。
-           endRef 放在内容容器**外面**，所以这里的 :last-child 真的命中最后一行；
-           它以前是内容容器的最后一个子节点，导致这条规则一直没生效。 */
-        .harness-message-list .harness-message-row:last-child { margin-bottom: 0; }
-        /* 消息主体的段间距（原先是各消息根节点上的 mb-6）：最后一条同样清零，
-           否则它会带着 24px 尾距和消息区的 pb-14 一起把输入框上方的空隙撑大。 */
-        .harness-message-list .harness-message-body { margin-bottom: 24px; }
-        .harness-message-list .harness-message-row:last-child .harness-message-body {
-          margin-bottom: 0;
-        }
-        .harness-message-list .ant-collapse-item { margin-bottom: 7px; }
-        .harness-message-list .ant-collapse-item:last-child { margin-bottom: 0; }
-        .harness-message-list .ant-collapse-title {
-          display: flex;
-          align-items: center;
-          min-width: 0;
-        }
-        .task-segment-collapse > .ant-collapse-item > .ant-collapse-header { align-items: center; }
-        .task-segment-collapse .ant-collapse-title {
-          flex: 1 1 auto;
-          min-width: 0;
-          display: flex;
-          align-items: center;
-        }
-        .task-segment-collapse .ant-collapse-title > span { width: 100%; }
-        .task-segment-collapse .ant-collapse-content-box { padding-block: 4px 8px !important; }
-        .task-segment-collapse .ant-collapse-header { padding-block: 7px !important; }
+    <SubagentViewContext.Provider value={subagentViewBridge}>
+      <WorkspaceBridgeContext.Provider value={workspaceBridge}>
+        <div className="h-full flex-1">
+          <style>{`
         .harness-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .harness-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .harness-scrollbar::-webkit-scrollbar-thumb {
@@ -525,128 +726,210 @@ const Harness: React.FC = () => {
         }
       `}</style>
 
-        <div
-          ref={layoutRef}
-          className="harness-layout"
-          style={{ height: '100%', display: 'flex', overflow: 'hidden' }}
-        >
-          <main
-            className="h-full flex flex-col overflow-hidden"
-            style={{
-              flex: 1,
-              minWidth: MAIN_MIN_WIDTH,
-              background: colorBgContainer,
-              borderTopLeftRadius: borderRadiusLG
-            }}
+          <div
+            ref={layoutRef}
+            className="harness-layout"
+            style={{ height: '100%', display: 'flex', overflow: 'hidden' }}
           >
-            {hasWorkspace === null ? null : hasWorkspace === false ? (
-              /* 未配置工作区：对话按工作区隔离，先引导选择目录（同「配置模型」的页内引导） */
-              <div
-                className="flex-1 flex items-center justify-center"
-                style={{ minHeight: 0, padding: 24 }}
-              >
-                <div style={{ maxWidth: 420, textAlign: 'center' }}>
-                  <div
-                    style={{
-                      width: 56,
-                      height: 56,
-                      margin: '0 auto 14px',
-                      borderRadius: 16,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      background: colorPrimaryBg,
-                      color: colorPrimary,
-                      fontSize: 26
-                    }}
-                  >
-                    <RiFoldersLine size={26} />
+            <main
+              className="h-full flex flex-col overflow-hidden"
+              style={{
+                flex: 1,
+                minWidth: MAIN_MIN_WIDTH,
+                background: colorBgContainer,
+                borderTopLeftRadius: borderRadiusLG
+              }}
+            >
+              {hasWorkspace === null ? null : hasWorkspace === false ? (
+                /* 未配置工作区：对话按工作区隔离，先引导选择目录（同「配置模型」的页内引导） */
+                <div
+                  className="flex-1 flex items-center justify-center"
+                  style={{ minHeight: 0, padding: 24 }}
+                >
+                  <div style={{ maxWidth: 420, textAlign: 'center' }}>
+                    <div
+                      style={{
+                        width: 56,
+                        height: 56,
+                        margin: '0 auto 14px',
+                        borderRadius: 16,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: colorPrimaryBg,
+                        color: colorPrimary,
+                        fontSize: 26
+                      }}
+                    >
+                      <RiFoldersLine size={26} />
+                    </div>
+                    <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: colorText }}>
+                      {t('harness.index.setupWorkspaceTitle')}
+                    </h2>
+                    <p style={{ margin: '8px 0 20px', fontSize: 13, color: colorTextSecondary }}>
+                      {t('harness.index.setupWorkspaceDescription')}
+                    </p>
+                    <Button
+                      type="primary"
+                      icon={<RiFoldersLine size={15} />}
+                      onClick={handleWorkspaceSetup}
+                    >
+                      {t('harness.index.setupWorkspaceButton')}
+                    </Button>
                   </div>
-                  <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: colorText }}>
-                    {t('harness.index.setupWorkspaceTitle')}
-                  </h2>
-                  <p style={{ margin: '8px 0 20px', fontSize: 13, color: colorTextSecondary }}>
-                    {t('harness.index.setupWorkspaceDescription')}
-                  </p>
-                  <Button
-                    type="primary"
-                    icon={<RiFoldersLine size={15} />}
-                    onClick={handleWorkspaceSetup}
-                  >
-                    {t('harness.index.setupWorkspaceButton')}
-                  </Button>
                 </div>
-              </div>
-            ) : !hasModels ? (
-              /* 模型未配置：仅「助手」页内引导，不影响其他功能使用 */
-              <div
-                className="flex-1 flex items-center justify-center"
-                style={{ minHeight: 0, padding: 24 }}
-              >
-                <div style={{ maxWidth: 420, textAlign: 'center' }}>
-                  <div
-                    style={{
-                      width: 56,
-                      height: 56,
-                      margin: '0 auto 14px',
-                      borderRadius: 16,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      background: colorPrimaryBg,
-                      color: colorPrimary,
-                      fontSize: 26
-                    }}
-                  >
-                    <RiChatAiLine size={26} />
+              ) : !hasModels ? (
+                /* 模型未配置：仅「助手」页内引导，不影响其他功能使用 */
+                <div
+                  className="flex-1 flex items-center justify-center"
+                  style={{ minHeight: 0, padding: 24 }}
+                >
+                  <div style={{ maxWidth: 420, textAlign: 'center' }}>
+                    <div
+                      style={{
+                        width: 56,
+                        height: 56,
+                        margin: '0 auto 14px',
+                        borderRadius: 16,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: colorPrimaryBg,
+                        color: colorPrimary,
+                        fontSize: 26
+                      }}
+                    >
+                      <RiChatAiLine size={26} />
+                    </div>
+                    <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: colorText }}>
+                      {t('harness.index.setupModelTitle')}
+                    </h2>
+                    <p style={{ margin: '8px 0 20px', fontSize: 13, color: colorTextSecondary }}>
+                      {t('harness.index.setupModelDescription')}
+                    </p>
+                    <Button
+                      type="primary"
+                      icon={<RiListSettingsLine size={15} />}
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new CustomEvent('open-system-settings', { detail: { tab: 'model' } })
+                        )
+                      }
+                    >
+                      {t('harness.index.setupModelButton')}
+                    </Button>
                   </div>
-                  <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: colorText }}>
-                    {t('harness.index.setupModelTitle')}
-                  </h2>
-                  <p style={{ margin: '8px 0 20px', fontSize: 13, color: colorTextSecondary }}>
-                    {t('harness.index.setupModelDescription')}
-                  </p>
-                  <Button
-                    type="primary"
-                    icon={<RiListSettingsLine size={15} />}
-                    onClick={() =>
-                      window.dispatchEvent(
-                        new CustomEvent('open-system-settings', { detail: { tab: 'model' } })
-                      )
+                </div>
+              ) : (
+                <>
+                  <HarnessHeader
+                    panelOpen={panelOpen}
+                    onTogglePanel={() => setPanelOpen(!panelOpen)}
+                    colorBorderSecondary={colorBorderSecondary}
+                    currentTopicId={currentTopicId}
+                    onSelectSubagent={handleSelectSubagent}
+                    activeSubagentId={subagentView?.agentId ?? null}
+                    onBackToMainAgent={handleBackToMainAgent}
+                    subagentBreadcrumb={
+                      subagentView
+                        ? {
+                            agentId: subagentView.agentId,
+                            name:
+                              subagentConversation.meta?.label ||
+                              subagentConversation.meta?.name ||
+                              subagentView.label ||
+                              subagentView.agentId,
+                            status: subagentConversation.meta?.status ?? 'running',
+                            lastStatus: subagentConversation.meta?.lastStatus,
+                            queuedMessages: subagentConversation.meta?.queuedMessages ?? 0
+                          }
+                        : null
                     }
-                  >
-                    {t('harness.index.setupModelButton')}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <HarnessHeader
-                  panelOpen={panelOpen}
-                  onTogglePanel={() => setPanelOpen(!panelOpen)}
-                  colorBorderSecondary={colorBorderSecondary}
-                  currentTopicId={currentTopicId}
-                />
+                  />
 
-                {isWelcomeMode ? (
-                  /* 空白会话：欢迎语和输入框作为一组整体垂直居中。
+                  {/* 对话主区：主智能体与后台子智能体共用同一个 ConversationPane
+                     （消息窗口 + 底部输入区）。切 target 时组件实例复用、只换数据源——
+                     用户口径：消息区域也要复用之前的对话窗口。 */}
+                  {subagentView ? (
+                    <ConversationPane
+                      messages={subagentConversation.messages}
+                      streaming={subagentConversation.streaming}
+                      currentTopicId={subagentView.topicId}
+                      readOnly
+                      isDarkMode={isDarkMode}
+                      colorText={colorText}
+                      colorTextSecondary={colorTextSecondary}
+                      colorTextTertiary={colorTextTertiary}
+                      colorFillAlter={colorFillAlter}
+                      colorBorderSecondary={colorBorderSecondary}
+                      copiedId={copiedId}
+                      hasMoreMessages={subagentConversation.hasOlder}
+                      isLoadingMoreMessages={subagentConversation.loadingOlder}
+                      onCopy={handleCopy}
+                      onDelete={subagentNoopAsync}
+                      onStartEditMessage={subagentNoop}
+                      onSubmitEditMessage={subagentNoopAsync}
+                      onCancelEditMessage={subagentNoop}
+                      editingMessageId={null}
+                      onBranch={subagentNoopAsync}
+                      onLoadMoreMessages={subagentConversation.loadMore}
+                      messagesEndRef={subagentMessagesEndRef}
+                      empty={
+                        !subagentConversation.ready ? (
+                          <>
+                            <Spin size="small" />
+                            <span style={{ fontSize: 12, color: colorTextTertiary }}>
+                              {t('harness.backgroundAgents.conversation.loading')}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <RiAiAgentLine size={22} style={{ color: colorTextTertiary }} />
+                            <span style={{ fontSize: 12, color: colorTextTertiary }}>
+                              {subagentConversation.meta
+                                ? t('harness.backgroundAgents.conversation.empty')
+                                : t('harness.backgroundAgents.conversation.missing')}
+                            </span>
+                          </>
+                        )
+                      }
+                      footer={
+                        subagentConversation.meta ? (
+                          <SubagentInput
+                            topicId={subagentView.topicId}
+                            agentId={subagentView.agentId}
+                            running={subagentConversation.meta.status === 'running'}
+                            isDarkMode={isDarkMode}
+                            colorBgLayout={colorBgLayout}
+                            colorBgContainer={colorBgContainer}
+                            colorBorder={colorBorder}
+                            colorText={colorText}
+                            colorBorderSecondary={colorBorderSecondary}
+                          />
+                        ) : null
+                      }
+                    />
+                  ) : isWelcomeMode ? (
+                    /* 空白会话：欢迎语和输入框作为一组整体垂直居中。
                      顶部栏保留——工作区面板开关在空白会话里也要能开/关，
                      否则在已有会话里打开面板后再新建会话就关不掉了。 */
-                  <div className="flex-1 min-h-0 flex flex-col justify-center pt-6 pb-10">
-                    <div className="w-full max-w-2xl mx-auto px-8">
-                      <WelcomeIntro colorText={colorText} colorTextSecondary={colorTextSecondary} />
+                    <div className="flex-1 min-h-0 flex flex-col justify-center pt-6 pb-10">
+                      <div className="w-full max-w-2xl mx-auto px-8">
+                        <WelcomeIntro
+                          colorText={colorText}
+                          colorTextSecondary={colorTextSecondary}
+                        />
+                      </div>
+                      {/* 归档会话只读：输入框整个不渲染（用户口径：不要提示条，什么都不要留） */}
+                      {currentTopicArchived ? null : inputArea}
                     </div>
-                    {/* 归档会话只读：输入框整个不渲染（用户口径：不要提示条，什么都不要留） */}
-                    {currentTopicArchived ? null : inputArea}
-                  </div>
-                ) : (
-                  <>
-                    <HarnessMessageArea
+                  ) : (
+                    <ConversationPane
                       messages={messages}
-                      isDarkMode={isDarkMode}
                       streaming={isLoading}
                       currentTopicId={currentTopicId}
                       readOnly={currentTopicArchived}
+                      isDarkMode={isDarkMode}
                       colorText={colorText}
                       colorTextSecondary={colorTextSecondary}
                       colorTextTertiary={colorTextTertiary}
@@ -669,53 +952,51 @@ const Harness: React.FC = () => {
                         // 段头徽标 → 直接打开该文件的差异视图（工作区内的真实路径）
                         runOnPanel((handle) => handle.openVirtualFile(realPath, realPath))
                       }}
+                      footer={currentTopicArchived ? null : inputArea}
                     />
-                    {currentTopicArchived ? null : inputArea}
-                  </>
-                )}
+                  )}
+                </>
+              )}
+            </main>
+
+            {/* Workspace panel resizer */}
+            {panelOpen && (
+              <>
+                <div className="harness-resizer" onMouseDown={handlePanelResizerMouseDown}>
+                  <div className="harness-resizer-dragger" />
+                </div>
+                <div
+                  style={{
+                    width: panelWidth,
+                    minWidth: panelMinWidth,
+                    maxWidth: panelMaxWidth,
+                    flexShrink: 0
+                  }}
+                >
+                  <WorkspacePanel
+                    ref={workspacePanelRef}
+                    workspacePath={workspacePath}
+                    isDarkMode={isDarkMode}
+                    colorBgContainer={colorBgContainer}
+                    borderRadiusLG={borderRadiusLG}
+                    colorText={colorText}
+                    colorTextSecondary={colorTextSecondary}
+                    colorTextTertiary={colorTextTertiary}
+                    onHasOpenFilesChange={setPanelHasEditor}
+                    onPendingByPathChange={setPendingByPath}
+                  />
+                </div>
               </>
             )}
-          </main>
+          </div>
 
-          {/* Workspace panel resizer */}
-          {panelOpen && (
-            <>
-              <div className="harness-resizer" onMouseDown={handlePanelResizerMouseDown}>
-                <div className="harness-resizer-dragger" />
-              </div>
-              <div
-                style={{
-                  width: panelWidth,
-                  minWidth: panelMinWidth,
-                  maxWidth: panelMaxWidth,
-                  flexShrink: 0
-                }}
-              >
-                <WorkspacePanel
-                  ref={workspacePanelRef}
-                  workspacePath={workspacePath}
-                  isDarkMode={isDarkMode}
-                  colorBgContainer={colorBgContainer}
-                  borderRadiusLG={borderRadiusLG}
-                  colorText={colorText}
-                  colorTextSecondary={colorTextSecondary}
-                  colorTextTertiary={colorTextTertiary}
-                  onHasOpenFilesChange={setPanelHasEditor}
-                  onPendingByPathChange={setPendingByPath}
-                />
-              </div>
-            </>
-          )}
+          {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答 */}
+          <AskQuestionModal currentTopicId={currentTopicId} onCancelTurn={handleStop} />
+          {/* 模型请求失败弹窗：自动重试耗尽后选择是否切换模型继续（原位继续，不重发问题） */}
+          <ModelRecoveryModal currentTopicId={currentTopicId} />
         </div>
-
-        {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答 */}
-        <AskQuestionModal currentTopicId={currentTopicId} onCancelTurn={handleStop} />
-        {/* 沙箱审批弹窗：危险 / 越界调用被拦下后等用户决定（允许一次 / 拒绝） */}
-        <PermissionApprovalModal currentTopicId={currentTopicId} />
-        {/* 模型请求失败弹窗：自动重试耗尽后选择是否切换模型继续（原位继续，不重发问题） */}
-        <ModelRecoveryModal currentTopicId={currentTopicId} />
-      </div>
-    </WorkspaceBridgeContext.Provider>
+      </WorkspaceBridgeContext.Provider>
+    </SubagentViewContext.Provider>
   )
 }
 

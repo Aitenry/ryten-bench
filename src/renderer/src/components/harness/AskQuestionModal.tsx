@@ -63,8 +63,12 @@ const AskQuestionModal: React.FC<{
     currentTopicId,
     fetchPending: (topicId) => harnessApi.harness.getQuestion(topicId),
     subscribe: (listener) => harnessApi.harness.onQuestionAsked(listener),
-    // 「换模型继续」由专用 ModelRecoveryModal 处理，通用提问弹窗忽略，避免重复弹窗
-    accept: (p) => !p.questions.some((q) => q.kind === 'model-recovery')
+    // 「换模型继续」由专用 ModelRecoveryModal 处理、「计划评审」由 PlanReviewModal 处理，
+    // 通用提问弹窗忽略这两类，避免同一挂起项被两个弹窗抢着渲染
+    accept: (p) =>
+      !p.questions.some(
+        (q) => q.kind === 'model-recovery' || q.kind === 'plan-review'
+      )
   })
 
   // 换了一条提问就清空草稿（同一张表单不该带着上一条的答案）

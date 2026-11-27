@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import { sandboxLog } from './log'
 import { sandboxService } from './service'
@@ -24,7 +24,8 @@ import {
  *
  * 超时/取消：kill 掉 runner 即可——Windows runner 把子进程放进了 kill-on-close 的
  * Job Object，runner 一死整棵子树就被系统清理；Linux/macOS 的启动器是 exec 替换，
- * kill 到的就是命令本身。
+ * kill 到的就是命令本身。`danger-full-access` 不经过 runner，另按进程树终止
+ * （见 terminateChild，后台任务「停止」必须真的停掉 dev server 的子孙进程）。
  */
 
 /** 单次执行的结果 */
@@ -49,9 +50,17 @@ export interface ConfinedRunOptions {
   workspaceRoot?: string
   /** 输出上限（字符） */
   maxChars: number
-  /** 超时（毫秒） */
+  /** 超时（毫秒）；0 = 不设超时（后台任务用：dev server 要一直跑） */
   timeoutMs: number
   signal?: AbortSignal
+  /**
+   * 输出增量回调（后台任务用）：每收到一段 stdout/stderr 就调用一次。
+   *
+   * 与 `maxChars` 的累计截断无关：后台任务要把命令日志持续写给任务注册表
+   * （job_output / 顶部栏查看），而 denial / runnerFailure 判定仍然只关心前
+   * `maxChars` 那个窗口。前台调用不传，行为完全不变。
+   */
+  onOutput?: (chunk: string) => void
   /** 平台覆盖（工装用） */
   platform?: string
 }
@@ -59,6 +68,53 @@ export interface ConfinedRunOptions {
 /** 组装「把这段字符串交给系统 shell」的 argv（保持 execute 工具原有的 shell 语义） */
 export function shellArgv(command: string, platform: string = process.platform): string[] {
   return platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', command] : ['/bin/sh', '-c', command]
+}
+
+/**
+ * 终止一次执行（含子孙进程）。
+ *
+ * Windows 上 execute 实际跑的是 `cmd.exe /c <command>`：npm/pnpm 这类命令会再起
+ * node 子进程，只 kill 直接子进程会留下占着端口的孤儿进程——用户点了「停止」，
+ * dev server 却还在跑（后台任务尤其明显）。因此 Windows 用 `taskkill /T /F` 杀整棵树，
+ * 其他平台保持 `child.kill()`（SIGTERM）语义。
+ *
+ * taskkill 自身失败（被裁剪的系统、极端权限）时退回 `child.kill()`：至少让等待中的
+ * Promise 能结束，不能因为清理动作失败就永远卡住一次工具调用。
+ */
+function terminateChild(child: ChildProcess): void {
+  if (process.platform === 'win32' && typeof child.pid === 'number') {
+    try {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+      killer.on('error', () => {
+        try {
+          child.kill()
+        } catch {
+          // 进程可能已经退出
+        }
+      })
+      killer.on('close', (code) => {
+        if (code !== 0) {
+          try {
+            child.kill()
+          } catch {
+            // 同上
+          }
+        }
+      })
+      killer.unref()
+      return
+    } catch {
+      // 落到下面的直接 kill
+    }
+  }
+  try {
+    child.kill()
+  } catch {
+    // 进程可能已经退出
+  }
 }
 
 /** 执行并收集输出（带超时、取消、输出上限） */
@@ -70,6 +126,8 @@ function runProcess(
     timeoutMs: number
     maxChars: number
     signal?: AbortSignal
+    /** 输出增量回调（见 ConfinedRunOptions.onOutput） */
+    onOutput?: (chunk: string) => void
   }
 ): Promise<{ exitCode: number | null; output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
@@ -98,8 +156,11 @@ function runProcess(
     let timedOut = false
 
     const append = (chunk: Buffer): void => {
-      if (truncated) return
       const text = chunk.toString('utf8')
+      // 先交给增量消费者（后台任务按自己的上限留存），再走累计/截断逻辑：
+      // maxChars 是「模型看到的结果」上限，不是后台任务日志的上限。
+      options.onOutput?.(text)
+      if (truncated) return
       if (output.length + text.length > options.maxChars) {
         output += text.slice(0, Math.max(0, options.maxChars - output.length))
         truncated = true
@@ -111,21 +172,17 @@ function runProcess(
     child.stdout.on('data', append)
     child.stderr.on('data', append)
 
-    const timer = setTimeout(() => {
-      timedOut = true
-      try {
-        child.kill()
-      } catch {
-        // 进程可能已经退出
-      }
-    }, options.timeoutMs)
+    // timeoutMs <= 0 = 不设超时（后台任务）；setTimeout(0) 会立即触发，不能直接传 0
+    let timer: NodeJS.Timeout | undefined
+    if (options.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        terminateChild(child)
+      }, options.timeoutMs)
+    }
 
     const onAbort = (): void => {
-      try {
-        child.kill()
-      } catch {
-        // 同上
-      }
+      terminateChild(child)
     }
     if (options.signal) {
       if (options.signal.aborted) onAbort()
@@ -133,7 +190,7 @@ function runProcess(
     }
 
     const finish = (exitCode: number | null): void => {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       options.signal?.removeEventListener('abort', onAbort)
       resolve({ exitCode, output, timedOut })
     }
@@ -163,7 +220,8 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
       env: baseEnv,
       timeoutMs: options.timeoutMs,
       maxChars: options.maxChars,
-      signal: options.signal
+      signal: options.signal,
+      onOutput: options.onOutput
     })
     return {
       exitCode: result.exitCode,
@@ -198,7 +256,8 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
     env: { ...baseEnv, ...(confined.env ?? {}) },
     timeoutMs: options.timeoutMs,
     maxChars: options.maxChars,
-    signal: options.signal
+    signal: options.signal,
+    onOutput: options.onOutput
   })
 
   const combined = result.output

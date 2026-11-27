@@ -1,4 +1,4 @@
-import { BaseChatModel } from '../../ai/chat-model'
+﻿import { BaseChatModel } from '../../ai/chat-model'
 import { BaseMessage } from '../../ai/messages'
 import type { StructuredToolInterface } from '../../ai/tools'
 import logger from 'electron-log'
@@ -14,13 +14,19 @@ import type { ModelUsageRecord } from './usage'
 import { buildFsTools } from './fs-backend'
 import { buildTodoTools, todoStore } from './todo'
 import { buildGoalTools, goalStore } from './goal'
+import { buildExitPlanModeTool, planModePromptSection, planModeStore } from './plan-mode'
 import { buildJobTools, jobsRegistry } from './jobs'
 import { buildAskUserTool } from './ask'
 import { buildSubagentControlTools, subagentSessions } from './subagent-sessions'
+import { buildTeamTools, teamStore } from './team'
 import { buildWorkflowTool } from './workflow'
 import { buildSkillsPromptSection, loadSkills } from './skills'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
 import { createTaskTool } from './subagent'
+import { createAgentAuthoringTool } from './subagent-authoring'
+import { resolveSubAgentModelSpec } from './subagent-model'
+import { teamModePromptSection, teamModeStore } from './team-mode'
+import { listEnabledSubAgents } from '../../services/harness/subagents'
 import { permissionGate } from './permission-gate'
 import { guardTools } from './permission-guard'
 import { sandboxPromptSection } from './permission'
@@ -28,7 +34,12 @@ import { RecordQueue, startGraphStream, invokeGraph, type GraphRunOptions } from
 import { SpillStore } from './spill'
 import type { MnemonComponent } from './mnemon'
 import type { RuntimeStream } from './types'
-import type { MemoryInjection, TurnMeta, AgentInjection } from '../../services/harness/types'
+import type {
+  MemoryInjection,
+  TurnMeta,
+  AgentInjection,
+  SubAgentMainModelDescriptor
+} from '../../services/harness/types'
 
 /**
  * AgentRuntime — 声明式组件组装入口（对应论文 §5.2 声明式配置 + 协调）
@@ -37,7 +48,7 @@ import type { MemoryInjection, TurnMeta, AgentInjection } from '../../services/h
  * - 文件工具集 ← workspacePath / memoryPath（无挂载则不激活）
  * - 记忆 ← memoryPath + workspaceId（未配置则不注入）
  * - 技能 ← skillsPath + enabledSkills（未配置则不注入）
- * - 子代理 ← subAgents + 模型解析器（无子代理则不挂 task 工具）
+ * - 子代理 ← subAgents + 模型解析器（task 工具始终挂载；无配置时描述引导 agent_create 构建）
  *
  * 每个请求一个 Runtime 实例（与旧 HarnessService 每次构建 agent 一致），隔离性好。
  */
@@ -49,6 +60,7 @@ You are in a continuous conversation with the user. All messages in the harness 
 - When the user asks about "previous" or "last time", refer to the conversation history provided.
 - Do NOT claim you cannot see or remember earlier messages. You have full access to the harness history.
 - If you keep a todo list for multi-step work, keep it current: mark each item completed as you finish it, and before you end a turn send a final write_todos in which no item is left in_progress — the user sees the list live, and an item stuck on in_progress after the work is done reads as "still running". The only exception is when you really are handing back to the user mid-work, such as asking a question and waiting for the answer.
+- For processes that never exit on their own (dev servers, watchers, long builds), call execute with run_in_background=true instead of blocking the turn: keep working or summarise, read output with job_output, and stop the job with job_kill when it is no longer needed.
 - Reply in the same language the user writes in, and keep responses concise and natural.`
 
 export interface AgentRuntimeOptions {
@@ -68,10 +80,22 @@ export interface AgentRuntimeOptions {
   memoryPath?: string
   /** 当前工作区 ID */
   workspaceId: number
+  /** spawn 时主模型描述符（后台子代理会话持久化、冷恢复用；缺省 = 当前默认供应商） */
+  modelDescriptor?: SubAgentMainModelDescriptor
+  /** 目标自动续跑轮：忽略计划模式（计划只用于用户主动启动的首轮，避免每轮弹评审） */
+  suppressPlanMode?: boolean
   /** Mnemon 记忆组件（进程级单例，由 HarnessService 注入） */
   mnemon?: MnemonComponent
   /** 工具调用总次数上限（模型级「工具调用轮数」；缺省用工程默认值） */
   maxToolCalls?: number
+  /**
+   * 生成中每采到一次真实用量就回调（整轮累计的记录数组）。
+   *
+   * 与流结束时的 `onUsage`（落库用）不是一回事：这里每发生一次模型往返就调一次，
+   * IPC 层据此把「本轮已跑 N 次调用 / X token」推给输入框底栏实时显示；
+   * 不配置就只采集不推送（非流式路径、后台子代理等）。
+   */
+  onUsageRecord?: (records: ModelUsageRecord[]) => void
 }
 
 export class Runtime {
@@ -83,6 +107,8 @@ export class Runtime {
   /** 本轮模型用量采集（每次模型调用 push 一条真实 usage_metadata） */
   private usageRecords: ModelUsageRecord[] = []
   private readonly taskTool?: StructuredToolInterface
+  /** 主代理专属的作者化工具：委派构建可复用子代理配置（子代理图不挂） */
+  private readonly authoringTool?: StructuredToolInterface
   private readonly workflowTool: StructuredToolInterface
   private readonly systemPrompt: string
   private readonly mnemon?: MnemonComponent
@@ -112,21 +138,31 @@ export class Runtime {
     })
     this.systemPrompt = this.buildSystemPrompt()
 
-    if (opts.subAgents.length > 0) {
-      this.taskTool = createTaskTool({
-        subAgents: opts.subAgents,
-        mainModel: opts.model,
-        resolveModel: (spec) => this.resolveSubAgentModel(spec),
+    // task 工具始终挂载：没有已配置子代理时，描述会引导主智能体用 agent_create 构建；
+    // reloadSubAgents 在**调用期**重新解析配置，保证同一轮内 agent_create 之后能立刻派发。
+    this.taskTool = createTaskTool({
+      subAgents: opts.subAgents,
+      mainModel: opts.model,
+      resolveModel: (spec) => this.resolveSubAgentModel(spec),
+      buildTools: (sa) => this.buildSubAgentTools(sa),
+      queue: this.queueRef,
+      spillRef: this.spillRef,
+      recursionLimit: this.recursionLimit,
+      maxToolCalls: this.maxToolCalls,
+      mainModelDescriptor: opts.modelDescriptor,
+      // 子代理专属记忆根（<memoryPath>/workspace-<wsId>/ 下 sub-agents/<name>/memories/AGENTS.md）
+      memoryPath: opts.memoryPath,
+      // 技能目录：子代理按声明的 skills 过滤注入
+      skillsPath: opts.skillsPath,
+      reloadSubAgents: () => listEnabledSubAgents(opts.workspaceId)
+    })
+
+    // 作者化工具只给主代理：把「新建子代理配置」做成可委派的工具调用（设置页同一服务层）。
+    // 没有工作区时 agent_config 无归属，不挂载。
+    if (opts.workspaceId > 0) {
+      this.authoringTool = createAgentAuthoringTool({
         workspaceId: opts.workspaceId,
-        buildTools: (sa) => this.buildSubAgentTools(sa),
-        queue: this.queueRef,
-        spillRef: this.spillRef,
-        recursionLimit: this.recursionLimit,
-        maxToolCalls: this.maxToolCalls,
-        // 子代理专属记忆根（<memoryPath>/workspace-<wsId>/ 下 sub-agents/<name>/memories/AGENTS.md）
-        memoryPath: opts.memoryPath,
-        // 技能目录：子代理按声明的 skills 过滤注入
-        skillsPath: opts.skillsPath
+        availableToolNames: opts.tools.map((tool) => tool.name)
       })
     }
 
@@ -142,7 +178,7 @@ export class Runtime {
     })
 
     logger.info(
-      `[Runtime] initialized (recursionLimit=${this.recursionLimit}, maxToolCalls=${this.maxToolCalls}, fsTools=${this.fsTools.length}, subAgents=${opts.subAgents.length}, taskTool=${this.taskTool ? 'yes' : 'no'}, mnemon=${this.mnemon ? `yes(${this.mnemon.tools.length} tools)` : 'no'}, workspacePath=${opts.workspacePath ?? 'disabled'}, memoryPath=${opts.memoryPath ?? 'disabled'}, skillsPath=${opts.skillsPath ?? 'disabled'})`
+      `[Runtime] initialized (recursionLimit=${this.recursionLimit}, maxToolCalls=${this.maxToolCalls}, fsTools=${this.fsTools.length}, subAgents=${opts.subAgents.length}, taskTool=${this.taskTool ? 'yes' : 'no'}, authoringTool=${this.authoringTool ? 'yes' : 'no'}, mnemon=${this.mnemon ? `yes(${this.mnemon.tools.length} tools)` : 'no'}, workspacePath=${opts.workspacePath ?? 'disabled'}, memoryPath=${opts.memoryPath ?? 'disabled'}, skillsPath=${opts.skillsPath ?? 'disabled'})`
     )
   }
 
@@ -160,12 +196,19 @@ export class Runtime {
         ...this.fsTools,
         ...buildTodoTools(todoStore, topicId),
         ...buildGoalTools(goalStore, topicId),
+        // 计划模式：退出工具只在激活时披露（与规划指引同时出现）
+        ...(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)
+          ? [buildExitPlanModeTool(topicId)]
+          : []),
         ...buildJobTools(jobsRegistry, topicId),
         buildAskUserTool(topicId),
         ...buildSubagentControlTools(subagentSessions, topicId),
+        // 共享任务板（opt-in）：仅在话题开启团队协作时注入
+        ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
         this.workflowTool,
         ...(this.mnemon ? this.mnemon.tools : []),
-        ...(this.taskTool ? [this.taskTool] : [])
+        ...(this.taskTool ? [this.taskTool] : []),
+        ...(this.authoringTool ? [this.authoringTool] : [])
       ],
       topicId
     )
@@ -173,7 +216,13 @@ export class Runtime {
 
   /** 子代理工具（按声明的工具名从系统工具注册表独立构建）——同样过闸门 */
   private buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
-    return this.guard(buildSubAgentToolsFromRegistry(subAgent))
+    // 子代理同样是团队一员（仅团队模式开启时）：带上共享任务板工具（身份由 configurable.teamAgent 提供）
+    return this.guard([
+      ...buildSubAgentToolsFromRegistry(subAgent),
+      ...(teamModeStore.isEnabled(this.currentTopicId)
+        ? buildTeamTools(teamStore, this.currentTopicId)
+        : [])
+    ])
   }
 
   /**
@@ -190,29 +239,7 @@ export class Runtime {
 
   /** 解析 'provider:model' → 模型实例；失败返回 undefined（回退主模型） */
   private async resolveSubAgentModel(spec: string | undefined): Promise<BaseChatModel | undefined> {
-    if (!spec) return undefined
-    // 仅按第一个冒号分割（模型名可能本身含冒号，如 ollama 的 "qwen2.5:7b"）
-    const sep = spec.indexOf(':')
-    if (sep <= 0) return undefined
-    const type = spec.slice(0, sep).trim().toLowerCase()
-    const modelName = spec
-      .slice(sep + 1)
-      .trim()
-      .toLowerCase()
-    if (!type || !modelName) return undefined
-    try {
-      const { getEnabledProviders } = await import('../../database/mapper/provider')
-      const providers = await getEnabledProviders()
-      const match = providers.find(
-        (p) => p.provider.toLowerCase() === type && p.model.toLowerCase() === modelName
-      )
-      if (!match) return undefined
-      const { getProviderService } = await import('../../provider/service')
-      return await getProviderService().createModel(match.id)
-    } catch (err) {
-      logger.warn(`[Runtime] Failed to resolve subagent model "${spec}", falling back to the main model:`, err)
-      return undefined
-    }
+    return resolveSubAgentModelSpec(spec)
   }
 
   /**
@@ -220,16 +247,22 @@ export class Runtime {
    */
   private buildSystemPrompt(): string {
     let prompt = RITA_BASE_PROMPT
-    if (this.opts.subAgents.length > 0) {
-      const list = this.opts.subAgents
-        .map((sa) => {
-          const display = sa.rename && sa.rename !== sa.name ? `${sa.rename} (${sa.name})` : sa.name
-          return `- ${display}: ${sa.description || '(no description)'}`
-        })
-        .join('\n')
+    // 工作区已配置时才有委派能力：task 工具始终挂载，没有子代理时引导 agent_create 构建
+    if (this.opts.workspaceId > 0) {
+      const list =
+        this.opts.subAgents.length > 0
+          ? this.opts.subAgents
+              .map((sa) => {
+                const display =
+                  sa.rename && sa.rename !== sa.name ? `${sa.rename} (${sa.name})` : sa.name
+                return `- ${display}: ${sa.description || '(no description)'}`
+              })
+              .join('\n')
+          : '(none configured yet)'
       prompt += `\n\n## Subagents
 You can use the task tool to delegate suitable work to a dedicated subagent (each subagent has its own system prompt, tools, and model). Prefer delegation when a task is beyond your current reach or falls in a subagent's area of expertise. Available subagents:
 ${list}
+If no existing subagent fits, you can create a reusable one yourself with agent_create (name in lowercase kebab-case, a precise description, a complete system_prompt, and optionally tools/model). It persists for this workspace (visible and editable in Settings → Agents) and can be used immediately with task, including later in this same turn. Do not create a subagent that duplicates an existing one.
 Once a delegation finishes, the subagent's full output is shown to the user directly; your final answer only needs a brief summary or a short wrap-up — do not restate the detail the subagent already produced.`
     }
     const skillsSection = buildSkillsPromptSection(
@@ -253,7 +286,14 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
    * 不同话题下会用不同档位；档位说明必须与真正生效的拦截行为逐字对应。
    */
   private promptFor(topicId: number): string {
-    return this.systemPrompt + sandboxPromptSection(permissionGate.modeFor(topicId))
+    return (
+      this.systemPrompt +
+      sandboxPromptSection(permissionGate.modeFor(topicId)) +
+      // 计划模式：只在激活时追加规划指引（未激活不增加任何 token）
+      planModePromptSection(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)) +
+      // 团队协作：opt-in（按话题持久化）；关闭时不追加任何团队提示词
+      teamModePromptSection(teamModeStore.isEnabled(topicId))
+    )
   }
 
   /** 图执行配置（递归上限触顶时由 graph 层优雅收尾，不再报错） */
@@ -266,6 +306,8 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
       configurable: {
         topicId,
         turnSource: turnMeta?.source ?? 'user',
+        // 团队身份：主图即 lead；子代理图会在自己的 stream 配置里覆盖成 member 身份
+        teamAgent: { id: 'lead', name: 'lead', isLead: true },
         goalRound:
           turnMeta?.source === 'goal-round'
             ? {
@@ -285,6 +327,17 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   /** 本轮各次模型调用回传的真实用量（每次 stream/invoke 开始时清空，结束时读取） */
   get usage(): ModelUsageRecord[] {
     return this.usageRecords
+  }
+
+  /**
+   * 记一条真实用量：先归入本轮账本，再在配置了监听时把**累计快照**交出去。
+   *
+   * 传副本而不是 `this.usageRecords` 本身：监听方（IPC 广播）可能在异步路径上读它，
+   * 而本轮后续还会继续 push——不能让它读到半路变长的同一个数组。
+   */
+  private recordUsage(record: ModelUsageRecord): void {
+    this.usageRecords.push(record)
+    this.opts.onUsageRecord?.([...this.usageRecords])
   }
 
   get memoryInjection(): MemoryInjection | null {
@@ -333,7 +386,7 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
       systemPrompt: this.promptFor(topicId),
       queue: this.queueRef,
       spill: this.spillRef.current,
-      usageSink: { push: (record) => this.usageRecords.push(record) },
+      usageSink: { push: (record) => this.recordUsage(record) },
       drainInjections
     })
     return startGraphStream(
@@ -366,7 +419,7 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
       systemPrompt: this.promptFor(topicId),
       queue: this.queueRef,
       spill: this.spillRef.current,
-      usageSink: { push: (record) => this.usageRecords.push(record) }
+      usageSink: { push: (record) => this.recordUsage(record) }
     })
     return await invokeGraph(
       graph,

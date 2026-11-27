@@ -11,7 +11,8 @@ import { buildAgentGraph, pushMessageRecords, type QueueRef, type StreamMessageL
 import { buildSkillsPromptSection, loadSkills } from './skills'
 import type { SpillStore } from './spill'
 import { subagentSessions } from './subagent-sessions'
-import type { SubAgentConfig } from '../../services/harness/types'
+import { subagentTeamPromptSection, teamModeStore } from './team-mode'
+import type { SubAgentConfig, SubAgentMainModelDescriptor } from '../../services/harness/types'
 import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
@@ -31,12 +32,20 @@ import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 /** 子代理运行时上下文 */
 export interface SubAgentRuntimeContext {
   /** 子代理定义列表 */
+  /** 子代理定义列表（构造期快照：用于 task 工具描述/初始 schema） */
   subAgents: SubAgentConfig[]
+  /**
+   * 调用期重新解析子代理清单（主智能体刚用 agent_create 建好、或设置页刚改过配置时，
+   * 同一轮内的 task 调用必须看到最新配置，而不是构造 Runtime 时的快照）。
+   * 缺省 = 使用构造期快照（后台会话/工作流等无作者化能力的路径）。
+   */
+  reloadSubAgents?: () => Promise<SubAgentConfig[]>
   /** 主代理模型（回退目标） */
   mainModel: BaseChatModel
   /** 按 'provider:model' 创建模型的回调（由 Runtime 注入） */
   resolveModel: (spec: string | undefined) => Promise<BaseChatModel | undefined>
-  workspaceId: number
+  /** spawn 时主模型描述符：随后台会话持久化，冷恢复回到同一模型 */
+  mainModelDescriptor?: SubAgentMainModelDescriptor
   /** 业务工具构建（按子代理声明的工具名） */
   buildTools: (subAgent: SubAgentConfig) => StructuredToolInterface[]
   /** 记录队列引用（流式时注入） */
@@ -68,31 +77,62 @@ function loadSubAgentMemory(memoryPath: string | undefined, name: string): strin
   return ''
 }
 
-/** 构建子代理系统提示词：基础 systemPrompt + 专属记忆 + 技能段 */
-function buildSubAgentSystemPrompt(ctx: SubAgentRuntimeContext, sa: SubAgentConfig): string {
+/** 子代理会话提示词构建所需的挂载路径（前台 spawn / 后台会话 / 冷恢复共用） */
+export interface SubAgentPromptPaths {
+  memoryPath?: string
+  skillsPath?: string
+}
+
+/**
+ * 构建子代理系统提示词：基础 systemPrompt + 专属记忆 + 技能段 + 团队协作段。
+ *
+ * 抽成独立导出函数的原因：冷恢复（`subagent-resume.ts`）没有 `SubAgentRuntimeContext`
+ * （没有主模型/工具构建器等运行时依赖），但必须用与前台/后台会话完全一致的提示词规则，
+ * 否则恢复后的子代理行为会漂移。
+ */
+export function buildSubAgentSessionPrompt(
+  sa: SubAgentConfig,
+  paths: SubAgentPromptPaths,
+  teamMode: boolean
+): string {
   let prompt = sa.systemPrompt
 
-  const memory = loadSubAgentMemory(ctx.memoryPath, sa.name)
+  const memory = loadSubAgentMemory(paths.memoryPath, sa.name)
   if (memory) {
     prompt += `\n\n## Long-term memory\n${memory}`
   }
 
   if (sa.skills && sa.skills.length > 0) {
     const skillsSection = buildSkillsPromptSection(
-      loadSkills({ skillsPath: ctx.skillsPath, enabledSkills: sa.skills })
+      loadSkills({ skillsPath: paths.skillsPath, enabledSkills: sa.skills })
     )
     if (skillsSection) {
       prompt += skillsSection
     }
   }
 
+  prompt += subagentTeamPromptSection(teamMode)
+
   return prompt
+}
+
+/** 构建子代理系统提示词（运行时上下文版本；委托给共享实现） */
+function buildSubAgentSystemPrompt(
+  ctx: SubAgentRuntimeContext,
+  sa: SubAgentConfig,
+  teamMode: boolean
+): string {
+  return buildSubAgentSessionPrompt(
+    sa,
+    { memoryPath: ctx.memoryPath, skillsPath: ctx.skillsPath },
+    teamMode
+  )
 }
 
 /** 构建 task 工具描述：静态引导 + 子代理清单（名称 + 功能描述） */
 function buildTaskDescription(subAgents: SubAgentConfig[]): string {
   if (subAgents.length === 0) {
-    return 'Delegate complex work to a dedicated subagent. A subagent has its own system prompt and toolset, which suits subtasks that need focused handling.'
+    return 'Delegate complex work to a dedicated subagent. A subagent has its own system prompt and toolset, which suits subtasks that need focused handling. No subagent definitions are configured in this workspace yet: create one with agent_create (name/description/system_prompt/tools), then delegate to it with task.'
   }
   const list = subAgents
     .map((sa) => {
@@ -141,11 +181,13 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
   return tool(
     async ({ subagent_type, description, prompt, background }, config) => {
       const m = getAgentToolTexts()
-      const sa = ctx.subAgents.find((s) => s.name === subagent_type)
+      // 调用期重新解析：agent_create / 设置页可能在 Runtime 构造之后刚改过配置
+      const subAgents = ctx.reloadSubAgents ? await ctx.reloadSubAgents() : ctx.subAgents
+      const sa = subAgents.find((s) => s.name === subagent_type)
       if (!sa) {
         return mainFormat(m.subagent.notFound, {
           type: subagent_type,
-          names: ctx.subAgents.map((s) => s.name).join(', ') || m.subagent.noneAvailable
+          names: subAgents.map((s) => s.name).join(', ') || m.subagent.noneAvailable
         })
       }
 
@@ -161,7 +203,9 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           recursionLimit: ctx.recursionLimit,
           maxToolCalls: ctx.maxToolCalls,
           spillRef: ctx.spillRef,
-          extendSystemPrompt: (s) => buildSubAgentSystemPrompt(ctx, s)
+          extendSystemPrompt: (s) =>
+            buildSubAgentSystemPrompt(ctx, s, teamModeStore.isEnabled(topicId)),
+          mainModelDescriptor: ctx.mainModelDescriptor
         })
         return mainFormat(m.subagent.backgroundStarted, { id: row.id, label: row.label })
       }
@@ -169,6 +213,10 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
       const causeId =
         ((config?.configurable as Record<string, unknown> | undefined)?.toolCallId as
           string | undefined) ?? 'unknown'
+      // 父图 configurable 里的 topicId：前台子代理同样要能读写本话题的共享任务板
+      const parentConfigurable = (config?.configurable ?? {}) as Record<string, unknown>
+      const parentTopicId =
+        typeof parentConfigurable.topicId === 'number' ? parentConfigurable.topicId : 0
       const queue = ctx.queue
       const push = (record: SubAgentRecord): void => queue.current?.push(record)
 
@@ -182,7 +230,11 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
         // 工具：子代理声明的业务工具
         const tools = ctx.buildTools(sa)
         // 系统提示词：基础提示词 + 专属记忆 + 技能段
-        const systemPrompt = buildSubAgentSystemPrompt(ctx, sa)
+        const systemPrompt = buildSubAgentSystemPrompt(
+          ctx,
+          sa,
+          teamModeStore.isEnabled(parentTopicId)
+        )
 
         // 编译子代理子图（记录经 subagentCtx 包装为 sub_* 记录）
         const graph = buildAgentGraph({
@@ -206,7 +258,12 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
             {
               streamMode: ['messages'] as const,
               recursionLimit: ctx.recursionLimit,
-              signal: config?.signal
+              signal: config?.signal,
+              // 团队身份：前台子代理也作为 member 参与共享任务板（id 用派遣调用 id）
+              configurable: {
+                topicId: parentTopicId,
+                teamAgent: { id: `task-${causeId}`, name: sa.name, isLead: false }
+              }
             }
           )
           for await (const item of stream) {
@@ -233,7 +290,9 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           const isRecursion =
             err instanceof GraphRecursionError || (err as Error)?.name === 'GraphRecursionError'
           if (isRecursion) {
-            logger.warn(`[SubAgent] ${sa.name} reached the tool call round limit, stopping automatically`)
+            logger.warn(
+              `[SubAgent] ${sa.name} reached the tool call round limit, stopping automatically`
+            )
             const output = fullText.trim()
               ? `${fullText.trim()}${m.subagent.roundLimitNote}`
               : m.subagent.roundLimitIncomplete

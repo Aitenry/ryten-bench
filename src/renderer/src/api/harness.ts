@@ -11,6 +11,7 @@ import type {
   HarnessDialogueRow,
   HarnessDialogueUsageRow,
   HarnessTopicRow,
+  JobOutputView,
   JobSnapshot,
   MnemonBodiesView,
   MnemonBodyInsight,
@@ -23,11 +24,20 @@ import type {
   PaginatedResult,
   PendingQuestionView,
   PermissionMode,
+  PlanModeView,
   QueuedMessageView,
   StartMemoryAgentResult,
+  SubagentConversationEvent,
+  SubagentConversationSnapshot,
+  SubagentConversationHistory,
+  SubagentPromptResult,
   SubagentSessionRow,
+  TeamBoardSnapshot,
+  TeamModeView,
+  TeamTaskEventView,
   TodoItem,
   TurnFinal,
+  TurnUsageView,
   WorkspaceFsChange,
   WorkspaceRow
 } from '../../../shared/harness/types'
@@ -46,6 +56,19 @@ export interface PermissionStateView {
   topicId: number
   mode: PermissionMode
   defaultMode: PermissionMode
+}
+
+/**
+ * 目标动作的返回形状：界面入口（创建/编辑/暂停/恢复/完成/清除）统一走它。
+ *
+ * 与工坊动作同一套约定：预期失败不抛错，`error` 里放可直接展示的文案；
+ * `goal-objective-required` / `goal-missing` 这类稳定代码由渲染层翻成本语言，
+ * 其余（状态机拒绝）直接显示主进程返回的本地化文本。
+ */
+export interface GoalActionResult {
+  ok: boolean
+  goal?: GoalView
+  error?: string
 }
 
 /**
@@ -86,15 +109,6 @@ const invoke = window.api.system.invoke
 /** 主进程 → 渲染层事件通道的订阅（通用桥 + 白名单门控） */
 const on = (channel: string, callback: (data: unknown) => void): (() => void) =>
   window.api.system.on(channel, callback)
-
-/** 后台子代理会话输出视图（点开查看结果） */
-export interface SubagentSessionOutputView {
-  text: string
-  status: 'running' | 'idle'
-  lastStatus?: 'completed' | 'failed' | 'killed'
-  /** 启动时的原始任务指令（弹窗顶部展示） */
-  prompt: string
-}
 
 /** 本轮流式结束载荷（harness-stream-done） */
 export interface StreamDoneResult {
@@ -227,6 +241,35 @@ export const harnessApi = {
       on('harness:harness-goal-updated', (data) =>
         callback(data as { topicId: number; goal: GoalView | null })
       ),
+    /** 创建目标（界面入口：人类直接请求，成功即武装自动续跑） */
+    createGoal: (payload: { topicId: number; objective: string; maxGoalRounds?: number }) =>
+      invoke('harness:harness-goal-create', payload) as Promise<GoalActionResult>,
+    /** 更新目标：编辑目标文本 / 暂停 / 恢复 / 标记完成 */
+    updateGoal: (payload: {
+      topicId: number
+      action: 'edit' | 'pause' | 'resume' | 'complete'
+      objective?: string
+      maxGoalRounds?: number
+    }) => invoke('harness:harness-goal-update', payload) as Promise<GoalActionResult>,
+    /** 清除目标（删除该话题的目标行；自动续跑随之解除） */
+    clearGoal: (topicId: number) =>
+      invoke('harness:harness-goal-clear', topicId) as Promise<GoalActionResult>,
+
+    // 计划模式（plan mode）：按话题持久化的「先规划、批准后执行」开关
+    getPlanMode: (topicId: number) =>
+      invoke('harness:harness-plan-get', topicId) as Promise<PlanModeView>,
+    setPlanMode: (payload: { topicId: number; active: boolean }) =>
+      invoke('harness:harness-plan-set', payload) as Promise<PlanModeView>,
+    onPlanModeUpdated: (callback: (data: PlanModeView) => void): (() => void) =>
+      on('harness:harness-plan-updated', (data) => callback(data as PlanModeView)),
+
+    // Agent Teams 模式（opt-in，按话题）：关闭时不注入 team_task_* 工具与团队提示词
+    getTeamMode: (topicId: number) =>
+      invoke('harness:harness-team-mode-get', topicId) as Promise<TeamModeView>,
+    setTeamMode: (payload: { topicId: number; enabled: boolean }) =>
+      invoke('harness:harness-team-mode-set', payload) as Promise<TeamModeView>,
+    onTeamModeUpdated: (callback: (data: TeamModeView) => void): (() => void) =>
+      on('harness:harness-team-mode-updated', (data) => callback(data as TeamModeView)),
 
     // 后台任务系统（jobs）
     onJobsUpdated: (
@@ -235,17 +278,25 @@ export const harnessApi = {
       on('harness:harness-jobs-updated', (data) =>
         callback(data as { topicId: number; jobs: JobSnapshot[] })
       ),
+    /** 当前话题的后台任务列表（顶部栏首次打开/切话题时拉一次） */
+    listJobs: (topicId: number) =>
+      invoke('harness:harness-jobs-list', topicId) as Promise<JobSnapshot[]>,
+    /** 手动停止一个后台任务（取消请求；任务以 killed 终态收尾） */
+    killJob: (topicId: number, jobId: string) =>
+      invoke('harness:harness-job-kill', topicId, jobId) as Promise<{
+        outcome: 'cancellation-requested' | 'already-finished' | 'not-found'
+        job: JobSnapshot | null
+      }>,
+    /** 查看任务输出快照（尾部截断；不消费模型的 job_output 游标） */
+    peekJobOutput: (topicId: number, jobId: string) =>
+      invoke('harness:harness-job-output-peek', topicId, jobId) as Promise<JobOutputView>,
 
     // 后台子代理会话（顶部栏列表：进行中 > 已完成，点开查看结果）
     listAgents: (topicId: number) =>
       invoke('harness:harness-agents-list', topicId) as Promise<SubagentSessionRow[]>,
-    agentOutput: (topicId: number, agentId: string) =>
-      invoke('harness:harness-agent-output', topicId, agentId) as Promise<
-        SubagentSessionOutputView | undefined
-      >,
     /**
      * 存入记忆：起一个后台「记忆整理」子代理，由它自己总结后写入 Mnemon，立即返回。
-     * 进度与结果走顶部栏后台代理入口（onAgentsUpdated / agentOutput），不等它跑完。
+     * 进度与结果走顶部栏后台代理入口（onAgentsUpdated），不等它跑完。
      */
     startMemoryAgent: (payload: {
       topicId: number
@@ -259,19 +310,67 @@ export const harnessApi = {
       on('harness:harness-agents-updated', (data) =>
         callback(data as { topicId: number; rows: SubagentSessionRow[] })
       ),
-    watchAgentOutput: (topicId: number, agentId: string, watch: boolean) => {
-      void invoke('harness:harness-agent-watch', topicId, agentId, watch)
-    },
-    onAgentOutputUpdated: (
+
+    // 后台子代理会话视图：点开一个子代理 → 主对话区切到它的流式会话记录
+    /** 会话快照（事件流 + seq；不登记关注，用于断点重拉） */
+    agentConversation: (topicId: number, agentId: string) =>
+      invoke(
+        'harness:harness-agent-conversation',
+        topicId,
+        agentId
+      ) as Promise<SubagentConversationSnapshot | null>,
+    /** 向前翻页：取 beforeSeq 之前最近一页完整轮次（会话视图滚动到顶部时调用） */
+    agentConversationOlder: (topicId: number, agentId: string, beforeSeq: number, maxTurns = 20) =>
+      invoke(
+        'harness:harness-agent-conversation-older',
+        topicId,
+        agentId,
+        beforeSeq,
+        maxTurns
+      ) as Promise<SubagentConversationHistory | null>,
+    /**
+     * 打开/关闭会话视图。watch=true 时主进程登记关注并直接返回**当前快照**；
+     * 此后增量事件走 onAgentConversationUpdated（按 seq 合并）。
+     */
+    watchAgentConversation: (topicId: number, agentId: string, watch: boolean) =>
+      invoke(
+        'harness:harness-agent-conversation-watch',
+        topicId,
+        agentId,
+        watch
+      ) as Promise<SubagentConversationSnapshot | null>,
+    onAgentConversationUpdated: (
       callback: (data: {
         topicId: number
         agentId: string
-        output: SubagentSessionOutputView
+        events: SubagentConversationEvent[]
       }) => void
     ): (() => void) =>
-      on('harness:harness-agent-output-updated', (data) =>
-        callback(data as { topicId: number; agentId: string; output: SubagentSessionOutputView })
+      on('harness:harness-agent-conversation-updated', (data) =>
+        callback(data as { topicId: number; agentId: string; events: SubagentConversationEvent[] })
       ),
+    /** 人工续聊：向子代理投递一条消息（空闲开新一轮，运行中排队；返回投递回执） */
+    sendAgentPrompt: (topicId: number, agentId: string, message: string) =>
+      invoke('harness:harness-agent-prompt', {
+        topicId,
+        agentId,
+        message
+      }) as Promise<SubagentPromptResult>,
+    /** 停止子代理当前这一轮（已排队消息保留） */
+    interruptAgent: (topicId: number, agentId: string) =>
+      invoke('harness:harness-agent-interrupt', topicId, agentId) as Promise<{
+        accepted: boolean
+      }>,
+
+    // Agent Teams / 超级智能体：共享任务板（主智能体 + 子代理协作的 team/task 投影）
+    /** 当前话题的共享任务板快照（打开顶部栏任务入口时拉一次） */
+    listTeamTasks: (topicId: number) =>
+      invoke('harness:harness-team-tasks', topicId) as Promise<TeamBoardSnapshot>,
+    /** 任务板整板变更推送（主进程每次变更推完整快照，带 revision 去旧） */
+    onTeamUpdated: (callback: (snapshot: TeamBoardSnapshot) => void): (() => void) =>
+      on('harness:harness-team-updated', (data) => callback(data as TeamBoardSnapshot)),
+    listTeamEvents: (topicId: number, limit = 20) =>
+      invoke('harness:harness-team-events', topicId, limit) as Promise<TeamTaskEventView[]>,
 
     // 向用户提问（ask_user_question）
     onQuestionAsked: (callback: (pending: PendingQuestionView) => void): (() => void) =>
@@ -505,6 +604,9 @@ export const harnessApi = {
     // 对话真实用量（一条助手回复一行）
     getUsageByTopic: (topicId: number) =>
       invoke('harness:harness-usage-get-by-topic', topicId) as Promise<HarnessDialogueUsageRow[]>,
+    /** 生成中本轮累计用量：每次模型往返结束推一条（流结束后不再有事件，改读上面的落库数据） */
+    onTurnUsage: (callback: (data: TurnUsageView) => void): (() => void) =>
+      on('harness:harness-turn-usage', (data) => callback(data as TurnUsageView)),
 
     // 工具结果按需读取：内置工具（read_file/execute 等）的结果不再随流下发，
     // 聊天卡片点开时才取（ls/glob/grep/execute 的详情按 topicId+callId 取回）
@@ -530,8 +632,19 @@ export const harnessApi = {
     getById: (workspaceId: number, id: number) =>
       invoke('harness:agent-get-by-id', workspaceId, id) as Promise<AgentConfigRow | null>,
     create: (input: AgentConfigInput) => invoke('harness:agent-create', input) as Promise<number>,
-    update: (workspaceId: number, id: number, updates: Partial<AgentConfigInput>) =>
-      invoke('harness:agent-update', workspaceId, id, updates) as Promise<boolean>,
+    update: (
+      workspaceId: number,
+      id: number,
+      updates: Partial<AgentConfigInput>,
+      expectedRevision?: number
+    ) =>
+      invoke(
+        'harness:agent-update',
+        workspaceId,
+        id,
+        updates,
+        expectedRevision
+      ) as Promise<boolean>,
     delete: (workspaceId: number, id: number) =>
       invoke('harness:agent-delete', workspaceId, id) as Promise<boolean>
   },

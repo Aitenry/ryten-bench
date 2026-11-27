@@ -37,6 +37,9 @@ export default defineConfig({
     './src/main/database/schema/harness/harness.ts',
     './src/main/database/schema/harness/file-change.ts',
     './src/main/database/schema/harness/agent.ts',
+    './src/main/database/schema/harness/subagent-session.ts',
+    './src/main/database/schema/harness/team-board.ts',
+    './src/main/database/schema/harness/team-task-event.ts',
     './src/main/database/schema/notes/todo.ts',
     './src/main/database/schema/notes/wiki.ts',
     './src/main/database/schema/notes/document.ts',
@@ -51,3 +54,6 @@ export default defineConfig({
   migrations: { table: '__drizzle_migrations', schema: 'drizzle' },
   verbose: true
 })
+
+
+

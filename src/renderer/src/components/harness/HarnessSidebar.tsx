@@ -879,9 +879,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [loadArchivedTopics])
 
   /** 「在应用中打开」的候选应用（文件资源管理器永远在内，其余按本机安装情况探测） */
-  const [openInApps, setOpenInApps] = useState<
-    { id: string; label: string; icon?: string }[]
-  >([])
+  const [openInApps, setOpenInApps] = useState<{ id: string; label: string; icon?: string }[]>([])
   useEffect(() => {
     let alive = true
     harnessApi.harness
@@ -3315,9 +3313,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               {chatWorkspaces.rootWorkspaceId != null &&
                 chatVisibleTopics
                   .filter((topic) => !topic.archived_at)
-                  .map((topic) =>
-                    renderTopicRow(chatWorkspaces.rootWorkspaceId as number, topic)
-                  )}
+                  .map((topic) => renderTopicRow(chatWorkspaces.rootWorkspaceId as number, topic))}
               {chatTopicsHasMore && chatTopicsLoading && (
                 <div className="py-1">
                   <SkeletonListRows rows={2} variant="stacked" />
@@ -3360,7 +3356,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <RiArchiveLine size={16} />
             {t('harness.sidebar.topicArchivedTitle')}
             {archivedTopics.length > 0 && (
-              <span style={{ fontSize: 12, color: colorTextTertiary }}>{archivedTopics.length}</span>
+              <span style={{ fontSize: 12, color: colorTextTertiary }}>
+                {archivedTopics.length}
+              </span>
             )}
           </span>
           <span className="flex items-center gap-2">

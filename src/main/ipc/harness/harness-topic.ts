@@ -4,8 +4,11 @@ import * as fs from 'fs'
 import type { IpcHandlerMap } from '../register'
 import { todoStore } from '../../runtime/harness/todo'
 import { goalStore } from '../../runtime/harness/goal'
+import { planModeStore } from '../../runtime/harness/plan-mode'
+import { teamModeStore } from '../../runtime/harness/team-mode'
 import { jobsRegistry } from '../../runtime/harness/jobs'
 import { subagentSessions } from '../../runtime/harness/subagent-sessions'
+import { teamStore } from '../../runtime/harness/team'
 import { SpillStore } from '../../runtime/harness/spill'
 import { questionService } from '../../runtime/harness/ask'
 import { permissionGate } from '../../runtime/harness/permission-gate'
@@ -190,7 +193,10 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
           try {
             await activateChatTopic(topicId)
           } catch (err) {
-            logger.warn('[Chat] Failed to switch session directory for new topic (topic creation unaffected):', err)
+            logger.warn(
+              '[Chat] Failed to switch session directory for new topic (topic creation unaffected):',
+              err
+            )
           }
         }
         return topicId
@@ -262,10 +268,15 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
       todoStore.clear(id)
       // 清理该话题的对话目标（goalStore：缓存 + 数据库行）
       await goalStore.delete(id)
+      // 计划模式：行随笔话题级联删除，这里只丢内存缓存
+      planModeStore.forget(id)
+      teamModeStore.forget(id)
       // 清理该话题的后台任务（全部 kill）
       jobsRegistry.clearTopic(id)
       // 清理该话题的子代理续接会话（全部中断）
       subagentSessions.clearTopic(id)
+      // 清理该话题的共享任务板（Agent Teams：任务按 topicId 归属）
+      teamStore.clearTopic(id)
       // 清理该话题的摘要压缩 checkpoint（topic_compactions 表）
       await deleteCompactionByTopic(id)
       // 清理该话题的工具结果溢出文件（spill 目录）

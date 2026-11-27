@@ -31,14 +31,60 @@ export type {
 /* ── 运行时视图（计划清单 / 目标 / 后台任务 / 子代理 / 提问 / 记忆整理） ── */
 export type { TodoItem } from '../../main/runtime/harness/todo'
 export type { GoalView } from '../../main/runtime/harness/goal'
-export type { JobSnapshot } from '../../main/runtime/harness/jobs'
+export type { JobSnapshot, JobOutputView } from '../../main/runtime/harness/jobs'
 export type { SubagentSessionRow } from '../../main/runtime/harness/subagent-sessions'
+export type { TeamModeView } from '../../main/runtime/harness/team-mode'
+
+/** Agent Teams 任务事件（IPC 最近活动视图；见 main/database/mapper/harness/team-task-event） */
+export interface TeamTaskEventView {
+  id: number
+  taskId: string
+  action: 'created' | 'claimed' | 'completed' | 'updated' | 'deleted'
+  actorId: string
+  actorName: string
+  subject: string
+  taskRevision: number
+  createdAt: string | null
+}
+export type {
+  SubagentConversationEvent,
+  SubagentConversationSnapshot,
+  SubagentConversationHistory,
+  SubagentPromptResult,
+  SubagentTurnStatus
+} from '../../main/runtime/harness/subagent-conversation'
+export type {
+  TeamBoardSnapshot,
+  TeamTask,
+  TeamTaskStatus,
+  TeamTaskView
+} from '../../main/runtime/harness/team'
 export type { PendingQuestionView, AskAnswer } from '../../main/runtime/harness/ask'
 export type { StartMemoryAgentResult } from '../../main/runtime/harness/memory-agent'
 
+/** 计划模式状态（按话题持久化；输入框徽标与命令面共用） */
+export interface PlanModeView {
+  topicId: number
+  active: boolean
+}
+
+/**
+ * 计划评审（exit_plan_mode）的跨进程契约。
+ *
+ * 答案用稳定标记而不是按钮文案：界面语言切换不会影响主进程对「批准 / 继续规划」的判定。
+ * 放在 shared 是因为渲染层的评审弹窗与主进程的退出工具都要用到，且不能把主进程模块
+ * （electron / 数据库 / 提问服务）打进渲染层产物。
+ */
+export const PLAN_REVIEW_KIND = 'plan-review'
+export const PLAN_REVIEW_APPROVE = 'plan-approve'
+export const PLAN_REVIEW_KEEP_PLANNING = 'plan-keep-planning'
+
 /* ── 沙箱权限（档位 + 审批弹窗视图） ── */
 export type { PermissionMode, DenyReason } from '../../main/runtime/harness/permission'
-export type { ApprovalRequestView, ApprovalDecision } from '../../main/runtime/harness/permission-gate'
+export type {
+  ApprovalRequestView,
+  ApprovalDecision
+} from '../../main/runtime/harness/permission-gate'
 
 /* ── 工作区文件改动史与文件监听 ── */
 export type { FileChangeView, FileChangeContent } from '../../main/workspace/file-history'
@@ -78,6 +124,22 @@ export interface QueuedMessageView {
   attachments: { fileName: string; isImage: boolean }[]
   /** 点过插话但本轮没等到注入边界：留在队列里，随下一次发送带出 */
   held?: boolean
+}
+
+/**
+ * 生成中本轮累计用量（`harness-turn-usage` 事件载荷）。
+ *
+ * 一次模型往返结束推一条，`calls` 与各 token 数都是**本轮累计**（不是最近一次），
+ * 供输入框底栏在生成中显示「本轮 N 次调用 · X tok」。它只是过程信号：
+ * 流结束后淘汰，改读 harness_dialogue_usage 里的权威账本。
+ */
+export interface TurnUsageView {
+  topicId: number
+  turnId: number
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
 }
 
 /* ── Mnemon 三层记忆（记忆设置页读的 IPC 返回形状） ── */
@@ -223,6 +285,10 @@ export interface ToolCard {
   fileCount?: number
   /** execute：退出码 */
   exitCode?: number
+  /** execute：后台任务的 job id（run_in_background=true 时） */
+  jobId?: string
+  /** execute：这条调用只是把命令放到了后台，结果/退出码在后台任务里 */
+  background?: boolean
   /** 有完整结果详情，点卡片可在右侧面板打开 */
   detail?: boolean
 }

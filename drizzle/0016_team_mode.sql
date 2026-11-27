@@ -1,0 +1,1 @@
+ALTER TABLE "harness_topic" ADD COLUMN "team_mode" boolean DEFAULT false NOT NULL;

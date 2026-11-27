@@ -1,23 +1,21 @@
-import * as fs from 'fs'
-import { join } from 'path'
 import logger from 'electron-log'
-import { mainMessages } from '../../i18n'
 import { settingsStore } from '../../context'
-import type { HarnessSettings } from '../../types/settings'
 import type { IpcHandlerMap } from '../register'
-import { clearAgentCache } from '../../services/harness/preload-cache'
 import {
   getAllAgents,
   getAgentsPaginated,
   getAgentById,
-  createAgent,
-  updateAgent,
-  deleteAgent,
   type AgentConfigInput
 } from '../../database/mapper/harness/agent'
-import { getAllWorkspaces } from '../../database/mapper/harness/harness'
 import type { MainAgentConfig } from '../../../shared/harness/mcp'
 import { canonicalToolName, isSelectableMainAgentTool } from '../../../shared/harness/mcp'
+import {
+  createSubAgentDefinition,
+  deleteSubAgentDefinition,
+  normalizeSubAgentTools,
+  updateSubAgentDefinition,
+  type SubAgentDraftPatch
+} from '../../services/harness/subagents'
 
 /**
  * 旧资料工具名（manage_docs/manage_todos/manage_wikis/search_graph）在 2026-11 合并成
@@ -31,7 +29,7 @@ function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
     if (Array.isArray(parsed)) {
       return {
         ...row,
-        tools: JSON.stringify(parsed.map((name) => canonicalToolName(String(name))))
+        tools: JSON.stringify(normalizeSubAgentTools(parsed.map((name) => String(name))) ?? [])
       }
     }
   } catch {
@@ -40,24 +38,12 @@ function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
   return row
 }
 
-/** 写入前的工具名归一（旧名迁移 + 去重） */
-function normalizeToolList(tools: string[] | null | undefined): string[] | null {
-  if (!tools) return null
-  const out: string[] = []
-  for (const name of tools) {
-    const canonical = canonicalToolName(String(name))
-    if (!out.includes(canonical)) out.push(canonical)
-  }
-  return out
-}
-
 /**
  * 智能体（子代理）配置 + 主智能体默认配置 IPC（harness 插件的第 5 个域）。
  *
- * 归属说明：这 8 个通道原本混在 `src/main/ipc/provider.ts` 里（该文件同时注册模型
- * Provider 通道），但 agent_config.workspace_id 挂的是 harness 的 workspace 表、
- * 配置的也是 AI 子代理，属于 harness —— 因此随本轮迁移搬进本插件，provider.ts 只留
- * 模型 Provider（provider-*）。
+ * 写入语义（校验/归一/缓存失效/记忆目录清理）已收敛到
+ * `services/harness/subagents.ts`：设置页与主智能体的 `agent_create` 工具共用同一套规则，
+ * 这里只做参数解析、读路径映射与错误日志。
  *
  * 通道名一律 `harness:<原扁平名>`（agent-* / main-agent-* 共 8 个），
  * 停用「AI 助手」后智能体配置页的通道一并消失。
@@ -100,14 +86,16 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle('agent-create', async (input: AgentConfigInput) => {
     try {
-      // agent_config.workspace_id 有外键约束：未配置工作区时给出可读提示，
-      // 而不是抛原始的 FK 违例（应用不再自动创建默认工作区）
-      const workspaces = await getAllWorkspaces()
-      if (!input.workspace_id || !workspaces.some((w) => w.id === input.workspace_id)) {
-        throw new Error(mainMessages().error.workspaceNotConfigured)
-      }
-      const id = await createAgent({ ...input, tools: normalizeToolList(input.tools) })
-      clearAgentCache()
+      const { id } = await createSubAgentDefinition({
+        workspaceId: input.workspace_id,
+        name: input.name,
+        displayName: input.rename ?? undefined,
+        description: input.description ?? '',
+        systemPrompt: input.prompt ?? '',
+        tools: input.tools ?? undefined,
+        model: input.model ?? undefined,
+        skills: input.skills ?? undefined
+      })
       return id
     } catch (error) {
       logger.error('Error in agent-create:', error)
@@ -117,15 +105,22 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle(
     'agent-update',
-    async (workspaceId: number, id: number, updates: Partial<AgentConfigInput>) => {
+    async (
+      workspaceId: number,
+      id: number,
+      updates: Partial<AgentConfigInput>,
+      expectedRevision?: number
+    ) => {
       try {
-        const normalized =
-          updates.tools !== undefined
-            ? { ...updates, tools: normalizeToolList(updates.tools) }
-            : updates
-        const result = await updateAgent(workspaceId, id, normalized)
-        clearAgentCache()
-        return result
+        const patch: SubAgentDraftPatch = {}
+        if (updates.name !== undefined) patch.name = updates.name
+        if (updates.rename !== undefined) patch.displayName = updates.rename ?? undefined
+        if (updates.description !== undefined) patch.description = updates.description ?? ''
+        if (updates.prompt !== undefined) patch.systemPrompt = updates.prompt ?? ''
+        if (updates.tools !== undefined) patch.tools = updates.tools ?? undefined
+        if (updates.model !== undefined) patch.model = updates.model ?? undefined
+        if (updates.skills !== undefined) patch.skills = updates.skills ?? undefined
+        return await updateSubAgentDefinition(workspaceId, id, patch, expectedRevision)
       } catch (error) {
         logger.error('Error in agent-update:', error)
         throw error
@@ -135,27 +130,7 @@ export function agentIpcHandlers(): IpcHandlerMap {
 
   handle('agent-delete', async (workspaceId: number, id: number) => {
     try {
-      // 先获取 agent 信息（需要 name 来删除记忆目录）
-      const agent = await getAgentById(workspaceId, id)
-      await deleteAgent(workspaceId, id)
-      clearAgentCache()
-      // 自动删除子Agent记忆目录
-      if (agent) {
-        const settings = settingsStore.store
-        const memoryPath = (settings.harness as HarnessSettings)?.memoryPath
-        if (memoryPath) {
-          try {
-            const agentDir = join(memoryPath, `workspace-${workspaceId}`, 'sub-agents', agent.name)
-            if (fs.existsSync(agentDir)) {
-              fs.rmSync(agentDir, { recursive: true, force: true })
-              logger.info(`Auto-removed memory directories for sub-agent: ${agent.name}`)
-            }
-          } catch (memErr) {
-            logger.warn('Failed to auto-remove sub-agent memory directories:', memErr)
-          }
-        }
-      }
-      return true
+      return await deleteSubAgentDefinition(workspaceId, id)
     } catch (error) {
       logger.error('Error in agent-delete:', error)
       throw error

@@ -12,6 +12,7 @@ import { SkeletonSettingRows } from '@renderer/components/system/Skeleton'
 import EntityCard, { EntityChip } from '@renderer/components/system/EntityCard'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
+import { SUBAGENT_NAME_PATTERN } from '../../../../../shared/harness/subagent'
 
 import type { ProviderOption } from '@renderer/types/components'
 import { isEmbeddingProvider, getProviderDisplayName } from '@renderer/utils/providerMeta'
@@ -322,7 +323,7 @@ const AgentSettings: React.FC = () => {
       }
 
       if (editingAgent) {
-        await harnessApi.agents.update(workspaceId, editingAgent.id, input)
+        await harnessApi.agents.update(workspaceId, editingAgent.id, input, editingAgent.revision)
         viewMessage('agent-save', 'success', t('agentSettings.messages.agentUpdated'), 2)
       } else {
         await harnessApi.agents.create(input)
@@ -754,7 +755,7 @@ const AgentSettings: React.FC = () => {
                 rules={[
                   { required: true, message: t('agentSettings.form.identifierRequired') },
                   {
-                    pattern: /^[a-z][a-z0-9-]*$/,
+                    pattern: SUBAGENT_NAME_PATTERN,
                     message: t('agentSettings.form.identifierPattern')
                   }
                 ]}

@@ -152,6 +152,10 @@ export const harnessZhCN = {
       modelEmpty: '没有匹配的模型',
       modelMenuAria: '选择模型与推理等级',
       effortLabel: '推理等级',
+      teamModeLabel: '启用智能体团队协作',
+      teamModeHint:
+        '开启后，主智能体与子代理共享任务板（team_task_* 工具与团队协作提示词）；按当前会话持久化，默认关闭。',
+      teamModeFailed: '切换团队协作失败',
       effortNotSentHint: '当前接口协议不下发该参数，仅记录',
       effortSaveFailed: '推理等级保存失败',
       back: '返回',
@@ -173,7 +177,109 @@ export const harnessZhCN = {
       skillsSearchPlaceholder: '搜索技能',
       /** 工具 / 技能面板搜索不到时的空态 */
       pickerNoMatch: '无匹配结果',
-      pickerSaveFailed: '保存失败，请重试'
+      pickerSaveFailed: '保存失败，请重试',
+      /** 「/」命令面（输入框开头输入 / 唤起；目标 / 计划两项，样式参考 DSH 命令菜单） */
+      commands: {
+        aria: '命令',
+        groupAdd: '添加',
+        goalLabel: '目标',
+        goalDescription: '设置或查看长期任务目标',
+        planLabel: '计划',
+        planDescription: '进入或退出计划模式',
+        empty: '没有匹配的命令',
+        noTopic: '先发送一条消息创建会话，再使用这个命令'
+      }
+    },
+    /** 计划模式（plan mode）：输入框徽标 + 进入/退出提示 */
+    planMode: {
+      badge: '计划模式',
+      badgeAria: '计划模式已开启，点击退出',
+      activeHint: '计划模式：先探索与规划，计划经你批准后才开始执行',
+      enabled: '已进入计划模式：先规划，批准后再执行',
+      disabled: '已退出计划模式',
+      switchFailed: '计划模式切换失败'
+    },
+    /** 目标弹窗（输入框命令面的「目标」入口） */
+    /** 内联目标卡片（输入框上方） */
+    goalInline: {
+      tag: '目标',
+      newTarget: '新目标',
+      newTargetHint: '在下方输入框输入内容',
+      newTargetAction: 'Enter 开始 · Esc 取消',
+      editing: '编辑中',
+      add: '为这次会话设定一个长期目标…',
+      editHint: '点任意处编辑',
+      composePlaceholder: '输入目标…',
+      composeFlag: '目标 · Enter 执行 · Esc 取消',
+      composeHint: 'Enter 执行 · Esc 取消',
+      editTitle: '编辑目标',
+      enterRun: '开始执行',
+      lineBreak: '换行',
+      start: '开始执行',
+      rounds: '{{rounds}} 轮',
+      saveFailed: '保存目标失败：',
+      actionFailed: '操作目标失败：'
+    },
+    goalDialog: {
+      title: '目标',
+      subtitle: '设置或查看这个会话的长期任务目标；目标会自动续跑，直到完成、暂停或达到轮次上限。',
+      emptyHint: '还没有目标。写下一个要长期推进的目标，Rita 会在每轮结束后自动继续。',
+      objectiveLabel: '目标描述',
+      objectivePlaceholder: '例如：把迁移方案落到代码，补全测试并提交 PR',
+      roundsLabel: '轮次上限',
+      roundsHint: '自动续跑的最大轮数（默认 256）',
+      create: '创建目标',
+      save: '保存修改',
+      pause: '暂停',
+      resume: '继续',
+      complete: '标记完成',
+      clear: '清除目标',
+      newGoal: '新目标',
+      phaseActive: '进行中',
+      phasePaused: '已暂停',
+      phaseBlocked: '受阻',
+      phaseComplete: '已完成',
+      rounds: '已进行 {{current}} / {{max}} 轮',
+      blockedReason: '阻塞原因：{{code}} · {{message}}',
+      activeHint: '目标会自动续跑：每轮结束后继续下一轮，直到完成或暂停。',
+      pausedHint: '目标已暂停；点「继续」重新开启自动续跑。',
+      completeHint: '目标已完成，可以创建新目标。',
+      objectiveRequired: '请先填写目标描述',
+      missingGoal: '当前话题没有目标',
+      created: '目标已创建',
+      saved: '目标已保存',
+      cleared: '目标已清除',
+      close: '关闭',
+      createFailed: '创建目标失败：{{message}}',
+      updateFailed: '更新目标失败：{{message}}',
+      clearFailed: '清除目标失败：{{message}}',
+      clearConfirmTitle: '清除这个目标？',
+      clearConfirmBody: '目标会被删除，自动续跑随之停止；会话内容不受影响。',
+      clearConfirmOk: '清除',
+      cancel: '取消'
+    },
+    /** 内联计划区（输入框上方） */
+    planInline: {
+      tag: '计划',
+      activeHint: '计划模式已开启 · 先给出完整方案，批准后才会改代码',
+      exit: '退出计划模式',
+      waiting: '等待批准',
+      editPlan: '编辑计划',
+      save: '保存',
+      savePlan: '保存修改',
+      cancel: '取消',
+      feedbackPlaceholder: '想调整计划？在这里补充意见，不占用底部输入框…',
+      editedNote: '已修订计划；批准后会把修订版作为最终计划执行。'
+    },
+    /** 计划评审弹窗（exit_plan_mode）：整份计划 + 批准 / 继续规划 */
+    planReview: {
+      title: '计划评审',
+      approve: '批准并开始执行',
+      keepPlanning: '继续规划',
+      feedbackLabel: '反馈（可选）',
+      feedbackPlaceholder: '想改哪里？告诉 Rita 如何调整计划…',
+      hint: '批准后计划模式关闭，Rita 开始按计划执行；选择「继续规划」会把反馈带回模型继续修订。',
+      emptyPlan: '（计划内容为空）'
     },
     permission: {
       readOnly: '仅可查看',
@@ -211,7 +317,10 @@ export const harnessZhCN = {
       allowOnce: '允许一次',
       deny: '拒绝',
       escalationNote: '模型申请临时提权到「{{mode}}」：{{justification}}',
-      footerHint: '只放行这一次；同样的操作再次出现时还会问你。点「停止生成」可中止本轮。'
+      footerHint: '只放行这一次；同样的操作再次出现时还会问你。点「停止生成」可中止本轮。',
+      inlineSubtitle: '该调用超出当前权限，等待你的决定',
+      inlineHint: '仅本次生效；长期档位请用输入框的权限选择器修改。',
+      deciding: '处理中…'
     },
     queue: {
       count: '{{count}} 条排队消息',
@@ -300,6 +409,7 @@ export const harnessZhCN = {
       toolFileCount_one: '{{count}} 个文件',
       toolFileCount_other: '{{count}} 个文件',
       toolExitCode: 'exit {{code}}',
+      toolBackgroundJob: '后台 · {{id}}',
       toolReplacements: '<mono>{{count}}</mono> 处',
       toolReplacements_one: '<mono>{{count}}</mono> 处',
       toolReplacements_other: '<mono>{{count}}</mono> 处',
@@ -393,7 +503,9 @@ export const harnessZhCN = {
     usageMeter: {
       tokens: '{{value}} tok',
       cacheHit: '缓存命中 {{percent}}%',
-      contextAria: '上下文占用 {{percent}}%（当前模型窗口 {{window}} token）'
+      contextAria: '上下文占用 {{percent}}%（当前模型窗口 {{window}} token）',
+      turnLive: '本轮 {{calls}} 次调用 · {{value}} tok',
+      turnLiveHint: '本轮实时累计（每次模型调用结束更新），结束后显示会话总计'
     },
     goalBar: {
       phaseActive: '进行中',
@@ -440,14 +552,90 @@ export const harnessZhCN = {
       failed: '失败',
       killed: '已停止',
       completed: '已完成',
-      runningCount: '{{count}} 进行中',
-      completedCount: '{{count}} 已完成',
-      failedCount: '{{count}} 失败',
-      killedCount: '{{count}} 已停止',
-      summarySeparator: '，',
-      promptLabel: '任务',
-      generating: '正在生成…',
-      noOutput: '暂无输出'
+      inactive: '未激活',
+      /**
+       * 子代理会话视图（点开右上角后台子代理 → 主对话区切到该子智能体的流式会话）。
+       * 与主对话共用消息渲染；这里只是视图外壳（返回入口 / 空态 / 只读提示）的文案。
+       */
+      conversation: {
+        backToMain: '返回主智能体',
+        breadcrumbMain: '主智能体',
+        loading: '正在加载会话…',
+        empty: '该子智能体还没有输出内容',
+        missing: '子智能体会话不存在（可能已随话题或会话清理删除）',
+        /* 人工续聊：在会话视图底部给这个子代理投递消息（与主代理 send_message 同一收件箱） */
+        placeholder: '给这个子智能体发送消息，继续会话…',
+        queuedCount: '{{count}} 条消息排队中',
+        sendFailed: '发送失败：{{reason}}',
+        open: '查看会话'
+      }
+    },
+    /**
+     * 顶部栏「后台任务」入口（execute run_in_background=true 的任务）。
+     *
+     * 与 backgroundAgents 分开：后台子代理已有自己的入口与结果弹窗；
+     * 这里只列命令类任务，避免同一个任务在顶部栏出现两次。
+     * 2026-11-26 起是「顶部内联托盘」：行内折叠输出、右侧停止。
+     */
+    /**
+     * 顶部栏「协作」入口（2026-11-26 方案 A）：把后台子代理与共享任务板合并成一个
+     * Popover —— 上半段子代理（点行进会话视图），下半段共享任务。
+     */
+    collab: {
+      agentsCount: '{{count}} 子代理',
+      tasksCount: '{{count}} 任务',
+      summarySeparator: ' · ',
+      sectionAgents: '子代理',
+      sectionTasks: '共享任务',
+      taskProgress: '进行中 {{running}} · 待办 {{pending}} · 已完成 {{completed}}',
+      agentTaskCount: '{{count}} 任务',
+      agentUsage: '{{tokens}} tok',
+      lastActivity: '最近：{{name}} {{action}}「{{task}}」',
+      eventCreated: '创建了',
+      eventClaimed: '认领了',
+      eventCompleted: '完成了',
+      eventUpdated: '更新了',
+      eventDeleted: '删除了',
+      footerShared: '主智能体与子智能体共享',
+      footerAgentsHint: '点击子代理可查看会话',
+      taskOpenOwner: '该任务由子代理负责，点击打开它的会话',
+      footerTasksHint: '任务由主智能体与子智能体共同维护'
+    } /**
+     * Agent Teams / 超级智能体：顶部栏「共享任务板」入口。
+     *
+     * 机制同一张板：主智能体（lead）与子代理（member）通过 team_task_* 工具读写，
+     * 用户在这里实时看到协作进展（进行中 / 待办 / 已完成 + 负责人 + 依赖）。
+     */,
+    team: {
+      unowned: '未认领',
+      blockedBy: '等待 {{tasks}}',
+      owner: '负责人：{{name}}'
+    },
+    backgroundJobs: {
+      running: '运行中',
+      stopping: '停止中',
+      completed: '已完成',
+      failed: '失败',
+      killed: '已停止',
+      runningCount: '{{count}} 个运行中',
+      totalCount: '共 {{count}} 个',
+      title: '后台任务',
+      stop: '停止任务',
+      stopFailed: '停止任务失败：{{reason}}',
+      alreadyFinished: '任务已经结束',
+      output: '输出',
+      noOutput: '暂无输出',
+      loadingOutput: '正在读取输出…',
+      outputFailed: '读取输出失败：{{reason}}',
+      outputTruncated: '（输出过长，仅显示最近一段）',
+      autoFollow: '自动跟随',
+      backToBottom: '回到底部',
+      startedAt: '启动于 {{time}}',
+      finishedAt: '结束于 {{time}}',
+      durationUnderSecond: '<1 秒',
+      durationSeconds: '{{count}} 秒',
+      durationMinutes: '{{minutes}} 分 {{seconds}} 秒',
+      durationHours: '{{hours}} 小时 {{minutes}} 分'
     },
     fileExplorer: {
       title: '资源编辑器',

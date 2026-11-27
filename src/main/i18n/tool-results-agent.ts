@@ -69,6 +69,23 @@ export const zhCNAgentToolTexts = {
     roundLimitReached: '已达轮次上限（{{rounds}} 轮），自动停止'
   },
 
+  /** 计划模式（plan-mode.ts）：exit_plan_mode 的返回与评审入口 */
+  plan: {
+    /** 工具不在计划模式下被调用（正常流程不会出现；防模型自行猜测调用） */
+    notActive: '当前未处于计划模式，exit_plan_mode 不可用。',
+    emptyPlan: '计划内容为空：请把完整计划（Markdown，以标题开头）放进 plan 参数。',
+    /** 计划评审弹窗的小标题 */
+    reviewHeader: '计划评审',
+    approved: '用户已批准计划。计划模式已关闭，现在开始按该计划执行。',
+    approvedWithFeedback:
+      '用户已批准计划（附注：{{feedback}}）。计划模式已关闭，现在开始按该计划执行。',
+    keepPlanning: '用户要求继续规划{{feedback}}。请根据反馈修订计划，然后再次调用 exit_plan_mode。',
+    aborted: '计划评审已中止（本轮被取消），计划模式保持不变。',
+    reviewFailed: '计划评审失败：{{message}}。请把计划作为普通回答写给用户。',
+    reviewNoAnswer:
+      '没有收到有效的评审结果，计划模式保持不变。请再次调用 exit_plan_mode，或请用户直接在输入框反馈。'
+  },
+
   /** 后台任务（jobs.ts）：job_output 的返回文本与任务终态说明 */
   jobs: {
     notFoundInTopic: '任务 {{id}} 不存在或不属于当前话题。',
@@ -100,6 +117,12 @@ export const zhCNAgentToolTexts = {
   },
 
   /** 续接会话控制工具与子代理会话运行（subagent-sessions.ts） */
+  /** 子代理作者化工具（agent_create）：主智能体委派构建子代理配置 */
+  agentAuthoring: {
+    created:
+      '已创建子代理「{{name}}」（id={{id}}）：它会出现在设置 → 智能体的列表中，并已注册为可复用子代理。现在可以直接调用 task(subagent_type="{{name}}", prompt=...) 派发任务。',
+    failed: '创建子代理失败：{{message}}'
+  },
   subagentSessions: {
     /** 会话/任务显示名：`<子代理名>：<任务首 40 字>` */
     sessionLabel: '{{name}}：{{task}}',
@@ -113,7 +136,10 @@ export const zhCNAgentToolTexts = {
     runFailed: '（运行失败：{{message}}）',
     /** 轮次上限时的失败说明 */
     roundLimitReached: '子智能体达到工具调用轮次上限',
-    sendFailed: '发送失败: {{message}}'
+    sendFailed: '发送失败: {{message}}',
+    /** 重启后恢复的 inactive 会话：冷恢复失败时明确拒绝续聊 */
+    inactiveCannotResume:
+      '子代理会话 {{id}} 是重启后恢复的历史记录，但本次冷恢复失败（模型或配置不可用）；请重新派发一个后台任务。'
   },
 
   /** 工作流工具（workflow.ts）：错误串里的话术（前缀标识符由代码拼接） */
@@ -171,6 +197,24 @@ export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
     roundLimitReached: 'Round limit reached ({{rounds}} rounds); stopping automatically'
   },
 
+  plan: {
+    notActive: 'Plan mode is not active; exit_plan_mode is unavailable.',
+    emptyPlan:
+      'The plan is empty: pass the complete plan in Markdown (starting with a heading) in the plan argument.',
+    reviewHeader: 'Plan review',
+    approved:
+      'The user approved the plan. Plan mode is now off; carry out the plan from this step.',
+    approvedWithFeedback:
+      'The user approved the plan (note: {{feedback}}). Plan mode is now off; carry out the plan from this step.',
+    keepPlanning:
+      'The user asked to keep planning{{feedback}}. Revise the plan accordingly and call exit_plan_mode again.',
+    aborted: 'The plan review was aborted (this turn was cancelled); plan mode is unchanged.',
+    reviewFailed:
+      'The plan review failed: {{message}}. Present the plan to the user as a normal answer instead.',
+    reviewNoAnswer:
+      'No valid review result was received; plan mode is unchanged. Call exit_plan_mode again, or ask the user for direct feedback.'
+  },
+
   jobs: {
     notFoundInTopic: 'Job {{id}} does not exist or does not belong to this topic.',
     notFound: 'Job {{id}} does not exist.',
@@ -192,6 +236,11 @@ export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
     noTextOutput: '(the subagent produced no text output)'
   },
 
+  agentAuthoring: {
+    created:
+      'Subagent "{{name}}" created (id={{id}}). It is persisted in Settings → Agents and can now be reused. Delegate with task(subagent_type="{{name}}", prompt=...).',
+    failed: 'Failed to create subagent: {{message}}'
+  },
   subagentSessions: {
     sessionLabel: '{{name}}: {{task}}',
     notFound: 'Subagent session {{id}} does not exist or does not belong to this topic.',
@@ -200,7 +249,9 @@ export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
     interrupted: '(this turn was interrupted)',
     runFailed: '(run failed: {{message}})',
     roundLimitReached: 'the subagent reached its tool call round limit',
-    sendFailed: 'Send failed: {{message}}'
+    sendFailed: 'Send failed: {{message}}',
+    inactiveCannotResume:
+      'Subagent session {{id}} is a restored history record, but cold resume failed (model or configuration unavailable). Start a new background task instead.'
   },
 
   workflow: {

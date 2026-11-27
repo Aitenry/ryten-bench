@@ -1,5 +1,5 @@
 import logger from 'electron-log'
-import type { SubAgentConfig } from '../../services/harness/types'
+import type { SubAgentConfig, SubAgentMainModelDescriptor } from '../../services/harness/types'
 import { MAX_TOOL_CALLS, MIN_TOOL_CALLS } from './agent'
 import { subagentSessions } from './subagent-sessions'
 import { getMnemonComponent } from '../../services/harness/mnemon-singleton'
@@ -13,7 +13,7 @@ import { getMnemonComponent } from '../../services/harness/mnemon-singleton'
  * 失败教训），再决定落到哪一层（热记忆 / 项目文档 / 长期记忆空间）并自己去写。
  *
  * 复用现有后台子代理体系（subagentSessions）的好处：
- * - 顶部栏 BackgroundAgentsButton 自动出现「进行中」入口，点开可看实时输出，无需新 UI；
+ * - 顶部栏合并后的「协作」入口自动出现子代理项，点开可看实时会话，无需新 UI；
  * - 同时注册为同名后台任务（job_output/job_kill 可管）；
  * - 话题删除时由 clearTopic 一并清理。
  *
@@ -137,6 +137,7 @@ export async function startMemoryAgent(
   if (providerId == null) return { ok: false, reason: 'no-model' }
 
   let model
+  let usedProviderId = providerId
   try {
     model = await providerService.createModel(providerId)
   } catch (err) {
@@ -149,11 +150,21 @@ export async function startMemoryAgent(
       )
       try {
         model = await providerService.createModel(fallbackId)
+        if (model) usedProviderId = fallbackId
       } catch {
         /* 落到下面的失败返回 */
       }
     }
     if (!model) return { ok: false, reason: 'model-failed', message: (err as Error)?.message }
+  }
+
+  // spawn 时模型描述符：会话持久化后，冷恢复仍回到这条记忆整理任务使用的模型
+  let modelDescriptor: SubAgentMainModelDescriptor | undefined
+  try {
+    const providerConfig = await providerService.getConfig(usedProviderId)
+    modelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
+  } catch {
+    /* 描述符只影响冷恢复精度，取不到时回退默认供应商即可 */
   }
 
   const maxToolCalls = Math.max(MIN_TOOL_CALLS, Math.floor(params.maxToolRounds ?? MAX_TOOL_CALLS))
@@ -169,6 +180,7 @@ export async function startMemoryAgent(
     buildTaskMessage(params.answer, params.question),
     {
       mainModel: model,
+      mainModelDescriptor: modelDescriptor,
       // 不解析 'provider:model'：记忆整理跟着当前默认模型走，不额外挑模型
       resolveModel: async () => undefined,
       // 只给记忆工具：这个代理不碰文件系统与业务数据

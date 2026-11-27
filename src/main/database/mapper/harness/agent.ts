@@ -30,7 +30,7 @@ export interface AgentConfigInput {
 
 // --- 内部工具 ---
 
-function rowToSubAgentConfig(row: AgentConfigRow): SubAgentConfig {
+export function rowToSubAgentConfig(row: AgentConfigRow): SubAgentConfig {
   return {
     name: row.name,
     ...(row.rename ? { rename: row.rename } : {}),
@@ -38,7 +38,8 @@ function rowToSubAgentConfig(row: AgentConfigRow): SubAgentConfig {
     systemPrompt: row.prompt ?? '',
     tools: row.tools ? JSON.parse(row.tools) : [],
     ...(row.model ? { model: row.model } : {}),
-    ...(row.skills ? { skills: JSON.parse(row.skills) as string[] } : {})
+    ...(row.skills ? { skills: JSON.parse(row.skills) as string[] } : {}),
+    revision: row.revision
   }
 }
 
@@ -120,6 +121,18 @@ async function getAgentById(workspaceId: number, id: number): Promise<AgentConfi
   })
 }
 
+/** 按标识查代理（用于「同一工作区内 name 唯一」的前置校验，避免撞库唯一约束后报原始错误） */
+async function getAgentByName(workspaceId: number, name: string): Promise<AgentConfigRow | null> {
+  return withOrm('getAgentByName', async (db) => {
+    const rows = await db
+      .select()
+      .from(agent_config)
+      .where(and(eq(agent_config.workspace_id, workspaceId), eq(agent_config.name, name)))
+      .limit(1)
+    return rows[0] ?? null
+  })
+}
+
 /** 创建代理 */
 async function createAgent(input: AgentConfigInput): Promise<number> {
   return withOrm('createAgent', async (db) => {
@@ -144,11 +157,17 @@ async function createAgent(input: AgentConfigInput): Promise<number> {
   })
 }
 
-/** 更新代理（同时校验 workspace_id） */
+/**
+ * 更新代理（同时校验 workspace_id）。
+ *
+ * `expectedRevision` 提供时走 CAS：版本不匹配返回 false（调用方转成可读冲突错误），
+ * 与 Agent Teams 任务板的 revision 校验同一思路。每次成功更新 revision + 1。
+ */
 async function updateAgent(
   workspaceId: number,
   id: number,
-  updates: Partial<AgentConfigInput>
+  updates: Partial<AgentConfigInput>,
+  expectedRevision?: number
 ): Promise<boolean> {
   return withOrm('updateAgent', async (db) => {
     const patch: PgUpdateSetSource<typeof agent_config> = {}
@@ -167,16 +186,23 @@ async function updateAgent(
       return false
     }
 
-    // updated_at 走数据库时钟，与原实现的 NOW() 一致
+    // 版本与 updated_at 都走数据库侧：revision 用于 CAS/会话快照追溯
+    patch.revision = sql`${agent_config.revision} + 1`
     patch.updated_at = sql`now()`
     const updated = await db
       .update(agent_config)
       .set(patch)
-      .where(and(eq(agent_config.workspace_id, workspaceId), eq(agent_config.id, id)))
+      .where(
+        and(
+          eq(agent_config.workspace_id, workspaceId),
+          eq(agent_config.id, id),
+          expectedRevision === undefined ? undefined : eq(agent_config.revision, expectedRevision)
+        )
+      )
       .returning({ id: agent_config.id })
 
     logger.info(
-      `Updated agent workspace=${workspaceId} id=${id}, ${updated.length} row(s) affected.`
+      `Updated agent workspace=${workspaceId} id=${id}${expectedRevision === undefined ? '' : ` (expectedRevision=${expectedRevision})`}, ${updated.length} row(s) affected.`
     )
     return updated.length > 0
   })
@@ -203,6 +229,7 @@ export {
   getAgentsPaginated,
   getEnabledSubAgentConfigs,
   getAgentById,
+  getAgentByName,
   createAgent,
   updateAgent,
   deleteAgent

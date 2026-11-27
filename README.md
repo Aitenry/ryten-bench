@@ -104,10 +104,52 @@ from the hub or from a local package, and both paths end in the same host instal
   turn immediately.
 - **Goals** — a long-running objective can be persisted on the topic; the goal bar shows phase
   (active / paused / blocked / complete) and round progress, and automatic continuations are
-  rendered as their own rounds in the transcript.
+  rendered as their own rounds in the transcript. Typing `/` as the first character of the
+  composer opens the **command menu** (a grouped "Add" list in the style of the reference:
+  icon, title, command alias and description): **Goal** opens a dialog that creates, edits,
+  pauses, resumes, completes or clears the objective and its round limit.
+- **Plan mode** — the same command menu's **Plan** entry toggles a per-topic mode (persisted
+  across restarts). While it is active the system prompt asks the model to explore and design
+  first, then submit the completed plan through an `exit_plan_mode` tool; the plan opens in a
+  review dialog where it can be approved (plan mode ends and execution starts from the next step)
+  or sent back with feedback for another revision. The composer shows a plan-mode badge while
+  the mode is active.
 - **Sub-agents & background agents** — named agents with their own system prompt, tool selection
   and memory directory; the main agent can delegate through a task tool, and background agents run
-  in parallel with a status button summarising running / completed / failed / stopped runs.
+  in parallel with a merged "team" entry in the top bar that summarises subagents and shared tasks.
+  Agents can be configured in Settings → Agents, or **built by the main agent itself** through an
+  `agent_create` tool (validated and persisted to the workspace, editable in Settings, usable by
+  `task` in the same turn). Opening a background agent from that entry (or from its "dispatched"
+  card in the transcript) switches the conversation pane to its **live streaming transcript** — same
+  message rendering and tool cards as the main conversation, breadcrumb and one click back to the
+  main agent in the top bar, plus a bottom composer to send follow-ups into the same inbox (queued
+  while it is running, with a stop control for the current turn). Viewing history never
+  re-activates the agent. Subagent sessions persist their transcript snapshots, so after an app
+  restart the history is still viewable as an inactive session; the first follow-up automatically
+  cold-resumes it (rebuilds the model/tools/system prompt from the persisted configuration snapshot, preferring the provider/model descriptor recorded at spawn)
+  and continues the same conversation. Long transcripts open on the latest 20 turns and scroll-load
+  older turns on demand instead of shipping the whole history in one IPC payload.
+- **Background commands** — `execute` takes a `run_in_background` option for long-running
+  processes (dev servers, watchers): the tool returns a job id immediately instead of blocking the
+  turn, the model keeps working and reads output incrementally with `job_output` / stops it with
+  `job_kill`, and an inline top-bar tray lists every background command with collapsible per-task
+  output and a stop control while the task is running.
+- **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
+  task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
+  tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic
+  `revision` checks, so parallel workers claim one task at a time instead of colliding. The top bar
+  shows live in-progress / pending / completed progress with owners and blockers; the task section
+  header summarises the team's progress counters and each subagent row shows its current task count
+  plus its accumulated token usage once the model reports it.
+  Every create/claim/complete/update/delete is appended to a `team_task_event` log and the panel
+  footer shows the most recent activity. Team membership
+  is the existing subagent tree, not a separate agent type. Agent teamwork is opt-in per
+  conversation (enable/disable it from the composer's model menu; off by default, matching DSH), and
+  when disabled the `team_task_*` tools and team prompt section are not injected at all. The board
+  is persisted as a per-topic JSON snapshot (`team_board`) and lazily rehydrated after a restart,
+  including task ids, revisions, owners and tombstones. See
+  [`docs/agent-teams-alignment.md`](docs/agent-teams-alignment.md) for the current status matrix
+  (subagent capabilities, configuration, Agent Teams, remaining gaps).
 - **Workflow orchestration** — a workflow tool lets the model write a JavaScript orchestration
   script (top-level `await`, `agent` / `pipeline` / `parallel` / `phase` / `log` / `args` hooks)
   that fans work out across many one-shot sub-agents, executed in a `node:vm` sandbox with no
@@ -464,7 +506,7 @@ the `WORKSHOP.md` contract generated for every draft).
 | Markdown view    | [react-markdown](https://github.com/remarkjs/react-markdown) + remark-gfm + rehype-katex/highlight                                                                           |
 | Diagrams & math  | [Mermaid](https://mermaid.js.org/) 11 + [KaTeX](https://katex.org/) + [highlight.js](https://highlightjs.org/)                                                               |
 | Code editor      | [CodeMirror 6](https://codemirror.net/) via [@uiw/react-codemirror](https://github.com/uiwjs/react-codemirror) + [@codemirror/merge](https://codemirror.net/docs/ref/#merge) |
-| Agent runtime    | In-house `src/main/ai` runtime (chat models, tools, messages, minimal state graph) — no third-party agent framework                                                   |
+| Agent runtime    | In-house `src/main/ai` runtime (chat models, tools, messages, minimal state graph) — no third-party agent framework                                                          |
 | Database         | [PGlite](https://pglite.dev/) 0.5 (PostgreSQL compiled to WebAssembly) + [Drizzle ORM](https://orm.drizzle.team/) 0.45                                                       |
 | Settings store   | [electron-store](https://github.com/sindresorhus/electron-store) 11                                                                                                          |
 | Graph rendering  | [ECharts](https://echarts.apache.org/) 6                                                                                                                                     |
@@ -476,7 +518,7 @@ the `WORKSHOP.md` contract generated for every draft).
 | Logging          | [electron-log](https://github.com/megahertz/electron-log)                                                                                                                    |
 | Packaging        | [electron-builder](https://www.electron.build/) 26                                                                                                                           |
 | Plugin hub       | Lattice platform: `/v1` REST over HTTP(S), device-bound token sessions, sha256-verified packages and sources                                                                 |
-| Sandbox          | Self-built, no third-party dependency: Windows restricted token + capability SIDs, Linux Landlock or `bwrap`, macOS `sandbox-exec`                                            |
+| Sandbox          | Self-built, no third-party dependency: Windows restricted token + capability SIDs, Linux Landlock or `bwrap`, macOS `sandbox-exec`                                           |
 
 ---
 
@@ -541,17 +583,17 @@ an `https://` node outside local development.
 
 ### Scripts
 
-| Command              | What it does                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------ |
-| `pnpm dev`           | Build the sandbox assets, then start the app with hot reload                         |
-| `pnpm build:sandbox` | Build the sandbox assets into `resources/sandbox/`                                   |
-| `pnpm build`         | Type-check and build the main, preload and renderer bundles                          |
-| `pnpm typecheck`     | `tsc --noEmit` for the node and web projects                                         |
-| `pnpm lint`          | ESLint over the repository (it also walks build output, so it is slow)               |
-| `pnpm build:win`     | Sandbox assets + app bundles + Windows NSIS installer                                |
-| `pnpm build:mac`     | Sandbox assets + app bundles + macOS DMG and ZIP (not notarized)                     |
-| `pnpm build:linux`   | Sandbox assets + app bundles + Linux AppImage and DEB                                |
-| `pnpm build:unpack`  | Unpacked directory build, useful for quick smoke tests                               |
+| Command              | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `pnpm dev`           | Build the sandbox assets, then start the app with hot reload           |
+| `pnpm build:sandbox` | Build the sandbox assets into `resources/sandbox/`                     |
+| `pnpm build`         | Type-check and build the main, preload and renderer bundles            |
+| `pnpm typecheck`     | `tsc --noEmit` for the node and web projects                           |
+| `pnpm lint`          | ESLint over the repository (it also walks build output, so it is slow) |
+| `pnpm build:win`     | Sandbox assets + app bundles + Windows NSIS installer                  |
+| `pnpm build:mac`     | Sandbox assets + app bundles + macOS DMG and ZIP (not notarized)       |
+| `pnpm build:linux`   | Sandbox assets + app bundles + Linux AppImage and DEB                  |
+| `pnpm build:unpack`  | Unpacked directory build, useful for quick smoke tests                 |
 
 A faster local lint that skips `dist/` and `node_modules/`:
 
@@ -572,11 +614,11 @@ Every push to `main` publishes a real version — there is no alpha channel and 
 version by hand. `.github/scripts/resolve-version.mjs` derives it from the last stable tag and the
 commit messages:
 
-| Change since the last release  | Next version                    |
-| ------------------------------ | ------------------------------- |
-| `fix(...)`, `chore(...)`, …    | patch — `0.1.0` → `0.1.1`       |
-| `feat(...)`                    | minor — `0.1.1` → `0.2.0`       |
-| `BREAKING CHANGE:` / `feat!:`  | major — `0.2.x` → `1.0.0`       |
+| Change since the last release | Next version              |
+| ----------------------------- | ------------------------- |
+| `fix(...)`, `chore(...)`, …   | patch — `0.1.0` → `0.1.1` |
+| `feat(...)`                   | minor — `0.1.1` → `0.2.0` |
+| `BREAKING CHANGE:` / `feat!:` | major — `0.2.x` → `1.0.0` |
 
 `[release:major|minor|patch]` in a commit message overrides the inference, and the first release
 takes the version already in `package.json`. Development happens on a branch named after the version
@@ -803,3 +845,4 @@ flowchart LR
 ## License
 
 [MIT](./LICENSE) © [Aitenry](https://github.com/Aitenry)
+

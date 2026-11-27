@@ -86,3 +86,86 @@ export function sumUsage(records: ModelUsageRecord[]): UsageTotals {
   }
   return { inputTokens, outputTokens, totalTokens, calls: records.length, hasTokens }
 }
+
+/* ── 上下文规模（压缩压力用） ───────────────────────────────────────────── */
+
+function objectOf(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+}
+
+/** 缓存读取：OpenAI 记在 prompt_tokens_details.cached_tokens，Anthropic 系单列 */
+function cacheReadOf(usage: Record<string, unknown>): number {
+  const inputDetails = objectOf(usage.input_token_details)
+  const promptDetails = objectOf(usage.prompt_tokens_details)
+  return (
+    (inputDetails ? pickNumber(inputDetails, ['cache_read', 'cacheRead', 'cached_tokens']) : null) ??
+    (promptDetails ? pickNumber(promptDetails, ['cached_tokens', 'cache_read']) : null) ??
+    pickNumber(usage, ['cache_read_input_tokens', 'prompt_cache_hit_tokens', 'cached_tokens']) ??
+    0
+  )
+}
+
+/** 缓存写入（Anthropic 系有；没有就是 0） */
+function cacheWriteOf(usage: Record<string, unknown>): number {
+  const inputDetails = objectOf(usage.input_token_details)
+  return (
+    (inputDetails
+      ? pickNumber(inputDetails, ['cache_creation', 'cache_write', 'cacheWrite'])
+      : null) ?? pickNumber(usage, ['cache_creation_input_tokens']) ?? 0
+  )
+}
+
+/**
+ * 单次模型调用的上下文规模（token）= 该次 prompt + 该次输出。
+ *
+ * 与渲染层 `utils/harness/usage.ts` 的 `entryContextTokens` 同口径：
+ * OpenAI / DeepSeek 系的 prompt_tokens 已含缓存命中（明细只是子集，不能再加），
+ * Anthropic 系的 input_tokens 之外另有 cache_read / cache_creation，必须补上。
+ *
+ * 压缩判定用它而不是字符数：它包含系统提示词、工具 schema、注入记忆，
+ * 就是模型真正看到的占用。
+ */
+export function contextTokensOf(usage: Record<string, unknown>): number {
+  const input =
+    pickNumber(usage, ['input_tokens', 'prompt_tokens', 'promptTokens', 'inputTokens']) ?? 0
+  const output =
+    pickNumber(usage, ['output_tokens', 'completion_tokens', 'completionTokens', 'outputTokens']) ??
+    0
+  const promptDetails = objectOf(usage.prompt_tokens_details)
+  const cacheIsSubsetOfInput =
+    (promptDetails ? pickNumber(promptDetails, ['cached_tokens', 'cache_read']) : null) !== null ||
+    pickNumber(usage, ['prompt_cache_hit_tokens']) !== null
+  const extra = cacheIsSubsetOfInput ? 0 : cacheReadOf(usage) + cacheWriteOf(usage)
+  return Math.max(0, input + extra + output)
+}
+
+/** 能提供 usage_metadata 列的最小行形态（数据库行天然满足） */
+export interface UsageMetadataCarrier {
+  usage_metadata: string | null
+}
+
+/**
+ * 话题最近一次模型调用的上下文规模（token）。
+ *
+ * 用量行按 id 升序（一轮一行），行内 `usage_metadata` 是该轮每次调用的 JSON 数组，
+ * **最后一条**才是最近一次调用——前面几次的 prompt 更小，对「现在多满」没有参考价值。
+ * 最后一行解析不出来就往前退一行；全都拿不到返回 null（调用方退回字符口径）。
+ */
+export function lastCallContextTokens(rows: UsageMetadataCarrier[]): number | null {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const raw = rows[i]?.usage_metadata
+    if (!raw) continue
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed) || parsed.length === 0) continue
+      const last = objectOf(parsed[parsed.length - 1])
+      const usage = objectOf(last?.usage)
+      if (!usage) continue
+      const tokens = contextTokensOf(usage)
+      if (tokens > 0) return tokens
+    } catch {
+      // 该行明细坏了：继续找更早的一行，不因为一条脏数据退回字符口径
+    }
+  }
+  return null
+}

@@ -17,6 +17,7 @@
     "test:queue": "node --no-warnings tests/queue-store.test.mts",
     "test:drain": "node --no-warnings tests/turn-drain.test.mts",
     "test:turn-guard": "node --no-warnings tests/turn-guard.test.mts",
+    "test:subagent": "node --no-warnings tests/subagent-draft.test.mts",
     "test:usage": "node --no-warnings tests/usage-summary.test.mts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
@@ -163,3 +164,4 @@
     ]
   }
 }
+

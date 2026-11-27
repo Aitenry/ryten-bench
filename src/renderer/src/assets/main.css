@@ -740,6 +740,145 @@ body.home-resizing * {
 }
 
 /**
+ * 顶部栏「后台任务」内联托盘（2026-11-26 设计确认）：
+ * 行头 hover / 停止按钮 hover / 运行中状态点呼吸 —— 组件里用 token 控制配色，
+ * 这里只放少量跨主题通用的交互反馈（与 TaskProgressCard 的 0.07 灰底同一口径）。
+ */
+.harness-bg-toggle {
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.harness-bg-toggle:hover {
+  background: rgba(128, 128, 128, 0.09);
+}
+
+.harness-bg-task-head {
+  transition: background 0.15s ease;
+}
+
+.harness-bg-task-head:hover {
+  background: rgba(128, 128, 128, 0.07);
+}
+
+.harness-bg-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0;
+  border: 1px solid rgba(255, 77, 79, 0.36);
+  border-radius: 7px;
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff7875;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.harness-bg-stop:hover:not(:disabled) {
+  border-color: rgba(255, 77, 79, 0.68);
+  background: rgba(255, 77, 79, 0.2);
+}
+
+.harness-bg-stop:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.harness-bg-stop-square {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.harness-bg-follow {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.harness-bg-follow:hover {
+  text-decoration: underline;
+}
+
+@keyframes harness-bg-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.harness-bg-dot-running {
+  animation: harness-bg-pulse 1.6s ease-in-out infinite;
+}
+
+.harness-bg-toggle:focus-visible,
+.harness-bg-task-head:focus-visible,
+.harness-bg-stop:focus-visible,
+.harness-bg-follow:focus-visible {
+  outline: 2px solid rgba(22, 119, 255, 0.65);
+  outline-offset: 1px;
+}
+
+/* ======== harness 消息区排版（主对话 / 子代理会话视图共用） ========
+ *
+ * 这些规则原先只写在 Harness 页面的内联 <style> 里——只有主对话页面能命中。
+ * 子代理会话视图（以及未来右侧栏 embedded 会话）复用同一个 HarnessMessageArea，
+ * 内联样式覆盖不到，就会出现「用户消息与 AI 回复贴在一起、思考过程的折叠头不居中」。
+ * 抽到全局 CSS 后，所有挂 .harness-message-list 的会话区共用同一套呼吸感与折叠对齐。
+ */
+
+/* 任务段折叠头（消息内容按任务折叠）：外观沿用既有 Collapse，只收紧布局——
+   标签必须撑满 header 且自身可压缩，否则长任务名会顶出容器、右侧的
+   清单按钮也贴不到右边（antd 的标签容器是 .ant-collapse-title，没法定 inline 样式）。 */
+/* 折叠头统一垂直居中：文字装在 .ant-collapse-title 里，它默认是块级盒子，
+   里面的行内文字按基线排版 → 看着偏上（用户反馈「思考过程这几个字并没有居中」）。
+   任务段此前单独修过（下面的 .task-segment-collapse 规则），其余折叠头没有，
+   于是同一屏里两种对齐并存。这两条把整个聊天区统一。 */
+.harness-message-list .ant-collapse-header { align-items: center; }
+/* 消息之间与折叠步骤之间留出呼吸空间：长任务里连续工具调用不再挤成一片 */
+.harness-message-list .harness-message-row { margin-bottom: 14px; }
+/* 最后一条消息不留尾巴：底部只需要给悬浮「回到底部」按钮留出空间（见消息区的 pb-14）。
+   endRef 放在内容容器**外面**，所以这里的 :last-child 真的命中最后一行；
+   它以前是内容容器的最后一个子节点，导致这条规则一直没生效。 */
+.harness-message-list .harness-message-row:last-child { margin-bottom: 0; }
+/* 消息主体的段间距（原先是各消息根节点上的 mb-6）：最后一条同样清零，
+   否则它会带着 24px 尾距和消息区的 pb-14 一起把输入框上方的空隙撑大。 */
+.harness-message-list .harness-message-body { margin-bottom: 24px; }
+.harness-message-list .harness-message-row:last-child .harness-message-body {
+  margin-bottom: 0;
+}
+.harness-message-list .ant-collapse-item { margin-bottom: 7px; }
+.harness-message-list .ant-collapse-item:last-child { margin-bottom: 0; }
+.harness-message-list .ant-collapse-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.task-segment-collapse > .ant-collapse-item > .ant-collapse-header { align-items: center; }
+.task-segment-collapse .ant-collapse-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.task-segment-collapse .ant-collapse-title > span { width: 100%; }
+.task-segment-collapse .ant-collapse-content-box { padding-block: 4px 8px !important; }
+.task-segment-collapse .ant-collapse-header { padding-block: 7px !important; }
+
+/**
  * 插件详情页的「返回插件仓库」：合并进头部卡片的那一行。
  *
  * 常态是静音的文字按钮，hover 才浮出底色——避免它看起来比插件标题还重。
@@ -1773,7 +1912,9 @@ button.shell-nav-item {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  box-shadow: 0 10px 20px -12px var(--login-primary, #1677ff);
+  /* 主按钮统一为中性反色（见 ThemeContext 的 Button token）；投影也跟着去蓝，
+     否则深色按钮下面垫一圈蓝光会很脏 */
+  box-shadow: 0 10px 20px -12px rgba(0, 0, 0, 0.45);
 }
 /* 「服务器地址」是「记住我」右侧的次要动作：原地展开，输入框落到下一行 */
 .login-advanced-toggle {

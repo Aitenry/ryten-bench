@@ -23,6 +23,7 @@ import FoldBody from './FoldBody'
 import { ToolProgressCard, ToolResultCard, type ToolCardStyle } from './ToolResultCard'
 import { toolIconFor } from '../../../utils/harness/toolIcons'
 import { MONO_FONT, TruncatedTooltipText } from './TruncatedTooltipText'
+import { useSubagentViewBridge } from '../../../contexts/harness/subagent-view-bridge'
 
 import {
   getToolStatusLabel,
@@ -191,6 +192,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
     const { t, i18n } = useTranslation()
     const { token } = theme.useToken()
     const isCopied = copiedId === message.id
+    /** 打开后台子代理会话视图的桥（点「已派发」卡片直达；不在 Harness 页内时为 null） */
+    const subagentViewBridge = useSubagentViewBridge()
 
     /**
      * 任务分段折叠状态（key = 段 key，值 = 是否折起）。
@@ -1387,9 +1390,30 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           const sa = block.subAgent
           // 后台派发轻量卡：仅名称 + 简述 + 会话 id（不含智能体内容/结果——结果在顶部栏查看）
           if (sa.status === 'dispatched') {
+            // 卡片的会话 id 能直达该子代理的流式会话视图（顶部栏入口之外的第二个入口）
+            const canOpenConversation = Boolean(sa.subagentId && subagentViewBridge)
             return (
               <div
                 key={blockIndex}
+                role={canOpenConversation ? 'button' : undefined}
+                tabIndex={canOpenConversation ? 0 : undefined}
+                title={
+                  canOpenConversation ? t('harness.backgroundAgents.conversation.open') : undefined
+                }
+                onClick={
+                  canOpenConversation
+                    ? () => subagentViewBridge?.openSubagent(sa.subagentId as string)
+                    : undefined
+                }
+                onKeyDown={
+                  canOpenConversation
+                    ? (event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return
+                        event.preventDefault()
+                        subagentViewBridge?.openSubagent(sa.subagentId as string)
+                      }
+                    : undefined
+                }
                 style={{
                   background: collapseBg,
                   border: 'var(--ant-line-width) var(--ant-line-type) var(--ant-color-border)',
@@ -1398,7 +1422,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   padding: '8px 12px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '8px'
+                  gap: '8px',
+                  cursor: canOpenConversation ? 'pointer' : undefined
                 }}
               >
                 <RiAiAgentLine size={16} style={{ color: colorTextSecondary, flexShrink: 0 }} />
@@ -1416,19 +1441,6 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 ) : (
                   <span style={{ flex: 1 }} />
                 )}
-                {sa.subagentId ? (
-                  <span
-                    className="shrink-0 rounded px-1.5 py-0.5"
-                    style={{
-                      background: colorFillAlter,
-                      color: colorTextTertiary,
-                      fontSize: 11,
-                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
-                    }}
-                  >
-                    {sa.subagentId}
-                  </span>
-                ) : null}
               </div>
             )
           }

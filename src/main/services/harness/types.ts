@@ -16,6 +16,13 @@ export interface HarnessOptions {
   /** 历史上下文字符预算（由当前模型上下文窗口换算，最小 60,000；缺省用默认值） */
   contextBudget?: number
   /**
+   * 当前模型上下文窗口（token，供应商档案 metadata.context_window）。
+   *
+   * 压缩压力优先按**真实 token** 判定（上一轮模型调用实际用掉的上下文 ÷ 窗口 ≥ 79%，
+   * 见 runtime/harness/context-pressure.ts）；缺这个值时退回「字符 ÷ 预算」的启发式。
+   */
+  contextWindow?: number
+  /**
    * 回合内插话（steering）：图内每个工具节点执行前调用一次，把用户排队中点
    * 「立即插话」的消息并入运行中的上下文（排在本次工具结果之后），模型下一步即可读到。
    * 落库、段落切分与 steered chunk 下发都由这个回调内部一并完成（IPC 层提供）。
@@ -108,6 +115,10 @@ export interface ToolCard {
   fileCount?: number
   /** execute：退出码 */
   exitCode?: number
+  /** execute：后台任务的 job id（run_in_background=true 时） */
+  jobId?: string
+  /** execute：这条调用只是把命令放到了后台，结果/退出码在后台任务里 */
+  background?: boolean
   /** 本次调用有完整结果详情，点卡片可在右侧面板打开 */
   detail?: boolean
 }
@@ -224,6 +235,19 @@ export interface SubAgentConfig {
   model?: string
   /** 可选：可用的技能 ID 列表（从技能目录中选取），留空则无技能 */
   skills?: string[]
+  /** 配置版本（每次编辑 +1；会话/快照可追溯创建时的版本，DSH preset generation 的轻量对应物） */
+  revision?: number
+}
+
+/**
+ * 子代理会话创建时的主模型描述符（provider 行 id + 模型名）。
+ *
+ * 冷恢复用它回到"spawn 时使用的模型"，而不是始终使用当前默认供应商；provider 已删除/
+ * 被禁用时回退默认模型（增强能力降级，不阻塞恢复）。
+ */
+export interface SubAgentMainModelDescriptor {
+  providerId: number
+  model: string
 }
 
 /** 智能体活动事件 */

@@ -99,6 +99,8 @@ const READ_TOOLS = new Set([
   'get_weather',
   // 交互与编排
   'ask_user_question',
+  // 计划评审：只向用户提交计划、不改文件（与提问同属交互面）
+  'exit_plan_mode',
   'write_todos',
   'read_todos',
   'create_goal',

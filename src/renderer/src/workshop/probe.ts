@@ -1,4 +1,4 @@
-﻿import { harnessApi } from '../api/harness'
+import { harnessApi } from '../api/harness'
 
 /**
  * 渲染层**实时探针**：在真实渲染进程里把一个插件的渲染模块 import + install 一遍。
