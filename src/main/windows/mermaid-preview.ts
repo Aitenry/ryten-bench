@@ -4,30 +4,23 @@ import * as fs from 'fs'
 import logger from 'electron-log'
 import mermaidPreviewHtmlPath from '../resource/mermaid-preview.html?asset'
 import { mainMessages } from '../i18n'
+import { buildMermaidPreviewHtml } from './mermaid-preview-html'
 
 let mermaidPreviewWin: BrowserWindow | null = null
 let cachedHtml: string | null = null
 
-/** 从 HTML 资源文件构建预览页（注入 SVG 内容与当前语言文案，图标/样式/交互均在文件内） */
-function buildMermaidPreviewHtml(svg: string): string {
+/** 从 HTML 资源文件构建预览页（注入 SVG / nonce / 当前语言文案，逻辑见 mermaid-preview-html.ts） */
+function buildPreviewPage(svg: string): string {
   if (cachedHtml === null) {
     cachedHtml = fs.readFileSync(mermaidPreviewHtmlPath, 'utf-8')
   }
-  // 文案由主进程 i18n 注入，HTML 里不再写死任何语言的界面文字
-  const i18nJson = JSON.stringify(mainMessages().window.mermaidPreview).replace(/</g, '\\u003c')
-  // 函数形式替换，避免 svg 中的 $ 字符触发 replace 特殊序列
-  return cachedHtml
-    .replace('<!-- __MERMAID_SVG__ -->', () => svg)
-    .replace(
-      '<!-- __MERMAID_I18N__ -->',
-      () => `<script>window.__MERMAID_I18N__=${i18nJson}</script>`
-    )
+  return buildMermaidPreviewHtml(cachedHtml, svg, mainMessages().window.mermaidPreview)
 }
 
 export function registerMermaidPreviewIpc(): void {
   ipcMain.handle('mermaid-preview', (_event, svg: string) => {
     const dataUrl =
-      'data:text/html;charset=utf-8,' + encodeURIComponent(buildMermaidPreviewHtml(svg))
+      'data:text/html;charset=utf-8,' + encodeURIComponent(buildPreviewPage(svg))
     if (mermaidPreviewWin && !mermaidPreviewWin.isDestroyed()) {
       // 快速连续预览时上一次导航会被下一次取代并以 ERR_ABORTED 拒绝——吞掉
       // 避免主进程 unhandled rejection（修复）
