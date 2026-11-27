@@ -87,6 +87,10 @@ export const zhCN = {
     graphModelNotConfigured:
       '未配置图谱构建模型：请先到「系统设置 → 图谱」中选择用于构建知识图谱的大模型。',
     memoryDirNotConfigured: '未配置记忆存储目录',
+    turnPersistFailed:
+      '对话未能写入本地数据库，本轮已中止（请检查磁盘空间或数据库状态后重试）',
+    assistantPersistFailed:
+      '本轮答复未能写入本地数据库，刷新后可能丢失（请检查磁盘空间或数据库状态）',
     invalidRequest: '请求参数无效',
     modelNotSelected: '目标模型不存在：请先在聊天界面顶部选择一个可用的 AI 模型。',
     providerNotFound: '目标模型不存在：未找到 ID 为 {{id}} 的供应商配置，或该供应商已被禁用。',
@@ -290,6 +294,10 @@ export const enUS: typeof zhCN = {
     graphModelNotConfigured:
       'No graph building model configured. Choose one under Settings → Graph first.',
     memoryDirNotConfigured: 'No memory storage folder configured',
+    turnPersistFailed:
+      'The conversation could not be written to the local database, so this turn was aborted (check disk space / database state and retry)',
+    assistantPersistFailed:
+      'This turn could not be written to the local database and may disappear after a refresh (check disk space / database state)',
     invalidRequest: 'Invalid request parameters',
     modelNotSelected:
       'Target model not found: choose an available AI model at the top of the chat first.',

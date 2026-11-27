@@ -596,6 +596,15 @@ async function runHarnessTurn(
       __turnId: turnId
     })
 
+  // 对话轮次失败统一收尾：通知前端错误并复位加载态（保证任何阶段失败前端都能停止反应）
+  const failTurn = (error: unknown): { topicId: number; cancelled: boolean; turnId: number } => {
+    const errMsg = error instanceof Error ? error.message : String(error)
+    logger.error('[Harness] Turn failed:', error)
+    safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
+    safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
+    return { topicId, cancelled: false, turnId }
+  }
+
   // 2. 保存用户消息（含图片、文档与目标自动续跑标记）。
   // 提前到模型创建之前（修复：模型创建失败时直接 return,用户消息不落库,重载后丢失）
   // 记下返回的行 id：流式结束后随 harness-stream-done 回传，前端删这轮时才找得到用户那一行
@@ -638,16 +647,9 @@ async function runHarnessTurn(
       })
     }
   } catch (err) {
+    // 用户消息都没落库就不该继续跑：否则「答了但问题没存」，刷新后整轮消失且用户无感知。
     logger.error('Failed to save user message:', err)
-  }
-
-  // 对话轮次失败统一收尾：通知前端错误并复位加载态（保证任何阶段失败前端都能停止反应）
-  const failTurn = (error: unknown): { topicId: number; cancelled: boolean; turnId: number } => {
-    const errMsg = error instanceof Error ? error.message : String(error)
-    logger.error('[Harness] Turn failed:', error)
-    safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
-    safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
-    return { topicId, cancelled: false, turnId }
+    return failTurn(new Error(mainMessages().error.turnPersistFailed))
   }
 
   // 模型创建可能因供应商不存在、被禁用、模型名称为空等原因失败，需要捕获并通知前端
@@ -833,6 +835,9 @@ async function runHarnessTurn(
   let goalRoundWillContinue: boolean | null = null
   let goalRoundClosed: boolean | null = null
 
+  /** 本轮助手输出落库失败的原因（非 null 时本轮不能算「已结算」） */
+  let assistantPersistError: unknown = null
+
   /** 把本轮助手输出落库并登记 */
   const flushSegment = async (): Promise<void> => {
     let dialogueId: number | null = null
@@ -845,6 +850,9 @@ async function runHarnessTurn(
           blocks: JSON.stringify(acc.blocks)
         })
       } catch (err) {
+        // 落库失败不能只记日志：前端拿不到库内行 id、刷新后整轮答复消失，
+        // 必须把本轮标记为未结算并在收尾时向用户报到（见 turnFinal.settled 与 streamError）。
+        assistantPersistError = err
         logger.error('[Harness] Failed to save AI message:', err)
       }
     }
@@ -1303,6 +1311,14 @@ async function runHarnessTurn(
   //    前端才能把用量行（按 dialogue_id 关联）当场贴到这条消息上，不必重新加载会话。
   //    无插话时这里恰好只有一段，与旧行为完全一致。
   await flushSegment()
+  if (assistantPersistError) {
+    // 答复已经流式展示给用户了，这里补一条明确的错误：刷新后这一轮可能消失
+    safeSend(event.sender, HARNESS_EVENTS.streamError, {
+      error: mainMessages().error.assistantPersistFailed,
+      topicId,
+      turnId
+    })
+  }
   const lastPersisted = [...segments].reverse().find((seg) => seg.dialogueId != null)
   const assistantDialogueId = lastPersisted?.dialogueId ?? null
   if (assistantDialogueId != null) {
@@ -1365,7 +1381,7 @@ async function runHarnessTurn(
    * 几乎同 tick 落地）。现在结论随 done 事件一起下发。
    */
   const turnFinal: TurnFinal = {
-    settled: !abortController.signal.aborted && !acc.failed,
+    settled: !abortController.signal.aborted && !acc.failed && assistantPersistError === null,
     goalRound: options?.turnMeta?.source === 'goal-round',
     round: options?.turnMeta?.goalRound,
     goalClosed: goalRoundClosed ?? undefined,

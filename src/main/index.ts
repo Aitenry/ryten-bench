@@ -44,6 +44,38 @@ logger.transports.file.fileName = 'main.log'
 // 放宽到 5MB（仍保留一份 .old，总量有界），保证崩溃栈/错误上下文至少能留最近一轮。
 logger.transports.file.maxSize = 5 * 1024 * 1024
 
+/**
+ * 进程级崩溃兜底：未捕获异常 / 未处理拒绝至少要落进 `main.log`。
+ *
+ * 为什么必须在这里：打包版没有 stderr 可看，而此前应用级 `uncaughtException` /
+ * `unhandledRejection` 处理器为 0——主进程任意一处后台 Promise reject 都可能是
+ * 「窗口突然没了」却查不到根因。
+ *
+ * 策略：
+ * - uncaughtException 记完整栈后**受控退出**（主进程状态已不可信，继续跑可能写坏数据）；
+ * - unhandledRejection 只记日志不退出（大量后台任务是 fire-and-forget，退出会把
+ *   一次可恢复的失败升级成崩溃），并做条数上限避免异常循环刷爆日志。
+ */
+process.on('uncaughtException', (err) => {
+  logger.error('[Main] uncaughtException:', err)
+  try {
+    app.exit(1)
+  } catch {
+    process.exit(1)
+  }
+})
+
+let loggedRejectionCount = 0
+process.on('unhandledRejection', (reason) => {
+  if (loggedRejectionCount < 50) {
+    loggedRejectionCount += 1
+    logger.error('[Main] unhandledRejection:', reason)
+  } else if (loggedRejectionCount === 50) {
+    loggedRejectionCount += 1
+    logger.error('[Main] unhandledRejection: further rejections suppressed (50 logged)')
+  }
+})
+
 // 崩溃转储本地收集（修复：渲染进程崩溃后只有 exitCode、无 dump 可查根因）。
 // 仅落盘不上传：dumps 保存于 userData/Crashpad/reports
 try {
