@@ -32,6 +32,7 @@ export * from './notes/wiki'
 export * from './notes/document'
 export * from './notes/graph'
 export * from './provider'
+export * from './search'
 
 
 

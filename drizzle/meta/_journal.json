@@ -148,6 +148,13 @@
       "when": 1795759653589,
       "tag": "0020_scheduled_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795760255949,
+      "tag": "0021_search_providers",
+      "breakpoints": true
     }
   ]
 }

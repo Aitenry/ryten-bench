@@ -7,6 +7,7 @@
  * 工具 schema 与「结构化失败 → 本地化文案」的翻译。
  */
 import { tool, type StructuredToolInterface } from '../../ai/tools'
+import type { SearchOutcome } from '../../search/types'
 import { z } from 'zod'
 import { mainFormat } from '../../i18n'
 import { getWebToolTexts } from '../../i18n/tool-results-web'
@@ -25,6 +26,20 @@ const MAX_SEARCH_RESULTS = 8
 
 /** 测试注入 / 部署裁剪用的选项（与 WebFetchOptions 同形） */
 export type WebToolOptions = WebFetchOptions
+
+/**
+ * 统一搜索入口的注入点（系统装配时注入 `searchWeb`；未装配时退回内置 DuckDuckGo 逻辑）。
+ *
+ * 为什么不直接 import registry：工具模块会被打进测试包与插件，registry 依赖数据库与
+ * 官方 SDK；注入让工具层与搜索后端解耦，也让旧行为可回退。
+ */
+type SearchWebImplementation = (query: string, maxResults: number) => Promise<SearchOutcome>
+let searchWebImplementation: SearchWebImplementation | null = null
+
+/** 注入/撤销统一搜索实现（传 undefined 恢复内置 DuckDuckGo 逻辑） */
+export function setWebSearchImplementation(next?: SearchWebImplementation): void {
+  searchWebImplementation = next ?? null
+}
 
 /** 结构化失败 → 本地化文案（fetch 与 search 共用） */
 function failureText(failure: WebFetchFailure): string {
@@ -92,6 +107,41 @@ export function buildWebSearchTool(options: WebToolOptions = {}): StructuredTool
   const texts = getWebToolTexts()
 
   const searchOne = async (query: string): Promise<string> => {
+    // 装配了统一搜索入口（会话可能配置了 DeepSeek / Tavily）→ 走它；
+    // 结果仍是「标题 + URL + 摘要」，可选附带正文摘要。
+    if (searchWebImplementation) {
+      const outcome = await searchWebImplementation(query, MAX_SEARCH_RESULTS)
+      if (!outcome.ok) {
+        const label = texts.search.errorLabels[outcome.code] ?? outcome.code
+        return mainFormat(texts.search.queryFailed, { query, message: label })
+      }
+      const fallback = outcome.fallbackFrom
+        ? `\n${mainFormat(texts.search.fallbackLine, {
+            provider: texts.search.providerLabels[outcome.fallbackFrom]
+          })}`
+        : ''
+      const header = `${mainFormat(texts.search.header, { query })}${fallback}`
+      if (outcome.items.length === 0) {
+        return `${header}\n\n${mainFormat(texts.search.noResults, { query })}`
+      }
+      const lines = outcome.items.map((hit, index) => {
+        const base = mainFormat(texts.search.resultLine, {
+          index: index + 1,
+          title: hit.title,
+          url: hit.url,
+          snippet: hit.snippet || '—'
+        })
+        return hit.content
+          ? `${base}\n   ${mainFormat(texts.search.contentLine, {
+              content:
+                hit.content.length > 1200 ? `${hit.content.slice(0, 1200)}…` : hit.content
+            })}`
+          : base
+      })
+      return `${header}\n\n${lines.join('\n')}`
+    }
+
+    // 未装配（离线测试 / 极端启动顺序）：保持原来的内置抓取逻辑
     const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
     const outcome = await fetchReadable(endpoint, options)
     if (!outcome.ok) {

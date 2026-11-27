@@ -1,4 +1,4 @@
-import { app } from 'electron'
+﻿import { app } from 'electron'
 import { join } from 'path'
 import logger from 'electron-log'
 import { awaitInitialized } from '../database/instance'
@@ -58,6 +58,8 @@ import {
 } from '../runtime/harness/mcp'
 import { readMcpServers } from '../runtime/harness/mcp-store'
 import { setMcpResourceOps, setMcpToolProvider } from '../tools/harness/builders'
+import { setWebSearchImplementation } from '../tools/harness/web'
+import { searchWeb } from '../search/registry'
 import { EffectScope, registerIpcHandlers } from '../ipc/register'
 
 /**
@@ -218,6 +220,14 @@ export function startHarness(): void {
       } catch (err) {
         logger.warn('[Harness] Failed to initialize scheduled tasks:', err)
       }
+      // 联网搜索：web_search 工具走统一入口（默认服务/密钥来自设置页；未配置时内置搜索兜底）
+      try {
+        setWebSearchImplementation((query, maxResults) =>
+          searchWeb({ query, maxResults })
+        )
+      } catch (err) {
+        logger.warn('[Harness] Failed to wire web search:', err)
+      }
       try {
         syncWorkspaceWatcher()
       } catch (err) {
@@ -249,6 +259,7 @@ export function startHarness(): void {
       setMcpResourceOps(undefined)
       scheduleRunner.stop()
       configureScheduleStoreBackend(undefined)
+      setWebSearchImplementation(undefined)
       // 退出前收掉所有持久终端（整树 kill，不留孤儿 shell）
       terminalSessions.closeAll()
       configureMcp(undefined)

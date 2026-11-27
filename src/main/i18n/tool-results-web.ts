@@ -23,7 +23,24 @@ export const zhCNWebToolTexts = {
     queryFailed: '搜索「{{query}}」失败: {{message}}',
     noResults: '搜索「{{query}}」没有返回结果。',
     header: '## 搜索: {{query}}',
-    resultLine: '{{index}}. {{title}}\n   {{url}}\n   {{snippet}}'
+    resultLine: '{{index}}. {{title}}\n   {{url}}\n   {{snippet}}',
+    contentLine: '正文摘要: {{content}}',
+    fallbackLine: '（{{provider}} 暂不可用，已回退到内置搜索）',
+    providerLabels: {
+      builtin: '内置搜索',
+      deepseek: 'DeepSeek 搜索',
+      tavily: 'Tavily 搜索'
+    },
+    errorLabels: {
+      'not-configured': '搜索服务尚未配置',
+      unauthorized: '密钥无效或已过期',
+      'rate-limited': '搜索服务限流，请稍后重试',
+      timeout: '搜索服务超时',
+      network: '网络错误，无法连接搜索服务',
+      'provider-error': '搜索服务返回错误',
+      'invalid-response': '搜索服务返回了无法解析的内容',
+      'invalid-query': '搜索词无效'
+    }
   }
 }
 
@@ -44,7 +61,24 @@ export const enUSWebToolTexts: typeof zhCNWebToolTexts = {
     queryFailed: 'Search for "{{query}}" failed: {{message}}',
     noResults: 'Search for "{{query}}" returned no results.',
     header: '## Search: {{query}}',
-    resultLine: '{{index}}. {{title}}\n   {{url}}\n   {{snippet}}'
+    resultLine: '{{index}}. {{title}}\n   {{url}}\n   {{snippet}}',
+    contentLine: 'Content excerpt: {{content}}',
+    fallbackLine: '({{provider}} is unavailable; fell back to the built-in search)',
+    providerLabels: {
+      builtin: 'Built-in search',
+      deepseek: 'DeepSeek search',
+      tavily: 'Tavily search'
+    },
+    errorLabels: {
+      'not-configured': 'The search service is not configured',
+      unauthorized: 'The API key is invalid or expired',
+      'rate-limited': 'The search service is rate limited, please retry later',
+      timeout: 'The search service timed out',
+      network: 'Network error: cannot reach the search service',
+      'provider-error': 'The search service returned an error',
+      'invalid-response': 'The search service returned unreadable content',
+      'invalid-query': 'Invalid search query'
+    }
   }
 }
 

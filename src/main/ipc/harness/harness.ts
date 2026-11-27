@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog } from 'electron'
+﻿import { BrowserWindow, app, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
@@ -14,6 +14,15 @@ import type { ScheduledTask } from '../../runtime/harness/schedule-types'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
+import {
+  asSearchProviderId,
+  clearSearchProviderKey,
+  getSearchSettingsView,
+  saveSearchProviderKey,
+  setSearchBehaviors,
+  setSearchDefaultProvider
+} from '../../search/settings'
+import { testSearchProvider } from '../../search/registry'
 import { settingsStore, streamAbortControllers, activeHarnessStreams } from '../../context'
 import { harnessQueue, setHarnessQueueLogger } from '../../services/harness/queue-store'
 import { drainPendingTurns } from '../../services/harness/turn-drain'
@@ -2621,6 +2630,73 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       }
     }
   )
+
+  // ── 联网搜索设置（设置 →「联网搜索」页） ─────────────────────────────
+  handle('harness-search-settings-get', async () => {
+    try {
+      return await getSearchSettingsView()
+    } catch (err) {
+      logger.warn('[Search] Failed to read search settings:', err)
+      return null
+    }
+  })
+
+  handle(
+    'harness-search-provider-save-key',
+    async (payload: { provider: string; apiKey: string }) => {
+      try {
+        return await saveSearchProviderKey(payload?.provider, payload?.apiKey)
+      } catch (err) {
+        logger.warn('[Search] Failed to save search key:', err)
+        return { ok: false, error: 'save-failed' }
+      }
+    }
+  )
+
+  handle('harness-search-provider-clear-key', async (payload: { provider: string }) => {
+    try {
+      return await clearSearchProviderKey(payload?.provider)
+    } catch (err) {
+      logger.warn('[Search] Failed to clear search key:', err)
+      return { ok: false, error: 'save-failed' }
+    }
+  })
+
+  handle(
+    'harness-search-default-set',
+    async (payload: { provider: string }) => {
+      try {
+        return await setSearchDefaultProvider(payload?.provider)
+      } catch (err) {
+        logger.warn('[Search] Failed to change default provider:', err)
+        return { ok: false, error: 'save-failed' }
+      }
+    }
+  )
+
+  handle(
+    'harness-search-behavior-set',
+    async (payload: { autoFallback?: boolean; includeContent?: boolean }) => {
+      try {
+        await setSearchBehaviors(payload ?? {})
+        return { ok: true }
+      } catch (err) {
+        logger.warn('[Search] Failed to update behaviors:', err)
+        return { ok: false }
+      }
+    }
+  )
+
+  handle('harness-search-provider-test', async (payload: { provider: string }) => {
+    const id = asSearchProviderId(payload?.provider)
+    if (!id) return { ok: false, provider: payload?.provider ?? '', elapsedMs: 0, itemCount: 0 }
+    try {
+      return await testSearchProvider(id)
+    } catch (err) {
+      logger.warn('[Search] Provider test failed:', err)
+      return { ok: false, provider: id, elapsedMs: 0, itemCount: 0, code: 'provider-error' }
+    }
+  })
 
   // 定时任务执行入口：runner 只负责「到点叫一下」，真正起轮仍走 runHarnessTurn 管线
   scheduleRunner.configureQuestionBuilder((task) =>
