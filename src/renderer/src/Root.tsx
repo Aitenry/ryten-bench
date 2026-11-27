@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import App from './App'
 import StartupSplash from './components/system/StartupSplash'
+import { AppErrorBoundary } from './components/system/AppErrorBoundary'
 import { useWindowTitle } from './window-title'
 
 /**
@@ -30,11 +31,13 @@ const WindowTitleSync: React.FC = () => {
 const Root: React.FC = () => {
   const [startupDone, setStartupDone] = useState(false)
   return (
-    <>
+    // 错误边界也覆盖启动页与标题同步：此前 `AppErrorBoundary` 只在 App 内部，
+    // 启动阶段（StartupSplash 的定时器/订阅）抛错会直接卸载整棵树变成白屏。
+    <AppErrorBoundary>
       <WindowTitleSync />
       <App />
       {!startupDone && <StartupSplash onDone={() => setStartupDone(true)} />}
-    </>
+    </AppErrorBoundary>
   )
 }
 

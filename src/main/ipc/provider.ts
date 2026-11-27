@@ -214,6 +214,19 @@ export function registerProviderIpc(): void {
     'provider-fetch-models',
     async (_event, providerType: string, baseUrl?: string, apiKey?: string) => {
       try {
+        // 只接受 http(s) 基址（安全审计 S13）：此前任意字符串都会拼进 fetch，
+        // 渲染层注入后可用来探测非 HTTP 协议/畸形地址，错误信息也会把内部异常带出去。
+        if (baseUrl) {
+          let parsed: URL
+          try {
+            parsed = new URL(baseUrl)
+          } catch {
+            throw new Error('baseUrl is not a valid URL')
+          }
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            throw new Error('baseUrl must use http or https')
+          }
+        }
         const models: FetchedModelInfo[] = []
 
         if (providerType === 'ollama') {
