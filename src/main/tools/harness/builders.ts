@@ -17,6 +17,7 @@ import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
 import { buildWebFetchTool, buildWebSearchTool } from './web'
+import { buildPresentTool } from './present'
 import {
   buildMcpResourceTools,
   type McpResourceOps
@@ -57,6 +58,8 @@ export const toolBuilders: Record<string, ToolFactory> = {
   // 联网：抓取 + 搜索（无密钥；见 tools/harness/web.ts）。默认不选中，由「智能体」页勾选启用。
   web_fetch: () => buildWebFetchTool(),
   web_search: () => buildWebSearchTool(),
+  // 交付物声明（read 只读校验 + 卡片展示；不写文件）
+  present: () => buildPresentTool(),
   ...workshopToolBuilders,
   ...latticeToolBuilders
 }
@@ -97,6 +100,13 @@ const localToolInfos: ToolInfo[] = [
     description: 'Search the web and get result links',
     icon: 'RiSearchLine',
     color: '#2f54eb'
+  },
+  {
+    name: 'present',
+    label: 'Present files',
+    description: 'Declare finished files as deliverables for the user',
+    icon: 'RiFileEditLine',
+    color: '#c98a2b'
   },
   // 插件工坊（4 个）+ 插件中心发版（1 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
   ...workshopToolInfos,

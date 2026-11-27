@@ -146,6 +146,9 @@ from the hub or from a local package, and both paths end in the same host instal
   thumbnail with click-to-preview, the image is stored with the message so it survives a restart,
   and history replay re-attaches the most recent tool images (bounded, like user pastes) so later
   turns can still look at them.
+- **Deliverables** — a `present` tool lets the model declare the finished files of a turn (1–4
+  workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
+  each file in the workspace panel. Optional tool, enabled under Settings → Agents.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic

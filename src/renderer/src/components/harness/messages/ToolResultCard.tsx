@@ -4,6 +4,7 @@ import {
   RiArrowRightSLine,
   RiErrorWarningLine,
   RiFileEditLine,
+  RiFileTextLine,
   RiPencilLine,
   RiTerminalBoxLine
 } from '@remixicon/react'
@@ -540,6 +541,95 @@ export const ToolImageStrip: React.FC<{
           }}
         />
       ))}
+    </div>
+  )
+}
+
+/**
+ * `present` 卡片：模型声明的交付文件列表，点击直接在右侧面板打开。
+ *
+ * 列表来自工具**入参**（不是输出文本）：入参随对话 blocks 一起落库，历史重载后卡片
+ * 仍能还原；输出只是给模型的确认文案，不参与渲染。
+ */
+export const PresentedFilesCard: React.FC<{
+  tool: ToolCall
+  isNested?: boolean
+  style: ToolCardStyle
+}> = ({ tool, isNested = false, style }) => {
+  const { t } = useTranslation()
+  const bridge = useWorkspaceBridge()
+  const rawFiles = (tool.input as { files?: unknown } | undefined)?.files
+  const files = Array.isArray(rawFiles)
+    ? (rawFiles as Array<{ path?: unknown; description?: unknown }>).filter(
+        (file) => typeof file?.path === 'string' && file.path.length > 0
+      )
+    : []
+  if (files.length === 0) return null
+
+  return (
+    <div
+      style={{
+        margin: isNested ? '4px 0 6px 20px' : '6px 0 8px 22px',
+        border: `1px solid ${style.colorBorderSecondary}`,
+        borderRadius: 10,
+        background: style.colorFillAlter,
+        padding: '8px 10px'
+      }}
+    >
+      <div style={{ fontSize: 12, color: style.colorTextSecondary, marginBottom: 6 }}>
+        {t('harness.assistantMessage.deliveredFiles')}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {files.map((file, index) => (
+          <button
+            key={`${String(file.path)}-${index}`}
+            type="button"
+            onClick={() => bridge?.openFile(file.path as string)}
+            title={file.path as string}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '3px 4px',
+              background: 'transparent',
+              border: 'none',
+              cursor: bridge ? 'pointer' : 'default',
+              textAlign: 'left',
+              color: style.colorText,
+              fontSize: 13,
+              minWidth: 0
+            }}
+          >
+            <RiFileTextLine
+              size={14}
+              style={{ color: style.colorTextSecondary, flexShrink: 0 }}
+            />
+            <span
+              style={{
+                fontFamily: MONO_FONT,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              {file.path as string}
+            </span>
+            {typeof file.description === 'string' && file.description ? (
+              <span
+                style={{
+                  color: style.colorTextTertiary,
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                — {file.description}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

@@ -20,7 +20,13 @@ import LoadingMessage from './LoadingMessage'
 import ToolTextPreview from './ToolTextPreview'
 import StreamTextWindow from './StreamTextWindow'
 import FoldBody from './FoldBody'
-import { ToolProgressCard, ToolResultCard, ToolImageStrip, type ToolCardStyle } from './ToolResultCard'
+import {
+  ToolProgressCard,
+  ToolResultCard,
+  ToolImageStrip,
+  PresentedFilesCard,
+  type ToolCardStyle
+} from './ToolResultCard'
 import { toolIconFor } from '../../../utils/harness/toolIcons'
 import { MONO_FONT, TruncatedTooltipText } from './TruncatedTooltipText'
 import { useSubagentViewBridge } from '../../../contexts/harness/subagent-view-bridge'
@@ -431,6 +437,23 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           <ToolImageStrip images={images} isNested={isNested} style={style} />
         </div>
       )
+    }
+
+    /** present：交付文件卡片（列表来自工具入参，随对话落库） */
+    const renderPresentCard = (
+      tool: ToolCall,
+      key: string | number,
+      isNested = false
+    ): React.ReactNode => {
+      const style: ToolCardStyle = {
+        isDarkMode,
+        colorText,
+        colorTextSecondary,
+        colorTextTertiary,
+        colorFillAlter,
+        colorBorderSecondary
+      }
+      return <PresentedFilesCard key={key} tool={tool} isNested={isNested} style={style} />
     }
 
     // ── Mnemon 记忆工具定制卡片 ──────────────────────────────────────────
@@ -1319,6 +1342,10 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             }
             if (phase) return renderMemoryInProgressCard(block.tool, blockIndex, false, phase)
           }
+          // 交付文件（present）：模型声明的最终产物，点击直接在右侧打开
+          if (toolName === 'present' && block.tool.status === 'completed') {
+            return renderPresentCard(block.tool, blockIndex, false)
+          }
           // 系统工具：进行中与完成态共用同款卡片（光泽只在进行中扫过，完成后静止）
           if (CARD_TOOLS.has(toolName)) {
             if (phase) return renderToolCard(block.tool, blockIndex, false, phase)
@@ -1573,6 +1600,10 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                     return renderMemoryToolCard(child.tool, ci, true)
                   }
                   if (phase) return renderMemoryInProgressCard(child.tool, ci, true, phase)
+                }
+                // 交付文件（present，嵌套）：同上
+                if (toolName === 'present' && child.tool.status === 'completed') {
+                  return renderPresentCard(child.tool, ci, true)
                 }
                 // 系统工具（嵌套）：进行中与完成态共用同款卡片（光泽只在进行中扫过）
                 if (CARD_TOOLS.has(toolName)) {

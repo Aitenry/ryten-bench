@@ -327,6 +327,8 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
       configurable: {
         topicId,
         turnSource: turnMeta?.source ?? 'user',
+        // 工作区根：present 等工具据此校验「交付物必须在工作区内」
+        workspaceRoot: this.opts.workspacePath,
         // 团队身份：主图即 lead；子代理图会在自己的 stream 配置里覆盖成 member 身份
         teamAgent: { id: 'lead', name: 'lead', isLead: true },
         goalRound:

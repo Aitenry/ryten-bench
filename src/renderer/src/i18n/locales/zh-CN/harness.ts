@@ -397,6 +397,7 @@ export const harnessZhCN = {
       changedFiles: '{{count}} 个文件已改',
       changedFilesTip: '这一段改了 {{files}} 个文件 · {{pending}} 处待审查（点击看差异）',
       toolOpenFile: '打开文件',
+    deliveredFiles: '交付文件',
       toolRevealDir: '在资源管理器中定位',
       toolViewDetail: '查看结果详情',
       toolFailed: '执行失败',

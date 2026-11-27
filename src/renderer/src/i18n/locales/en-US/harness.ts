@@ -405,6 +405,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       changedFilesTip:
         '{{files}} file(s) changed in this step · {{pending}} awaiting review (click to diff)',
       toolOpenFile: 'Open file',
+    deliveredFiles: 'Delivered files',
       toolRevealDir: 'Reveal in explorer',
       toolViewDetail: 'View result details',
       toolFailed: 'Failed',

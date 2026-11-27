@@ -107,6 +107,8 @@ const READ_TOOLS = new Set([
   'read_mcp_resource',
   // 技能加载（读技能目录，不写用户数据）
   'skill',
+  // 交付物声明：只校验文件是否存在，不改文件
+  'present',
   // 交互与编排
   'ask_user_question',
   // 计划评审：只向用户提交计划、不改文件（与提问同属交互面）
