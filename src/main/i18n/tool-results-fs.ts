@@ -72,6 +72,23 @@ export const zhCNFsToolTexts = {
     failed: '编辑文件失败: {{message}}'
   },
 
+  applyPatch: {
+    /** 补丁应用成功：{{summary}} 是逐文件摘要行 */
+    applied: '补丁已应用（{{files}} 个文件）：\n{{summary}}',
+    parseFailed:
+      '补丁格式错误（{{code}}）。请用 "*** Begin Patch" / "*** End Patch" 包裹，更新块的行以空格（上下文）、"-"（删除）或 "+"（新增）开头。',
+    addExists: '文件已存在，无法新增（如要修改请用 Update File）: {{path}}',
+    deleteMissing: '文件不存在，无法删除: {{path}}',
+    updateMissing: '文件不存在，无法更新: {{path}}',
+    hunkNotFound:
+      '无法在 {{path}} 中找到第 {{hunk}} 个更新块的上下文，未做任何修改。请先 read_file 确认文件当前内容（空白与换行必须完全一致）。',
+    emptyHunk: '{{path}} 的第 {{hunk}} 个更新块没有上下文或删除行。',
+    failed: '应用补丁失败: {{message}}',
+    summaryAdd: 'A {{path}}（{{lines}} 行）',
+    summaryDelete: 'D {{path}}',
+    summaryUpdate: 'M {{path}}（+{{added}} −{{removed}}）'
+  },
+
   ls: {
     failed: '列出目录失败: {{message}}'
   },
@@ -223,6 +240,22 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     updated_one: 'Updated {{path}}: {{count}} replacement made.',
     updated_other: 'Updated {{path}}: {{count}} replacements made.',
     failed: 'Failed to edit the file: {{message}}'
+  },
+
+  applyPatch: {
+    applied: 'Patch applied ({{files}} files):\n{{summary}}',
+    parseFailed:
+      'Malformed patch ({{code}}). Wrap it in "*** Begin Patch" / "*** End Patch"; hunk lines start with a space (context), "-" (removed) or "+" (added).',
+    addExists: 'The file already exists, so it cannot be added (use Update File to modify it): {{path}}',
+    deleteMissing: 'The file does not exist, so it cannot be deleted: {{path}}',
+    updateMissing: 'The file does not exist, so it cannot be updated: {{path}}',
+    hunkNotFound:
+      'Could not find the context of update hunk #{{hunk}} in {{path}}; nothing was changed. Read the file first and match whitespace and line breaks exactly.',
+    emptyHunk: 'Hunk #{{hunk}} of {{path}} has no context or removed lines.',
+    failed: 'Failed to apply the patch: {{message}}',
+    summaryAdd: 'A {{path}} ({{lines}} lines)',
+    summaryDelete: 'D {{path}}',
+    summaryUpdate: 'M {{path}} (+{{added}} −{{removed}})'
   },
 
   ls: {

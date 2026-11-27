@@ -139,6 +139,9 @@ from the hub or from a local package, and both paths end in the same host instal
   command or unknown call forms a barrier and keeps the reply's order. Tools may declare a
   cooperative `timeoutMs`; a call that outlives it returns a readable timeout result and the turn
   continues instead of hanging.
+- **Multi-file patches** — `apply_patch` applies Add / Update / Delete sections across several files
+  in one call (`*** Begin Patch` … `*** End Patch`); the whole patch is validated in memory first, so
+  a hunk that does not match writes nothing, and accepted changes still land in change review.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic

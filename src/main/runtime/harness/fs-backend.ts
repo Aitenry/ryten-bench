@@ -1,4 +1,4 @@
-﻿import { tool, type StructuredToolInterface } from '../../ai/tools'
+import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -7,6 +7,7 @@ import { mainFormat, mainPlural } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { recordToolFacts } from './tool-result-facts'
 import { MAX_IMAGE_BYTES, readImageFile, toolMedia } from './image-tool'
+import { applyHunks, parsePatch } from './apply-patch'
 import { recordFileChange } from '../../workspace/file-history'
 import { changeStats } from '../../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../../workspace/watcher'
@@ -713,6 +714,164 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
               'When true, replace every occurrence; defaults to false (a unique match is required)'
             ),
           ...sandboxPermissionField
+        })
+      }
+    ),
+
+    /**
+     * 多文件补丁（对应 DSH / OpenAI 的 apply_patch）。
+     *
+     * 两阶段执行：先在内存里读入并应用全部操作、逐块校验；任何一处失败就整体放弃
+     * （一个字节都不写）。全部通过后再统一落盘，并逐文件记录改动（差异视图可撤销）。
+     */
+    tool(
+      async ({ input }, config) => {
+        const callId = callIdOf(config)
+        const parsed = parsePatch(input)
+        if (!parsed.ok) {
+          const message = mainFormat(tr.applyPatch.parseFailed, { code: parsed.error })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+
+        interface PlannedChange {
+          path: string
+          realPath: string
+          before: string | null
+          after: string | null
+          /** 沿用既有来源枚举（DB 有 CHECK 约束）：新增算 write_file，更新/删除算 edit_file */
+          source: 'write_file' | 'edit_file'
+        }
+        const planned: PlannedChange[] = []
+        const summaries: string[] = []
+
+        for (const operation of parsed.operations) {
+          const resolved = resolve(operation.path)
+          if ('error' in resolved) {
+            recordToolFacts(callId, { error: resolved.error })
+            return resolved.error
+          }
+
+          if (operation.kind === 'add') {
+            if (fs.existsSync(resolved.realPath)) {
+              const message = mainFormat(tr.applyPatch.addExists, { path: operation.path })
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            const after = operation.lines.length > 0 ? `${operation.lines.join('\n')}\n` : ''
+            planned.push({
+              path: operation.path,
+              realPath: resolved.realPath,
+              before: null,
+              after,
+              source: 'write_file'
+            })
+            summaries.push(
+              mainFormat(tr.applyPatch.summaryAdd, {
+                path: operation.path,
+                lines: operation.lines.length
+              })
+            )
+            continue
+          }
+
+          if (operation.kind === 'delete') {
+            if (!fs.existsSync(resolved.realPath)) {
+              const message = mainFormat(tr.applyPatch.deleteMissing, { path: operation.path })
+              recordToolFacts(callId, { error: message })
+              return message
+            }
+            planned.push({
+              path: operation.path,
+              realPath: resolved.realPath,
+              before: fs.readFileSync(resolved.realPath, 'utf-8'),
+              after: null,
+              source: 'edit_file'
+            })
+            summaries.push(mainFormat(tr.applyPatch.summaryDelete, { path: operation.path }))
+            continue
+          }
+
+          // update
+          if (!fs.existsSync(resolved.realPath)) {
+            const message = mainFormat(tr.applyPatch.updateMissing, { path: operation.path })
+            recordToolFacts(callId, { error: message })
+            return message
+          }
+          const before = fs.readFileSync(resolved.realPath, 'utf-8')
+          const applied = applyHunks(before, operation.hunks, operation.path)
+          if (!applied.ok) {
+            const failure = applied.failure
+            const hunk = 'hunk' in failure ? failure.hunk + 1 : 1
+            const message =
+              failure.code === 'empty-hunk'
+                ? mainFormat(tr.applyPatch.emptyHunk, { path: operation.path, hunk })
+                : mainFormat(tr.applyPatch.hunkNotFound, { path: operation.path, hunk })
+            recordToolFacts(callId, { error: message })
+            return message
+          }
+          const stats = changeStats(before, applied.content)
+          planned.push({
+            path: operation.path,
+            realPath: resolved.realPath,
+            before,
+            after: applied.content,
+            source: 'edit_file'
+          })
+          summaries.push(
+            mainFormat(tr.applyPatch.summaryUpdate, {
+              path: operation.path,
+              added: stats.added,
+              removed: stats.removed
+            })
+          )
+        }
+
+        try {
+          for (const change of planned) {
+            if (change.after === null) {
+              fs.unlinkSync(change.realPath)
+            } else {
+              fs.mkdirSync(path.dirname(change.realPath), { recursive: true })
+              fs.writeFileSync(change.realPath, change.after, 'utf-8')
+            }
+          }
+        } catch (err) {
+          const message = mainFormat(tr.applyPatch.failed, { message: (err as Error).message })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+
+        let added = 0
+        let removed = 0
+        for (const change of planned) {
+          const stats = changeStats(change.before, change.after)
+          added += stats.added
+          removed += stats.removed
+          await recordWorkspaceWrite({
+            options,
+            config,
+            realPath: change.realPath,
+            before: change.before,
+            after: change.after,
+            source: change.source,
+            stats
+          })
+        }
+        recordToolFacts(callId, { added, removed })
+        return mainFormat(tr.applyPatch.applied, {
+          files: planned.length,
+          summary: summaries.join('\n')
+        })
+      },
+      {
+        name: 'apply_patch',
+        description:
+          'Apply one multi-file patch in a single call. Format: "*** Begin Patch" then "*** Add File: path" (+lines), "*** Update File: path" (hunks of " context", "-old", "+new" lines, optionally split by "@@"), or "*** Delete File: path", and finally "*** End Patch". Update hunks match context and removed lines exactly (whitespace-sensitive); if any hunk does not match, nothing is written and the error names the file and hunk. Prefer this over several edit_file calls when the changes belong together.',
+        schema: z.object({
+          input: z
+            .string()
+            .describe('Full patch text, including the *** Begin Patch / *** End Patch markers')
         })
       }
     ),

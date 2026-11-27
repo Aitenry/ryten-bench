@@ -76,7 +76,7 @@ export function isStrictlyWider(next: PermissionMode, current: PermissionMode): 
 export type ToolAccess = 'read' | 'write' | 'exec' | 'external'
 
 /** 写类工具（工作区内写入由挂载表兜底，权限面只管「这个档位允不允许写」） */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file'])
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
 
 /** 执行类工具 */
 const EXEC_TOOLS = new Set(['execute'])
@@ -91,12 +91,18 @@ const EXEC_TOOLS = new Set(['execute'])
 const READ_TOOLS = new Set([
   // 文件读取与检索
   'read_file',
+  'read_image',
   'ls',
   'glob',
   'grep',
   // 本地工具
   'get_time',
   'get_weather',
+  // 联网（只读网络调用，不改本地状态）
+  'web_fetch',
+  'web_search',
+  // 技能加载（读技能目录，不写用户数据）
+  'skill',
   // 交互与编排
   'ask_user_question',
   // 计划评审：只向用户提交计划、不改文件（与提问同属交互面）
@@ -114,6 +120,11 @@ const READ_TOOLS = new Set([
   'list_agents',
   'task',
   'workflow',
+  // 团队任务板：写的是应用自己的看板数据，不是用户文件
+  'team_task_create',
+  'team_task_claim',
+  'team_task_list',
+  'team_task_update',
   // 记忆（写的是应用自己的记忆目录，不是用户工作区）
   'mnemon_memory_bodies',
   'mnemon_recall',
