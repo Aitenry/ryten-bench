@@ -3,6 +3,7 @@ import { z } from 'zod'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
+import { appendFrameWithinCap } from './jobs-buffer'
 
 /**
  * 后台任务系统（jobs）— 对应 deepseek-harness 的 dsh-jobs / dsh-tool-jobs 体系
@@ -51,6 +52,8 @@ export const JOB_PEEK_MAX_CHARS = 40_000
 interface JobRecord extends JobSnapshot {
   topicId: number
   outputFrames: string[]
+  /** 已缓存的输出字符总数（用于 O(1) 判断是否需要裁剪，避免每次 find/join 全量统计） */
+  bufferedChars: number
   /**
    * 输出帧之间的连接符。
    *
@@ -89,6 +92,23 @@ export class JobsRegistry {
    *  long-running 会话中 job_list 全量序列化与广播输出线性膨胀） */
   private static readonly MAX_TERMINAL_PER_TOPIC = 50
 
+  /**
+   * 运行中任务的输出缓存上限（修复：此前 outputFrames 无上限，长跑 dev server
+   * 每秒产生大量输出帧，主进程内存无界增长，且前端每秒 `peek` 会 join 全量再截尾）。
+   * 超出后从头部丢弃最旧帧，并同步回退消费游标——`job_output` 仍能读到后续增量，
+   * 只是更早的历史被标记为已截断（`peek` 的 truncated 字段）。
+   */
+  private static readonly MAX_BUFFERED_CHARS = 1_000_000
+  private static readonly MAX_BUFFERED_FRAMES = 20_000
+
+  /** 追加一帧输出并裁剪到上限（丢弃最旧帧时保持 cursor 指向正确位置） */
+  private appendFrame(record: JobRecord, text: string): void {
+    appendFrameWithinCap(record, text, {
+      maxChars: JobsRegistry.MAX_BUFFERED_CHARS,
+      maxFrames: JobsRegistry.MAX_BUFFERED_FRAMES
+    })
+  }
+
   /** 变更回调（主进程注入，广播 harness-jobs-updated） */
   onChange?: JobsUpdateListener
 
@@ -124,6 +144,7 @@ export class JobsRegistry {
       startedAt: Date.now(),
       topicId,
       outputFrames: [],
+      bufferedChars: 0,
       frameSeparator: options?.frameSeparator ?? '\n',
       cursor: 0,
       reported: false,
@@ -135,7 +156,7 @@ export class JobsRegistry {
       id,
       appendOutput: (text) => {
         if (record.status !== 'running') return
-        record.outputFrames.push(text)
+        this.appendFrame(record, text)
         this.wakeWaiters(record)
       },
       cancel: (reason) => {
@@ -143,7 +164,7 @@ export class JobsRegistry {
       },
       settle: (status, output, error) => {
         if (record.status !== 'running' && record.status !== 'stopping') return // first-wins
-        if (output) record.outputFrames.push(output)
+        if (output) this.appendFrame(record, output)
         record.status = status
         record.finishedAt = Date.now()
         if (error) record.detail = error
