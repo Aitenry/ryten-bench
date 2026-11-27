@@ -25,7 +25,7 @@ import {
   type ScheduleView,
   type ScheduleWhenView
 } from '../../../api/harness'
-import { computeNextRunPreview, deriveTaskTitle, formatRelativeDay } from '../../../utils/schedules/format'
+import { computeNextRunPreview, formatRelativeDay } from '../../../utils/schedules/format'
 import { mcpNamespace, mcpServerGroupValue } from '../../../../../shared/harness/mcp'
 
 type Mode = 'chat' | 'work' | 'plugin'
@@ -331,6 +331,11 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const nextPreview = currentWhen ? computeNextRunPreview(currentWhen) : null
 
   const handleSave = async (): Promise<void> => {
+    const trimmedTitle = title.trim()
+    if (!trimmedTitle) {
+      message.error(t('schedulesPage.titleRequired'))
+      return
+    }
     const trimmedPrompt = promptText.trim()
     if (!trimmedPrompt) {
       message.error(t('schedulesPage.invalidPrompt'))
@@ -362,19 +367,18 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     }
     setSaving(true)
     try {
-      const finalTitle = title.trim() || deriveTaskTitle(trimmedPrompt)
       const agentConfig = arraysToSelection(selectedTools, selectedSkills, selectedMcp)
       const result = task
         ? await harnessApi.harness.updateScheduleFull({
             id: task.id,
-            title: finalTitle,
+            title: trimmedTitle,
             prompt: trimmedPrompt,
             when: currentWhen,
             ...targetPayload,
             agentConfig
           })
         : await harnessApi.harness.createSchedule({
-            title: finalTitle,
+            title: trimmedTitle,
             prompt: trimmedPrompt,
             when: currentWhen,
             ...targetPayload,
@@ -427,38 +431,29 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     [t, topicsOfMode]
   )
 
-  // 每项一行：左侧固定宽度标签，右侧控件（紧凑排布，避免标签各占一行）
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 12
-  }
-  const rowLabelStyle: React.CSSProperties = {
-    width: 76,
-    flex: 'none',
+  // 字段纵向排布：每个 label 在控件上方（用户口径：label 与选项上下排列）
+  const fieldStyle: React.CSSProperties = { marginTop: 14 }
+  const labelStyle: React.CSSProperties = {
     fontSize: 12,
     color: token.colorTextSecondary,
-    textAlign: 'right'
+    marginBottom: 7
   }
-  const rowControlStyle: React.CSSProperties = {
-    flex: 1,
-    minWidth: 0,
+  const requiredMarkStyle: React.CSSProperties = {
+    color: token.colorError,
+    marginLeft: 2
+  }
+  const controlRowStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: 8
-  }
-  const hintStyle: React.CSSProperties = {
-    fontSize: 11,
-    color: token.colorTextTertiary,
-    whiteSpace: 'nowrap'
+    gap: 8,
+    flexWrap: 'wrap'
   }
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      width={660}
+      width={620}
       title={task ? t('schedulesPage.editorEditTitle') : t('schedulesPage.editorNewTitle')}
       confirmLoading={saving}
       okText={task ? t('schedulesPage.save') : t('schedulesPage.create')}
@@ -472,95 +467,90 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         {t('schedulesPage.editorDesc')}
       </div>
 
-      {/* 名称：表单第一项 */}
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldTitleOptional')}</div>
-        <div style={rowControlStyle}>
-          <Input
-            value={title}
-            maxLength={120}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder={deriveTaskTitle(promptText || '')}
-          />
+      {/* 名称：表单第一项，必填 */}
+      <div style={fieldStyle}>
+        <div style={labelStyle}>
+          {t('schedulesPage.fieldTitle')}
+          <span style={requiredMarkStyle}>*</span>
         </div>
+        <Input
+          value={title}
+          maxLength={120}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder={t('schedulesPage.titlePlaceholder')}
+        />
       </div>
 
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldMode')}</div>
-        <div style={rowControlStyle}>
-          <Segmented
-            value={mode}
-            onChange={(value) => handleModeChange(value as Mode)}
-            options={[
-              { value: 'chat', label: t('schedulesPage.modeChat') },
-              { value: 'work', label: t('schedulesPage.modeWork') },
-              { value: 'plugin', label: t('schedulesPage.modePlugin') }
-            ]}
-          />
-        </div>
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldMode')}</div>
+        <Segmented
+          value={mode}
+          onChange={(value) => handleModeChange(value as Mode)}
+          options={[
+            { value: 'chat', label: t('schedulesPage.modeChat') },
+            { value: 'work', label: t('schedulesPage.modeWork') },
+            { value: 'plugin', label: t('schedulesPage.modePlugin') }
+          ]}
+        />
       </div>
 
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldConversation')}</div>
-        <div style={rowControlStyle}>
-          <Select
-            style={{ flex: 1 }}
-            value={selectValue}
-            loading={catalogLoading}
-            showSearch
-            optionFilterProp="label"
-            onChange={(value: string) => {
-              if (value === NEW_SESSION) {
-                setTopicId(null)
-                setTargetMemoryScope(mode === 'chat' ? 'chat' : null)
-                if (mode === 'chat') setTargetWorkspaceId(chatRootId)
-                else if (mode === 'plugin') {
-                  setTargetWorkspaceId(pluginWorkspaceOptions[0]?.value ?? null)
-                } else setTargetWorkspaceId(workWorkspaces[0]?.id ?? null)
-              } else {
-                setTopicId(Number(value))
-              }
-            }}
-            options={conversationOptions}
-            placeholder={t('schedulesPage.fieldConversation')}
-          />
-        </div>
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldConversation')}</div>
+        <Select
+          style={{ width: '100%' }}
+          value={selectValue}
+          loading={catalogLoading}
+          showSearch
+          optionFilterProp="label"
+          onChange={(value: string) => {
+            if (value === NEW_SESSION) {
+              setTopicId(null)
+              setTargetMemoryScope(mode === 'chat' ? 'chat' : null)
+              if (mode === 'chat') setTargetWorkspaceId(chatRootId)
+              else if (mode === 'plugin') {
+                setTargetWorkspaceId(pluginWorkspaceOptions[0]?.value ?? null)
+              } else setTargetWorkspaceId(workWorkspaces[0]?.id ?? null)
+            } else {
+              setTopicId(Number(value))
+            }
+          }}
+          options={conversationOptions}
+          placeholder={t('schedulesPage.fieldConversation')}
+        />
       </div>
 
       {isNewSession && (mode === 'work' || mode === 'plugin') && (
-        <div style={rowStyle}>
-          <div style={rowLabelStyle}>
+        <div style={fieldStyle}>
+          <div style={labelStyle}>
             {mode === 'plugin'
               ? t('schedulesPage.fieldPlugin')
               : t('schedulesPage.fieldWorkspace')}
           </div>
-          <div style={rowControlStyle}>
-            <Select
-              style={{ flex: 1 }}
-              value={targetWorkspaceId ?? undefined}
-              loading={catalogLoading}
-              onChange={(value: number) => handleWorkspaceChange(value)}
-              options={
-                mode === 'plugin'
-                  ? pluginWorkspaceOptions
-                  : workWorkspaces.map((workspace) => ({
-                      value: workspace.id,
-                      label: workspace.name
-                    }))
-              }
-              placeholder={
-                mode === 'plugin'
-                  ? t('schedulesPage.fieldPlugin')
-                  : t('schedulesPage.fieldWorkspace')
-              }
-            />
-          </div>
+          <Select
+            style={{ width: '100%' }}
+            value={targetWorkspaceId ?? undefined}
+            loading={catalogLoading}
+            onChange={(value: number) => handleWorkspaceChange(value)}
+            options={
+              mode === 'plugin'
+                ? pluginWorkspaceOptions
+                : workWorkspaces.map((workspace) => ({
+                    value: workspace.id,
+                    label: workspace.name
+                  }))
+            }
+            placeholder={
+              mode === 'plugin'
+                ? t('schedulesPage.fieldPlugin')
+                : t('schedulesPage.fieldWorkspace')
+            }
+          />
         </div>
       )}
 
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldWhen')}</div>
-        <div style={rowControlStyle}>
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldWhen')}</div>
+        <div style={controlRowStyle}>
           <Segmented
             value={whenMode}
             onChange={(value) => setWhenMode(value as 'daily' | 'every' | 'once')}
@@ -601,7 +591,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
               onChange={(value) => setOnceAt(value)}
             />
           )}
-          <span style={hintStyle}>
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
             {nextPreview
               ? t('schedulesPage.previewNext', {
                   time: formatRelativeDay(nextPreview.toISOString())
@@ -611,68 +601,59 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         </div>
       </div>
 
-      <div style={{ ...rowStyle, alignItems: 'flex-start' }}>
-        <div style={{ ...rowLabelStyle, paddingTop: 6 }}>
-          {t('schedulesPage.fieldPrompt')}
-        </div>
-        <div style={rowControlStyle}>
-          <Input.TextArea
-            rows={3}
-            value={promptText}
-            onChange={(event) => setPromptText(event.target.value)}
-            placeholder={t('schedulesPage.promptPlaceholder')}
-          />
-        </div>
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldPrompt')}</div>
+        <Input.TextArea
+          rows={4}
+          value={promptText}
+          onChange={(event) => setPromptText(event.target.value)}
+          placeholder={t('schedulesPage.promptPlaceholder')}
+        />
       </div>
 
-      {/* 本轮启用：工具 / 技能 / MCP 各一行 */}
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldTool')}</div>
-        <div style={rowControlStyle}>
-          <Select
-            mode="multiple"
-            allowClear
-            maxTagCount="responsive"
-            style={{ flex: 1 }}
-            value={selectedTools}
-            onChange={setSelectedTools}
-            options={toolOptions}
-            placeholder={t('schedulesPage.toolsPlaceholder')}
-            optionFilterProp="label"
-          />
-        </div>
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldTool')}</div>
+        <Select
+          mode="multiple"
+          allowClear
+          maxTagCount="responsive"
+          style={{ width: '100%' }}
+          value={selectedTools}
+          onChange={setSelectedTools}
+          options={toolOptions}
+          placeholder={t('schedulesPage.toolsPlaceholder')}
+          optionFilterProp="label"
+        />
       </div>
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldSkill')}</div>
-        <div style={rowControlStyle}>
-          <Select
-            mode="multiple"
-            allowClear
-            maxTagCount="responsive"
-            style={{ flex: 1 }}
-            value={selectedSkills}
-            onChange={setSelectedSkills}
-            options={skillOptions}
-            placeholder={t('schedulesPage.skillsPlaceholder')}
-            optionFilterProp="label"
-          />
-        </div>
+
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldSkill')}</div>
+        <Select
+          mode="multiple"
+          allowClear
+          maxTagCount="responsive"
+          style={{ width: '100%' }}
+          value={selectedSkills}
+          onChange={setSelectedSkills}
+          options={skillOptions}
+          placeholder={t('schedulesPage.skillsPlaceholder')}
+          optionFilterProp="label"
+        />
       </div>
-      <div style={rowStyle}>
-        <div style={rowLabelStyle}>{t('schedulesPage.fieldMcp')}</div>
-        <div style={rowControlStyle}>
-          <Select
-            mode="multiple"
-            allowClear
-            maxTagCount="responsive"
-            style={{ flex: 1 }}
-            value={selectedMcp}
-            onChange={setSelectedMcp}
-            options={mcpOptions}
-            placeholder={t('schedulesPage.mcpPlaceholder')}
-            optionFilterProp="label"
-          />
-        </div>
+
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldMcp')}</div>
+        <Select
+          mode="multiple"
+          allowClear
+          maxTagCount="responsive"
+          style={{ width: '100%' }}
+          value={selectedMcp}
+          onChange={setSelectedMcp}
+          options={mcpOptions}
+          placeholder={t('schedulesPage.mcpPlaceholder')}
+          optionFilterProp="label"
+        />
       </div>
     </Modal>
   )
