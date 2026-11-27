@@ -10,6 +10,7 @@ import { MAX_IMAGE_BYTES, readImageFile, toolMedia, type ImageMimeType } from '.
 import { normalizeImageDataUrl } from './image-encode'
 import { applyHunks, parsePatch } from './apply-patch'
 import { applyInsert, applyStrReplace, formatView } from './str-replace-core'
+import { DEFAULT_MAX_DOCUMENT_CHARS, extractDocument } from './document-extract'
 import { recordFileChange } from '../../workspace/file-history'
 import { changeStats } from '../../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../../workspace/watcher'
@@ -443,6 +444,108 @@ function normalizeImageForContext(image: {
   }
 }
 
+/** read_document 的单文件大小上限（Office 文档解压前；解压炸弹另由抽取器自身失败兜底） */
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+
+/**
+ * 文档文本抽取工具（docx / xlsx / pptx / 纯文本）。
+ *
+ * `read_file` 只读 UTF-8，Office 文件对模型不可见；这里按扩展名把文档抽成文本，
+ * 结构化摘要（工作表/幻灯片数）放在头部，正文有 20k 字符上限（可用 max_chars 调整）。
+ */
+function buildReadDocumentTool(
+  resolve: (virtualPath: string) => { realPath: string } | { error: string }
+): StructuredToolInterface {
+  const tr = getFsToolTexts()
+  return tool(
+    async ({ file_path, max_chars }, config) => {
+      const callId = callIdOf(config)
+      const resolved = resolve(file_path)
+      if ('error' in resolved) {
+        recordToolFacts(callId, { error: resolved.error })
+        return resolved.error
+      }
+      try {
+        const stat = fs.statSync(resolved.realPath)
+        if (!stat.isFile()) {
+          const message = mainFormat(tr.read.notFile, { path: file_path })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+        if (stat.size > MAX_DOCUMENT_BYTES) {
+          const message = mainFormat(tr.readDocument.tooLarge, {
+            path: file_path,
+            bytes: stat.size.toLocaleString(),
+            limit: MAX_DOCUMENT_BYTES.toLocaleString()
+          })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+        const buffer = fs.readFileSync(resolved.realPath)
+        const extracted = await extractDocument({
+          fileName: file_path,
+          buffer,
+          maxChars: max_chars ?? DEFAULT_MAX_DOCUMENT_CHARS
+        })
+        if (!extracted.ok) {
+          const message =
+            extracted.reason === 'empty'
+              ? mainFormat(tr.readDocument.empty, { path: file_path })
+              : extracted.reason === 'failed'
+                ? mainFormat(tr.readDocument.failed, {
+                    message: extracted.message ?? tr.readDocument.unsupported
+                  })
+                : mainFormat(tr.readDocument.unsupported, { path: file_path })
+          recordToolFacts(callId, { error: message })
+          return message
+        }
+        recordToolFacts(callId, {
+          bytes: stat.size,
+          lines: extracted.text.split('\n').length,
+          truncated: extracted.truncated
+        })
+        const meta = extracted.meta.length > 0 ? `\n${extracted.meta.join('\n')}` : ''
+        const header = mainFormat(tr.readDocument.header, {
+          path: file_path,
+          kind: extracted.kind,
+          bytes: stat.size.toLocaleString(),
+          meta
+        })
+        const note = extracted.truncated
+          ? mainFormat(tr.readDocument.truncated, {
+              total: extracted.totalChars.toLocaleString()
+            })
+          : ''
+        return `${header}\n\n${extracted.text}${note}`
+      } catch (err) {
+        const message = mainFormat(tr.readDocument.failed, {
+          message: (err as Error).message
+        })
+        recordToolFacts(callId, { error: message })
+        return message
+      }
+    },
+    {
+      name: 'read_document',
+      isConcurrencySafe: () => true,
+      timeoutMs: 60_000,
+      description:
+        'Extract the text of a document from the virtual filesystem: .docx (Word, plain text), .xlsx (every sheet as tab-separated rows), .pptx (text per slide), or plain-text formats (.csv/.tsv/.md/.txt/.json/.yaml/.log). PDF is not supported. Large documents are truncated; pass max_chars to widen the limit (default 20000).',
+      schema: z.object({
+        file_path: z
+          .string()
+          .describe('Virtual path of the document, e.g. /uploads/report.docx'),
+        max_chars: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Maximum characters of extracted text (default 20000)')
+      })
+    }
+  )
+}
+
 /**
  * 构建文件系统工具集。无任何挂载时返回空数组（组件不激活，对应论文「依赖缺失 = 不激活」）。
  */
@@ -623,6 +726,8 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
         })
       }
     ),
+
+    buildReadDocumentTool(resolve),
 
     tool(
       async ({ file_path, content }, config) => {

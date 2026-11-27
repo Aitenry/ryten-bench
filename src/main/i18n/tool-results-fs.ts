@@ -104,6 +104,18 @@ export const zhCNFsToolTexts = {
     failed: 'str_replace_editor 失败: {{message}}'
   },
 
+  /** read_document：从 docx/xlsx/pptx/纯文本里抽取文本 */
+  readDocument: {
+    unsupported:
+      '不支持的文档类型: {{path}}（支持 .docx / .xlsx / .pptx / .csv / .tsv / .md / .txt / .json / .yaml；.pdf 暂不支持）',
+    empty: '文档没有可提取的文本: {{path}}',
+    tooLarge: '文档过大（{{bytes}} 字节，上限 {{limit}} 字节）: {{path}}',
+    failed: '读取文档失败: {{message}}',
+    /** 成功头部：类型与字节数；{{meta}} 是可选的结构化摘要行 */
+    header: '文档: {{path}}（{{kind}}，{{bytes}} 字节）{{meta}}',
+    truncated: '\n\n（文档共 {{total}} 字符，已截断；可只导出需要的部分后再读。）'
+  },
+
   ls: {
     failed: '列出目录失败: {{message}}'
   },
@@ -288,6 +300,18 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
     replaced: 'Replaced 1 occurrence in {{path}} ({{total}} lines total).',
     inserted: 'Inserted content after line {{line}} of {{path}} ({{total}} lines total).',
     failed: 'str_replace_editor failed: {{message}}'
+  },
+
+  /** read_document: extract text from docx / xlsx / pptx / plain text */
+  readDocument: {
+    unsupported:
+      'Unsupported document type: {{path}} (supports .docx / .xlsx / .pptx / .csv / .tsv / .md / .txt / .json / .yaml; .pdf is not supported yet)',
+    empty: 'The document has no extractable text: {{path}}',
+    tooLarge: 'The document is too large ({{bytes}} bytes, limit {{limit}} bytes): {{path}}',
+    failed: 'Failed to read the document: {{message}}',
+    header: 'Document: {{path}} ({{kind}}, {{bytes}} bytes){{meta}}',
+    truncated:
+      '\n\n(The document has {{total}} characters and was truncated; export only the needed part and read it again.)'
   },
 
   ls: {

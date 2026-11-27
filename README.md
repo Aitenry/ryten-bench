@@ -209,6 +209,10 @@ from the hub or from a local package, and both paths end in the same host instal
   local and private addresses are refused, responses are capped at 2 MB and 24k characters) and
   `web_search` runs 1–10 queries against a public search endpoint and returns title / URL / snippet
   rows for a follow-up `web_fetch`. Both are off until selected under Settings → Agents.
+- **Document reading** — `read_document` extracts text so Office attachments stop being binary
+  black boxes: Word (`.docx`) plain text, Excel (`.xlsx`) every sheet as tab-separated rows,
+  PowerPoint (`.pptx`) text per slide, plus plain-text formats (`csv`/`tsv`/`md`/`txt`/`json`/`yaml`).
+  Output is capped at 20k characters by default and PDF is not supported yet.
 - **Workspace files** — file explorer and CodeMirror 6 editor (with a Markdown rich/source toggle,
   language modes, search, folding, word wrap and caret/selection status) inside the assistant view,
   live-reacting to on-disk changes and warning when a file changed on disk while unsaved edits

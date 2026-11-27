@@ -97,6 +97,7 @@ const READ_TOOLS = new Set([
   // 文件读取与检索
   'read_file',
   'read_image',
+  'read_document',
   'ls',
   'glob',
   'grep',
