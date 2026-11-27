@@ -2083,6 +2083,12 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
        *
        * 默认折叠态：**组里还有调用在进行中就不折**（同「要能看见正在干什么」这条口径——
        * 流式时最后一组通常正开着），其余（整组完成、历史消息）一律折起。
+       *
+       * **组头文字与组内名称同款**（用户 2026-11-27：「需要折叠的名称和一致都是大字体」）：
+       * 此前组头按小标题写死 12px + 次级色，而组里每个工具折叠头继承 antd 的
+       * `token.fontSize`（14px）与 `token.colorText`——同一个 `get_weather`，在组头小而灰、
+       * 在组内大而白，折起与展开像两种东西。现在组头直接取 token 的字号/行高与正文色，
+       * 与组内名称逐项对齐：折起时看到的就是这行大字，展开后组内每一行仍是同款大字。
        */
       const renderToolRun = (entry: Extract<ToolRunEntry, { kind: 'run' }>): React.ReactNode => {
         const runKey = `toolrun-${entry.indices[0]}-${entry.name}`
@@ -2117,12 +2123,15 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             {RunIcon ? (
               <RunIcon size={14} style={{ color: colorTextSecondary, flex: '0 0 auto' }} />
             ) : null}
+            {/* 组名与组内折叠头的名称同字号同色（2026-11-27 用户口径）：字号/行高取 antd 的
+                token，颜色取正文色——组内每个折叠头都由 `resetComponent` 写成这一套，
+                组头再写死 12px/次级色就会「折起小、展开大」。 */}
             <span
               style={{
                 flex: '1 1 auto',
-                fontSize: 12,
-                lineHeight: '18px',
-                color: colorTextSecondary,
+                fontSize: token.fontSize,
+                lineHeight: token.lineHeight,
+                color: colorText,
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
