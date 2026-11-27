@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { Trans, useTranslation } from '@renderer/i18n'
 import {
   RiArrowRightSLine,
@@ -9,7 +9,7 @@ import {
   RiTerminalBoxLine
 } from '@remixicon/react'
 import { ShinyIcon } from '@renderer/components/effects/ShinyText'
-import { Image } from 'antd'
+import { Button, Image } from 'antd'
 
 import { useWorkspaceBridge } from '../../../contexts/harness/workspace-bridge'
 import { formatBytes, TOOL_CARD_ICONS, toolIconFor } from '../../../utils/harness/toolIcons'
@@ -551,6 +551,71 @@ export const ToolImageStrip: React.FC<{
  * 列表来自工具**入参**（不是输出文本）：入参随对话 blocks 一起落库，历史重载后卡片
  * 仍能还原；输出只是给模型的确认文案，不参与渲染。
  */
+/**
+ * 动作卡（propose_action）：回答下方的可点选按钮。
+ *
+ * 点选后通过 `harness-propose-action` 事件把 reply（缺省为 label）交给会话发送逻辑——
+ * 与手动发消息同一条路径（生成中则入队）。点过之后本卡片就地禁用并显示所选文本。
+ */
+export const ProposeActionsCard: React.FC<{
+  tool: ToolCall
+  isNested?: boolean
+  style: ToolCardStyle
+}> = ({ tool, isNested = false, style }) => {
+  const [picked, setPicked] = useState<string | null>(null)
+  const input = tool.input as { question?: unknown; actions?: unknown } | undefined
+  const question = typeof input?.question === 'string' ? input.question.trim() : ''
+  const rawActions = Array.isArray(input?.actions) ? input.actions : []
+  const actions = rawActions
+    .filter(
+      (action): action is { label: string; description?: string; reply?: string } =>
+        typeof action === 'object' &&
+        action !== null &&
+        typeof (action as { label?: unknown }).label === 'string' &&
+        ((action as { label: string }).label ?? '').trim().length > 0
+    )
+    .slice(0, 4)
+  if (actions.length === 0) return null
+
+  const pick = (action: { label: string; reply?: string }): void => {
+    if (picked !== null) return
+    const text = (action.reply ?? action.label).trim()
+    setPicked(text)
+    window.dispatchEvent(new CustomEvent('harness-propose-action', { detail: { text } }))
+  }
+
+  return (
+    <div
+      style={{
+        margin: isNested ? '4px 0 6px 20px' : '6px 0 8px 22px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        maxWidth: 620
+      }}
+    >
+      {question && (
+        <div style={{ fontSize: 13, color: style.colorTextSecondary }}>{question}</div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {actions.map((action) => (
+          <Button
+            key={action.label}
+            size="small"
+            disabled={picked !== null}
+            title={action.description}
+            onClick={() => pick(action)}
+          >
+            {action.label}
+          </Button>
+        ))}
+      </div>
+      {picked && (
+        <div style={{ fontSize: 12, color: style.colorTextTertiary }}>✓ {picked}</div>
+      )}
+    </div>
+  )
+}
 export const PresentedFilesCard: React.FC<{
   tool: ToolCall
   isNested?: boolean

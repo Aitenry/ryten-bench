@@ -1497,6 +1497,54 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     [startTurn]
   )
 
+  /**
+   * 动作卡（propose_action）点选：把选项文本作为一条用户消息发出去。
+   *
+   * 与手动发送走同一条路径：生成中则入队（不打断当前回合），否则直接开新一轮。
+   * 卡片通过 `harness-propose-action` 窗口事件把文本交到这里。
+   */
+  const handleProposeAction = useCallback(
+    async (text: string): Promise<void> => {
+      const content = text.trim()
+      if (!content || currentTopicArchivedRef.current) return
+      window.dispatchEvent(new CustomEvent('harness-send-started'))
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content,
+        blocks: [{ type: 'text', text: content }],
+        timestamp: Date.now()
+      }
+      const topicId = currentTopicIdRef.current
+      if (topicId != null) {
+        const turnState = await harnessApi.harness.getTurnState(topicId).catch(() => null)
+        if (turnState?.active) {
+          try {
+            const { queued } = await harnessApi.harness.enqueueMessage({
+              topicId,
+              text: content,
+              attachments: { images: [], documents: [] }
+            })
+            if (queued) return
+          } catch (err) {
+            console.error('Failed to enqueue proposed action:', err)
+          }
+        }
+      }
+      await startTurn({ userMessage, attachments: [] })
+    },
+    [startTurn]
+  )
+
+  useEffect(() => {
+    const listener = (event: Event): void => {
+      const detail = (event as CustomEvent<{ text?: unknown }>).detail
+      if (typeof detail?.text === 'string') void handleProposeAction(detail.text)
+    }
+    window.addEventListener('harness-propose-action', listener)
+    return () => window.removeEventListener('harness-propose-action', listener)
+  }, [handleProposeAction])
+
   /** 删除一条排队消息（主进程为真源，删除后靠广播回同步） */
   const handleRemoveQueued = useCallback(async (itemId: string): Promise<void> => {
     const topicId = currentTopicIdRef.current

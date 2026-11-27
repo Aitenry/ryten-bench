@@ -116,6 +116,8 @@ const READ_TOOLS = new Set([
   'terminal_list',
   // 模型路由清单（只读）
   'list_subagent_models',
+  // 动作卡（只读：把选项展示给用户）
+  'propose_action',
   // 本地工具
   'get_time',
   'get_weather',

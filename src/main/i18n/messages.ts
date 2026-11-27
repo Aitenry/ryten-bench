@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 主进程里**会出现在系统界面上**的文案：系统托盘菜单、原生文件对话框、启动页步骤名、独立窗口标题。
  *
  * 这里不放：日志、注释、抛给渲染进程的错误信息（那些属于各自的模块）、以及发给模型的提示词。
@@ -157,6 +157,7 @@ export const zhCN = {
     run_code: { label: '代码编排', description: '写 JS 批量调用只读工具并返回结果（仅完全权限档）' },
     list_subagent_models: { label: '模型路由', description: '列出已启用的 provider:model 路由与能力' },
     conversation_list: { label: '会话列表', description: '列出当前工作区的最近会话' },
+    propose_action: { label: '动作选项', description: '在回答下方给出可点选的动作按钮' },
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -337,6 +338,10 @@ export const enUS: typeof zhCN = {
     conversation_list: {
       label: 'List conversations',
       description: 'List the recent conversations of this workspace'
+    },
+    propose_action: {
+      label: 'Propose actions',
+      description: 'Offer clickable action buttons under the reply'
     },
     manage_materials: {
       label: 'Materials',
