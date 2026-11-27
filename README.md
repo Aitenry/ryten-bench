@@ -225,6 +225,9 @@ from the hub or from a local package, and both paths end in the same host instal
   pick them under the chat input (or in a scheduled task), and only the picked ones enter the system
   prompt as a short name/description index; their full instructions load on demand through a
   `skill` tool, so the prompt never carries every skill body at once. Managed under More → Skills.
+  In tool pickers the four scheduled-task tools appear as one **Schedules** choice and the MCP
+  tools/resources as one **MCP** choice; selecting a choice expands to the underlying tools at run
+  time, so the lists stay short and readable.
 - **MCP servers** — connect Model Context Protocol servers over stdio (a local command such as
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers). Servers connect when added but their tools are

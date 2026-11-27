@@ -149,6 +149,11 @@ export const zhCN = {
     schedule_list: { label: '定时任务列表', description: '查看全部定时任务' },
     schedule_view: { label: '定时任务详情', description: '查看单个定时任务' },
     schedule_edit: { label: '修改定时任务', description: '更新/暂停/恢复/删除定时任务' },
+    'schedule-tasks': {
+      label: '定时任务',
+      description: '创建、查看、修改、暂停/删除定时任务（合并为一个选择）'
+    },
+    mcp: { label: 'MCP', description: '使用所有已连接 MCP 服务器提供的工具与资源' },
     terminal_open: { label: '打开终端', description: '开启一条持久 shell 会话（仅完全权限档）' },
     terminal_send: { label: '终端执行', description: '在持久终端里执行命令并等待输出' },
     terminal_read: { label: '读取终端', description: '读取终端自上次读取以来的新输出' },
@@ -307,6 +312,11 @@ export const enUS: typeof zhCN = {
       label: 'Edit schedule',
       description: 'Update, pause, resume or delete a scheduled task'
     },
+    'schedule-tasks': {
+      label: 'Schedules',
+      description: 'Create, list, view and edit scheduled tasks (one selection)'
+    },
+    mcp: { label: 'MCP', description: 'Use tools and resources from every connected MCP server' },
     terminal_open: {
       label: 'Open terminal',
       description: 'Open a persistent shell session (danger-full-access only)'

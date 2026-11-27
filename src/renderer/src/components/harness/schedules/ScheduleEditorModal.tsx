@@ -451,6 +451,16 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         {t('schedulesPage.editorDesc')}
       </div>
 
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldTitleOptional')}</div>
+        <Input
+          value={title}
+          maxLength={120}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder={deriveTaskTitle(promptText || '')}
+        />
+      </div>
+
       {/* 目标：模式 → 会话 / 新会话 */}
       <div style={fieldStyle}>
         <div style={labelStyle}>{t('schedulesPage.fieldMode')}</div>
@@ -612,15 +622,6 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         </div>
       </div>
 
-      <div style={fieldStyle}>
-        <div style={labelStyle}>{t('schedulesPage.fieldTitleOptional')}</div>
-        <Input
-          value={title}
-          maxLength={120}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder={deriveTaskTitle(promptText || '')}
-        />
-      </div>
     </Modal>
   )
 }

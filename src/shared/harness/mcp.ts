@@ -205,6 +205,25 @@ export function parseMcpServerGroup(value?: string): string | null {
   return namespace || null
 }
 
+/**
+ * 「定时任务」工具分组选择项：列表里只出现一个选择项，运行前展开成
+ * `schedule_create/list/view/edit` 四个真实工具（用户口径：定时任务合成一个注册选择）。
+ */
+export const SCHEDULE_TOOL_GROUP = 'schedule-tasks'
+
+/** 定时任务分组的真实工具名 */
+export const SCHEDULE_TOOL_NAMES = [
+  'schedule_create',
+  'schedule_list',
+  'schedule_view',
+  'schedule_edit'
+] as const
+
+/** 该选择项是不是「定时任务」分组 */
+export function isScheduleToolGroup(value?: string): boolean {
+  return value === SCHEDULE_TOOL_GROUP
+}
+
 /** 该选择项是不是某台 MCP 服务器的分组项 */
 export function isMcpServerGroup(value?: string): boolean {
   return parseMcpServerGroup(value) !== null
@@ -343,14 +362,11 @@ export function canonicalToolName(name: string): string {
  * 渲染层不需要再做过滤。
  */
 export function isSelectableMainAgentTool(name?: string): boolean {
-  return (
-    typeof name === 'string' &&
-    name.length > 0 &&
-    !isMcpToolName(name) &&
-    !isMcpServerGroup(name) &&
-    !isMcpToolGroup(name) &&
-    !isPluginModeTool(name)
-  )
+  if (typeof name !== 'string' || name.length === 0) return false
+  // 两个「分组项」本身可以保存：运行时展开成具体工具（见 buildTools）
+  if (isScheduleToolGroup(name) || isMcpToolGroup(name)) return true
+  if (isMcpToolName(name) || isMcpServerGroup(name) || isPluginModeTool(name)) return false
+  return true
 }
 
 /**
@@ -391,7 +407,8 @@ export function effectiveMainAgentTools(
     for (const name of names ?? []) {
       if (typeof name !== 'string' || !name) continue
       const canonical = canonicalToolName(name)
-      if (isMcpToolGroup(canonical) || isMcpServerGroup(canonical)) continue
+      // 分组项（MCP 服务器 / 旧「MCP」标记 / 定时任务）保留到组装阶段再统一展开，
+      // 这样「选择列表里的一项」与「真正挂载的工具」不会各写一套名单。
       if (isPluginModeTool(canonical)) continue
       if (!out.includes(canonical)) out.push(canonical)
     }

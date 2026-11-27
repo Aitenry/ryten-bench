@@ -1,4 +1,4 @@
-import type { StructuredToolInterface } from '../../ai/tools'
+﻿import type { StructuredToolInterface } from '../../ai/tools'
 import type { SubAgentConfig } from '../../services/harness/types'
 import {
   HARNESS_TOOL_CONTRIBUTION,
@@ -6,12 +6,16 @@ import {
   type ToolInfo
 } from '../../plugins/tool-contract'
 import { listContributions } from '../../plugins/contributions'
-import { settingsStore } from '../../context'
 import {
+  MCP_TOOL_GROUP,
+  SCHEDULE_TOOL_GROUP,
+  SCHEDULE_TOOL_NAMES,
   canonicalToolName,
   expandMcpServerGroups,
+  isMcpToolGroup,
+  isScheduleToolGroup,
   isSelectableMainAgentTool,
-  type MainAgentConfig
+  parseMcpServerGroup
 } from '../../../shared/harness/mcp'
 import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
@@ -213,6 +217,24 @@ const MCP_RESOURCE_TOOL_INFOS: ToolInfo[] = [
   }
 ]
 
+/** 「定时任务」分组选择项：列表里只显示这一项，运行前展开成 4 个工具 */
+const SCHEDULE_GROUP_INFO: ToolInfo = {
+  name: SCHEDULE_TOOL_GROUP,
+  label: 'Schedules',
+  description: 'Create, list, view and edit scheduled tasks',
+  icon: 'RiCalendar2Line',
+  color: '#722ed1'
+}
+
+/** 「MCP」分组选择项：一次勾选 = 已连接服务器的工具 + 3 个资源工具 */
+const MCP_GROUP_INFO: ToolInfo = {
+  name: MCP_TOOL_GROUP,
+  label: 'MCP',
+  description: 'Use every connected MCP server (tools and resources)',
+  icon: 'RiPlug2Line',
+  color: '#8c6b3f'
+}
+
 /** 已注入 MCP 数据源时的三个资源工具（每次现建，保证用最新连接） */
 function mcpResourceToolSources(): ToolSource<StructuredToolInterface>[] {
   if (!mcpResourceOps) return []
@@ -304,42 +326,71 @@ function resolveToolBuilders(): Record<string, ToolFactory> {
  * 过滤在主进程完成，渲染层拿到什么就展示什么，不再二次过滤。
  */
 export function listAvailableTools(): ToolInfo[] {
-  return mergeToolSources(toolSources()).infos.filter((info) =>
-    isSelectableMainAgentTool(info.name)
-  ) as ToolInfo[]
+  const infos = mergeToolSources(toolSources()).infos
+  const hidden = new Set<string>([...SCHEDULE_TOOL_NAMES, ...MCP_RESOURCE_TOOL_INFOS.map((i) => i.name)])
+  const visible = infos.filter(
+    (info) => isSelectableMainAgentTool(info.name) && !hidden.has(info.name)
+  )
+  // 分组项由这里补：定时任务恒有；MCP 只在真的有数据源/服务器时出现
+  const out = visible.filter(
+    (info) => !isScheduleToolGroup(info.name) && !isMcpToolGroup(info.name)
+  )
+  out.push(SCHEDULE_GROUP_INFO)
+  if (mcpResourceOps || currentMcpTools().infos.length > 0) out.push(MCP_GROUP_INFO)
+  return out
 }
 
 // ============================================================================
 // Build Tools
 // ============================================================================
 
+/**
+ * 展开选择列表里的分组项 → 真实工具名（去重）：
+ * - `schedule-tasks` → 4 个 `schedule_*` 工具；
+ * - `mcp` → 当前已连接 MCP 服务器的全部工具 + 3 个资源工具；
+ * - `mcp@<服务器>` → 那台服务器的工具；
+ * - 其余原样保留。
+ *
+ * 列表里用户勾的是「一项」，运行时挂的是它代表的全部工具（与资料整理合并同一个思路）。
+ */
+export function expandSelectionToolNames(
+  toolNames: string[],
+  mcpToolNames?: string[]
+): string[] {
+  const allMcp = mcpToolNames ?? currentMcpTools().infos.map((info) => info.name)
+  const resourceNames = mcpResourceOps ? MCP_RESOURCE_TOOL_INFOS.map((info) => info.name) : []
+  const out: string[] = []
+  for (const raw of toolNames) {
+    const name = canonicalToolName(raw)
+    if (isScheduleToolGroup(name)) {
+      out.push(...SCHEDULE_TOOL_NAMES)
+      continue
+    }
+    if (isMcpToolGroup(name)) {
+      out.push(...allMcp, ...resourceNames)
+      continue
+    }
+    if (parseMcpServerGroup(name)) {
+      out.push(...expandMcpServerGroups([name], allMcp))
+      continue
+    }
+    out.push(name)
+  }
+  return Array.from(new Set(out))
+}
+
 /** Build AI tool instances from selected tool names */
 export function buildTools(toolNames: string[]): StructuredToolInterface[] {
   const registry = resolveToolBuilders()
-  const canonicalNames = Array.from(new Set(toolNames.map((name) => canonicalToolName(name))))
-  return canonicalNames.filter((name) => name in registry).map((name) => registry[name]())
+  return expandSelectionToolNames(toolNames)
+    .filter((name) => name in registry)
+    .map((name) => registry[name]())
 }
 
-/** 为智能体构建实际的工具实例 */
+/** 为智能体构建实际的工具实例（分组项同样先展开） */
 export function buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
   const registry = resolveToolBuilders()
-  /**
-   * 子智能体的选择里存的可能是 MCP 分组项（智能体页按服务器给一项，见 shared/mcp.ts）：
-   * 建实例前展开成 MCP 页当前启用的那批真实工具名。**只有 MCP 页能决定具体哪几个工具**，
-   * 子智能体只是引用那份清单，因此这里每次都现读，MCP 页改了立即生效。
-   */
-  const selected = expandMcpServerGroups(subAgent.tools, enabledMcpToolNames())
-  const canonicalNames = Array.from(new Set(selected.map((name) => canonicalToolName(name))))
-  return canonicalNames.filter((name) => name in registry).map((name) => registry[name]())
-}
-
-/** MCP 页当前勾选给模型的工具名（`mainAgent.mcpTools`，读不到就当没有） */
-function enabledMcpToolNames(): string[] {
-  try {
-    const config = settingsStore.get('mainAgent') as MainAgentConfig | undefined
-    return Array.isArray(config?.mcpTools) ? config.mcpTools : []
-  } catch (err) {
-    console.warn('[Harness] Failed to read enabled MCP tools:', err)
-    return []
-  }
+  return expandSelectionToolNames(subAgent.tools ?? [])
+    .filter((name) => name in registry)
+    .map((name) => registry[name]())
 }
