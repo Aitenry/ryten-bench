@@ -183,10 +183,12 @@ from the hub or from a local package, and both paths end in the same host instal
   workspace-scoped, so the assistant can follow a reference back to an earlier discussion.
 - **Scheduled tasks** — `schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit` run a
   prompt in its conversation on a one-off timestamp, every N minutes, or daily at `HH:MM`. Tasks live
-  under `userData/schedules/`, fire a fresh turn when due while the app is running (missed runs are
-  skipped, not replayed, and the live transcript mounts the scheduled turn immediately), and can be
-  paused, resumed or deleted from **Settings → Schedules**. Optional tools, enabled under
-  Settings → Agents.
+  in the local database (`scheduled_tasks` / `scheduled_task_runs`, run history kept forever), fire a
+  fresh turn when due while the app is running (missed runs are skipped, not replayed, and the live
+  transcript mounts the scheduled turn immediately), and are managed from the sidebar **Schedules**
+  page: card list with pause / resume / edit / delete, new-task dialog (fixed conversation) and a
+  permanent run-history viewer. Optional tools, enabled under Settings → Agents. The old
+  Settings → Schedules tab was removed in favour of that page.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic
@@ -229,8 +231,13 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Web access** — two optional tools join the same tool loop: `web_fetch` retrieves one HTTP(S)
   URL and returns its readable text (HTML is reduced to Markdown, JSON/plain text pass through;
   local and private addresses are refused, responses are capped at 2 MB and 24k characters) and
-  `web_search` runs 1–10 queries against a public search endpoint and returns title / URL / snippet
-  rows for a follow-up `web_fetch`. Both are off until selected under Settings → Agents.
+  `web_search` runs 1–10 queries and returns title / URL / snippet rows for a follow-up
+  `web_fetch`. Search providers are pluggable behind one interface and configured in
+  **Settings → Web search**: the keyless built-in search (default fallback), DeepSeek's search API
+  and Tavily (official SDK). Provider keys are AES-256-GCM encrypted with the machine key and only
+  ever shown as a mask (first 6 + last 6); the default provider, automatic fallback and "request
+  page content" behaviour are global settings. Both tools are off until selected under
+  Settings → Agents.
 - **Document reading** — `read_document` extracts text so Office attachments stop being binary
   black boxes: Word (`.docx`) plain text, Excel (`.xlsx`) every sheet as tab-separated rows,
   PowerPoint (`.pptx`) text per slide, plus plain-text formats (`csv`/`tsv`/`md`/`txt`/`json`/`yaml`).
