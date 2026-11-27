@@ -541,6 +541,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
 
     return (
       <div
+        data-workspace-panel="1"
         className="flex h-full overflow-hidden"
         style={{
           background: colorBgContainer,

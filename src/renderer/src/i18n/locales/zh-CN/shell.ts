@@ -10,7 +10,6 @@ export const zhCNShell = {
     harness: '助手'
   },
   nav: {
-    start: '开始',
     library: '资料库',
     pluginRepo: '插件仓库',
     schedules: '定时任务',

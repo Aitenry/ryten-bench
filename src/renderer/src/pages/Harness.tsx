@@ -7,7 +7,7 @@ import { useHarness } from '../contexts/harness/HarnessContextCore'
 import HarnessHeader from '../components/harness/HarnessHeader'
 import TerminalPanel from '../components/harness/TerminalPanel'
 import BrowserPanel from '../components/harness/BrowserPanel'
-import { consumeHarnessPanelRequest } from '../utils/harness/panel-launch'
+import StartPage, { type StartToolKind } from './StartPage'
 import ConversationPane from '../components/harness/ConversationPane'
 import ConversationFooter from '../components/harness/ConversationFooter'
 import SubagentInput from '../components/harness/SubagentInput'
@@ -255,6 +255,8 @@ const Harness: React.FC = () => {
   const [terminalOpen, setTerminalOpen] = useState(false)
   /** 应用内浏览器面板：与终端/工作区同一列互斥（开始页选择后打开） */
   const [browserOpen, setBrowserOpen] = useState(false)
+  /** 「开始」页：工具选择入口在对话窗口侧栏，页面占主内容区 */
+  const [startViewOpen, setStartViewOpen] = useState(false)
   /**
    * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
    *
@@ -483,27 +485,41 @@ const Harness: React.FC = () => {
     })
   }, [])
 
-  /**
-   * 开始页选择 → 跳到 /harness 后消费一次「打开哪个面板」的意图。
-   * 顶部栏不再放终端按钮；入口统一收在侧栏「开始」页。
-   */
+  /** 侧栏「开始」入口 → 打开开始页（侧栏在 AppShell 里，通过窗口事件通知本页） */
   useEffect(() => {
-    const kind = consumeHarnessPanelRequest()
-    if (!kind) return
-    if (kind === 'terminal') {
-      setTerminalOpen(true)
-      setPanelOpen(false)
-      setBrowserOpen(false)
-    } else if (kind === 'browser') {
-      setBrowserOpen(true)
-      setPanelOpen(false)
-      setTerminalOpen(false)
-    } else {
-      setPanelOpen(true)
-      setTerminalOpen(false)
-      setBrowserOpen(false)
-    }
+    const handler = (): void => setStartViewOpen(true)
+    window.addEventListener('harness-open-start', handler)
+    return () => window.removeEventListener('harness-open-start', handler)
   }, [])
+
+  // 切到别的会话：退出开始页（开始页只是工具选择，不该挡住用户点开的会话）
+  const prevStartTopicRef = useRef(currentTopicId)
+  useEffect(() => {
+    if (prevStartTopicRef.current === currentTopicId) return
+    prevStartTopicRef.current = currentTopicId
+    setStartViewOpen(false)
+  }, [currentTopicId])
+
+  /** 开始页选工具：收起开始页，直接打开右列对应面板 */
+  const handleStartSelect = useCallback(
+    (kind: StartToolKind): void => {
+      setStartViewOpen(false)
+      if (kind === 'terminal') {
+        setTerminalOpen(true)
+        setPanelOpen(false)
+        setBrowserOpen(false)
+      } else if (kind === 'browser') {
+        setBrowserOpen(true)
+        setPanelOpen(false)
+        setTerminalOpen(false)
+      } else {
+        setPanelOpen(true)
+        setTerminalOpen(false)
+        setBrowserOpen(false)
+      }
+    },
+    []
+  )
 
   /**
    * 工具卡片 → 右侧工作区面板的桥（见 contexts/WorkspaceBridgeContext）。
@@ -804,10 +820,10 @@ const Harness: React.FC = () => {
 
   /** 终端/浏览器面板的最小可读宽度（工作区面板没有文件时只有 220） */
   const TERMINAL_PANEL_MIN_WIDTH = 360
-  /** 终端或浏览器占同一列：都按「有编辑器」那一档计算宽度上下限 */
-  const sidePanelOpen = terminalOpen || browserOpen
+  /** 工作区 / 终端 / 浏览器占同一列：统一宽度上下限，切换面板不跳宽度 */
+  const anyPanelOpen = panelOpen || terminalOpen || browserOpen
   const workspaceMinWidth = panelMinWidthFor(panelHasEditor)
-  const panelMinWidth = sidePanelOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
+  const panelMinWidth = anyPanelOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
   /*
    * 面板宽度上限：比例上限（大屏会从 45% 放开到 65%）与「对话至少 MAIN_MIN_WIDTH」取小。
    * 终端面板按「有编辑器」那一档计算上限，否则会被工作区面板的 220px 无文件上限卡死。
@@ -816,7 +832,7 @@ const Harness: React.FC = () => {
    */
   const panelMaxWidth = computePanelMaxWidth({
     layoutWidth,
-    hasEditor: panelHasEditor || sidePanelOpen,
+    hasEditor: anyPanelOpen ? true : panelHasEditor,
     sidebarOpen: false,
     sidebarWidth: 0
   })
@@ -825,8 +841,8 @@ const Harness: React.FC = () => {
   // 只把宽度收敛回合法区间，保留用户拖拽结果，避免溢出出现横向滚动条
   const prevHasEditorRef = useRef(panelHasEditor)
   useEffect(() => {
-    // 终端/浏览器打开时宽度由下面的 side-panel effect 负责（否则会被「无编辑器 → 220px」压窄）
-    if (sidePanelOpen) {
+    // 任意右侧面板打开时宽度由下面统一的打开 effect 负责：三种面板共用同一宽度，不因内容跳变
+    if (anyPanelOpen) {
       setPanelWidth((prev) => clampWidth(prev, panelMinWidth, panelMaxWidth))
       return
     }
@@ -838,14 +854,14 @@ const Harness: React.FC = () => {
     setPanelWidth(
       panelHasEditor ? autoOpenPanelWidth(layoutWidth, panelMaxWidth) : PANEL_MIN_WITHOUT_EDITOR
     )
-  }, [panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth, sidePanelOpen])
+  }, [anyPanelOpen, panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth])
 
-  // 打开终端/浏览器时给一个可读的默认宽度（之前停在文件树的 220px，标题/页签全被挤扁）
-  const prevSidePanelOpenRef = useRef(sidePanelOpen)
+  // 打开任一面板时给一个可读的默认宽度；三种面板之后都保持这个宽度（统一）
+  const prevAnyPanelOpenRef = useRef(anyPanelOpen)
   useEffect(() => {
-    if (sidePanelOpen === prevSidePanelOpenRef.current) return
-    prevSidePanelOpenRef.current = sidePanelOpen
-    if (!sidePanelOpen) return
+    if (anyPanelOpen === prevAnyPanelOpenRef.current) return
+    prevAnyPanelOpenRef.current = anyPanelOpen
+    if (!anyPanelOpen) return
     setPanelWidth((prev) =>
       clampWidth(
         Math.max(prev, Math.max(TERMINAL_PANEL_MIN_WIDTH, 420)),
@@ -853,7 +869,7 @@ const Harness: React.FC = () => {
         panelMaxWidth
       )
     )
-  }, [panelMaxWidth, panelMinWidth, sidePanelOpen])
+  }, [anyPanelOpen, panelMaxWidth, panelMinWidth])
 
   const panelDraggingRef = useRef(false)
 
@@ -965,7 +981,9 @@ const Harness: React.FC = () => {
                 borderTopLeftRadius: borderRadiusLG
               }}
             >
-              {hasWorkspace === null ? null : hasWorkspace === false ? (
+              {startViewOpen ? (
+                <StartPage onSelect={handleStartSelect} />
+              ) : hasWorkspace === null ? null : hasWorkspace === false ? (
                 /* 未配置工作区：对话按工作区隔离，先引导选择目录（同「配置模型」的页内引导） */
                 <div
                   className="flex-1 flex items-center justify-center"

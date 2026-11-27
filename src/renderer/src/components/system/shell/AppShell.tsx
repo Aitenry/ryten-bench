@@ -9,7 +9,6 @@ import {
   RiBellLine,
   RiBook2Line,
   RiCalendar2Line,
-  RiCompass3Line,
   RiBrain4Line,
   RiFileAi2Line,
   RiLoader4Line,
@@ -35,7 +34,6 @@ import { formatSyncTime } from '@renderer/lattice/format'
 import NotificationList from '../NotificationList'
 import { openSettingsModal } from '../settings/settings-modal-state'
 import AssistantSidebar from './AssistantSidebar'
-import { usePtyTerminalStats } from '@renderer/hooks/usePtyTerminalStats'
 import ShellTitleBar from './ShellTitleBar'
 import type { Window } from '../../../../resource/types/window'
 
@@ -464,8 +462,6 @@ const AppShell: React.FC = () => {
   const navigate = useNavigate()
   const pluginRoutes = usePluginRoutes()
   const plugins = usePlugins()
-  /** 终端运行数：顶栏角标已移除，改到侧栏「开始」与开始页显示 */
-  const terminalAlive = usePtyTerminalStats()
 
   /**
    * 版本号取主进程的真实版本（`app-version` IPC），不再写死。
@@ -631,34 +627,6 @@ const AppShell: React.FC = () => {
           </div>
 
           <nav className="shell-nav">
-            <NavLink
-              to="/start"
-              data-shell-start="1"
-              className={({ isActive }) => `shell-nav-item${isActive ? ' active' : ''}`}
-            >
-              <RiCompass3Line size={16} />
-              {t('shell.nav.start')}
-              {terminalAlive > 0 ? (
-                <span
-                  data-shell-terminal-badge="1"
-                  style={{
-                    marginLeft: 'auto',
-                    minWidth: 16,
-                    height: 16,
-                    padding: '0 5px',
-                    borderRadius: 999,
-                    background: 'rgba(73,170,25,.16)',
-                    color: '#3f9414',
-                    fontSize: 9.5,
-                    lineHeight: '16px',
-                    textAlign: 'center',
-                    fontWeight: 600
-                  }}
-                >
-                  {terminalAlive}
-                </span>
-              ) : null}
-            </NavLink>
             <NavLink
               to="/notes"
               className={({ isActive }) => `shell-nav-item${isActive ? ' active' : ''}`}

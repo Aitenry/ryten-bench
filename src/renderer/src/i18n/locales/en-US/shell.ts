@@ -9,7 +9,6 @@ export const enUSShell: typeof zhCNShell = {
     harness: 'Assistant'
   },
   nav: {
-    start: 'Start',
     library: 'Library',
     pluginRepo: 'Plugin repository',
     schedules: 'Schedules',

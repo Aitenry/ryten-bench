@@ -384,6 +384,7 @@ export const harnessEnUS: typeof harnessZhCN = {
     /** Start page: tool launcher (sidebar "Start") */
     startPage: {
       title: 'Start',
+      entry: 'Start',
       workspace: {
         title: 'Workspace files',
         description: 'Browse files in the conversation workspace'

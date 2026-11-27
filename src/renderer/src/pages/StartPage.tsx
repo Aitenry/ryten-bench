@@ -1,9 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect } from 'react'
 import { theme } from 'antd'
-import { useNavigate } from 'react-router-dom'
 import {
-  RiApps2Line,
-  RiArrowRightSLine,
   RiCompass3Line,
   RiFolder3Line,
   RiGlobalLine,
@@ -11,40 +8,27 @@ import {
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import { usePtyTerminalStats } from '../hooks/usePtyTerminalStats'
-import { requestHarnessPanel } from '../utils/harness/panel-launch'
 
 /**
- * 「开始」页：工具选择入口（用户 2026-11-27 截图设计）。
+ * 「开始」页：工具选择入口（用户 2026-11-27 截图设计，后续按反馈移到对话窗口侧栏）。
  *
- * 顶部栏不再放终端按钮；从侧栏「开始」进入这里，选择：工作区文件 / 新建终端 / 浏览器 /
- * 更多工具。选中后面板在 `/harness` 右侧列打开（sessionStorage 传一次启动意图）。
+ * 入口在**对话窗口侧栏**（HarnessSidebar 的「开始」按钮），不是系统外壳侧栏；
+ * 页面在助手页主内容区渲染（对话区让位），选择后打开右列对应面板：
+ * 工作区文件 / 新建终端 / 浏览器。「更多工具」按用户要求移除。
  *
- * 终端卡片和侧栏角标共用 `usePtyTerminalStats()`（主进程真源 + 会话变化事件）。
+ * 终端卡片与侧栏入口共用 `usePtyTerminalStats()`（主进程真源 + 会话变化事件）。
  */
 
-interface StartCard {
-  key: 'workspace' | 'terminal' | 'browser' | 'more'
-  icon: React.ReactNode
-  title: string
-  description: string
-  shortcut?: string
-  badge?: string
+export type StartToolKind = 'workspace' | 'terminal' | 'browser'
+
+interface StartPageProps {
+  onSelect: (kind: StartToolKind) => void
 }
 
-const StartPage: React.FC = () => {
+const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
   const { token } = theme.useToken()
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const terminalAlive = usePtyTerminalStats()
-  const [moreOpen, setMoreOpen] = useState(false)
-
-  const openPanel = useCallback(
-    (kind: 'workspace' | 'terminal' | 'browser'): void => {
-      requestHarnessPanel(kind)
-      navigate('/harness')
-    },
-    [navigate]
-  )
 
   // 快捷键与卡片上的提示一致（Ctrl/Cmd + P / ` / T）
   useEffect(() => {
@@ -54,23 +38,35 @@ const StartPage: React.FC = () => {
       const key = event.key.toLowerCase()
       if (key === 'p') {
         event.preventDefault()
-        openPanel('workspace')
+        onSelect('workspace')
       } else if (key === '`') {
         event.preventDefault()
-        openPanel('terminal')
+        onSelect('terminal')
       } else if (key === 't') {
         event.preventDefault()
-        openPanel('browser')
+        onSelect('browser')
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [openPanel])
+  }, [onSelect])
 
-  const shortcut = (value: string): string =>
-    (window.navigator.platform || '').toLowerCase().includes('mac') ? `⌘ ${value}` : `Ctrl + ${value}`
+  const shortcut = useCallback(
+    (value: string): string =>
+      (window.navigator.platform || '').toLowerCase().includes('mac')
+        ? `⌘ ${value}`
+        : `Ctrl + ${value}`,
+    []
+  )
 
-  const cards: StartCard[] = [
+  const cards: Array<{
+    key: StartToolKind
+    icon: React.ReactNode
+    title: string
+    description: string
+    shortcut: string
+    badge?: string
+  }> = [
     {
       key: 'workspace',
       icon: <RiFolder3Line size={22} style={{ color: '#e8b339' }} />,
@@ -92,20 +88,7 @@ const StartPage: React.FC = () => {
       title: t('harness.startPage.browser.title'),
       description: t('harness.startPage.browser.description'),
       shortcut: shortcut('T')
-    },
-    {
-      key: 'more',
-      icon: <RiApps2Line size={22} style={{ color: token.colorTextSecondary }} />,
-      title: t('harness.startPage.more.title'),
-      description: t('harness.startPage.more.description')
     }
-  ]
-
-  const moreItems = [
-    { key: 'skills', label: t('settings.nav.skills') },
-    { key: 'mcp', label: t('settings.nav.mcp') },
-    { key: 'memory', label: t('settings.nav.memory') },
-    { key: 'agents', label: t('settings.nav.agents') }
   ]
 
   return (
@@ -143,128 +126,74 @@ const StartPage: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-start-cards="1">
-          {cards.map((card) => {
-            const selected = card.key === 'more' && moreOpen
-            return (
-              <React.Fragment key={card.key}>
-                <button
-                  type="button"
-                  data-start-card={card.key}
-                  onClick={() => {
-                    if (card.key === 'more') {
-                      setMoreOpen((prev) => !prev)
-                    } else {
-                      openPanel(card.key)
-                    }
-                  }}
+          {cards.map((card) => (
+            <button
+              key={card.key}
+              type="button"
+              data-start-card={card.key}
+              onClick={() => onSelect(card.key)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                width: '100%',
+                textAlign: 'left',
+                padding: '14px 18px',
+                minHeight: 64,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 14,
+                background: token.colorFillQuaternary,
+                cursor: 'pointer',
+                color: token.colorText
+              }}
+            >
+              <span style={{ width: 26, display: 'grid', placeItems: 'center' }}>{card.icon}</span>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                <span
                   style={{
+                    fontSize: 14.5,
+                    fontWeight: 600,
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 14,
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '14px 18px',
-                    minHeight: 64,
-                    border: `1px solid ${selected ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
-                    borderRadius: 14,
-                    background: token.colorFillQuaternary,
-                    cursor: 'pointer',
-                    color: token.colorText,
-                    transition: 'border-color .15s ease, background .15s ease'
+                    gap: 6
                   }}
                 >
-                  <span style={{ width: 26, display: 'grid', placeItems: 'center' }}>
-                    {card.icon}
-                  </span>
-                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                  {card.title}
+                  {card.badge ? (
                     <span
+                      data-start-terminal-badge="1"
                       style={{
-                        fontSize: 14.5,
-                        fontWeight: 600,
-                        display: 'flex',
+                        display: 'inline-flex',
                         alignItems: 'center',
-                        gap: 6
+                        height: 18,
+                        padding: '0 7px',
+                        borderRadius: 999,
+                        background: 'rgba(73,170,25,.14)',
+                        color: '#3f9414',
+                        fontSize: 10,
+                        fontWeight: 600
                       }}
                     >
-                      {card.title}
-                      {card.key === 'more' ? (
-                        <RiArrowRightSLine
-                          size={15}
-                          style={{
-                            transform: moreOpen ? 'rotate(90deg)' : 'none',
-                            transition: 'transform .15s ease',
-                            color: token.colorTextTertiary
-                          }}
-                        />
-                      ) : null}
-                      {card.badge ? (
-                        <span
-                          data-start-terminal-badge="1"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            height: 18,
-                            padding: '0 7px',
-                            borderRadius: 999,
-                            background: 'rgba(73,170,25,.14)',
-                            color: '#3f9414',
-                            fontSize: 10,
-                            fontWeight: 600
-                          }}
-                        >
-                          {card.badge}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span style={{ fontSize: 11.5, color: token.colorTextTertiary }}>
-                      {card.description}
-                    </span>
-                  </span>
-                  {card.shortcut ? (
-                    <span
-                      style={{
-                        marginLeft: 'auto',
-                        fontSize: 11,
-                        color: token.colorTextTertiary,
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
-                      {card.shortcut}
+                      {card.badge}
                     </span>
                   ) : null}
-                </button>
-                {selected
-                  ? moreItems.map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        data-start-more-item={item.key}
-                        onClick={() => navigate(`/more/${item.key}`)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          height: 42,
-                          marginLeft: 40,
-                          padding: '0 14px',
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          borderRadius: 10,
-                          background: token.colorFillQuaternary,
-                          color: token.colorTextSecondary,
-                          fontSize: 12.5,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {item.label}
-                        <RiArrowRightSLine
-                          size={14}
-                          style={{ marginLeft: 'auto', color: token.colorTextTertiary }}
-                        />
-                      </button>
-                    ))
-                  : null}
-              </React.Fragment>
-            )
-          })}
+                </span>
+                <span style={{ fontSize: 11.5, color: token.colorTextTertiary }}>
+                  {card.description}
+                </span>
+              </span>
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  fontSize: 11,
+                  color: token.colorTextTertiary,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {card.shortcut}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
     </div>

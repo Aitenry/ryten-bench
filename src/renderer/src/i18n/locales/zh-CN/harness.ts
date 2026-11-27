@@ -379,6 +379,7 @@ export const harnessZhCN = {
     /** 开始页：工具选择入口（侧栏「开始」） */
     startPage: {
       title: '开始',
+      entry: '开始',
       workspace: {
         title: '工作区文件',
         description: '浏览会话工作区的文件'
