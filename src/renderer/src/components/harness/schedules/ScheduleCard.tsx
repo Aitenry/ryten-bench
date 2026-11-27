@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 定时任务卡片（侧边栏「定时任务」页）。
  *
  * 版式对齐设计稿：标题 + 状态 pill，**所有操作图标收在右上角 `⋯` 之前**
@@ -16,9 +16,9 @@ import {
   RiTimeLine
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
-import type { TFunction } from 'i18next'
 import type { ScheduleView } from '../../../api/harness'
 import { formatDateTime, formatRelativeDay } from '../../../utils/schedules/format'
+import { describeScheduleRule } from './describe-rule'
 
 export interface ScheduleCardActions {
   onPause: (task: ScheduleView) => void
@@ -31,17 +31,6 @@ export interface ScheduleCardActions {
 }
 
 const ICON_SIZE = 14
-
-/** 规则一句话（每天 09:00 / 每 30 分钟 / 一次性 12-05 14:00） */
-export function describeScheduleRule(task: ScheduleView, t: TFunction): string {
-  if (task.when.kind === 'daily') {
-    return t('schedulesPage.ruleDaily', { time: task.when.time })
-  }
-  if (task.when.kind === 'every') {
-    return t('schedulesPage.ruleEvery', { minutes: String(task.when.minutes) })
-  }
-  return t('schedulesPage.ruleOnce', { time: formatDateTime(task.when.at) })
-}
 
 const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & ScheduleCardActions> = ({
   task,

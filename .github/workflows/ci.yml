@@ -47,5 +47,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # 只拦 error（prettier 格式告警是存量，见 docs/audit-2026-11；--quiet 不报 warning）
+      - name: Lint (errors only)
+        run: pnpm lint:errors
+
       - name: Unit tests
         run: pnpm test:all

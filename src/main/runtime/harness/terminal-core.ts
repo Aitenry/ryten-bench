@@ -93,10 +93,14 @@ export function normalizeCommand(
 
 /** 清理 ANSI 转义（颜色、光标控制、OSC 标题等），保留可读文本 */
 export function stripAnsi(text: string): string {
+  // ANSI 转义序列本来就必须由 ESC(0x1b)/BEL(0x07) 等控制字符组成，
+  // `no-control-regex` 在这里是误报：保留行内 disable 比放宽全局规则更精确。
+  /* eslint-disable no-control-regex */
   return text
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
     .replace(/\u001b[@-Z\\-_]/g, '')
+  /* eslint-enable no-control-regex */
 }
 
 /**
