@@ -160,6 +160,8 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
             })
           } catch (err) {
             console.error('Failed to flush doc on unmount:', err)
+            // 兑现注释里的承诺：冲刷失败必须让用户知道，否则切换文档会静默丢正文
+            viewMessage('doc-flush-save', 'error', t('notes.doc.flushFailed'))
           }
         }
       }

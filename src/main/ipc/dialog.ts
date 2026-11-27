@@ -1,3 +1,4 @@
+import logger from 'electron-log'
 import { dialog, ipcMain } from 'electron'
 import * as fs from 'fs'
 import { mainMessages } from '../i18n'
@@ -44,7 +45,7 @@ export function registerDialogIpc(): void {
 
       return { dataUrl: filePath, fileName, isImage: false }
     } catch (error) {
-      console.error('Error selecting file:', error)
+      logger.error('Error selecting file:', error)
       throw error
     }
   })
@@ -68,7 +69,7 @@ export function registerDialogIpc(): void {
       const fileName = filePath.split(/[\\/]/).pop() || 'file'
       return { fileName, filePath }
     } catch (error) {
-      console.error('Error selecting text file:', error)
+      logger.error('Error selecting text file:', error)
       throw error
     }
   })

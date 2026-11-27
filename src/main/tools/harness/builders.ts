@@ -1,3 +1,4 @@
+import logger from 'electron-log'
 import type { StructuredToolInterface } from '../../ai/tools'
 import type { SubAgentConfig } from '../../services/harness/types'
 import {
@@ -180,7 +181,7 @@ function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[
   try {
     return mcpToolProvider()
   } catch (err) {
-    console.warn('[Harness] Failed to read MCP tools:', err)
+    logger.warn('[Harness] Failed to read MCP tools:', err)
     return { tools: [], infos: [] }
   }
 }
@@ -318,7 +319,7 @@ function toolSources(): {
  * 工具集退化为本地两个工具，**不抛错**。MCP 同理：服务器断开或停用时其工具即刻消失。
  */
 function resolveToolBuilders(): Record<string, ToolFactory> {
-  return mergeToolSources(toolSources()).builders
+  return mergeToolSources({ ...toolSources(), onWarn: (message) => logger.warn(message) }).builders
 }
 
 /**
@@ -335,7 +336,7 @@ function resolveToolBuilders(): Record<string, ToolFactory> {
  * 唯一入口是输入框下方的 MCP 选择器；分组标记 `mcp` 只作为**历史配置兼容**保留展开逻辑。
  */
 export function listAvailableTools(): ToolInfo[] {
-  const infos = mergeToolSources(toolSources()).infos
+  const infos = mergeToolSources({ ...toolSources(), onWarn: (message) => logger.warn(message) }).infos
   const hidden = new Set<string>([
     ...SCHEDULE_TOOL_NAMES,
     ...MCP_RESOURCE_TOOL_INFOS.map((i) => i.name)
@@ -427,7 +428,7 @@ function buildScopedResourceTools(toolNames: string[]): StructuredToolInterface[
   try {
     return buildMcpResourceTools(mcpResourceOps, getMcpToolTexts(), allowed)
   } catch (err) {
-    console.warn('[Harness] Failed to build MCP resource tools:', err)
+    logger.warn('[Harness] Failed to build MCP resource tools:', err)
     return []
   }
 }

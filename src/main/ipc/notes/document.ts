@@ -1,3 +1,4 @@
+import logger from 'electron-log'
 import { dialog } from 'electron'
 import * as fs from 'fs'
 import mammoth from 'mammoth'
@@ -36,7 +37,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       return await getDocById(id)
     } catch (error) {
-      console.error('Error in notes:doc-get-by-id:', error)
+      logger.error('Error in notes:doc-get-by-id:', error)
       throw error
     }
   },
@@ -50,7 +51,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       return await getAllDocs(page, pageSize, excludeWikiId, search)
     } catch (error) {
-      console.error('Error in notes:doc-get-all:', error)
+      logger.error('Error in notes:doc-get-all:', error)
       throw error
     }
   },
@@ -59,7 +60,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       return await getDocPage(query, page, pageSize)
     } catch (error) {
-      console.error('Error in notes:doc-page-get:', error)
+      logger.error('Error in notes:doc-page-get:', error)
       throw error
     }
   },
@@ -73,7 +74,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       return await addDoc(doc)
     } catch (error) {
-      console.error('Error in notes:doc-add:', error)
+      logger.error('Error in notes:doc-add:', error)
       throw error
     }
   },
@@ -88,7 +89,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       return await updateDoc(id, updates)
     } catch (error) {
-      console.error('Error in notes:doc-update:', error)
+      logger.error('Error in notes:doc-update:', error)
       throw error
     }
   },
@@ -97,11 +98,11 @@ export const documentIpcHandlers: IpcHandlerMap = {
     try {
       const result = await deleteDoc(id)
       deleteNodePosition(`doc-${id}`).catch((err) =>
-        console.error('Failed to delete node position for doc:', err)
+        logger.error('Failed to delete node position for doc:', err)
       )
       return result
     } catch (error) {
-      console.error('Error in notes:doc-delete:', error)
+      logger.error('Error in notes:doc-delete:', error)
       throw error
     }
   },
@@ -116,13 +117,13 @@ export const documentIpcHandlers: IpcHandlerMap = {
       // 清理对应的节点位置
       for (const id of deletedIds) {
         deleteNodePosition(`doc-${id}`).catch((err) =>
-          console.error('Failed to delete node position for doc:', err)
+          logger.error('Failed to delete node position for doc:', err)
         )
       }
 
       return result
     } catch (error) {
-      console.error('Error in notes:doc-delete-by-time-range:', error)
+      logger.error('Error in notes:doc-delete-by-time-range:', error)
       throw error
     }
   },
@@ -184,7 +185,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
 
       return { title, content }
     } catch (error) {
-      console.error('Error in notes:doc-import:', error)
+      logger.error('Error in notes:doc-import:', error)
       throw error
     }
   },
@@ -208,7 +209,7 @@ export const documentIpcHandlers: IpcHandlerMap = {
       fs.writeFileSync(result.filePath, doc.content || '', 'utf-8')
       return true
     } catch (error) {
-      console.error('Error in notes:doc-export:', error)
+      logger.error('Error in notes:doc-export:', error)
       throw error
     }
   }

@@ -1638,8 +1638,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       await loadWorkspaces()
     } catch (err) {
       console.error('Failed to create workspace:', err)
+      viewMessage('workspace-create-failed', 'error', t('harness.sidebar.workspaceCreateFailed'), 5)
     }
-  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode, viewReplacedRunningTopic])
+  }, [loadWorkspaces, onNewHarness, onOpenHarness, t, rememberWork, mode, viewReplacedRunningTopic, viewMessage])
 
   const handleDeleteWorkspace = useCallback(
     (ws: WorkspaceRow): void => {
@@ -1697,11 +1698,26 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             await loadWorkspaces()
           } catch (err) {
             console.error('Failed to delete workspace:', err)
+            viewMessage(
+              'workspace-delete-failed',
+              'error',
+              t('harness.sidebar.workspaceDeleteFailed'),
+              5
+            )
           }
         }
       })
     },
-    [activeWorkspaceId, modal, loadWorkspaces, onNewHarness, t, isNonUserWorkspace, rememberWork]
+    [
+      activeWorkspaceId,
+      modal,
+      loadWorkspaces,
+      onNewHarness,
+      t,
+      isNonUserWorkspace,
+      rememberWork,
+      viewMessage
+    ]
   )
 
   /**

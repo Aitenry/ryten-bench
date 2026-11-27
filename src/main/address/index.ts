@@ -1,3 +1,4 @@
+import logger from 'electron-log'
 import axios from 'axios'
 import { getMainLanguage } from '../i18n'
 
@@ -27,7 +28,7 @@ export const getIp = async (): Promise<IpApiResponse | null> => {
     })
     return response.data
   } catch (error) {
-    console.error('Error fetching IP data:', (error as Error).message)
+    logger.error('Error fetching IP data:', (error as Error).message)
     return null
   }
 }

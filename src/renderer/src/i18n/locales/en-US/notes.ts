@@ -85,7 +85,8 @@ export const notesEnUS: typeof notesZhCN = {
       notFound: 'Document not found or deleted',
       empty: 'No documents',
       propsSaved: 'Document properties saved',
-      propsSaveFailed: 'Failed to save document properties'
+      propsSaveFailed: 'Failed to save document properties',
+      flushFailed: 'Saving on document switch failed — recent edits may not be saved'
     },
     /* Todos */
     todo: {

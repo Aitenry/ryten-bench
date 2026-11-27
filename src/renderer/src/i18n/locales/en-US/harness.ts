@@ -111,6 +111,8 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceRevealInFileManager: 'Show in file manager',
       workspaceSwitchFailed:
         'Could not switch workspace. Check that the folder still exists and try again.',
+      workspaceCreateFailed: 'Failed to create the workspace — check that the folder is writable and retry',
+      workspaceDeleteFailed: 'Failed to delete the workspace — please retry',
       workspaceDelete: 'Delete workspace',
       workspaceDeleteConfirmTitle: 'Delete workspace',
       workspaceDeleteConfirmContent:

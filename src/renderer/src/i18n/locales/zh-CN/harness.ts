@@ -118,6 +118,8 @@ export const harnessZhCN = {
       workspaceRevealInFinder: '在访达中显示',
       workspaceRevealInFileManager: '在文件管理器中显示',
       workspaceSwitchFailed: '切换工作区失败：请检查目录是否仍然存在，然后重试',
+    workspaceCreateFailed: '新建工作区失败：请检查目录是否可写，然后重试',
+    workspaceDeleteFailed: '删除工作区失败：请稍后重试',
       workspaceDelete: '删除工作区',
       workspaceDeleteConfirmTitle: '删除工作区',
       workspaceDeleteConfirmContent:

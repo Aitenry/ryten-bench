@@ -90,7 +90,8 @@ export const notesZhCN = {
       notFound: '文档不存在或已被删除',
       empty: '暂无文档',
       propsSaved: '文档属性已保存',
-      propsSaveFailed: '保存文档属性失败'
+      propsSaveFailed: '保存文档属性失败',
+      flushFailed: '切换文档时保存失败，刚才的修改可能没有保存'
     },
     /* 待办 */
     todo: {

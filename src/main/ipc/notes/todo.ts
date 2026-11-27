@@ -37,7 +37,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getTodoItemById(id)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-by-id:', error)
+      logger.error('Error in notes:todo-items-get-by-id:', error)
       throw error
     }
   },
@@ -46,7 +46,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getTodoItemByTitle(title)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-by-title:', error)
+      logger.error('Error in notes:todo-items-get-by-title:', error)
       throw error
     }
   },
@@ -55,7 +55,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getTodoItemsByPriority(priority)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-by-priority:', error)
+      logger.error('Error in notes:todo-items-get-by-priority:', error)
       throw error
     }
   },
@@ -70,7 +70,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
       }
       return await getTodoItemsByStatus(normalized)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-by-completed-status:', error)
+      logger.error('Error in notes:todo-items-get-by-completed-status:', error)
       throw error
     }
   },
@@ -79,7 +79,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getAllTodoItems()
     } catch (error) {
-      console.error('Error in notes:todo-items-get-schedule:', error)
+      logger.error('Error in notes:todo-items-get-schedule:', error)
       throw error
     }
   },
@@ -88,7 +88,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getTodoItemsPaginated(page, pageSize)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-paginated:', error)
+      logger.error('Error in notes:todo-items-get-paginated:', error)
       throw error
     }
   },
@@ -97,7 +97,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getTodoItemsByDueDate(dueDate)
     } catch (error) {
-      console.error('Error in notes:todo-items-get-by-due-date:', error)
+      logger.error('Error in notes:todo-items-get-by-due-date:', error)
       throw error
     }
   },
@@ -106,7 +106,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await addTodoItem(todoItem)
     } catch (error) {
-      console.error('Error in notes:todo-items-add:', error)
+      logger.error('Error in notes:todo-items-add:', error)
       throw error
     }
   },
@@ -119,7 +119,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
       }
       return await updateTodoItem(id, updates)
     } catch (error) {
-      console.error('Error in notes:todo-items-update:', error)
+      logger.error('Error in notes:todo-items-update:', error)
       throw error
     }
   },
@@ -136,7 +136,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
       )
       return result
     } catch (error) {
-      console.error('Error in notes:todo-items-delete:', error)
+      logger.error('Error in notes:todo-items-delete:', error)
       throw error
     }
   },
@@ -146,7 +146,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await addDependency(taskId, dependsOnTaskId)
     } catch (error) {
-      console.error('Error in notes:task-deps-add:', error)
+      logger.error('Error in notes:task-deps-add:', error)
       throw error
     }
   },
@@ -155,7 +155,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await deleteDependency(taskId, dependsOnTaskId)
     } catch (error) {
-      console.error('Error in notes:task-deps-delete:', error)
+      logger.error('Error in notes:task-deps-delete:', error)
       throw error
     }
   },
@@ -164,7 +164,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getAllDependencies()
     } catch (error) {
-      console.error('Error in notes:task-deps-get-all:', error)
+      logger.error('Error in notes:task-deps-get-all:', error)
       throw error
     }
   },
@@ -173,7 +173,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     try {
       return await getAllTasksWithDependencies()
     } catch (error) {
-      console.error('Error in notes:task-deps-get-with-tasks:', error)
+      logger.error('Error in notes:task-deps-get-with-tasks:', error)
       throw error
     }
   }

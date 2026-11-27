@@ -1,3 +1,4 @@
+import logger from 'electron-log'
 import type { IpcHandlerMap } from '../register'
 import { deleteNodePosition } from '../../database/mapper/notes/node-position'
 import {
@@ -29,7 +30,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await getWikiById(id)
     } catch (error) {
-      console.error('Error in notes:wiki-get-by-id:', error)
+      logger.error('Error in notes:wiki-get-by-id:', error)
       throw error
     }
   },
@@ -38,7 +39,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await getAllWikis(page, pageSize)
     } catch (error) {
-      console.error('Error in notes:wiki-get-all:', error)
+      logger.error('Error in notes:wiki-get-all:', error)
       throw error
     }
   },
@@ -49,7 +50,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await addWiki(wiki)
     } catch (error) {
-      console.error('Error in notes:wiki-add:', error)
+      logger.error('Error in notes:wiki-add:', error)
       throw error
     }
   },
@@ -61,7 +62,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await updateWiki(id, updates)
     } catch (error) {
-      console.error('Error in notes:wiki-update:', error)
+      logger.error('Error in notes:wiki-update:', error)
       throw error
     }
   },
@@ -70,11 +71,11 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       const result = await deleteWiki(id)
       deleteNodePosition(`wiki-${id}`).catch((err) =>
-        console.error('Failed to delete node position for wiki:', err)
+        logger.error('Failed to delete node position for wiki:', err)
       )
       return result
     } catch (error) {
-      console.error('Error in notes:wiki-delete:', error)
+      logger.error('Error in notes:wiki-delete:', error)
       throw error
     }
   },
@@ -83,7 +84,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await getDirectoriesByWikiId(wikiId)
     } catch (error) {
-      console.error('Error in notes:wiki-directories-get:', error)
+      logger.error('Error in notes:wiki-directories-get:', error)
       throw error
     }
   },
@@ -94,7 +95,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await addDirectory(directory)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-add:', error)
+      logger.error('Error in notes:wiki-directory-add:', error)
       throw error
     }
   },
@@ -106,7 +107,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await updateDirectory(id, updates)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-update:', error)
+      logger.error('Error in notes:wiki-directory-update:', error)
       throw error
     }
   },
@@ -115,7 +116,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await deleteDirectory(id)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-delete:', error)
+      logger.error('Error in notes:wiki-directory-delete:', error)
       throw error
     }
   },
@@ -124,7 +125,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await getDocsByDirectoryId(directoryId)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-docs-get:', error)
+      logger.error('Error in notes:wiki-directory-docs-get:', error)
       throw error
     }
   },
@@ -137,7 +138,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await addDocToDirectory(directoryId, noteId, sortOrder)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-note-add:', error)
+      logger.error('Error in notes:wiki-directory-note-add:', error)
       throw error
     }
   },
@@ -146,7 +147,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await removeDocFromDirectory(directoryId, docId)
     } catch (error) {
-      console.error('Error in notes:wiki-directory-doc-remove:', error)
+      logger.error('Error in notes:wiki-directory-doc-remove:', error)
       throw error
     }
   },
@@ -155,7 +156,7 @@ export const wikiIpcHandlers: IpcHandlerMap = {
     try {
       return await getDirectoriesByDocId(docId)
     } catch (error) {
-      console.error('Error in notes:wiki-doc-directories-get:', error)
+      logger.error('Error in notes:wiki-doc-directories-get:', error)
       throw error
     }
   }
