@@ -23,6 +23,15 @@ export const zhCNSessionToolTexts = {
     truncated: '…（单条过长，已截断）',
     notFound: '找不到话题 {{topicId}}（或它不属于当前工作区）。',
     failed: '读取历史会话失败: {{message}}'
+  },
+  conversationList: {
+    header: '## 最近会话（{{count}}）',
+    empty: '当前工作区还没有会话记录。',
+    item: '- 话题 {{topicId}}「{{title}}」（更新于 {{updated}}）{{archivedTag}}',
+    archivedTag: '[已归档]',
+    hint: '用 conversation_read({ topicId }) 读取某个会话的最近消息。',
+    none: '—',
+    failed: '读取会话列表失败: {{message}}'
   }
 }
 
@@ -44,6 +53,15 @@ export const enUSSessionToolTexts: typeof zhCNSessionToolTexts = {
     truncated: '… (truncated, message too long)',
     notFound: 'Topic {{topicId}} was not found (or belongs to another workspace).',
     failed: 'Failed to read the conversation: {{message}}'
+  },
+  conversationList: {
+    header: '## Recent conversations ({{count}})',
+    empty: 'This workspace has no conversations yet.',
+    item: '- topic {{topicId}} "{{title}}" (updated {{updated}}){{archivedTag}}',
+    archivedTag: '[archived]',
+    hint: 'Use conversation_read({ topicId }) to read the most recent messages of a conversation.',
+    none: '—',
+    failed: 'Failed to read the conversation list: {{message}}'
   }
 }
 

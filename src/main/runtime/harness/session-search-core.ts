@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 历史会话检索的纯格式化逻辑（无 electron / DB 依赖，可离线测试）。
  *
  * 对照 DSH 的 `dsh-tool-session-query`（session_search / session_event_read 一族）：
@@ -35,6 +35,24 @@ export interface SessionToolTexts {
     notFound: string
     failed: string
   }
+  conversationList: {
+    header: string
+    empty: string
+    item: string
+    archivedTag: string
+    hint: string
+    none: string
+    failed: string
+  }
+}
+
+/** 一条会话列表项（工具层从话题行投影） */
+export interface ConversationListEntry {
+  topicId: number
+  title: string
+  /** 更新时间（ISO；缺失则显示 none） */
+  updatedAt: string | null
+  archived: boolean
 }
 
 /** 一条待展示的消息（conversation_read 用） */
@@ -100,8 +118,7 @@ export function formatSessionSearch(
 }
 
 /** 单个话题最近消息 */
-export function formatConversation(
-  format: Format,
+export function formatConversation(  format: Format,
   texts: SessionToolTexts,
   args: {
     topicId: number
@@ -129,4 +146,30 @@ export function formatConversation(
     })
   })
   return [header, ...lines].join('\n\n')
+}
+
+/**
+ * 会话列表（`conversation_list`）：按更新时间倒序展示最近的话题。
+ *
+ * 与搜索互补：先浏览再按 id 读取；归档话题保留但带标记（它们仍可被 conversation_read 读取）。
+ */
+export function formatConversationList(
+  format: Format,
+  texts: SessionToolTexts,
+  entries: ConversationListEntry[]
+): string {
+  const header = format(texts.conversationList.header, { count: String(entries.length) })
+  if (entries.length === 0) {
+    return `${header}\n\n${texts.conversationList.empty}`
+  }
+  const items = entries.map((entry) => {
+    const updated = entry.updatedAt ? entry.updatedAt.replace('T', ' ').slice(0, 16) : texts.conversationList.none
+    return format(texts.conversationList.item, {
+      topicId: String(entry.topicId),
+      title: entry.title || texts.sessionSearch.none,
+      updated,
+      archivedTag: entry.archived ? ` ${texts.conversationList.archivedTag}` : ''
+    })
+  })
+  return [header, ...items, '', texts.conversationList.hint].join('\n')
 }

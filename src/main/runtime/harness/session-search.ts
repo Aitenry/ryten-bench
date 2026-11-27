@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 历史会话检索工具：`session_search`（跨话题搜消息）与 `conversation_read`（读某话题最近消息）。
  *
  * 对照 DSH 的 `dsh-tool-session-query`：DSH 的查询建立在事件溯源会话日志上；本项目以
@@ -13,13 +13,16 @@ import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { mainFormat } from '../../i18n'
 import { getSessionToolTexts } from '../../i18n/tool-results-session'
 import {
+  getAllTopics,
   getDialoguesByTopicId,
   getTopicById,
   searchDialogues
 } from '../../database/mapper/harness/harness'
 import {
   formatConversation,
+  formatConversationList,
   formatSessionSearch,
+  type ConversationListEntry,
   type SessionSearchHit
 } from './session-search-core'
 
@@ -106,5 +109,41 @@ export function buildSessionSearchTools(workspaceId: number): StructuredToolInte
     }
   )
 
-  return [sessionSearch, conversationRead]
+  const conversationList = tool(
+    async ({ limit }) => {
+      const texts = getSessionToolTexts()
+      try {
+        const topics = await getAllTopics(workspaceId)
+        const entries: ConversationListEntry[] = topics.slice(0, limit ?? 10).map((topic) => ({
+          topicId: topic.id,
+          title: topic.title ?? '',
+          updatedAt: topic.updated_at ? new Date(topic.updated_at).toISOString() : null,
+          archived: topic.archived_at !== null
+        }))
+        return formatConversationList(mainFormat, texts, entries)
+      } catch (err) {
+        return mainFormat(texts.conversationList.failed, {
+          message: err instanceof Error ? err.message : String(err)
+        })
+      }
+    },
+    {
+      name: 'conversation_list',
+      isConcurrencySafe: () => true,
+      timeoutMs: 30_000,
+      description:
+        'List the most recent conversations of this workspace (id, title, last update, archived flag), newest first. Use it to browse before reading one with conversation_read; session_search searches message text instead.',
+      schema: z.object({
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(30)
+          .optional()
+          .describe('How many conversations to list (default 10)')
+      })
+    }
+  )
+
+  return [sessionSearch, conversationRead, conversationList]
 }

@@ -109,6 +109,7 @@ const READ_TOOLS = new Set([
   // 历史会话检索（只读）
   'session_search',
   'conversation_read',
+  'conversation_list',
   // 持久终端的读取/清理（open/send 是写类；读取与关闭永远允许）
   'terminal_read',
   'terminal_close',

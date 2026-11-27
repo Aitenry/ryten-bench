@@ -156,6 +156,7 @@ export const zhCN = {
     terminal_list: { label: '终端列表', description: '查看当前话题的终端会话' },
     run_code: { label: '代码编排', description: '写 JS 批量调用只读工具并返回结果（仅完全权限档）' },
     list_subagent_models: { label: '模型路由', description: '列出已启用的 provider:model 路由与能力' },
+    conversation_list: { label: '会话列表', description: '列出当前工作区的最近会话' },
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -332,6 +333,10 @@ export const enUS: typeof zhCN = {
     list_subagent_models: {
       label: 'Model routes',
       description: 'List enabled provider:model routes and their capabilities'
+    },
+    conversation_list: {
+      label: 'List conversations',
+      description: 'List the recent conversations of this workspace'
     },
     manage_materials: {
       label: 'Materials',
