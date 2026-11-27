@@ -83,7 +83,9 @@ const WRITE_TOOLS = new Set([
   'str_replace_editor',
   // 持久终端：open/send 会以用户身份执行任意命令（工具层已限制只用 danger 档）
   'terminal_open',
-  'terminal_send'
+  'terminal_send',
+  // PTC：模型写的 JS 在进程内执行（工具层已限制只用 danger 档）
+  'run_code'
 ])
 
 /** 执行类工具 */

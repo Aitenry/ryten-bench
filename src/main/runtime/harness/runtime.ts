@@ -24,6 +24,7 @@ import { buildSkillsPromptSection, loadSkills, type SkillInfo } from './skills-c
 import { buildSkillTool } from './skill-tool'
 import { buildSessionSearchTools } from './session-search'
 import { buildTerminalTools } from './terminal-tools'
+import { buildRunCodeTool } from './run-code-tool'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
 import { createTaskTool } from './subagent'
 import { createAgentAuthoringTool } from './subagent-authoring'
@@ -206,34 +207,37 @@ export class Runtime {
    * 组装处就被包住，否则「新加一个工具」就会悄悄绕过沙箱。
    */
   private buildAllTools(topicId: number): StructuredToolInterface[] {
-    return this.guard(
-      [
-        ...this.opts.tools,
-        ...this.fsTools,
-        // 历史会话检索（跨话题搜索 + 按话题读取）：只在有工作区的会话里挂载
-        ...(this.opts.workspaceId > 0 ? buildSessionSearchTools(this.opts.workspaceId) : []),
-        // 持久终端：只在有工作区时挂载；open/send 由工具层限制在 danger-full-access 档
-        ...buildTerminalTools({ workspacePath: this.opts.workspacePath }),
-        ...buildTodoTools(todoStore, topicId),
-        ...buildGoalTools(goalStore, topicId),
-        // 计划模式：退出工具只在激活时披露（与规划指引同时出现）
-        ...(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)
-          ? [buildExitPlanModeTool(topicId)]
-          : []),
-        ...buildJobTools(jobsRegistry, topicId),
-        buildAskUserTool(topicId),
-        ...buildSubagentControlTools(subagentSessions, topicId),
-        // 共享任务板（opt-in）：仅在话题开启团队协作时注入
-        ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
-        this.workflowTool,
-        ...(this.mnemon ? this.mnemon.tools : []),
-        // 技能：系统提示词只放索引，正文由 skill 工具按需加载（没有技能时不挂）
-        ...(this.skills.length > 0 ? [buildSkillTool(this.skills)] : []),
-        ...(this.taskTool ? [this.taskTool] : []),
-        ...(this.authoringTool ? [this.authoringTool] : [])
-      ],
-      topicId
-    )
+    const tools: StructuredToolInterface[] = [
+      ...this.opts.tools,
+      ...this.fsTools,
+      // 历史会话检索（跨话题搜索 + 按话题读取）：只在有工作区的会话里挂载
+      ...(this.opts.workspaceId > 0 ? buildSessionSearchTools(this.opts.workspaceId) : []),
+      // 持久终端：只在有工作区时挂载；open/send 由工具层限制在 danger-full-access 档
+      ...buildTerminalTools({ workspacePath: this.opts.workspacePath }),
+      ...buildTodoTools(todoStore, topicId),
+      ...buildGoalTools(goalStore, topicId),
+      // 计划模式：退出工具只在激活时披露（与规划指引同时出现）
+      ...(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)
+        ? [buildExitPlanModeTool(topicId)]
+        : []),
+      ...buildJobTools(jobsRegistry, topicId),
+      buildAskUserTool(topicId),
+      ...buildSubagentControlTools(subagentSessions, topicId),
+      // 共享任务板（opt-in）：仅在话题开启团队协作时注入
+      ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
+      this.workflowTool,
+      ...(this.mnemon ? this.mnemon.tools : []),
+      // 技能：系统提示词只放索引，正文由 skill 工具按需加载（没有技能时不挂）
+      ...(this.skills.length > 0 ? [buildSkillTool(this.skills)] : []),
+      ...(this.taskTool ? [this.taskTool] : []),
+      ...(this.authoringTool ? [this.authoringTool] : [])
+    ]
+    // PTC（run_code）要在**全部工具装配完成之后**再建：它把只读工具桥接给模型代码，
+    // 必须能看到最终列表（且排除自身）。只在有工作区时挂载，与 terminal 一致。
+    if (this.opts.workspacePath) {
+      tools.push(buildRunCodeTool({ availableTools: tools }))
+    }
+    return this.guard(tools, topicId)
   }
 
   /** 子代理工具（按声明的工具名从系统工具注册表独立构建）——同样过闸门 */

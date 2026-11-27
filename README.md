@@ -140,6 +140,13 @@ from the hub or from a local package, and both paths end in the same host instal
   marker, splits output incrementally, keeps a bounded 256 KB ring buffer and terminates the whole
   process tree on close, on 10 minutes of idleness and on app quit. Because the shell is not
   sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
+- **Programmable tool calls (PTC)** — `run_code` runs a JavaScript snippet in a `node:vm` context
+  where `await tools.<name>(args)` calls the read-only tools (`read_file`, `grep`, `glob`, `ls`,
+  `read_image`, `web_fetch`, `web_search`, `session_search`, …), so the model can loop, filter and
+  aggregate results in one call instead of many round trips. Console output and the returned value
+  are captured (capped at 20k/50k characters), synchronous work is limited to 5 s, the whole call to
+  120 s with at most 200 tool calls. `node:vm` is not a security boundary, so like the terminal it
+  only works in the **full access** permission mode.
 - **Parallel & bounded tool calls** — when one model reply requests several read-only calls (read,
   glob, grep, `web_fetch`, …), they run concurrently instead of one after another; any write,
   command or unknown call forms a barrier and keeps the reply's order. Tools may declare a
