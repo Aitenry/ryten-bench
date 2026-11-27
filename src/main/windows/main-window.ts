@@ -70,6 +70,48 @@ const CONSOLE_WARN_REPEAT_SUMMARY_AT = 100
 const consoleWarnSeen = new Map<string, { count: number; lastAt: number }>()
 
 /**
+ * 允许转交操作系统的站外链接协议白名单。
+ *
+ * 为什么需要：聊天正文 / 网页抓取结果里的链接会经 `setWindowOpenHandler` 与
+ * `will-navigate` 交给 `shell.openExternal`，而 Windows 上 `file:`、`ms-msdt:`、
+ * `search-ms:`、`smb://` 等会被系统协议处理器直接接管（Electron 安全清单明确要求
+ * 对 openExternal 做 scheme 白名单）。这里只放行浏览器语义的三种协议，其余拒绝并留日志。
+ */
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
+
+/** 解析 URL；非法 URL 返回 null（不抛错，调用方按"拒绝"处理） */
+function parseUrlOrNull(url: string): URL | null {
+  try {
+    return new URL(url)
+  } catch {
+    return null
+  }
+}
+
+/** 同源判断：用于开发态渲染页导航（`startsWith` 会把 `localhost:5173.evil.com` 误判为同源） */
+function isSameOrigin(url: string, origin: string): boolean {
+  const target = parseUrlOrNull(url)
+  const base = parseUrlOrNull(origin)
+  return Boolean(target && base && target.origin === base.origin)
+}
+
+/**
+ * 把站外链接交给系统浏览器：只放行白名单协议。
+ *
+ * 日志只记协议名、不记完整 URL：链接查询串里可能带 OAuth token / 分享密钥。
+ */
+function openExternalIfAllowed(url: string, context: string): void {
+  const parsed = parseUrlOrNull(url)
+  if (!parsed || !ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+    logger.warn(`[Window] Blocked external URL (${context}) protocol=${parsed?.protocol ?? 'invalid'}`)
+    return
+  }
+  shell
+    .openExternal(parsed.toString())
+    .catch((err) => logger.warn(`[Window] Failed to open external link (${context}):`, err))
+}
+
+/**
  * 窗口控制 IPC（作用于发送方窗口）：全局只注册一次。
  * 修复：此前注册在 createMainWindow 内——macOS 关闭全部窗口后 activate 重开主窗口会
  * 触发 ipcMain.handle 重复注册抛错（Attempted to register a second handler），
@@ -427,7 +469,8 @@ export function createMainWindow(): void {
   })
 
   win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url).then()
+    // 站外链接统一走 scheme 白名单，不用把原始 URL 直接交给系统协议处理器
+    openExternalIfAllowed(details.url, 'window-open')
     return { action: 'deny' }
   })
 
@@ -437,13 +480,10 @@ export function createMainWindow(): void {
   // 主进程 IPC——必须拦截并转交系统浏览器（hash 路由的页内导航不会触发本事件）。
   win.webContents.on('will-navigate', (event, url) => {
     const devOrigin = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
-    const allowed = devOrigin ? url.startsWith(devOrigin) : url.startsWith('file://')
-    if (!allowed) {
-      event.preventDefault()
-      shell
-        .openExternal(url)
-        .catch((err) => logger.warn('[Window] Failed to open external link:', err))
-    }
+    const allowed = devOrigin ? isSameOrigin(url, devOrigin) : url.startsWith('file://')
+    if (allowed) return
+    event.preventDefault()
+    openExternalIfAllowed(url, 'will-navigate')
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
