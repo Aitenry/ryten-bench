@@ -8,7 +8,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "test": "node scripts/ai-selftest.mjs",
+    "test": "node scripts/run-all-tests.mjs",
     "test:profiles": "node --no-warnings tests/profiles.test.mts",
     "test:env": "node --no-warnings tests/environment.test.mts",
     "test:lock": "node --no-warnings tests/lock-credentials.test.mts",
@@ -163,6 +163,10 @@
     "react-dom": "^19.1.1",
     "typescript": "^5.9.2",
     "vite": "^8.2.1"
+  },
+  "engines": {
+    "node": ">=22.12",
+    "pnpm": ">=9"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

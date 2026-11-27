@@ -1,0 +1,51 @@
+name: CI
+
+# 日常质量门禁（PR / 非 main 分支推送）。
+#
+# 与 release.yml 的分工：
+# - release.yml 只在 main 推送时跑「发版链路」（版本解析 → 三平台打包 → 发布）；
+# - 本工作流负责在合入前拦回归：typecheck + 全量单元测试。
+#
+# 注意：lint 暂不进 CI——仓库存在 4 万+ 条 prettier/CRLF 存量告警（见
+# docs/audit-2026-11/04-complexity-style.md C23），先做格式化治理再启用。
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck & unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test:all

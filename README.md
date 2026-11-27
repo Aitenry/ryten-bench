@@ -706,16 +706,24 @@ an `https://` node outside local development.
 | `pnpm build:sandbox` | Build the sandbox assets into `resources/sandbox/`                     |
 | `pnpm build`         | Type-check and build the main, preload and renderer bundles            |
 | `pnpm typecheck`     | `tsc --noEmit` for the node and web projects                           |
+| `pnpm test`          | Run every offline regression test in `tests/` (`test:all` alias)       |
+| `pnpm test:ai`       | Run the local AI runtime self-test (`scripts/ai-selftest.mjs`)         |
 | `pnpm lint`          | ESLint over the repository (it also walks build output, so it is slow) |
+| `pnpm format`        | Prettier over the repository                                           |
 | `pnpm build:win`     | Sandbox assets + app bundles + Windows NSIS installer                  |
 | `pnpm build:mac`     | Sandbox assets + app bundles + macOS DMG and ZIP (not notarized)       |
 | `pnpm build:linux`   | Sandbox assets + app bundles + Linux AppImage and DEB                  |
 | `pnpm build:unpack`  | Unpacked directory build, useful for quick smoke tests                 |
 
+Unit tests are zero-dependency Node scripts (`node:assert`, no test framework) and run
+offline. Each `tests/*.test.mts` is executed in its own process by
+`scripts/run-all-tests.mjs`; a failing file fails the command. CI runs `pnpm test:all`
+before releasing.
+
 A faster local lint that skips `dist/` and `node_modules/`:
 
 ```bash
-npx eslint --cache src examples electron.vite.config.ts
+npx eslint --cache src electron.vite.config.ts
 ```
 
 > Sandbox assets are generated artifacts: `resources/sandbox/` is not committed, and packaging
@@ -804,14 +812,17 @@ RytenBench/
 │   │       ├── providers/notes/      # Knowledge-graph build progress provider
 │   │       ├── route/  types/  workshop/  # route table; workshop/ = renderer side of the plugin workshop
 │   │       └── Root.tsx  App.tsx  main.tsx  window-title.ts
-│   ├── shared/                       # Cross-process DTOs (plugin/, harness/, notes/)
-│   └── plugins/                      # Plugin host: scanner, store, context, runtime table, protocol
+│   └── shared/                       # Cross-process DTOs (plugin/, harness/, notes/)
+│       # Plugin host code lives in src/main/plugins/ (main process) + src/shared/plugin/ (contract)
 ├── native/                           # Self-built sandbox backends (no third-party dependency)
 │   ├── build-sandbox.mjs             # Builds resources/sandbox, --selfcheck runs the packaged app
 │   ├── win32-sandbox-runner/         # Windows restricted-token runner (JS + koffi)
 │   └── landlock-launcher/            # Linux Landlock launcher (C, kernel ≥ 5.13)
 ├── resources/                        # Icons, tray assets, models-profile.json
 │   └── sandbox/                      # Generated sandbox assets (not committed)
+├── tests/                            # Offline regression tests (node:assert; scripts/run-all-tests.mjs)
+├── scripts/                          # Test runners, self-tests and local tooling
+├── docs/audit-2026-11/               # 2026-11 architecture + health audit and optimization roadmap
 ├── drizzle/                          # Generated migrations and snapshots
 ├── build/                            # electron-builder resources (macOS entitlements)
 ├── .github/workflows/                # Release builds for Windows, macOS and Linux (on main)
