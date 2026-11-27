@@ -46,10 +46,14 @@ import {
   closeAllMcp,
   currentMcpTools,
   refreshCatalog,
-  setMcpModuleBase
+  setMcpModuleBase,
+  connectedMcpServerNames,
+  listMcpResources,
+  listMcpResourceTemplates,
+  readMcpResource
 } from '../runtime/harness/mcp'
 import { readMcpServers } from '../runtime/harness/mcp-store'
-import { setMcpToolProvider } from '../tools/harness/builders'
+import { setMcpResourceOps, setMcpToolProvider } from '../tools/harness/builders'
 import { EffectScope, registerIpcHandlers } from '../ipc/register'
 
 /**
@@ -183,6 +187,13 @@ export function startHarness(): void {
     configureMcp(readMcpServers)
     setMcpModuleBase(app.getAppPath())
     setMcpToolProvider(currentMcpTools)
+    // MCP 资源三件套的数据源：与工具提供者同一套接线，未连接服务器时工具会给出可操作提示
+    setMcpResourceOps({
+      servers: connectedMcpServerNames,
+      listResources: listMcpResources,
+      listTemplates: listMcpResourceTemplates,
+      read: readMcpResource
+    })
 
     // 工作区文件监听：数据库初始化完成（设置已加载）后跟随当前工作区启动。
     let stopped = false
@@ -216,6 +227,7 @@ export function startHarness(): void {
       configureWorkshopDirReleaseHook(null)
       uninstallWorkshopHost()
       setMcpToolProvider(undefined)
+      setMcpResourceOps(undefined)
       configureMcp(undefined)
       setMcpModuleBase(undefined)
       void closeAllMcp()

@@ -182,7 +182,9 @@ from the hub or from a local package, and both paths end in the same host instal
 - **MCP servers** — connect Model Context Protocol servers over stdio (a local command such as
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers), and their tools join the same tool-call loop as
-  the built-in and plugin tools. Managed under More → MCP.
+  the built-in and plugin tools. Connected servers' **resources** are readable too:
+  `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` return text inline and
+  turn image resources into viewable attachments. Managed under More → MCP.
 - **Web access** — two optional tools join the same tool loop: `web_fetch` retrieves one HTTP(S)
   URL and returns its readable text (HTML is reduced to Markdown, JSON/plain text pass through;
   local and private addresses are refused, responses are capped at 2 MB and 24k characters) and

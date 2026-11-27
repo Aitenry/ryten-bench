@@ -453,6 +453,105 @@ export function currentMcpTools(): { tools: StructuredToolInterface[]; infos: To
   return { tools: defs.map((d) => d.instance), infos: defs.map((d) => d.info) }
 }
 
+/* ────────────────────────── MCP resources ────────────────────────── */
+
+/** 当前已连接的服务器名（资源工具报错时列出可用服务器） */
+export function connectedMcpServerNames(): string[] {
+  return snapshot.entries
+    .filter((entry) => entry.status === 'ok' && snapshot.clients.has(mcpNamespace(entry.config.name)))
+    .map((entry) => entry.config.name)
+}
+
+/** 按配置名取已连接的客户端；未连接/停用返回 null */
+function connectedClient(server: string): McpClient | null {
+  const entry = snapshot.entries.find(
+    (item) => item.status === 'ok' && item.config.name === server
+  )
+  if (!entry) return null
+  return snapshot.clients.get(mcpNamespace(entry.config.name)) ?? null
+}
+
+/** 列出某台服务器的资源（支持分页游标） */
+export async function listMcpResources(
+  server: string,
+  cursor?: string
+): Promise<{
+  resources: Array<{ uri: string; name?: string; description?: string; mimeType?: string }>
+  nextCursor?: string
+}> {
+  const client = connectedClient(server)
+  if (!client) throw new Error(`MCP server "${server}" is not connected`)
+  const result = await withTimeout(
+    client.listResources(cursor ? { cursor } : {}),
+    CONNECT_TIMEOUT_MS,
+    `读取资源清单超时（${server}）`
+  )
+  return {
+    resources: (result.resources ?? []).map((resource) => ({
+      uri: resource.uri,
+      name: resource.name,
+      description: resource.description,
+      mimeType: resource.mimeType
+    })),
+    nextCursor: result.nextCursor
+  }
+}
+
+/** 列出某台服务器的资源模板（参数化 URI） */
+export async function listMcpResourceTemplates(
+  server: string,
+  cursor?: string
+): Promise<{
+  templates: Array<{
+    uriTemplate: string
+    name?: string
+    description?: string
+    mimeType?: string
+  }>
+  nextCursor?: string
+}> {
+  const client = connectedClient(server)
+  if (!client) throw new Error(`MCP server "${server}" is not connected`)
+  const result = await withTimeout(
+    client.listResourceTemplates(cursor ? { cursor } : {}),
+    CONNECT_TIMEOUT_MS,
+    `读取资源模板超时（${server}）`
+  )
+  return {
+    templates: (result.resourceTemplates ?? []).map((template) => ({
+      uriTemplate: template.uriTemplate,
+      name: template.name,
+      description: template.description,
+      mimeType: template.mimeType
+    })),
+    nextCursor: result.nextCursor
+  }
+}
+
+/** 读取一个资源（文本 / base64 blob 由工具层决定怎么展示） */
+export async function readMcpResource(
+  server: string,
+  uri: string
+): Promise<{
+  contents: Array<{ uri?: string; mimeType?: string; text?: string; blob?: string }>
+}> {
+  const client = connectedClient(server)
+  if (!client) throw new Error(`MCP server "${server}" is not connected`)
+  const result = await withTimeout(
+    client.readResource({ uri }),
+    CONNECT_TIMEOUT_MS,
+    `读取资源超时（${server}）`
+  )
+  return {
+    contents: (result.contents ?? []).map((content) => ({
+      uri: content.uri,
+      mimeType: content.mimeType,
+      text: 'text' in content ? content.text : undefined,
+      blob: 'blob' in content ? content.blob : undefined
+    }))
+  }
+}
+
 /**
  * 设置页当前视图：**只读最近一次真实结果，绝不发起连接**。
  *

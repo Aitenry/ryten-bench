@@ -17,6 +17,11 @@ import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
 import { buildWebFetchTool, buildWebSearchTool } from './web'
+import {
+  buildMcpResourceTools,
+  type McpResourceOps
+} from './mcp-resources'
+import { getMcpToolTexts } from '../../i18n/tool-results-mcp'
 import { workshopToolBuilders, workshopToolInfos } from './workshop'
 import { latticeToolBuilders, latticeToolInfos } from './lattice'
 
@@ -130,6 +135,58 @@ function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[
 }
 
 /**
+ * MCP 资源工具的数据访问依赖：由 `system/harness.ts` 在装配时注入（与 MCP 工具提供者
+ * 同一套理由——不在工具注册表里直接 import MCP 管理器，否则离线回归会拖进 SDK/子进程）。
+ */
+let mcpResourceOps: McpResourceOps | null = null
+
+/** 注入/撤销 MCP 资源数据源（插件装配与退出时调用；未注入时这三个工具不存在） */
+export function setMcpResourceOps(ops?: McpResourceOps): void {
+  mcpResourceOps = ops ?? null
+}
+
+/** 资源工具的展示元数据（名称固定，与数据源无关） */
+const MCP_RESOURCE_TOOL_INFOS: ToolInfo[] = [
+  {
+    name: 'list_mcp_resources',
+    label: 'MCP resources',
+    description: 'List resources exposed by an MCP server',
+    icon: 'RiPlug2Line',
+    color: '#8c6b3f'
+  },
+  {
+    name: 'list_mcp_resource_templates',
+    label: 'MCP resource templates',
+    description: 'List parameterized resource URI templates',
+    icon: 'RiPlug2Line',
+    color: '#8c6b3f'
+  },
+  {
+    name: 'read_mcp_resource',
+    label: 'Read MCP resource',
+    description: 'Read one MCP resource by URI',
+    icon: 'RiPlug2Line',
+    color: '#8c6b3f'
+  }
+]
+
+/** 已注入 MCP 数据源时的三个资源工具（每次现建，保证用最新连接） */
+function mcpResourceToolSources(): ToolSource<StructuredToolInterface>[] {
+  if (!mcpResourceOps) return []
+  try {
+    return buildMcpResourceTools(mcpResourceOps, getMcpToolTexts())
+      .map((instance) => {
+        const info = MCP_RESOURCE_TOOL_INFOS.find((item) => item.name === instance.name)
+        return info ? { info, build: () => instance } : null
+      })
+      .filter((source): source is ToolSource<StructuredToolInterface> => source !== null)
+  } catch (err) {
+    console.warn('[Harness] Failed to build MCP resource tools:', err)
+    return []
+  }
+}
+
+/**
  * 内置功能的工具（资料整理 1 个）：随应用编译进来，不经插件注册表。
  *
  * 第三方插件仍走 `harness.tool` 贡献点（`listContributions`），两者在 `toolSources()`
@@ -170,10 +227,14 @@ function toolSources(): {
     if (ready) mcpSources.push({ info, build: () => ready })
   }
   return {
-    local: Object.entries(toolBuilders).map(([name, build]) => ({
-      info: localToolInfos.find((i) => i.name === name)!,
-      build
-    })),
+    local: [
+      ...Object.entries(toolBuilders).map(([name, build]) => ({
+        info: localToolInfos.find((i) => i.name === name)!,
+        build
+      })),
+      // MCP 资源三件套：数据源由 system/harness 注入，未注入时为空（工具不存在）
+      ...mcpResourceToolSources()
+    ],
     contributed,
     mcp: mcpSources
   }

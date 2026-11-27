@@ -101,6 +101,10 @@ const READ_TOOLS = new Set([
   // 联网（只读网络调用，不改本地状态）
   'web_fetch',
   'web_search',
+  // MCP 资源读取（只读）
+  'list_mcp_resources',
+  'list_mcp_resource_templates',
+  'read_mcp_resource',
   // 技能加载（读技能目录，不写用户数据）
   'skill',
   // 交互与编排
