@@ -1,4 +1,4 @@
-﻿import { BrowserWindow, app, dialog } from 'electron'
+import { BrowserWindow, app, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
@@ -421,6 +421,8 @@ async function runHarnessTurn(
   let maxToolRounds: number | undefined
   /** 原始窗口（token）：压缩压力按真实 token 判定时用，与上面按 1:1 换算的字符预算分开存 */
   let contextWindowTokens: number | undefined
+  /** 当前模型档案是否声明支持图片输入：false 时 read_image 在执行期拒绝 */
+  let supportsImageInput = false
   try {
     const providerConfig = await getProviderService().getConfig(options?.providerId)
     modelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
@@ -431,6 +433,9 @@ async function runHarnessTurn(
     contextBudget = Math.max(20_000, windowTokens)
     contextWindowTokens = windowTokens > 0 ? windowTokens : undefined
     maxToolRounds = providerConfig.max_tool_rounds
+    supportsImageInput =
+      (providerConfig.metadata as { capabilities?: { supports_image_input?: boolean } } | null)
+        ?.capabilities?.supports_image_input === true
     logger.info(
       `[Harness] Model context window=${windowTokens} tokens → history budget=${contextBudget} chars, maxToolRounds=${maxToolRounds}`
     )
@@ -517,7 +522,8 @@ async function runHarnessTurn(
       maxToolRounds,
       memoryScope,
       modelDescriptor,
-      options?.turnMeta?.source === 'goal-round'
+      options?.turnMeta?.source === 'goal-round',
+      supportsImageInput
     )
   } catch (err) {
     // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
@@ -1483,10 +1489,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       // 同时记录 provider/model 描述符，供后台子代理持久化与冷恢复回到同一模型
       let maxToolRounds: number | undefined
       let syncModelDescriptor: SubAgentMainModelDescriptor | undefined
+      let syncSupportsImageInput = false
       try {
         const providerConfig = await getProviderService().getConfig(options?.providerId)
         maxToolRounds = providerConfig.max_tool_rounds
         syncModelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
+        syncSupportsImageInput =
+          (providerConfig.metadata as { capabilities?: { supports_image_input?: boolean } } | null)
+            ?.capabilities?.supports_image_input === true
       } catch (err) {
         logger.warn('[Harness] Failed to read model max tool call rounds, using default:', err)
       }
@@ -1504,7 +1514,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         maxToolRounds,
         syncMemoryScope,
         syncModelDescriptor,
-        false
+        false,
+        syncSupportsImageInput
       )
       return await harnessService.sendMessage(question, options)
     }

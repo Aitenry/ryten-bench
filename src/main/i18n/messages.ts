@@ -142,6 +142,8 @@ export const zhCN = {
   tools: {
     get_weather: { label: '天气查询', description: '查询当前实况、逐小时与未来天气预报' },
     get_time: { label: '时间查询', description: '获取当前日期和时间' },
+    web_fetch: { label: '网页抓取', description: '抓取一个 URL 并抽取可读正文' },
+    web_search: { label: '网页搜索', description: '联网搜索并返回结果链接与摘要' },
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -278,6 +280,8 @@ export const enUS: typeof zhCN = {
       description: 'Current conditions with hourly and daily forecasts'
     },
     get_time: { label: 'Time', description: 'Current date and time' },
+    web_fetch: { label: 'Web fetch', description: 'Fetch a URL and read its readable text' },
+    web_search: { label: 'Web search', description: 'Search the web and get result links' },
     manage_materials: {
       label: 'Materials',
       description:

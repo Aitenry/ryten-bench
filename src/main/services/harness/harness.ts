@@ -60,6 +60,8 @@ class HarnessService {
   private readonly modelDescriptor?: SubAgentMainModelDescriptor
   /** 目标自动续跑轮：跳过计划模式工具/提示词 */
   private readonly suppressPlanMode: boolean
+  /** 本轮路由的模型是否声明支持图片输入（read_image 的执行期门禁） */
+  private readonly supportsImageInput: boolean
 
   /**
    * @param model 已创建的 BaseChatModel 实例（由外部 ProviderService 提供）
@@ -75,6 +77,7 @@ class HarnessService {
    * @param memoryScope 这条会话的记忆作用域；缺省 = 按 workspaceId 的工作区作用域
    * @param modelDescriptor spawn 时主模型描述符（可选；后台子代理冷恢复用）
    * @param suppressPlanMode 目标自动续跑轮：忽略计划模式
+   * @param supportsImageInput 当前模型档案是否声明支持图片输入（false = read_image 拒绝执行）
    */
   constructor(
     model: BaseChatModel,
@@ -89,7 +92,8 @@ class HarnessService {
     maxToolRounds: number = DEFAULT_MAX_TOOL_ROUNDS,
     memoryScope?: MemoryScope,
     modelDescriptor?: SubAgentMainModelDescriptor,
-    suppressPlanMode = false
+    suppressPlanMode = false,
+    supportsImageInput = false
   ) {
     this.model = model
     this.tools = tools
@@ -104,6 +108,7 @@ class HarnessService {
     this.maxToolRounds = maxToolRounds
     this.modelDescriptor = modelDescriptor
     this.suppressPlanMode = suppressPlanMode
+    this.supportsImageInput = supportsImageInput
     logger.info(
       `HarnessService initialized with the agent Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, memoryScope=${this.memoryScopeDirName ?? 'disabled'}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds}, model=${this.modelDescriptor ? `${this.modelDescriptor.providerId}/${this.modelDescriptor.model}` : 'default'})`
     )
@@ -131,6 +136,7 @@ class HarnessService {
       maxToolCalls: this.maxToolRounds,
       modelDescriptor: this.modelDescriptor,
       suppressPlanMode: this.suppressPlanMode,
+      supportsImageInput: this.supportsImageInput,
       onUsageRecord,
       mnemon: getMnemonComponent(
         this.memoryPath,

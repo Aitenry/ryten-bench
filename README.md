@@ -170,6 +170,11 @@ from the hub or from a local package, and both paths end in the same host instal
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers), and their tools join the same tool-call loop as
   the built-in and plugin tools. Managed under More → MCP.
+- **Web access** — two optional tools join the same tool loop: `web_fetch` retrieves one HTTP(S)
+  URL and returns its readable text (HTML is reduced to Markdown, JSON/plain text pass through;
+  local and private addresses are refused, responses are capped at 2 MB and 24k characters) and
+  `web_search` runs 1–10 queries against a public search endpoint and returns title / URL / snippet
+  rows for a follow-up `web_fetch`. Both are off until selected under Settings → Agents.
 - **Workspace files** — file explorer and CodeMirror 6 editor (with a Markdown rich/source toggle,
   language modes, search, folding, word wrap and caret/selection status) inside the assistant view,
   live-reacting to on-disk changes and warning when a file changed on disk while unsaved edits

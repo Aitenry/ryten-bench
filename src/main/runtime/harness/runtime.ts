@@ -1,4 +1,4 @@
-﻿import { BaseChatModel } from '../../ai/chat-model'
+import { BaseChatModel } from '../../ai/chat-model'
 import { BaseMessage } from '../../ai/messages'
 import type { StructuredToolInterface } from '../../ai/tools'
 import logger from 'electron-log'
@@ -89,6 +89,11 @@ export interface AgentRuntimeOptions {
   /** 工具调用总次数上限（模型级「工具调用轮数」；缺省用工程默认值） */
   maxToolCalls?: number
   /**
+   * 本轮路由的模型是否声明支持图片输入（models-profile 的 supports_image_input）。
+   * 传给文件工具集，作为 read_image 的执行期门禁（false = 拒绝）。
+   */
+  supportsImageInput?: boolean
+  /**
    * 生成中每采到一次真实用量就回调（整轮累计的记录数组）。
    *
    * 与流结束时的 `onUsage`（落库用）不是一回事：这里每发生一次模型往返就调一次，
@@ -134,7 +139,9 @@ export class Runtime {
       workspacePath: opts.workspacePath,
       memoryPath: opts.memoryPath,
       // 文件改动史按工作区归属（模型每次写文件都要留下可追溯 / 可回溯的记录）
-      workspaceId: opts.workspaceId
+      workspaceId: opts.workspaceId,
+      // 视觉门禁：read_image 只在模型声明支持图片输入时执行
+      supportsImageInput: opts.supportsImageInput
     })
     this.systemPrompt = this.buildSystemPrompt()
 

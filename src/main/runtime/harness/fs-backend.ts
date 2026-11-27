@@ -241,6 +241,14 @@ export interface FsBackendOptions {
   memoryPath?: string
   /** 当前工作区 ID（文件改动史按工作区归属；缺省则不记录改动） */
   workspaceId?: number
+  /**
+   * 本轮路由的模型是否声明支持图片输入（models-profile 的 supports_image_input）。
+   *
+   * 三态语义与 DSH 的 read_image 门禁对齐：`false`（明确不支持/档案未声明）时
+   * `read_image` 执行期拒绝；`true` 放行；`undefined`（运行时未拿到模型信息，例如
+   * 离线测试/子代理）也放行，由 provider 自己报错，避免把工具意外锁死。
+   */
+  supportsImageInput?: boolean
 }
 
 /**
@@ -510,6 +518,13 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     tool(
       async ({ file_path }, config) => {
         const callId = callIdOf(config)
+        // 视觉门禁：模型档案明确声明不支持图片输入时，在执行边界拒绝（与 DSH 的
+        // route-gated read_image 同义）。放在读字节之前，避免为一次注定失败的调用白读文件。
+        if (options.supportsImageInput === false) {
+          const refused = tr.readImage.modelUnsupported
+          recordToolFacts(callId, { error: refused })
+          return refused
+        }
         const resolved = resolve(file_path)
         if ('error' in resolved) {
           recordToolFacts(callId, { error: resolved.error })

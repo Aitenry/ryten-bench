@@ -16,6 +16,7 @@ import {
 import { mergeToolSources, type ToolSource } from './registry'
 import { buildGetWeatherTool } from './weather'
 import { buildGetTimeTool } from './time'
+import { buildWebFetchTool, buildWebSearchTool } from './web'
 import { workshopToolBuilders, workshopToolInfos } from './workshop'
 import { latticeToolBuilders, latticeToolInfos } from './lattice'
 
@@ -48,6 +49,9 @@ type ToolFactory = () => StructuredToolInterface
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
   get_time: buildGetTimeTool,
+  // 联网：抓取 + 搜索（无密钥；见 tools/harness/web.ts）。默认不选中，由「智能体」页勾选启用。
+  web_fetch: () => buildWebFetchTool(),
+  web_search: () => buildWebSearchTool(),
   ...workshopToolBuilders,
   ...latticeToolBuilders
 }
@@ -74,6 +78,20 @@ const localToolInfos: ToolInfo[] = [
     description: 'Current date and time',
     icon: 'RiTimeLine',
     color: '#52c41a'
+  },
+  {
+    name: 'web_fetch',
+    label: 'Web fetch',
+    description: 'Fetch a URL and read its readable text',
+    icon: 'RiGlobalLine',
+    color: '#13c2c2'
+  },
+  {
+    name: 'web_search',
+    label: 'Web search',
+    description: 'Search the web and get result links',
+    icon: 'RiSearchLine',
+    color: '#2f54eb'
   },
   // 插件工坊（4 个）+ 插件中心发版（1 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
   ...workshopToolInfos,
