@@ -8,6 +8,7 @@ import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
 import { configureScheduleStore } from '../runtime/harness/schedule-store'
 import { scheduleRunner } from '../runtime/harness/schedule-runner'
+import { terminalSessions } from '../runtime/harness/terminal-sessions'
 import { preloadHarnessData } from '../services/harness/preload-cache'
 import { clearSubAgentCache } from '../services/harness/subagents'
 import { clearProviderCache } from '../provider/cache'
@@ -237,6 +238,8 @@ export function startHarness(): void {
       setMcpResourceOps(undefined)
       scheduleRunner.stop()
       configureScheduleStore(undefined)
+      // 退出前收掉所有持久终端（整树 kill，不留孤儿 shell）
+      terminalSessions.closeAll()
       configureMcp(undefined)
       setMcpModuleBase(undefined)
       void closeAllMcp()

@@ -149,6 +149,11 @@ export const zhCN = {
     schedule_list: { label: '定时任务列表', description: '查看全部定时任务' },
     schedule_view: { label: '定时任务详情', description: '查看单个定时任务' },
     schedule_edit: { label: '修改定时任务', description: '更新/暂停/恢复/删除定时任务' },
+    terminal_open: { label: '打开终端', description: '开启一条持久 shell 会话（仅完全权限档）' },
+    terminal_send: { label: '终端执行', description: '在持久终端里执行命令并等待输出' },
+    terminal_read: { label: '读取终端', description: '读取终端自上次读取以来的新输出' },
+    terminal_close: { label: '关闭终端', description: '关闭终端并终止其进程树' },
+    terminal_list: { label: '终端列表', description: '查看当前话题的终端会话' },
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -297,6 +302,26 @@ export const enUS: typeof zhCN = {
     schedule_edit: {
       label: 'Edit schedule',
       description: 'Update, pause, resume or delete a scheduled task'
+    },
+    terminal_open: {
+      label: 'Open terminal',
+      description: 'Open a persistent shell session (danger-full-access only)'
+    },
+    terminal_send: {
+      label: 'Terminal run',
+      description: 'Run a command in the persistent terminal and wait for output'
+    },
+    terminal_read: {
+      label: 'Read terminal',
+      description: 'Read output produced since the last read'
+    },
+    terminal_close: {
+      label: 'Close terminal',
+      description: 'Close a terminal and terminate its process tree'
+    },
+    terminal_list: {
+      label: 'List terminals',
+      description: 'List terminal sessions in this conversation'
     },
     manage_materials: {
       label: 'Materials',

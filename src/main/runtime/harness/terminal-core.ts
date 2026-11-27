@@ -218,3 +218,13 @@ export function truncateTail(text: string, maxChars: number): { text: string; tr
   if (text.length <= limit) return { text, truncated: false }
   return { text: `…（前 ${text.length - limit} 字符已省略）\n${text.slice(-limit)}`, truncated: true }
 }
+
+/**
+ * 去掉输出里残留的完成标记行。
+ *
+ * `terminal_send` 正常会切掉当轮的标记，但超时/迟到的情况下旧标记会留在环形缓冲里；
+ * `terminal_read` 展示前统一清掉，避免把内部协议文本喂给模型。
+ */
+export function stripSentinelLines(text: string): string {
+  return text.replace(/^__RB_DONE_[A-Za-z0-9]+__\r?$/gm, '')
+}

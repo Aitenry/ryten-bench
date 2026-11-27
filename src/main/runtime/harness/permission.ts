@@ -80,7 +80,10 @@ const WRITE_TOOLS = new Set([
   'write_file',
   'edit_file',
   'apply_patch',
-  'str_replace_editor'
+  'str_replace_editor',
+  // 持久终端：open/send 会以用户身份执行任意命令（工具层已限制只用 danger 档）
+  'terminal_open',
+  'terminal_send'
 ])
 
 /** 执行类工具 */
@@ -104,6 +107,10 @@ const READ_TOOLS = new Set([
   // 历史会话检索（只读）
   'session_search',
   'conversation_read',
+  // 持久终端的读取/清理（open/send 是写类；读取与关闭永远允许）
+  'terminal_read',
+  'terminal_close',
+  'terminal_list',
   // 本地工具
   'get_time',
   'get_weather',

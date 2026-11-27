@@ -134,6 +134,12 @@ from the hub or from a local package, and both paths end in the same host instal
   turn, the model keeps working and reads output incrementally with `job_output` / stops it with
   `job_kill`, and an inline top-bar tray lists every background command with collapsible per-task
   output and a stop control while the task is running.
+- **Persistent terminal** — `terminal_open` / `terminal_send` / `terminal_read` / `terminal_close` /
+  `terminal_list` keep one shell session alive across calls, so `cd`, environment variables and
+  virtualenvs persist (unlike one-shot `execute`). The session layer appends a per-command completion
+  marker, splits output incrementally, keeps a bounded 256 KB ring buffer and terminates the whole
+  process tree on close, on 10 minutes of idleness and on app quit. Because the shell is not
+  sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
 - **Parallel & bounded tool calls** — when one model reply requests several read-only calls (read,
   glob, grep, `web_fetch`, …), they run concurrently instead of one after another; any write,
   command or unknown call forms a barrier and keeps the reply's order. Tools may declare a
