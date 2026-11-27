@@ -443,8 +443,38 @@ async function batchUpsertEntities(
 }
 
 /**
- * 批量 upsert 关系（在单个事务中完成）
- * 返回实际保存的关系数量
+ * 合并两段 `source_note_ids`（JSON 数组字符串），按元素去重后返回 JSON 字符串。
+ * 保留元素原始类型（文档 id 是数字，不能在这里被字符串化）。
+ */
+function mergeSourceNoteIds(a: string | null, b: string | null): string | null {
+  const parse = (value: string | null): unknown[] => {
+    if (!value) return []
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  const merged = new Map<string, unknown>()
+  for (const item of [...parse(a), ...parse(b)]) {
+    if (item === null || item === undefined) continue
+    const key = typeof item === 'object' ? JSON.stringify(item) : String(item)
+    if (!merged.has(key)) merged.set(key, item)
+  }
+  return merged.size > 0 ? JSON.stringify([...merged.values()]) : null
+}
+
+/**
+ * 批量 upsert 关系（单条语句完成）。
+ *
+ * 旧实现「每条关系先 SELECT 再 UPDATE/INSERT」在 PGlite 单连接上等于 2N 次串行语句，
+ * 图构建最后一阶段动辄上千条关系，期间所有 UI 查询排队。现在依赖
+ * `uq_graph_relations_key`（wiki_id/source_id/target_id/relation_type 唯一索引）
+ * 用一条 `INSERT ... ON CONFLICT DO UPDATE` 完成；批内重复先按业务键去重并合并
+ * source_note_ids（Postgres 不允许同一条语句两次命中同一行）。
+ *
+ * 返回实际写入的关系数（去重后的行数）。
  */
 async function batchUpsertRelations(
   relations: Omit<GraphRelation, 'id' | 'created_at'>[]
@@ -452,32 +482,47 @@ async function batchUpsertRelations(
   if (relations.length === 0) return 0
 
   return withOrm('batchUpsertRelations', async (db) => {
-    let savedCount = 0
-    await db.transaction(async (tx) => {
-      for (const relation of relations) {
-        const existing = await tx
-          .select({ id: graph_relations.id })
-          .from(graph_relations)
-          .where(relationKey(relation))
-          .limit(1)
-
-        if (existing.length > 0) {
-          await tx
-            .update(graph_relations)
-            .set({
-              description: relation.description,
-              properties: relation.properties,
-              confidence: relation.confidence,
-              source_note_ids: relation.source_note_ids
-            })
-            .where(eq(graph_relations.id, existing[0].id))
-        } else {
-          await tx.insert(graph_relations).values(relation)
-        }
-        savedCount++
+    const deduped = new Map<string, Omit<GraphRelation, 'id' | 'created_at'>>()
+    for (const relation of relations) {
+      const key = `${relation.wiki_id}:${relation.source_id}:${relation.target_id}:${relation.relation_type}`
+      const next: Omit<GraphRelation, 'id' | 'created_at'> = {
+        ...relation,
+        source_note_ids: toSourceNoteIds(relation.source_note_ids)
       }
-    })
-    return savedCount
+      const previous = deduped.get(key)
+      deduped.set(
+        key,
+        previous
+          ? {
+              ...next,
+              source_note_ids: mergeSourceNoteIds(
+                previous.source_note_ids,
+                next.source_note_ids
+              )
+            }
+          : next
+      )
+    }
+
+    const values = [...deduped.values()]
+    await db
+      .insert(graph_relations)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          graph_relations.wiki_id,
+          graph_relations.source_id,
+          graph_relations.target_id,
+          graph_relations.relation_type
+        ],
+        set: {
+          description: sql`excluded.description`,
+          properties: sql`excluded.properties`,
+          confidence: sql`excluded.confidence`,
+          source_note_ids: sql`excluded.source_note_ids`
+        }
+      })
+    return values.length
   })
 }
 
@@ -502,11 +547,19 @@ async function batchUpdateEntityConfidence(
 
   await withOrm('batchUpdateEntityConfidence', async (db) => {
     await db.transaction(async (tx) => {
+      // 按置信度分组，每组一条 UPDATE ... IN (...)：合并阶段更新数 =
+      // 不同置信度档位数（通常个位数），而不是实体数。
+      const byConfidence = new Map<number, number[]>()
       for (const { id, confidence } of updates) {
+        const bucket = byConfidence.get(confidence)
+        if (bucket) bucket.push(id)
+        else byConfidence.set(confidence, [id])
+      }
+      for (const [confidence, ids] of byConfidence) {
         await tx
           .update(graph_entities)
           .set({ confidence, updated_at: sql`now()` })
-          .where(eq(graph_entities.id, id))
+          .where(inArray(graph_entities.id, ids))
       }
     })
   })

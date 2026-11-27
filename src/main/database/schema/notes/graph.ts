@@ -59,6 +59,14 @@ export const graph_relations = pgTable(
     created_at: timestamp({ mode: 'string' }).defaultNow()
   },
   (table) => [
+    // 关系的业务唯一键：同一知识库里 (source, target, relation_type) 只应有一行。
+    // 有它才能真正「一条语句 upsert」（ON CONFLICT），也避免并发构建写出重复关系。
+    unique('uq_graph_relations_key').on(
+      table.wiki_id,
+      table.source_id,
+      table.target_id,
+      table.relation_type
+    ),
     index('idx_graph_relations_source').using(
       'btree',
       table.source_id.asc().nullsLast().op('int4_ops')
