@@ -34,8 +34,10 @@ const DETAIL_TOOLS = new Set(['ls', 'glob', 'grep', 'execute'])
 /** 参与投影的工具（其余工具保持原样下发） */
 export const PROJECTED_TOOLS = new Set([
   'read_file',
+  'read_image',
   'write_file',
   'edit_file',
+  'apply_patch',
   'ls',
   'glob',
   'grep',
@@ -101,6 +103,8 @@ export function projectToolInput(
   switch (name) {
     case 'read_file':
       return pick(raw, ['file_path', 'offset', 'limit'])
+    case 'read_image':
+      return pick(raw, ['file_path'])
     case 'write_file': {
       // content 是整份文件正文：只保留长度供卡片展示，正文本身不进 IPC/库
       const out = pick(raw, ['file_path'])
@@ -114,6 +118,12 @@ export function projectToolInput(
         out.old_string_bytes = Buffer.byteLength(raw.old_string, 'utf-8')
       if (typeof raw.new_string === 'string')
         out.new_string_bytes = Buffer.byteLength(raw.new_string, 'utf-8')
+      return out
+    }
+    case 'apply_patch': {
+      // 补丁正文可能很长：只保留字节数供卡片展示，正文本身不进 IPC/库
+      const out: Record<string, unknown> = {}
+      if (typeof raw.input === 'string') out.patch_bytes = Buffer.byteLength(raw.input, 'utf-8')
       return out
     }
     case 'ls':
@@ -205,6 +215,33 @@ export function buildToolProjection(params: {
         // 替换处数 + 差异规模：一个说「改了几处」，一个说「文件实际变了多少行」
         added: facts?.added,
         removed: facts?.removed
+      }
+      return { input, output: error ? '' : output, card }
+    }
+
+    case 'read_image': {
+      const path = str(params.input?.file_path)
+      if (!path) return fallback()
+      const card: ToolCard = {
+        kind: 'file',
+        path,
+        status: error ? 'error' : 'ok',
+        message: clampLine(error ?? output),
+        bytes: facts?.bytes
+      }
+      return { input, output: error ? '' : output, card }
+    }
+
+    case 'apply_patch': {
+      // 成功时输出是「补丁已应用（N 个文件）」+ 逐文件摘要：卡片一行摘要 + 差异规模
+      const card: ToolCard = {
+        kind: 'file',
+        status: error ? 'error' : 'ok',
+        message: error ? clampLine(error) : clampLine(output),
+        files: facts?.files,
+        added: facts?.added,
+        removed: facts?.removed,
+        bytes: typeof input.patch_bytes === 'number' ? input.patch_bytes : undefined
       }
       return { input, output: error ? '' : output, card }
     }

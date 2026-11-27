@@ -3,7 +3,8 @@ import {
   HumanMessage,
   AIMessage,
   ToolMessage,
-  SystemMessage
+  SystemMessage,
+  type MessageContentComplex
 } from '../../ai/messages'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
@@ -31,6 +32,7 @@ import { planObservationMask } from '../../runtime/harness/observation-mask'
 import {
   dialogueBudgetChars,
   planReplayImages,
+  planReplayToolImages,
   userMessageContent
 } from '../../runtime/harness/image-replay'
 
@@ -706,6 +708,14 @@ function appendDialogueMessages(
 
   let placeholderChars = 0
   const replayImages = planReplayImages(selected)
+  // 被观测清理替换掉的旧工具结果不再回放图像（图像只跟随「还看得见」的工具结果）
+  const maskedToolKeys = new Set<string>()
+  for (let i = 0; i < parsed.length; i++) {
+    const masked = plan.masked.get(i)
+    if (!masked) continue
+    for (const toolIndex of masked) maskedToolKeys.add(`${parsed[i].dialogue.id}:${toolIndex}`)
+  }
+  const replayToolImages = planReplayToolImages(selected, maskedToolKeys)
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]
     const d = p.dialogue
@@ -745,6 +755,27 @@ function appendDialogueMessages(
         content = pruneToolOutput(tool.output ?? '')
       }
       messages.push(new ToolMessage({ content, tool_call_id: toolCalls[ti].id }))
+    }
+
+    // 工具结果图像（read_image）：与实时执行时一致——在本条助手消息的全部工具结果之后
+    // 追加一条 user 图像消息，保证后续轮次仍能看到图（受 image-replay 的预算约束）。
+    const toolImages = replayToolImages.get(d.id)
+    if (toolImages && toolImages.length > 0) {
+      const fsTexts = getFsToolTexts()
+      const blocks: MessageContentComplex[] = [
+        {
+          type: 'text',
+          text: toolImages
+            .map((image) =>
+              mainFormat(fsTexts.readImage.attached, { tool: image.tool, path: image.path })
+            )
+            .join('\n')
+        }
+      ]
+      for (const image of toolImages) {
+        blocks.push({ type: 'image_url', image_url: { url: image.dataUrl } })
+      }
+      messages.push(new HumanMessage({ content: blocks }))
     }
   }
 

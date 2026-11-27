@@ -21,6 +21,13 @@ export interface ToolCallRecord {
   input: Record<string, unknown>
   callId: string
   output: Promise<string>
+  /**
+   * 本次工具结果携带的图像（read_image 等媒体工具）。
+   *
+   * 与 output 同生命周期：工具执行完才 resolve。流生产者把它投影进完成态工具块，
+   * UI 渲染缩略图、历史回放重新注入模型上下文。
+   */
+  images?: Promise<import('./image-tool').ToolImage[]>
 }
 
 /** 子代理流记录（causeId = 派遣该子代理的 task 工具调用 ID） */

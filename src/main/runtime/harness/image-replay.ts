@@ -57,16 +57,28 @@ function imagesOf(blocks: UserDialogueBlock[] | null): string[] {
 
 /** 单条对话计入历史预算的字符数（图片按估算值，其余按真实长度） */
 export function dialogueBudgetChars(d: ReplayDialogue): number {
-  if (d.role !== 'user' || !d.blocks) return d.content.length + (d.blocks?.length ?? 0)
+  if (!d.blocks) return d.content.length
   const blocks = userBlocksOf(d)
   if (!blocks) return d.content.length + d.blocks.length
   let chars = 0
   for (const block of blocks) {
     if (block?.type === 'image' && typeof block.image_url === 'string') {
       chars += IMAGE_BUDGET_CHARS
-    } else {
-      chars += JSON.stringify(block).length
+      continue
     }
+    // 助手行的工具结果图像同样以 base64 存在 blocks 里：按估算值计，不按真实长度
+    if (block?.type === 'tool' && block.tool && typeof block.tool === 'object') {
+      const tool = block.tool as { images?: unknown }
+      if (Array.isArray(tool.images) && tool.images.length > 0) {
+        const stripped = {
+          ...block,
+          tool: { ...(block.tool as Record<string, unknown>), images: undefined }
+        }
+        chars += JSON.stringify(stripped).length + tool.images.length * IMAGE_BUDGET_CHARS
+        continue
+      }
+    }
+    chars += JSON.stringify(block).length
   }
   return d.content.length + chars
 }
@@ -116,4 +128,73 @@ export function userMessageContent(
     content.push({ type: 'image_url', image_url: { url } })
   }
   return content
+}
+
+/**
+ * 历史回放里「工具结果图像」的预算（read_image 等媒体工具）。
+ *
+ * 与用户贴图分开计：工具图像通常只服务当前任务，回放太多既贵又没意义；只保留最近
+ * {@link MAX_REPLAYED_TOOL_IMAGES} 张。被观测清理（observation mask）替换掉的旧工具
+ * 结果不再回放图像——调用方通过 maskedToolKeys（`<dialogueId>:<toolIndex>`）排除。
+ */
+export const MAX_REPLAYED_TOOL_IMAGES = 4
+export const MAX_REPLAYED_TOOL_IMAGE_CHARS = 8 * 1024 * 1024
+
+/** 一张待回放的工具结果图像 */
+export interface ReplayedToolImage {
+  dataUrl: string
+  path: string
+  /** 产生这张图的工具名（回放文案用） */
+  tool: string
+}
+
+/**
+ * 规划每条助手消息要回放的工具结果图像（按消息 id 分组，组内保持原始顺序）。
+ *
+ * 从新到旧分配预算，保证保留的总是最近出现的那几张；超出预算的图像直接丢弃
+ * （模型看到的对应工具结果文本里仍有路径，可以重新 read_image）。
+ */
+export function planReplayToolImages(
+  selected: ReplayDialogue[],
+  maskedToolKeys: Set<string> = new Set()
+): Map<number, ReplayedToolImage[]> {
+  const byDialogue = new Map<number, ReplayedToolImage[]>()
+  let images = 0
+  let chars = 0
+
+  for (let i = selected.length - 1; i >= 0; i--) {
+    const d = selected[i]
+    if (d.role !== 'assistant') continue
+    const blocks = userBlocksOf(d)
+    if (!blocks) continue
+    const toolBlocks = blocks.filter((block) => block?.type === 'tool')
+    for (let ti = toolBlocks.length - 1; ti >= 0; ti--) {
+      if (maskedToolKeys.has(`${d.id}:${ti}`)) continue
+      const tool = toolBlocks[ti].tool as
+        | { name?: unknown; images?: unknown }
+        | undefined
+      if (!tool || !Array.isArray(tool.images) || tool.images.length === 0) continue
+      const toolName = typeof tool.name === 'string' ? tool.name : 'tool'
+      for (let ii = tool.images.length - 1; ii >= 0; ii--) {
+        const image = tool.images[ii] as { dataUrl?: unknown; path?: unknown } | null
+        if (!image || typeof image.dataUrl !== 'string') continue
+        if (
+          images + 1 > MAX_REPLAYED_TOOL_IMAGES ||
+          chars + image.dataUrl.length > MAX_REPLAYED_TOOL_IMAGE_CHARS
+        ) {
+          continue
+        }
+        images += 1
+        chars += image.dataUrl.length
+        const row = byDialogue.get(d.id) ?? []
+        row.unshift({
+          dataUrl: image.dataUrl,
+          path: typeof image.path === 'string' ? image.path : '',
+          tool: toolName
+        })
+        byDialogue.set(d.id, row)
+      }
+    }
+  }
+  return byDialogue
 }

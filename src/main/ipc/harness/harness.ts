@@ -780,6 +780,7 @@ async function runHarnessTurn(
                 b.tool.output = chunk.tool.output
                 b.tool.status = chunk.tool.status
                 b.tool.card = chunk.tool.card
+                b.tool.images = chunk.tool.images
                 break
               }
             }

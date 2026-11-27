@@ -8,11 +8,17 @@ import {
   RiTerminalBoxLine
 } from '@remixicon/react'
 import { ShinyIcon } from '@renderer/components/effects/ShinyText'
+import { Image } from 'antd'
 
 import { useWorkspaceBridge } from '../../../contexts/harness/workspace-bridge'
 import { formatBytes, TOOL_CARD_ICONS, toolIconFor } from '../../../utils/harness/toolIcons'
 import { MONO_FONT, TruncatedTooltipText } from './TruncatedTooltipText'
-import type { ToolCall, ToolCard, ToolCardKind } from '../../../../../shared/harness/types'
+import type {
+  ToolCall,
+  ToolCard,
+  ToolCardKind,
+  ToolImageData
+} from '../../../../../shared/harness/types'
 
 /**
  * 内置工具的结果卡片（read_file / write_file / edit_file / ls / glob / grep / execute）。
@@ -73,7 +79,7 @@ function inputSummary(name: string, input: Record<string, unknown> | undefined):
  */
 const MUTATE_COLOR = '#c98a2b'
 /** 写改工具：完成态必须与 read_file 一眼可分（此前全都是同一个眼睛图标） */
-const MUTATE_TOOLS = new Set(['write_file', 'edit_file'])
+const MUTATE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
 
 /** 卡片外壳：图标 + 主文本（单行截断 + 悬停全文）+ 右侧元信息 + 悬停动作提示 */
 const CardShell: React.FC<{
@@ -491,5 +497,49 @@ export const ToolProgressCard: React.FC<{
       primary={`${summary || tool.name || t('harness.assistantMessage.toolCallFallback')}${status}`}
       primaryColor={style.colorText}
     />
+  )
+}
+/**
+ * 工具结果图像条（read_image / 其它媒体工具）：缩略图 + 点击大图预览。
+ *
+ * 图像来自工具结果里持久化的 data URL（对话 blocks），因此历史消息、重启后的会话都能
+ * 直接显示，不依赖磁盘上的原文件（原文件可能已被移动或删除）。
+ */
+export const ToolImageStrip: React.FC<{
+  images: ToolImageData[]
+  isNested?: boolean
+  style: ToolCardStyle
+}> = ({ images, isNested = false, style }) => {
+  if (!images || images.length === 0) return null
+  const size = isNested ? 72 : 108
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        margin: isNested ? '4px 0 6px 20px' : '6px 0 8px 22px'
+      }}
+    >
+      {images.map((image, index) => (
+        <Image
+          key={`${image.path}-${index}`}
+          src={image.dataUrl}
+          alt={image.path}
+          width={size}
+          height={size}
+          style={{
+            objectFit: 'cover',
+            borderRadius: 8,
+            border: `1px solid ${style.colorBorderSecondary}`,
+            background: style.colorFillAlter
+          }}
+          preview={{
+            src: image.dataUrl,
+            mask: <span style={{ fontSize: 12 }}>{image.path}</span>
+          }}
+        />
+      ))}
+    </div>
   )
 }

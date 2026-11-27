@@ -1,4 +1,5 @@
 import type { TurnFinal } from './answer-boundary'
+import type { ToolImageData } from '../../../shared/harness/types'
 
 export interface HarnessOptions {
   images?: string[]
@@ -131,6 +132,8 @@ export interface ToolCallDetail {
   id?: string
   /** 定制化卡片数据，仅 deepagent 内置工具设置 */
   card?: ToolCard
+  /** 工具结果携带的图像（read_image 等）：持久化到对话 blocks，供 UI 与历史回放使用 */
+  images?: ToolImageData[]
 }
 
 /** 每轮注入系统提示词的热记忆内容（用于前端展示「注入记忆」） */

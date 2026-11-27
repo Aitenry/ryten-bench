@@ -5,6 +5,7 @@ import {
   RiFileEditLine,
   RiFolderOpenLine,
   RiFoldersLine,
+  RiImageLine,
   RiListCheck,
   RiPencilLine,
   RiPlug2Line,
@@ -36,6 +37,8 @@ export const TOOL_IN_PROGRESS_ICONS: Record<
   }>
 > = {
   read_file: RiEye2Line,
+  read_image: RiImageLine,
+  apply_patch: RiFileEditLine,
   write_file: RiFileEditLine,
   edit_file: RiPencilLine,
   ls: RiFolderOpenLine,

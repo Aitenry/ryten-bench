@@ -293,6 +293,14 @@ export interface ToolCard {
   detail?: boolean
 }
 
+/** 工具结果里的图像（data URL：UI 直接渲染，历史回放也用它） */
+export interface ToolImageData {
+  dataUrl: string
+  /** 虚拟路径（卡片标题/历史回放文案用） */
+  path: string
+  mimeType?: string
+}
+
 /** 工具调用 */
 export interface ToolCall {
   name: string
@@ -301,6 +309,8 @@ export interface ToolCall {
   status?: 'preparing' | 'executing' | 'completed'
   id?: string
   card?: ToolCard
+  /** 本次工具结果携带的图像（read_image 等媒体工具）；UI 渲染缩略图，历史回放重新注入 */
+  images?: ToolImageData[]
 }
 
 /** 智能体活动事件 */

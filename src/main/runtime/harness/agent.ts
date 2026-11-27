@@ -337,7 +337,9 @@ function createToolRunner(
           name: item.name,
           input: item.args,
           callId: item.callId,
-          output: outputPromise
+          output: outputPromise,
+          // 图像随结果一起交付：流生产者/持久化层据此渲染卡片并在后续轮次回放
+          images: outputPromise.then(() => media)
         }
         pushRecord(push, record, subagentCtx)
       }

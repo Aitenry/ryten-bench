@@ -40,6 +40,8 @@ export interface ToolResultFacts {
   mimeType?: string
   width?: number
   height?: number
+  /** apply_patch：本次补丁涉及的文件数 */
+  files?: number
 }
 
 /** 登记表容量上限：超出时丢弃最早的条目（正常流不会达到） */

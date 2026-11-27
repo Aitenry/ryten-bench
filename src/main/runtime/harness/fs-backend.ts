@@ -858,7 +858,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             stats
           })
         }
-        recordToolFacts(callId, { added, removed })
+        recordToolFacts(callId, { added, removed, files: planned.length })
         return mainFormat(tr.applyPatch.applied, {
           files: planned.length,
           summary: summaries.join('\n')

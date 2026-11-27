@@ -20,7 +20,7 @@ import LoadingMessage from './LoadingMessage'
 import ToolTextPreview from './ToolTextPreview'
 import StreamTextWindow from './StreamTextWindow'
 import FoldBody from './FoldBody'
-import { ToolProgressCard, ToolResultCard, type ToolCardStyle } from './ToolResultCard'
+import { ToolProgressCard, ToolResultCard, ToolImageStrip, type ToolCardStyle } from './ToolResultCard'
 import { toolIconFor } from '../../../utils/harness/toolIcons'
 import { MONO_FONT, TruncatedTooltipText } from './TruncatedTooltipText'
 import { useSubagentViewBridge } from '../../../contexts/harness/subagent-view-bridge'
@@ -45,8 +45,10 @@ import type { Message } from '../../../types/harness/types'
 /** 定制化卡片工具集：进行中/完成态共用同款卡片外形（光泽只在进行中扫过，完成后静止） */
 const CARD_TOOLS = new Set([
   'read_file',
+  'read_image',
   'write_file',
   'edit_file',
+  'apply_patch',
   'ls',
   'glob',
   'grep',
@@ -418,10 +420,16 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           />
         )
       }
-      // 无卡片数据（异常形态）：返回 null，交由通用折叠兜底展示
-      if (!tool.card) return null
+      // 无卡片数据且无图像（异常形态）：返回 null，交由通用折叠兜底展示
+      const images = tool.images ?? []
+      if (!tool.card && images.length === 0) return null
       return (
-        <ToolResultCard key={key} tool={tool} topicId={topicId} isNested={isNested} style={style} />
+        <div key={key}>
+          {tool.card ? (
+            <ToolResultCard tool={tool} topicId={topicId} isNested={isNested} style={style} />
+          ) : null}
+          <ToolImageStrip images={images} isNested={isNested} style={style} />
+        </div>
       )
     }
 

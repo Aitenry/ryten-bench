@@ -110,7 +110,17 @@ interface ProjectedToolCall {
   status: 'completed'
   id: string
   card?: ToolCard
+  /** 工具结果携带的图像（read_image）：随块持久化，UI 渲染 + 历史回放 */
+  images?: Array<{ dataUrl: string; path: string; mimeType?: string }>
 }
+
+/**
+ * 单张工具结果图像进入对话 blocks 的字节上限（data URL 字符数，约 1.1MB 原图）。
+ *
+ * 图像与用户上传的图片一样以 base64 存在 blocks JSON 里：不设上限时一次 read_image
+ * 就能把会话行撑到几十 MB。超过上限的图不落库（模型本轮仍看得到，UI 显示文本结果）。
+ */
+const MAX_STORED_TOOL_IMAGE_CHARS = 1_500_000
 
 /**
  * 收敛一次工具调用的完成态：读取原始输出 → 投影 → 另存详情。
@@ -123,13 +133,28 @@ async function finishToolCall(
   input: Record<string, unknown>,
   callId: string,
   safeGetOutput: SafeGetOutputFn,
-  call: { output: unknown }
+  call: {
+    output: unknown
+    images?: Promise<Array<{ dataUrl: string; path: string; mimeType?: string }>>
+  }
 ): Promise<ProjectedToolCall> {
   const raw = await safeGetOutput(call)
   const output = typeof raw === 'string' ? raw : JSON.stringify(raw)
+  // 工具结果图像：只保留有界的少量（超过上限的图不落库，避免把会话行撑爆）
+  const images = call.images ? await call.images.catch(() => []) : []
+  const storedImages = images
+    .filter((image) => image.dataUrl.length <= MAX_STORED_TOOL_IMAGE_CHARS)
+    .slice(0, 2)
   if (!PROJECTED_TOOLS.has(name)) {
     // 非内置工具（mnemon_* / manage_* 等）：保持原样，前端要解析 JSON 渲染专属卡片
-    return { name, input, output, status: 'completed', id: callId }
+    return {
+      name,
+      input,
+      output,
+      status: 'completed',
+      id: callId,
+      images: storedImages.length > 0 ? storedImages : undefined
+    }
   }
   const projected = buildToolProjection({
     name,
@@ -150,7 +175,8 @@ async function finishToolCall(
     output: projected.output,
     status: 'completed',
     id: callId,
-    card
+    card,
+    images: storedImages.length > 0 ? storedImages : undefined
   }
 }
 
