@@ -5,6 +5,7 @@ import logger from 'electron-log'
 import { mainMessages } from '../../i18n'
 import { settingsStore } from '../../context'
 import { activeWorkspace, syncWorkspaceWatcher } from '../../workspace'
+import { isReallyInsideRoot } from '../../workspace/selected-roots'
 import { markPathWritten, recordFileChange } from '../../workspace/file-history'
 import {
   keepFileChanges,
@@ -33,6 +34,11 @@ function assertInsideWorkspace(inputPath: string): string {
   const normalizedRoot = resolve(root)
   const target = resolve(inputPath)
   if (target !== normalizedRoot && !target.startsWith(normalizedRoot + sep)) {
+    throw new Error(m.pathOutsideWorkspace)
+  }
+  // 符号链接逃逸（安全审计 S06）：字符串前缀比较拦不住「工作区内的链接指向根外」。
+  // 目标不存在（新建文件）时按最近已存在祖先的 realpath 比较。
+  if (!isReallyInsideRoot(target, normalizedRoot)) {
     throw new Error(m.pathOutsideWorkspace)
   }
   return target

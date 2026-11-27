@@ -12,7 +12,8 @@
  * 这是一个内存态白名单：重启后需要重新选目录——可接受，因为新建工作区本来就要先弹框；
  * 已存在的用户工作区走第 2 条，不受影响。
  */
-import { resolve, sep } from 'path'
+import { basename, dirname, join, resolve, sep } from 'path'
+import * as fs from 'fs'
 
 /** 最多记住的目录数（防止渲染层反复弹框把内存撑大；对话框本身需要用户操作，实际很难触顶） */
 const MAX_REMEMBERED_ROOTS = 64
@@ -56,4 +57,36 @@ export function isPathInsideRoot(target: string, root: string): boolean {
   const r = key(normalizedRoot)
   const t = key(normalizedTarget)
   return t === r || t.startsWith(r.endsWith(sep) ? r : r + sep)
+}
+
+/**
+ * 解析真实路径；目标不存在（新建文件/目录）时，沿父目录回溯到最近的已存在祖先，
+ * 再把不存在的尾部拼回去。
+ *
+ * 为什么需要（安全审计 S06）：字符串级 `path.relative` 校验挡不住符号链接——工作区内
+ * 若存在指向根外的 symlink/junction，写操作会跟随链接落到根外。realpath 先解析链接，
+ * 再做边界比较；「目标尚不存在」是写文件的常态，所以要能处理缺失尾部。
+ */
+export function realpathWithMissingTail(input: string): string {
+  let current = resolve(input)
+  const tail: string[] = []
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native(current)
+      return tail.length === 0 ? real : join(real, ...tail.reverse())
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return resolve(input)
+      tail.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+/**
+ * 真实路径级边界校验：先 realpath 再比较，符号链接无法逃出根目录。
+ * 路径不存在时按 `realpathWithMissingTail` 的解析结果比较（仍能挡住父目录链接）。
+ */
+export function isReallyInsideRoot(target: string, root: string): boolean {
+  return isPathInsideRoot(realpathWithMissingTail(target), realpathWithMissingTail(root))
 }

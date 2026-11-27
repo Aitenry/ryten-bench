@@ -48,7 +48,11 @@ import { currentMcpTools } from '../../runtime/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
 import { hasLatticeSession } from '../../lattice/session'
-import { rememberSelectedRoot } from '../../workspace/selected-roots'
+import {
+  isUserSelectedRoot,
+  rememberSelectedRoot,
+  workspacePathKey
+} from '../../workspace/selected-roots'
 import { readVirtualTextFile } from '../../runtime/harness/fs-backend'
 import { getToolOutputStore } from '../../runtime/harness/tool-output-store'
 import type {
@@ -104,6 +108,7 @@ import {
   getAllTopics,
   getTopicById,
   getWorkspaceById,
+  getAllWorkspaces,
   searchDialogues
 } from '../../database/mapper/harness/harness'
 import { listTeamTaskEvents } from '../../database/mapper/harness/team-task-event'
@@ -438,6 +443,31 @@ async function persistTurnUsage(params: {
  * 执行一轮完整对话：建模型 → 建话题 → 存用户消息 → 流式 → 存 AI 回复 → 通知前端。
  * 返回 { topicId, cancelled, turnId }（cancelled=true 表示用户点了停止）。
  */
+/**
+ * 收敛「本轮工作区路径」的信任来源（安全审计 S03）。
+ *
+ * 渲染层/调用方可以传 `workspaceContext.workspacePath` 当本轮文件工具的挂载根；
+ * 只信任「用户经系统对话框亲手选过」或「已登记工作区行」的目录，其余一律回落到
+ * 设置里的活动工作区路径（定时任务等主进程调用方传的本来就是库里的路径，不受影响）。
+ */
+async function resolveTrustedWorkspacePath(
+  requested: string | undefined,
+  fallback: string | undefined
+): Promise<string | undefined> {
+  if (!requested) return fallback
+  try {
+    if (isUserSelectedRoot(requested)) return requested
+    const rows = await getAllWorkspaces()
+    if (rows.some((row) => workspacePathKey(row.path) === workspacePathKey(requested))) {
+      return requested
+    }
+  } catch (err) {
+    logger.warn('[Harness] Failed to validate requested workspace path:', err)
+  }
+  logger.warn('[Harness] Ignored a workspacePath that is not a registered workspace')
+  return fallback
+}
+
 async function runHarnessTurn(
   params: RunHarnessTurnParams
 ): Promise<{ topicId: number; cancelled: boolean; turnId: number }> {
@@ -465,7 +495,10 @@ async function runHarnessTurn(
   // 本轮工作区上下文：定时任务可以跨模式/跨工作区运行，由调用方显式指定，缺省用当前设置。
   const turnWorkspaceId =
     options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
-  const turnWorkspacePath = options?.workspaceContext?.workspacePath ?? harnessSettings?.workspacePath
+  const turnWorkspacePath = await resolveTrustedWorkspacePath(
+    options?.workspaceContext?.workspacePath,
+    harnessSettings?.workspacePath
+  )
 
   // 0. 本轮的记忆作用域与「插件模式」。**必须在建话题、建工具之前定下来**：
   //    插件模式决定工坊那 4 个工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），
@@ -1699,8 +1732,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
       const syncWorkspaceId =
         options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
-      const syncWorkspacePath =
-        options?.workspaceContext?.workspacePath ?? harnessSettings?.workspacePath
+      const syncWorkspacePath = await resolveTrustedWorkspacePath(
+        options?.workspaceContext?.workspacePath,
+        harnessSettings?.workspacePath
+      )
       const syncRequestSelection = normalizeAgentSelection(options?.agentConfig)
       const syncTopicSelection = options?.topicId
         ? await getTopicAgentSelection(options.topicId)

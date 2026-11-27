@@ -14,6 +14,7 @@ import { DEFAULT_MAX_DOCUMENT_CHARS, extractDocument } from './document-extract'
 import { recordFileChange } from '../../workspace/file-history'
 import { changeStats } from '../../workspace/line-diff'
 import { beginToolWriteWindow, endToolWriteWindow } from '../../workspace/watcher'
+import { isReallyInsideRoot } from '../../workspace/selected-roots'
 import { permissionGate } from './permission-gate'
 import { isPermissionMode } from './permission'
 import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../../sandbox/exec'
@@ -353,6 +354,11 @@ function resolveVirtualPath(
       // 二次校验：确保解析结果仍在挂载根内（防 ../ 逃逸）
       const relative = path.relative(mount.root, realPath)
       if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        return { error: mainFormat(tr.path.escapesMount, { path: vp }) }
+      }
+      // 三次校验（符号链接，安全审计 S06）：工作区内若有指向根外的 symlink/junction，
+      // 上面的字符串比较仍会通过，但实际读写会落到根外——用 realpath 再比一次。
+      if (!isReallyInsideRoot(realPath, mount.root)) {
         return { error: mainFormat(tr.path.escapesMount, { path: vp }) }
       }
       return { realPath }
