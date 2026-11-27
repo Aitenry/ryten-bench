@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+﻿import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import logger from 'electron-log'
 import { withOrm } from '../../orm'
@@ -701,6 +701,54 @@ async function getUsageSummaryByWorkspace(workspaceId: number): Promise<
   })
 }
 
+/** 跨话题搜索的一条命中（含所属话题标题） */
+export interface HarnessDialogueSearchRow {
+  id: number
+  topic_id: number
+  role: string
+  content: string
+  created_at: string | null
+  topic_title: string | null
+}
+
+/**
+ * 跨话题搜索历史消息（按工作区隔离）。
+ *
+ * - `query` 里的 `%` / `_` / `\` 会被转义：用户输入是文本，不是 LIKE 通配符；
+ * - 只返回**当前工作区**的话题（跨工作区搜索会把别的项目的历史带进来）；
+ * - 按时间倒序、上限 50 条，够模型定位「哪次会话聊过」即可，详情再按话题读。
+ */
+async function searchDialogues(
+  workspaceId: number,
+  query: string,
+  limit = 20
+): Promise<HarnessDialogueSearchRow[]> {
+  const escaped = query.replace(/[\\%_]/g, (char) => `\\${char}`)
+  const pattern = `%${escaped}%`
+  const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)))
+  return withOrm('searchDialogues', async (db) => {
+    return db
+      .select({
+        id: harness_dialogue.id,
+        topic_id: harness_dialogue.topic_id,
+        role: harness_dialogue.role,
+        content: harness_dialogue.content,
+        created_at: harness_dialogue.created_at,
+        topic_title: harness_topic.title
+      })
+      .from(harness_dialogue)
+      .innerJoin(harness_topic, eq(harness_dialogue.topic_id, harness_topic.id))
+      .where(
+        and(
+          eq(harness_topic.workspace_id, workspaceId),
+          ilike(harness_dialogue.content, pattern)
+        )
+      )
+      .orderBy(desc(harness_dialogue.created_at))
+      .limit(safeLimit)
+  })
+}
+
 export {
   getAllWorkspaces,
   createWorkspace,
@@ -728,6 +776,7 @@ export {
   forkTopic,
   getDialoguesByTopicId,
   getDialoguesByTopicIdPaginated,
+  searchDialogues,
   addDialogue,
   updateDialogueContent,
   deleteDialoguesByTopicId,

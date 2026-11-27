@@ -22,6 +22,7 @@ import { buildTeamTools, teamStore } from './team'
 import { buildWorkflowTool } from './workflow'
 import { buildSkillsPromptSection, loadSkills, type SkillInfo } from './skills-core'
 import { buildSkillTool } from './skill-tool'
+import { buildSessionSearchTools } from './session-search'
 import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
 import { createTaskTool } from './subagent'
 import { createAgentAuthoringTool } from './subagent-authoring'
@@ -208,6 +209,8 @@ export class Runtime {
       [
         ...this.opts.tools,
         ...this.fsTools,
+        // 历史会话检索（跨话题搜索 + 按话题读取）：只在有工作区的会话里挂载
+        ...(this.opts.workspaceId > 0 ? buildSessionSearchTools(this.opts.workspaceId) : []),
         ...buildTodoTools(todoStore, topicId),
         ...buildGoalTools(goalStore, topicId),
         // 计划模式：退出工具只在激活时披露（与规划指引同时出现）

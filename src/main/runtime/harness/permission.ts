@@ -100,6 +100,9 @@ const READ_TOOLS = new Set([
   'ls',
   'glob',
   'grep',
+  // 历史会话检索（只读）
+  'session_search',
+  'conversation_read',
   // 本地工具
   'get_time',
   'get_weather',

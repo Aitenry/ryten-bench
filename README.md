@@ -155,6 +155,10 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Deliverables** — a `present` tool lets the model declare the finished files of a turn (1–4
   workspace paths with one-line descriptions); the reply then shows a clickable file list that opens
   each file in the workspace panel. Optional tool, enabled under Settings → Agents.
+- **Conversation recall** — `session_search` searches every conversation of the workspace for a
+  literal keyword and returns the newest hits (topic id/title, role, time, a snippet around the
+  match); `conversation_read` then reads the last N messages of a topic. Both are read-only and
+  workspace-scoped, so the assistant can follow a reference back to an earlier discussion.
 - **Scheduled tasks** — `schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit` run a
   prompt in its conversation on a one-off timestamp, every N minutes, or daily at `HH:MM`. Tasks live
   under `userData/schedules/`, fire a fresh turn when due while the app is running (missed runs are
