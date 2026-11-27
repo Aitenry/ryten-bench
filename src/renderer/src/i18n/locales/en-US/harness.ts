@@ -194,6 +194,12 @@ export const harnessEnUS: typeof harnessZhCN = {
         noTopic: 'Send a message first to create the conversation, then use this command'
       }
     },
+    /** Tool source tag shown at the right of a tool name (system / plugin / MCP) */
+    toolSource: {
+      system: 'System',
+      plugin: 'Plugin',
+      mcp: 'MCP'
+    },
     /** Plan mode: composer badge and enter/leave feedback */
     planMode: {
       badge: 'Plan mode',
@@ -362,6 +368,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       attachmentCount: '[{{count}} attachment(s)] '
     },
     header: {
+      openStart: 'Start',
       toggleSidebar: 'Sidebar',
       togglePanel: 'Workspace panel',
       toggleTerminal: 'Terminal',
@@ -371,12 +378,7 @@ export const harnessEnUS: typeof harnessZhCN = {
     terminalPanel: {
       title: 'Terminal',
       runningCount: '{{count}} running',
-      newSession: 'New terminal',
-      closeSession: 'Close current terminal',
-      hidePanel: 'Hide terminal panel',
       loading: 'Loading terminal sessions…',
-      empty: 'No terminal sessions yet',
-      emptyHint: 'Opening the panel creates a terminal automatically; use the button below to add another.',
       tooMany: 'At most 3 terminals per conversation',
       noShell: 'No usable shell found (pwsh / cmd / bash)',
       failed: 'Terminal operation failed, please retry'
@@ -384,7 +386,6 @@ export const harnessEnUS: typeof harnessZhCN = {
     /** Start page: tool launcher (sidebar "Start") */
     startPage: {
       title: 'Start',
-      entry: 'Start',
       workspace: {
         title: 'Workspace files',
         description: 'Browse files in the conversation workspace'
@@ -405,15 +406,23 @@ export const harnessEnUS: typeof harnessZhCN = {
     },
     /** In-app browser panel (Electron webview) */
     browserPanel: {
-      title: 'Browser',
-      loading: 'Loading…',
       addressPlaceholder: 'Enter a URL or search',
       back: 'Back',
       forward: 'Forward',
       reload: 'Reload',
-      home: 'Home',
-      open: 'Go',
-      hidePanel: 'Hide browser panel',
+      blankTab: 'New tab',
+      newTab: 'New tab',
+      tabSearch: 'Search tabs',
+      tabSearchPlaceholder: 'Search tabs',
+      tabSearchShortcut: 'Ctrl+Shift+A',
+      openTabs: 'Open tabs',
+      noMatchingTabs: 'No matching tabs',
+      recentlyClosed: 'Recently closed',
+      noRecentlyClosed: 'No recently closed tabs',
+      timeJustNow: 'just now',
+      timeMinutesAgo: '{{count}} min ago',
+      timeHoursAgo: '{{count}} h ago',
+      timeDaysAgo: '{{count}} d ago',
       loadFailed: 'Failed to load page: {{reason}}'
     },
     messageArea: {

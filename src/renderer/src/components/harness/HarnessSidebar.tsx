@@ -41,8 +41,6 @@ import { useDraftActions } from './workshop/useDraftActions'
 import { useMessage } from '@renderer/hooks/useMessage'
 import { useTranslation } from '@renderer/i18n'
 import { setWindowTitleSource } from '@renderer/window-title'
-import { RiCompass3Line } from '@remixicon/react'
-import { usePtyTerminalStats } from '@renderer/hooks/usePtyTerminalStats'
 import type { HarnessSettings } from '@renderer/types/settings'
 import type { MenuProps } from 'antd'
 import type { TFunction } from 'i18next'
@@ -121,8 +119,6 @@ interface HarnessSidebarProps {
    * null = 清空待定位目标（点标题命中 / 关掉搜索时用）。
    */
   onSetPendingJumpDialogue?: (dialogueId: number | null) => void
-  /** 打开「开始」页（对话窗口侧栏入口；工具选择后打开右侧面板） */
-  onOpenStart?: () => void
   /** 系统外壳模式：使用深色侧栏与参考图里的浅色胶囊滑块 */
   shellMode?: boolean
 }
@@ -401,13 +397,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   onLoadMoreTopics,
   onRefreshTopics,
   onNewHarness,
-  onOpenStart,
   onOpenHarness,
   onSetPendingJumpDialogue,
   shellMode = false
 }) => {
-  /** 终端运行数：开始入口角标（顶栏角标已移除） */
-  const terminalAlive = usePtyTerminalStats()
   const { token } = theme.useToken()
   const { viewMessage } = useMessage()
   const { modal, message } = App.useApp()
@@ -3380,53 +3373,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         borderRadius: borderRadiusLG
       }}
     >
-      {/* 开始入口：工具选择放在对话窗口侧栏里（不是系统外壳侧栏） */}
-      {onOpenStart ? (
-        <button
-          type="button"
-          data-harness-start="1"
-          onClick={onOpenStart}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 9,
-            flexShrink: 0,
-            height: 34,
-            margin: '8px 10px 0',
-            padding: '0 10px',
-            border: 'none',
-            borderRadius: 9,
-            background: colorFillAlter,
-            color: colorText,
-            cursor: 'pointer',
-            fontFamily: 'inherit'
-          }}
-        >
-          <RiCompass3Line size={15} style={{ color: colorTextSecondary }} />
-          <span style={{ fontSize: 12.5, fontWeight: 600 }}>{t('harness.startPage.entry')}</span>
-          {terminalAlive > 0 ? (
-            <span
-              data-harness-start-badge="1"
-              style={{
-                minWidth: 16,
-                height: 16,
-                padding: '0 5px',
-                borderRadius: 999,
-                background: 'rgba(73,170,25,.16)',
-                color: '#3f9414',
-                fontSize: 9.5,
-                lineHeight: '16px',
-                textAlign: 'center',
-                fontWeight: 600
-              }}
-            >
-              {terminalAlive}
-            </span>
-          ) : null}
-          <span style={{ marginLeft: 'auto', color: colorTextTertiary, fontSize: 13 }}>›</span>
-        </button>
-      ) : null}
-
       {/* 头部：模式开关（对话 / 工作 / 插件）+ 右侧动作胶囊（搜索 / 新建） */}
       <div
         data-harness-sidebar-header="1"

@@ -10,13 +10,12 @@ import { useTranslation } from '@renderer/i18n'
 import { usePtyTerminalStats } from '../hooks/usePtyTerminalStats'
 
 /**
- * 「开始」页：工具选择入口（用户 2026-11-27 截图设计，后续按反馈移到对话窗口侧栏）。
+ * 「开始」面板：右侧工具选择入口（用户 2026-11-27 口径）。
  *
- * 入口在**对话窗口侧栏**（HarnessSidebar 的「开始」按钮），不是系统外壳侧栏；
- * 页面在助手页主内容区渲染（对话区让位），选择后打开右列对应面板：
- * 工作区文件 / 新建终端 / 浏览器。「更多工具」按用户要求移除。
- *
- * 终端卡片与侧栏入口共用 `usePtyTerminalStats()`（主进程真源 + 会话变化事件）。
+ * - 入口在**对话窗口侧栏**（HarnessSidebar 的「开始」按钮），点击后在**右侧面板**打开本页，
+ *   不占对话主内容区、也不默认弹资源管理器；
+ * - 三个工具：工作区文件 / 新建终端 / 浏览器；「更多工具」按用户要求移除；
+ * - 选择后面板切换为对应工具（同一列、同一宽度）；终端卡片与侧栏入口共用运行数角标。
  */
 
 export type StartToolKind = 'workspace' | 'terminal' | 'browser'
@@ -69,22 +68,23 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
   }> = [
     {
       key: 'workspace',
-      icon: <RiFolder3Line size={22} style={{ color: '#e8b339' }} />,
+      icon: <RiFolder3Line size={19} style={{ color: '#e8b339' }} />,
       title: t('harness.startPage.workspace.title'),
       description: t('harness.startPage.workspace.description'),
       shortcut: shortcut('P')
     },
     {
       key: 'terminal',
-      icon: <RiTerminalBoxLine size={22} style={{ color: '#4d6bfe' }} />,
+      icon: <RiTerminalBoxLine size={19} style={{ color: '#4d6bfe' }} />,
       title: t('harness.startPage.terminal.title'),
       description: t('harness.startPage.terminal.description'),
       shortcut: shortcut('`'),
-      badge: terminalAlive > 0 ? t('harness.startPage.terminal.running', { count: terminalAlive }) : ''
+      badge:
+        terminalAlive > 0 ? t('harness.startPage.terminal.running', { count: terminalAlive }) : ''
     },
     {
       key: 'browser',
-      icon: <RiGlobalLine size={22} style={{ color: '#4d9bfe' }} />,
+      icon: <RiGlobalLine size={19} style={{ color: '#4d9bfe' }} />,
       title: t('harness.startPage.browser.title'),
       description: t('harness.startPage.browser.description'),
       shortcut: shortcut('T')
@@ -93,39 +93,52 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
 
   return (
     <div
-      className="h-full overflow-y-auto custom-scrollbar"
-      style={{ background: token.colorBgContainer }}
+      className="flex flex-col h-full overflow-y-auto custom-scrollbar"
+      style={{ background: token.colorBgContainer, borderRadius: token.borderRadiusLG }}
       data-start-page="1"
     >
-      <div style={{ maxWidth: 760, margin: '0 auto', padding: '28px 24px 64px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: token.colorText }}>
-          <RiCompass3Line size={17} />
-          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{t('harness.startPage.title')}</span>
-        </div>
+      {/* 标题栏：与其他右侧面板同款 */}
+      <div
+        className="flex items-center"
+        style={{
+          height: 34,
+          flex: '0 0 34px',
+          gap: 7,
+          padding: '0 12px',
+          background: token.colorFillQuaternary,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`
+        }}
+      >
+        <RiCompass3Line size={15} style={{ color: token.colorTextSecondary }} />
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: token.colorText }}>
+          {t('harness.startPage.title')}
+        </span>
+      </div>
 
+      <div style={{ padding: '18px 12px 16px' }}>
         <div
           style={{
             display: 'flex',
             justifyContent: 'center',
-            margin: '72px 0 44px',
+            margin: '12px 0 22px',
             color: token.colorTextTertiary
           }}
         >
           <span
             style={{
-              width: 58,
-              height: 58,
+              width: 44,
+              height: 44,
               borderRadius: '50%',
               border: `2px solid ${token.colorBorderSecondary}`,
               display: 'grid',
               placeItems: 'center'
             }}
           >
-            <RiCompass3Line size={26} />
+            <RiCompass3Line size={20} />
           </span>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-start-cards="1">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} data-start-cards="1">
           {cards.map((card) => (
             <button
               key={card.key}
@@ -135,23 +148,23 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 14,
+                gap: 11,
                 width: '100%',
                 textAlign: 'left',
-                padding: '14px 18px',
-                minHeight: 64,
+                padding: '11px 12px',
+                minHeight: 56,
                 border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 14,
+                borderRadius: 12,
                 background: token.colorFillQuaternary,
                 cursor: 'pointer',
                 color: token.colorText
               }}
             >
-              <span style={{ width: 26, display: 'grid', placeItems: 'center' }}>{card.icon}</span>
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <span style={{ width: 22, display: 'grid', placeItems: 'center' }}>{card.icon}</span>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                 <span
                   style={{
-                    fontSize: 14.5,
+                    fontSize: 13,
                     fontWeight: 600,
                     display: 'flex',
                     alignItems: 'center',
@@ -165,12 +178,12 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
-                        height: 18,
-                        padding: '0 7px',
+                        height: 17,
+                        padding: '0 6px',
                         borderRadius: 999,
                         background: 'rgba(73,170,25,.14)',
                         color: '#3f9414',
-                        fontSize: 10,
+                        fontSize: 9.5,
                         fontWeight: 600
                       }}
                     >
@@ -178,14 +191,22 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
                     </span>
                   ) : null}
                 </span>
-                <span style={{ fontSize: 11.5, color: token.colorTextTertiary }}>
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    color: token.colorTextTertiary,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
                   {card.description}
                 </span>
               </span>
               <span
                 style={{
                   marginLeft: 'auto',
-                  fontSize: 11,
+                  fontSize: 10,
                   color: token.colorTextTertiary,
                   whiteSpace: 'nowrap'
                 }}

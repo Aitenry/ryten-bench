@@ -200,6 +200,15 @@ export const harnessZhCN = {
         noTopic: '先发送一条消息创建会话，再使用这个命令'
       }
     },
+    /**
+     * 工具来源标签（工具清单里名称右侧的小胶囊）：系统 = 随应用编译，插件 = 第三方插件贡献，
+     * MCP = 外部 MCP 服务器。见主进程 `ToolSourceKind`。
+     */
+    toolSource: {
+      system: '系统',
+      plugin: '插件',
+      mcp: 'MCP'
+    },
     /** 计划模式（plan mode）：输入框徽标 + 进入/退出提示 */
     planMode: {
       badge: '计划模式',
@@ -357,6 +366,7 @@ export const harnessZhCN = {
       attachmentCount: '[{{count}} 个附件] '
     },
     header: {
+      openStart: '开始',
       toggleSidebar: '侧边栏',
       togglePanel: '工作区面板',
       toggleTerminal: '终端',
@@ -366,12 +376,7 @@ export const harnessZhCN = {
     terminalPanel: {
       title: '终端',
       runningCount: '运行中 {{count}}',
-      newSession: '新建终端',
-      closeSession: '关闭当前终端',
-      hidePanel: '收起终端面板',
       loading: '正在读取终端会话…',
-      empty: '还没有终端会话',
-      emptyHint: '打开面板会自动新建一个终端会话；也可以点下方按钮手动再开一个。',
       tooMany: '每个会话最多 3 个终端',
       noShell: '找不到可用的 shell（pwsh / cmd / bash）',
       failed: '终端操作失败，请重试'
@@ -379,7 +384,6 @@ export const harnessZhCN = {
     /** 开始页：工具选择入口（侧栏「开始」） */
     startPage: {
       title: '开始',
-      entry: '开始',
       workspace: {
         title: '工作区文件',
         description: '浏览会话工作区的文件'
@@ -400,15 +404,23 @@ export const harnessZhCN = {
     },
     /** 应用内浏览器面板（Electron webview） */
     browserPanel: {
-      title: '浏览器',
-      loading: '加载中…',
       addressPlaceholder: '输入网址或搜索内容',
       back: '后退',
       forward: '前进',
       reload: '刷新',
-      home: '主页',
-      open: '打开',
-      hidePanel: '收起浏览器面板',
+      blankTab: '新标签页',
+      newTab: '新建标签页',
+      tabSearch: '搜索标签页',
+      tabSearchPlaceholder: '搜索标签页',
+      tabSearchShortcut: 'Ctrl+Shift+A',
+      openTabs: '打开的标签页',
+      noMatchingTabs: '没有匹配的标签页',
+      recentlyClosed: '最近关闭的标签页',
+      noRecentlyClosed: '没有最近关闭的标签页',
+      timeJustNow: '刚刚',
+      timeMinutesAgo: '{{count}} 分钟前',
+      timeHoursAgo: '{{count}} 小时前',
+      timeDaysAgo: '{{count}} 天前',
       loadFailed: '网页加载失败：{{reason}}'
     },
     messageArea: {

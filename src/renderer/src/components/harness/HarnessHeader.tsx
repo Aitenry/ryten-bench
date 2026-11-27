@@ -43,8 +43,10 @@ export interface HeaderSubagentBreadcrumb {
 }
 
 interface HarnessHeaderProps {
-  panelOpen: boolean
-  onTogglePanel: () => void
+  /** 右侧「开始」面板是否打开（顶部按钮带激活态） */
+  startOpen: boolean
+  /** 顶部按钮：打开/收起右侧「开始」工具面�� */
+  onToggleStart: () => void
   colorBorderSecondary: string
   currentTopicId: number | null
   /** 点顶部栏后台子代理：主对话区切换到该子代理的流式会话（见 SubagentConversationView） */
@@ -74,8 +76,8 @@ interface HarnessHeaderProps {
  * 每行左侧折叠输出、右侧停止，不再使用 Popover / Modal。
  */
 const HarnessHeader: React.FC<HarnessHeaderProps> = ({
-  panelOpen,
-  onTogglePanel,
+  startOpen,
+  onToggleStart,
   colorBorderSecondary,
   currentTopicId,
   onSelectSubagent,
@@ -211,9 +213,10 @@ const HarnessHeader: React.FC<HarnessHeaderProps> = ({
           <Button
             type="text"
             size="small"
-            title={t('harness.header.togglePanel')}
-            icon={panelOpen ? <RiLayoutRightFill size={16} /> : <RiLayoutRightLine size={16} />}
-            onClick={onTogglePanel}
+            data-harness-start-toggle="1"
+            title={t('harness.header.openStart')}
+            icon={startOpen ? <RiLayoutRightFill size={16} /> : <RiLayoutRightLine size={16} />}
+            onClick={onToggleStart}
           />
         </div>
       </div>

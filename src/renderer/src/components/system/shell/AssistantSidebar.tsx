@@ -84,10 +84,6 @@ const AssistantSidebar: React.FC = () => {
       onNewHarness={handleNewHarness}
       onOpenHarness={openHarness}
       onSetPendingJumpDialogue={setPendingJumpDialogueId}
-      onOpenStart={() => {
-        openHarness()
-        window.dispatchEvent(new CustomEvent('harness-open-start'))
-      }}
       shellMode={effectiveTheme === 'dark'}
     />
   )

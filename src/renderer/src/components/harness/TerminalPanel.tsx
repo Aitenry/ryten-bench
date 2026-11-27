@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, theme, Tooltip } from 'antd'
+import { theme } from 'antd'
 import {
-  RiAddLine,
-  RiCloseLine,
-  RiLayoutRightLine,
   RiTerminalBoxLine
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
@@ -158,6 +155,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     onRunningCountChange?.(sessions.filter((session) => session.alive).length)
   }, [onRunningCountChange, sessions])
 
+  /**
+   * 没有终端就不保留空面板（用户 2026-11-27 口径）：
+   * 创建失败，或用户关掉最后一个会话 → 自动收起整个终端侧栏。
+   * 初次打开且没有会话时由上面的自动新建负责，不在这里关。
+   */
+  const hadSessionsRef = useRef(false)
+  useEffect(() => {
+    if (sessions.length > 0) hadSessionsRef.current = true
+  }, [sessions.length])
+  useEffect(() => {
+    if (loading || opening) return
+    if (sessions.length > 0) return
+    if (error || hadSessionsRef.current) onClosePanel?.()
+  }, [error, loading, onClosePanel, opening, sessions.length])
+
   return (
     <div
       className="flex flex-col h-full overflow-hidden"
@@ -201,42 +213,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </span>
         ) : null}
         <span style={{ flex: 1 }} />
-        <Tooltip title={t('harness.terminalPanel.newSession')}>
-          <Button
-            type="text"
-            size="small"
-            data-terminal-action="new"
-            aria-label={t('harness.terminalPanel.newSession')}
-            disabled={opening || sessions.length >= 3}
-            loading={opening}
-            icon={<RiAddLine size={14} />}
-            onClick={() => void openSession()}
-          />
-        </Tooltip>
-        {activeId ? (
-          <Tooltip title={t('harness.terminalPanel.closeSession')}>
-            <Button
-              type="text"
-              size="small"
-              data-terminal-action="close-session"
-              aria-label={t('harness.terminalPanel.closeSession')}
-              icon={<RiCloseLine size={14} />}
-              onClick={() => activeId && void closeSession(activeId)}
-            />
-          </Tooltip>
-        ) : null}
-        {onClosePanel ? (
-          <Tooltip title={t('harness.terminalPanel.hidePanel')}>
-            <Button
-              type="text"
-              size="small"
-              data-terminal-hide="1"
-              aria-label={t('harness.terminalPanel.hidePanel')}
-              icon={<RiLayoutRightLine size={14} />}
-              onClick={onClosePanel}
-            />
-          </Tooltip>
-        ) : null}
       </div>
 
       {/* 会话页签 */}
@@ -287,6 +263,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
               </span>
               <span
                 role="presentation"
+                data-terminal-close-tab="1"
                 onClick={(event) => {
                   event.stopPropagation()
                   void closeSession(session.sessionId)
@@ -298,56 +275,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
             </button>
           )
         })}
-        {sessions.length < 3 ? (
-          <button
-            type="button"
-            title={t('harness.terminalPanel.newSession')}
-            disabled={opening}
-            onClick={() => void openSession()}
-            style={{
-              width: 33,
-              height: 33,
-              border: 'none',
-              background: 'transparent',
-              color: colorTextTertiary,
-              cursor: 'pointer'
-            }}
-          >
-            ＋
-          </button>
-        ) : null}
       </div>
 
-      {/* 终端主体：xterm.js + node-pty */}
+      {/* 终端主体：xterm.js + node-pty（没有会话时面板会被自动关闭，不再显示空态/新建入口） */}
       {loading ? (
         <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
           {t('harness.terminalPanel.loading')}
         </div>
-      ) : error ? (
-        <div style={{ padding: 14, fontSize: 12, color: token.colorError }}>
-          {error}
-          <div style={{ marginTop: 10 }}>
-            <Button size="small" icon={<RiAddLine size={13} />} onClick={() => void openSession()}>
-              {t('harness.terminalPanel.newSession')}
-            </Button>
-          </div>
-        </div>
-      ) : sessions.length === 0 ? (
-        <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
-          <div style={{ marginBottom: 6 }}>{t('harness.terminalPanel.empty')}</div>
-          <div style={{ marginBottom: 10 }}>{t('harness.terminalPanel.emptyHint')}</div>
-          <Button size="small" icon={<RiAddLine size={13} />} onClick={() => void openSession()}>
-            {t('harness.terminalPanel.newSession')}
-          </Button>
-        </div>
-      ) : (
+      ) : sessions.length > 0 ? (
         <TerminalEmulator
           key={activeId ?? 'none'}
           sessionId={activeId ?? ''}
           isDarkMode={isDarkMode}
           onExited={() => void loadSessions()}
         />
-      )}
+      ) : null}
     </div>
   )
 }

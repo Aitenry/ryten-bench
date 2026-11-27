@@ -255,8 +255,8 @@ const Harness: React.FC = () => {
   const [terminalOpen, setTerminalOpen] = useState(false)
   /** 应用内浏览器面板：与终端/工作区同一列互斥（开始页选择后打开） */
   const [browserOpen, setBrowserOpen] = useState(false)
-  /** 「开始」页：工具选择入口在对话窗口侧栏，页面占主内容区 */
-  const [startViewOpen, setStartViewOpen] = useState(false)
+  /** 「开始」面板：工具选择入口（右列面板之一，与工作区/终端/浏览器互斥） */
+  const [startPanelOpen, setStartPanelOpen] = useState(false)
   /**
    * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
    *
@@ -449,61 +449,41 @@ const Harness: React.FC = () => {
     action(handle)
   }, [panelOpen, panelHasEditor])
 
-  /** 工作区面板开关：与终端/浏览器面板互斥（同一列只显示一个） */
-  const toggleWorkspacePanel = useCallback((): void => {
-    setPanelOpen((prev) => {
-      const next = !prev
-      if (next) {
-        setTerminalOpen(false)
-        setBrowserOpen(false)
-      }
-      return next
-    })
-  }, [])
-
-  /** 终端面板开关：与工作区/浏览器面板互斥 */
+  /** 终端面板开关：与工作区/浏览器/开始面板互斥 */
   const toggleTerminalPanel = useCallback((): void => {
     setTerminalOpen((prev) => {
       const next = !prev
       if (next) {
         setPanelOpen(false)
         setBrowserOpen(false)
+        setStartPanelOpen(false)
       }
       return next
     })
   }, [])
 
-  /** 浏览器面板开关：与工作区/终端面板互斥 */
-  const toggleBrowserPanel = useCallback((): void => {
-    setBrowserOpen((prev) => {
-      const next = !prev
-      if (next) {
-        setPanelOpen(false)
-        setTerminalOpen(false)
-      }
-      return next
-    })
-  }, [])
+  /**
+   * 右侧是否已有任意面板（开始/工作区/终端/浏览器）。
+   * 顶部栏只有一个按钮：有面板时点它 = 全部收起；没有面板时点它 = 打开「开始」。
+   */
+  const anyPanelOpen = panelOpen || terminalOpen || browserOpen || startPanelOpen
 
-  /** 侧栏「开始」入口 → 打开开始页（侧栏在 AppShell 里，通过窗口事件通知本页） */
-  useEffect(() => {
-    const handler = (): void => setStartViewOpen(true)
-    window.addEventListener('harness-open-start', handler)
-    return () => window.removeEventListener('harness-open-start', handler)
-  }, [])
-
-  // 切到别的会话：退出开始页（开始页只是工具选择，不该挡住用户点开的会话）
-  const prevStartTopicRef = useRef(currentTopicId)
-  useEffect(() => {
-    if (prevStartTopicRef.current === currentTopicId) return
-    prevStartTopicRef.current = currentTopicId
-    setStartViewOpen(false)
-  }, [currentTopicId])
+  /** 顶部栏按钮：收起所有右侧面板 / 打开开始面板 */
+  const toggleStartPanel = useCallback((): void => {
+    if (anyPanelOpen) {
+      setPanelOpen(false)
+      setTerminalOpen(false)
+      setBrowserOpen(false)
+      setStartPanelOpen(false)
+      return
+    }
+    setStartPanelOpen(true)
+  }, [anyPanelOpen])
 
   /** 开始页选工具：收起开始页，直接打开右列对应面板 */
   const handleStartSelect = useCallback(
     (kind: StartToolKind): void => {
-      setStartViewOpen(false)
+      setStartPanelOpen(false)
       if (kind === 'terminal') {
         setTerminalOpen(true)
         setPanelOpen(false)
@@ -821,7 +801,6 @@ const Harness: React.FC = () => {
   /** 终端/浏览器面板的最小可读宽度（工作区面板没有文件时只有 220） */
   const TERMINAL_PANEL_MIN_WIDTH = 360
   /** 工作区 / 终端 / 浏览器占同一列：统一宽度上下限，切换面板不跳宽度 */
-  const anyPanelOpen = panelOpen || terminalOpen || browserOpen
   const workspaceMinWidth = panelMinWidthFor(panelHasEditor)
   const panelMinWidth = anyPanelOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
   /*
@@ -981,9 +960,7 @@ const Harness: React.FC = () => {
                 borderTopLeftRadius: borderRadiusLG
               }}
             >
-              {startViewOpen ? (
-                <StartPage onSelect={handleStartSelect} />
-              ) : hasWorkspace === null ? null : hasWorkspace === false ? (
+              {hasWorkspace === null ? null : hasWorkspace === false ? (
                 /* 未配置工作区：对话按工作区隔离，先引导选择目录（同「配置模型」的页内引导） */
                 <div
                   className="flex-1 flex items-center justify-center"
@@ -1066,8 +1043,8 @@ const Harness: React.FC = () => {
               ) : (
                 <>
                   <HarnessHeader
-                    panelOpen={panelOpen}
-                    onTogglePanel={toggleWorkspacePanel}
+                    startOpen={anyPanelOpen}
+                    onToggleStart={toggleStartPanel}
                     colorBorderSecondary={colorBorderSecondary}
                     currentTopicId={currentTopicId}
                     onSelectSubagent={handleSelectSubagent}
@@ -1205,7 +1182,7 @@ const Harness: React.FC = () => {
             </main>
 
             {/* Right column: workspace / terminal / embedded browser (mutually exclusive) */}
-            {(panelOpen || terminalOpen || browserOpen) && (
+            {anyPanelOpen && (
               <>
                 <div className="harness-resizer" onMouseDown={handlePanelResizerMouseDown}>
                   <div className="harness-resizer-dragger" />
@@ -1218,7 +1195,9 @@ const Harness: React.FC = () => {
                     flexShrink: 0
                   }}
                 >
-                  {terminalOpen ? (
+                  {startPanelOpen ? (
+                    <StartPage onSelect={handleStartSelect} />
+                  ) : terminalOpen ? (
                     <TerminalPanel
                       topicId={currentTopicId}
                       isDarkMode={isDarkMode}
@@ -1236,7 +1215,6 @@ const Harness: React.FC = () => {
                       colorTextSecondary={colorTextSecondary}
                       colorTextTertiary={colorTextTertiary}
                       colorBorderSecondary={colorBorderSecondary}
-                      onClosePanel={toggleBrowserPanel}
                     />
                   ) : (
                     <WorkspacePanel
