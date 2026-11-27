@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import logger from 'electron-log'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
+import { pruneOldestFiles } from './prune-oldest'
 
 /**
  * 工具结果溢出存储（spill）— 对应 deepseek-harness 的 spill 体系
@@ -44,6 +45,8 @@ export interface SpillLocator {
 export class SpillStore {
   private readonly dir?: string
   private readonly virtualPrefix?: string
+  /** 是否有一轮异步清理在跑（合并并发写入触发的重复扫描） */
+  private pruning = false
 
   constructor(workspacePath?: string, memoryPath?: string, topicId = 0) {
     if (workspacePath) {
@@ -101,33 +104,16 @@ export class SpillStore {
     return `${head}${middle}${tail}\n\n${locator}`
   }
 
-  /** 删除最旧溢出文件，保证每个话题文件数不超过上限 */
+  /** 删除最旧溢出文件，保证每个话题文件数不超过上限（异步，不阻塞事件循环） */
   private prune(): void {
-    let files: fs.Dirent[]
-    try {
-      files = fs.readdirSync(this.dir!, { withFileTypes: true })
-    } catch {
-      return
-    }
-    const spillFiles = files
-      .filter((e) => e.isFile() && e.name.startsWith('spill-'))
-      .map((e) => {
-        const full = path.join(this.dir!, e.name)
-        try {
-          return { full, mtime: fs.statSync(full).mtimeMs }
-        } catch {
-          return null
-        }
-      })
-      .filter((f): f is { full: string; mtime: number } => f !== null)
-      .sort((a, b) => a.mtime - b.mtime)
-    for (let i = 0; i < spillFiles.length - MAX_FILES_PER_TOPIC; i++) {
-      try {
-        fs.unlinkSync(spillFiles[i].full)
-      } catch {
-        // 删除失败不阻塞保存
-      }
-    }
+    if (!this.dir || this.pruning) return
+    this.pruning = true
+    void pruneOldestFiles(this.dir, {
+      keep: MAX_FILES_PER_TOPIC,
+      match: (name) => name.startsWith('spill-')
+    }).finally(() => {
+      this.pruning = false
+    })
   }
 
   /**

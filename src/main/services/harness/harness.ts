@@ -30,7 +30,7 @@ import { todoStore } from '../../runtime/harness/todo'
 import { mainFormat } from '../../i18n'
 import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { getCompactionByTopic, upsertCompaction } from '../../database/mapper/harness/compaction'
-import { getUsageByTopic } from '../../database/mapper/harness/harness'
+import { getLastUsageByTopic } from '../../database/mapper/harness/harness'
 import type { HistoryDialogue, LoadHistoryFn } from './history'
 import { extractStructuredMessages, convertDialoguesToMessages } from './history'
 import { buildHumanMessage } from './message-builder'
@@ -211,7 +211,8 @@ class HarnessService {
    */
   private async measureContextTokens(topicId: number): Promise<number | null> {
     try {
-      return lastCallContextTokens(await getUsageByTopic(topicId))
+      const last = await getLastUsageByTopic(topicId)
+      return lastCallContextTokens(last ? [last] : [])
     } catch (err) {
       logger.warn(
         '[Harness] Failed to read usage for compaction pressure, falling back to chars:',

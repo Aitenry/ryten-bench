@@ -1,4 +1,4 @@
-﻿import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import logger from 'electron-log'
 import { withOrm } from '../../orm'
@@ -655,6 +655,25 @@ async function addDialogueUsage(
   })
 }
 
+/**
+ * 只取该话题**最后一条**用量行（性能审计 P09）。
+ *
+ * 每轮对话开头估算「上一轮真实上下文 token」只需要最后一行；旧实现在这里
+ * `getUsageByTopic` 全量读出（长会话数百行、含 usage_metadata JSON）再取最后一条。
+ * 渲染层回填用量仍走 `getUsageByTopic` 全量接口，语义不变。
+ */
+async function getLastUsageByTopic(topicId: number): Promise<HarnessDialogueUsageRow | null> {
+  return withOrm('getLastUsageByTopic', async (db) => {
+    const rows = await db
+      .select()
+      .from(harness_dialogue_usage)
+      .where(eq(harness_dialogue_usage.topic_id, topicId))
+      .orderBy(desc(harness_dialogue_usage.id))
+      .limit(1)
+    return rows[0] ?? null
+  })
+}
+
 /** 按话题取用量明细（渲染层按 dialogue_id 回填到各条消息） */
 async function getUsageByTopic(topicId: number): Promise<HarnessDialogueUsageRow[]> {
   return withOrm('getUsageByTopic', async (db) => {
@@ -783,5 +802,6 @@ export {
   deleteDialogueById,
   addDialogueUsage,
   getUsageByTopic,
+  getLastUsageByTopic,
   getUsageSummaryByWorkspace
 }

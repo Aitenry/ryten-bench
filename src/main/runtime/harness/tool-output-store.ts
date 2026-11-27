@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import logger from 'electron-log'
+import { pruneOldestFiles } from './prune-oldest'
 
 /**
  * 工具结果详情存储（内置工具的「结果原文」旁路）。
@@ -27,6 +28,8 @@ export const MAX_DETAIL_CHARS = 512_000
 
 export class ToolOutputStore {
   private readonly baseDir: string
+  /** 正在清理的话题（串行合并，避免并发写触发多轮全目录扫描） */
+  private readonly pruning = new Set<number>()
 
   constructor(baseDir: string) {
     this.baseDir = baseDir
@@ -107,32 +110,15 @@ export class ToolOutputStore {
 
   /** 删除最旧文件，保证单话题文件数不超过上限（先写后剪，与 spill 同口径） */
   private prune(topicId: number): void {
+    // 异步清理（性能审计 P19）：工具调用密集时同步 readdir/stat/unlink 会阻塞事件循环。
+    // 同一话题的清理串行合并，避免并发写触发多轮全目录扫描。
+    if (this.pruning.has(topicId)) return
+    this.pruning.add(topicId)
     const dir = path.join(this.baseDir, String(topicId))
-    let entries: fs.Dirent[]
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return
-    }
-    const files = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
-      .map((entry) => {
-        const full = path.join(dir, entry.name)
-        try {
-          return { full, mtime: fs.statSync(full).mtimeMs }
-        } catch {
-          return null
-        }
-      })
-      .filter((item): item is { full: string; mtime: number } => item !== null)
-      .sort((a, b) => a.mtime - b.mtime)
-    for (let i = 0; i < files.length - MAX_FILES_PER_TOPIC; i += 1) {
-      try {
-        fs.unlinkSync(files[i].full)
-      } catch {
-        // 删除失败不阻塞写入
-      }
-    }
+    void pruneOldestFiles(dir, {
+      keep: MAX_FILES_PER_TOPIC,
+      match: (name) => name.endsWith('.txt')
+    }).finally(() => this.pruning.delete(topicId))
   }
 }
 
