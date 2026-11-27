@@ -376,6 +376,40 @@ export const harnessZhCN = {
       noShell: '找不到可用的 shell（pwsh / cmd / bash）',
       failed: '终端操作失败，请重试'
     },
+    /** 开始页：工具选择入口（侧栏「开始」） */
+    startPage: {
+      title: '开始',
+      workspace: {
+        title: '工作区文件',
+        description: '浏览会话工作区的文件'
+      },
+      terminal: {
+        title: '新建终端',
+        description: '在会话工作区运行命令',
+        running: '运行中 {{count}}'
+      },
+      browser: {
+        title: '浏览器',
+        description: '浏览网页'
+      },
+      more: {
+        title: '更多工具',
+        description: '技能、MCP、记忆与智能体设置'
+      }
+    },
+    /** 应用内浏览器面板（Electron webview） */
+    browserPanel: {
+      title: '浏览器',
+      loading: '加载中…',
+      addressPlaceholder: '输入网址或搜索内容',
+      back: '后退',
+      forward: '前进',
+      reload: '刷新',
+      home: '主页',
+      open: '打开',
+      hidePanel: '收起浏览器面板',
+      loadFailed: '网页加载失败：{{reason}}'
+    },
     messageArea: {
       scrollToBottom: '回到底部',
       showEarlier: '显示更早的 {{count}} 条消息'

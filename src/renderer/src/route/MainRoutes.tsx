@@ -18,6 +18,7 @@ const HarnessView = lazy(() => import('@renderer/pages/Harness'))
 const NotesView = lazy(() => import('@renderer/pages/Notes'))
 const MoreView = lazy(() => import('@renderer/pages/More'))
 const SchedulesView = lazy(() => import('@renderer/pages/Schedules'))
+const StartPageView = lazy(() => import('@renderer/pages/StartPage'))
 
 const PluginRouteView: React.FC<{ route: RegisteredRoute }> = ({ route }) => {
   // lazy 实例必须来自模块级缓存（见 lazyViewCache.ts）：在渲染期新建 lazy 会让
@@ -55,6 +56,15 @@ const MainRoutes: React.FC = () => {
     <Routes>
       {/* 系统功能页面：对话（默认）/ 资料库。随应用编译，不参与插件启停 */}
       <Route path="/" element={<Navigate to="/harness" replace />} />
+      {/* 开始页：工具选择入口（顶部栏终端按钮已移除，入口在侧栏「开始」） */}
+      <Route
+        path="/start"
+        element={
+          <Suspense fallback={<RouteSkeleton variant="generic" />}>
+            <StartPageView />
+          </Suspense>
+        }
+      />
       <Route
         path="/harness"
         element={

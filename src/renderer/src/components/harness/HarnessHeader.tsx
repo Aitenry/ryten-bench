@@ -5,8 +5,7 @@ import {
   RiArrowLeftLine,
   RiArrowRightSLine,
   RiLayoutRightLine,
-  RiLayoutRightFill,
-  RiTerminalBoxLine
+  RiLayoutRightFill
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import BackgroundJobsButton from './BackgroundJobsButton'
@@ -46,11 +45,6 @@ export interface HeaderSubagentBreadcrumb {
 interface HarnessHeaderProps {
   panelOpen: boolean
   onTogglePanel: () => void
-  /** 右侧终端面板：与工作区面板同一列二选一（2026-11-27 用户设计稿确认） */
-  terminalOpen: boolean
-  onToggleTerminal: () => void
-  /** 运行中的终端会话数（顶栏按钮角标） */
-  terminalRunningCount: number
   colorBorderSecondary: string
   currentTopicId: number | null
   /** 点顶部栏后台子代理：主对话区切换到该子代理的流式会话（见 SubagentConversationView） */
@@ -82,9 +76,6 @@ interface HarnessHeaderProps {
 const HarnessHeader: React.FC<HarnessHeaderProps> = ({
   panelOpen,
   onTogglePanel,
-  terminalOpen,
-  onToggleTerminal,
-  terminalRunningCount,
   colorBorderSecondary,
   currentTopicId,
   onSelectSubagent,
@@ -217,42 +208,6 @@ const HarnessHeader: React.FC<HarnessHeaderProps> = ({
             onSelectAgent={onSelectSubagent}
             activeAgentId={activeSubagentId}
           />
-          <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <Button
-              type="text"
-              size="small"
-              data-harness-terminal-toggle="1"
-              title={t('harness.header.toggleTerminal')}
-              icon={
-                <RiTerminalBoxLine
-                  size={16}
-                  style={{ color: terminalOpen ? token.colorPrimary : undefined }}
-                />
-              }
-              onClick={onToggleTerminal}
-            />
-            {terminalRunningCount > 0 ? (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: -1,
-                  right: -2,
-                  minWidth: 14,
-                  height: 14,
-                  padding: '0 4px',
-                  borderRadius: 999,
-                  background: token.colorPrimary,
-                  color: '#fff',
-                  fontSize: 9,
-                  lineHeight: '14px',
-                  textAlign: 'center',
-                  pointerEvents: 'none'
-                }}
-              >
-                {terminalRunningCount}
-              </span>
-            ) : null}
-          </span>
           <Button
             type="text"
             size="small"

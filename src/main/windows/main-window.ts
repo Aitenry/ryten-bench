@@ -270,10 +270,26 @@ export function createMainWindow(): void {
     ...{ icon },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      /**
+       * 应用内浏览器面板用 `<webview>` 挂真实网页（不是 iframe，避免 X-Frame-Options 拦截）。
+       * 必须显式开启 webviewTag；访客页的安全参数在下面的 will-attach-webview 里强制收紧。
+       */
+      webviewTag: true
     }
   })
   setMainWindow(win)
+
+  /**
+   * 应用内浏览器 guest 的安全基线：无论页面怎么写 `<webview>` 属性，
+   * 一律剥掉 preload、禁用 Node 集成、开上下文隔离与沙箱。
+   */
+  win.webContents.on('will-attach-webview', (_event, webPreferences) => {
+    delete (webPreferences as { preload?: string }).preload
+    webPreferences.nodeIntegration = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+  })
   // 锁屏状态机接管：页面每次加载完成补发锁屏状态（刷新/崩溃重建不会解锁）、
   // 最小化/隐藏即锁、锁屏期间拦截刷新与开发者工具快捷键。
   attachLockScreen(win)

@@ -230,6 +230,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <Button
               type="text"
               size="small"
+              data-terminal-hide="1"
               aria-label={t('harness.terminalPanel.hidePanel')}
               icon={<RiLayoutRightLine size={14} />}
               onClick={onClosePanel}

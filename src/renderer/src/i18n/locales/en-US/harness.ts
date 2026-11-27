@@ -381,6 +381,40 @@ export const harnessEnUS: typeof harnessZhCN = {
       noShell: 'No usable shell found (pwsh / cmd / bash)',
       failed: 'Terminal operation failed, please retry'
     },
+    /** Start page: tool launcher (sidebar "Start") */
+    startPage: {
+      title: 'Start',
+      workspace: {
+        title: 'Workspace files',
+        description: 'Browse files in the conversation workspace'
+      },
+      terminal: {
+        title: 'New terminal',
+        description: 'Run commands in the conversation workspace',
+        running: '{{count}} running'
+      },
+      browser: {
+        title: 'Browser',
+        description: 'Browse the web'
+      },
+      more: {
+        title: 'More tools',
+        description: 'Skills, MCP, memory and agent settings'
+      }
+    },
+    /** In-app browser panel (Electron webview) */
+    browserPanel: {
+      title: 'Browser',
+      loading: 'Loading…',
+      addressPlaceholder: 'Enter a URL or search',
+      back: 'Back',
+      forward: 'Forward',
+      reload: 'Reload',
+      home: 'Home',
+      open: 'Go',
+      hidePanel: 'Hide browser panel',
+      loadFailed: 'Failed to load page: {{reason}}'
+    },
     messageArea: {
       scrollToBottom: 'Back to bottom',
       showEarlier: 'Show {{count}} earlier messages'

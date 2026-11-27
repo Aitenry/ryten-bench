@@ -145,17 +145,25 @@ from the hub or from a local package, and both paths end in the same host instal
   marker, splits output incrementally, keeps a bounded 256 KB ring buffer and terminates the whole
   process tree on close, on 10 minutes of idleness and on app quit. Because the shell is not
   sandboxed, `terminal_open`/`terminal_send` only work in the **full access** permission mode.
-  The same sessions are reachable from a **right-side terminal panel** (top-bar terminal button,
-  docked in the same column as the workspace panel): opening the panel automatically creates a
-  session when there is none, and the terminal is a **real PTY** — rendered by the open-source
-  **xterm.js** (`@xterm/xterm` + fit addon) and backed by **node-pty** in the main process, so
-  prompts, echo, ANSI colours, Ctrl+C, window resizing, scrollback and full-screen interactive
-  programs (vim, top, …) behave like a native terminal. Hiding the panel keeps PTY processes alive
-  and replays their buffer on reopen; closing a tab kills that session. The panel belongs to the
-  human and is **not limited by the conversation's permission mode** — only the model-facing
-  `terminal_open`/`terminal_send` tools (which keep their own line-mode sessions) require full
-  access. When a conversation has no workspace (or none is selected) the terminal opens in the
-  user's home directory.
+  The same PTY is reachable from a **right-side terminal panel**, opened from the **Start page**
+  (sidebar → Start; the top bar no longer carries a terminal button): opening the panel
+  automatically creates a session when there is none, and the terminal is a **real PTY** —
+  rendered by the open-source **xterm.js** (`@xterm/xterm` + fit addon) and backed by
+  **node-pty** in the main process, so prompts, echo, ANSI colours, Ctrl+C, window resizing,
+  scrollback and full-screen interactive programs (vim, top, …) behave like a native terminal.
+  Hiding the panel keeps PTY processes alive and replays their buffer on reopen; closing a tab
+  kills that session. The panel belongs to the human and is **not limited by the conversation's
+  permission mode** — only the model-facing `terminal_open`/`terminal_send` tools (which keep
+  their own line-mode sessions) require full access. When a conversation has no workspace (or
+  none is selected) the terminal opens in the user's home directory.
+- **Start page & embedded browser** — sidebar → Start shows a launcher with four cards:
+  **Workspace files** (`Ctrl+P`), **New terminal** (`` Ctrl+` ``), **Browser** (`Ctrl+T`) and
+  **More tools** (skills / MCP / memory / agents). The terminal card shows the live running
+  session count (the same badge appears next to Start in the sidebar); selecting a card opens
+  the matching right-side panel on the assistant page. Browser is a real in-app browser built on
+  Electron `<webview>` (guest pages get no preload, no Node integration, context isolation and
+  sandbox): address bar with URL-or-search input, back/forward/reload/home, page title, and
+  popups open in the same view.
 - **Programmable tool calls (PTC)** — `run_code` runs a JavaScript snippet in a `node:vm` context
   where `await tools.<name>(args)` calls the read-only tools (`read_file`, `grep`, `glob`, `ls`,
   `read_image`, `web_fetch`, `web_search`, `session_search`, …), so the model can loop, filter and

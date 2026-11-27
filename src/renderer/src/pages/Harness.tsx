@@ -6,6 +6,8 @@ import { useTranslation } from '@renderer/i18n'
 import { useHarness } from '../contexts/harness/HarnessContextCore'
 import HarnessHeader from '../components/harness/HarnessHeader'
 import TerminalPanel from '../components/harness/TerminalPanel'
+import BrowserPanel from '../components/harness/BrowserPanel'
+import { consumeHarnessPanelRequest } from '../utils/harness/panel-launch'
 import ConversationPane from '../components/harness/ConversationPane'
 import ConversationFooter from '../components/harness/ConversationFooter'
 import SubagentInput from '../components/harness/SubagentInput'
@@ -251,7 +253,8 @@ const Harness: React.FC = () => {
    * 宽度复用同一份可拖拽面板宽度，观感与工作区面板一致。
    */
   const [terminalOpen, setTerminalOpen] = useState(false)
-  const [terminalRunningCount, setTerminalRunningCount] = useState(0)
+  /** 应用内浏览器面板：与终端/工作区同一列互斥（开始页选择后打开） */
+  const [browserOpen, setBrowserOpen] = useState(false)
   /**
    * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
    *
@@ -432,6 +435,7 @@ const Harness: React.FC = () => {
     if (handle) action(handle)
     else pendingPanelActionRef.current = action
     setTerminalOpen(false)
+    setBrowserOpen(false)
     setPanelOpen(true)
   }, [])
   useEffect(() => {
@@ -443,22 +447,62 @@ const Harness: React.FC = () => {
     action(handle)
   }, [panelOpen, panelHasEditor])
 
-  /** 工作区面板开关：与终端面板互斥（同一列只显示一个） */
+  /** 工作区面板开关：与终端/浏览器面板互斥（同一列只显示一个） */
   const toggleWorkspacePanel = useCallback((): void => {
     setPanelOpen((prev) => {
       const next = !prev
-      if (next) setTerminalOpen(false)
+      if (next) {
+        setTerminalOpen(false)
+        setBrowserOpen(false)
+      }
       return next
     })
   }, [])
 
-  /** 终端面板开关：与工作区面板互斥 */
+  /** 终端面板开关：与工作区/浏览器面板互斥 */
   const toggleTerminalPanel = useCallback((): void => {
     setTerminalOpen((prev) => {
       const next = !prev
-      if (next) setPanelOpen(false)
+      if (next) {
+        setPanelOpen(false)
+        setBrowserOpen(false)
+      }
       return next
     })
+  }, [])
+
+  /** 浏览器面板开关：与工作区/终端面板互斥 */
+  const toggleBrowserPanel = useCallback((): void => {
+    setBrowserOpen((prev) => {
+      const next = !prev
+      if (next) {
+        setPanelOpen(false)
+        setTerminalOpen(false)
+      }
+      return next
+    })
+  }, [])
+
+  /**
+   * 开始页选择 → 跳到 /harness 后消费一次「打开哪个面板」的意图。
+   * 顶部栏不再放终端按钮；入口统一收在侧栏「开始」页。
+   */
+  useEffect(() => {
+    const kind = consumeHarnessPanelRequest()
+    if (!kind) return
+    if (kind === 'terminal') {
+      setTerminalOpen(true)
+      setPanelOpen(false)
+      setBrowserOpen(false)
+    } else if (kind === 'browser') {
+      setBrowserOpen(true)
+      setPanelOpen(false)
+      setTerminalOpen(false)
+    } else {
+      setPanelOpen(true)
+      setTerminalOpen(false)
+      setBrowserOpen(false)
+    }
   }, [])
 
   /**
@@ -758,10 +802,12 @@ const Harness: React.FC = () => {
     Math.max(500, Math.floor(window.innerWidth * 0.4))
   )
 
-  /** 终端面板的最小可读宽度（命令/路径要放得下；工作区面板没有文件时只有 220） */
+  /** 终端/浏览器面板的最小可读宽度（工作区面板没有文件时只有 220） */
   const TERMINAL_PANEL_MIN_WIDTH = 360
+  /** 终端或浏览器占同一列：都按「有编辑器」那一档计算宽度上下限 */
+  const sidePanelOpen = terminalOpen || browserOpen
   const workspaceMinWidth = panelMinWidthFor(panelHasEditor)
-  const panelMinWidth = terminalOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
+  const panelMinWidth = sidePanelOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
   /*
    * 面板宽度上限：比例上限（大屏会从 45% 放开到 65%）与「对话至少 MAIN_MIN_WIDTH」取小。
    * 终端面板按「有编辑器」那一档计算上限，否则会被工作区面板的 220px 无文件上限卡死。
@@ -770,7 +816,7 @@ const Harness: React.FC = () => {
    */
   const panelMaxWidth = computePanelMaxWidth({
     layoutWidth,
-    hasEditor: panelHasEditor || terminalOpen,
+    hasEditor: panelHasEditor || sidePanelOpen,
     sidebarOpen: false,
     sidebarWidth: 0
   })
@@ -779,8 +825,8 @@ const Harness: React.FC = () => {
   // 只把宽度收敛回合法区间，保留用户拖拽结果，避免溢出出现横向滚动条
   const prevHasEditorRef = useRef(panelHasEditor)
   useEffect(() => {
-    // 终端打开时宽度由终端的 effect 负责（否则会被「无编辑器 → 220px」的规则压窄）
-    if (terminalOpen) {
+    // 终端/浏览器打开时宽度由下面的 side-panel effect 负责（否则会被「无编辑器 → 220px」压窄）
+    if (sidePanelOpen) {
       setPanelWidth((prev) => clampWidth(prev, panelMinWidth, panelMaxWidth))
       return
     }
@@ -792,14 +838,14 @@ const Harness: React.FC = () => {
     setPanelWidth(
       panelHasEditor ? autoOpenPanelWidth(layoutWidth, panelMaxWidth) : PANEL_MIN_WITHOUT_EDITOR
     )
-  }, [panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth, terminalOpen])
+  }, [panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth, sidePanelOpen])
 
-  // 打开终端时给一个命令面板级的默认宽度（之前停在文件树的 220px，标题/页签全被挤扁）
-  const prevTerminalOpenRef = useRef(terminalOpen)
+  // 打开终端/浏览器时给一个可读的默认宽度（之前停在文件树的 220px，标题/页签全被挤扁）
+  const prevSidePanelOpenRef = useRef(sidePanelOpen)
   useEffect(() => {
-    if (terminalOpen === prevTerminalOpenRef.current) return
-    prevTerminalOpenRef.current = terminalOpen
-    if (!terminalOpen) return
+    if (sidePanelOpen === prevSidePanelOpenRef.current) return
+    prevSidePanelOpenRef.current = sidePanelOpen
+    if (!sidePanelOpen) return
     setPanelWidth((prev) =>
       clampWidth(
         Math.max(prev, Math.max(TERMINAL_PANEL_MIN_WIDTH, 420)),
@@ -807,7 +853,7 @@ const Harness: React.FC = () => {
         panelMaxWidth
       )
     )
-  }, [panelMaxWidth, panelMinWidth, terminalOpen])
+  }, [panelMaxWidth, panelMinWidth, sidePanelOpen])
 
   const panelDraggingRef = useRef(false)
 
@@ -1004,9 +1050,6 @@ const Harness: React.FC = () => {
                   <HarnessHeader
                     panelOpen={panelOpen}
                     onTogglePanel={toggleWorkspacePanel}
-                    terminalOpen={terminalOpen}
-                    onToggleTerminal={toggleTerminalPanel}
-                    terminalRunningCount={terminalRunningCount}
                     colorBorderSecondary={colorBorderSecondary}
                     currentTopicId={currentTopicId}
                     onSelectSubagent={handleSelectSubagent}
@@ -1143,8 +1186,8 @@ const Harness: React.FC = () => {
               )}
             </main>
 
-            {/* Right column: workspace panel or persistent terminal (mutually exclusive) */}
-            {(panelOpen || terminalOpen) && (
+            {/* Right column: workspace / terminal / embedded browser (mutually exclusive) */}
+            {(panelOpen || terminalOpen || browserOpen) && (
               <>
                 <div className="harness-resizer" onMouseDown={handlePanelResizerMouseDown}>
                   <div className="harness-resizer-dragger" />
@@ -1165,8 +1208,17 @@ const Harness: React.FC = () => {
                       colorText={colorText}
                       colorTextSecondary={colorTextSecondary}
                       colorTextTertiary={colorTextTertiary}
-                      onRunningCountChange={setTerminalRunningCount}
                       onClosePanel={toggleTerminalPanel}
+                    />
+                  ) : browserOpen ? (
+                    <BrowserPanel
+                      isDarkMode={isDarkMode}
+                      colorBgContainer={colorBgContainer}
+                      colorText={colorText}
+                      colorTextSecondary={colorTextSecondary}
+                      colorTextTertiary={colorTextTertiary}
+                      colorBorderSecondary={colorBorderSecondary}
+                      onClosePanel={toggleBrowserPanel}
                     />
                   ) : (
                     <WorkspacePanel

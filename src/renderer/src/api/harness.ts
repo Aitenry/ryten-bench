@@ -1066,6 +1066,13 @@ export const harnessApi = {
         ok: boolean
         data: string
       }>,
+    /** 全局统计：开始页 / 侧栏角标显示「运行中 N」 */
+    stats: () =>
+      invoke('harness:pty-terminal-stats') as Promise<{
+        ok: boolean
+        alive: number
+        total: number
+      }>,
     /** 实时输出（已按 ~12ms 合批） */
     onData: (callback: (payload: { sessionId: string; data: string }) => void): (() => void) =>
       on('harness:pty-terminal-data', (payload) =>

@@ -283,6 +283,12 @@ export class PtyTerminalManager {
   get activeCount(): number {
     return [...this.sessions.values()].filter((record) => record.alive).length
   }
+
+  /** 全局统计（开始页/侧栏角标用）：活跃 + 全部保留中的会话数 */
+  stats(): { alive: number; total: number } {
+    const all = [...this.sessions.values()]
+    return { alive: all.filter((record) => record.alive).length, total: all.length }
+  }
 }
 
 /** 进程级单例（IPC 层接线 onData/onExit） */

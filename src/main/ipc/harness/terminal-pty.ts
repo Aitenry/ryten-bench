@@ -130,6 +130,11 @@ export function ptyTerminalIpcHandlers(): IpcHandlerMap {
     return { ok: true, data: sessionId ? ptyTerminals.buffer(sessionId) : '' }
   })
 
+  /** 全局统计：开始页 / 侧栏角标显示「运行中 N」 */
+  handle('pty-terminal-stats', () => {
+    return { ok: true, ...ptyTerminals.stats() }
+  })
+
   handle('pty-terminal-close-topic', (payload: { topicId?: unknown }) => {
     const raw = Number(payload?.topicId)
     const topicId = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
