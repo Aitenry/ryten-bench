@@ -10,6 +10,7 @@
  * - **错过即跳过**：应用关着错过多次触发时，不在启动瞬间补跑，下一次从「现在」重新计算
  *   （与 DSH 的 scheduler 行为一致：补跑会瞬间刷屏，且旧提醒往往已无意义）。
  */
+import logger from 'electron-log'
 import { nextRunAfterRun, selectDueTaskIds } from './schedule-core'
 import { scheduleStore, type ScheduleStore } from './schedule-store'
 import type { ScheduledTask } from './schedule-types'
@@ -72,7 +73,11 @@ export class ScheduleRunner {
   start(intervalMs = 20_000): void {
     if (this.timer) return
     this.timer = setInterval(() => {
-      void this.tick().catch(() => undefined)
+      // tick 自身按任务隔离失败，这里只兜底「读任务列表/调度计算」级别的异常：
+      // 必须留日志，否则定时任务整体停摆时用户在设置页和日志里都看不到原因。
+      void this.tick().catch((err) => {
+        logger.error('[Schedule] Tick failed:', err)
+      })
     }, intervalMs)
     // 定时器不单独维持进程存活（应用退出时不能被它拖住）
     this.timer.unref?.()
@@ -110,8 +115,9 @@ export class ScheduleRunner {
       try {
         const result = await drive({ task, question: this.buildQuestion(task) })
         if (result && result.cancelled) status = 'cancelled'
-      } catch {
+      } catch (err) {
         status = 'failed'
+        logger.error(`[Schedule] Task #${task.id} (${task.title}) failed:`, err)
       } finally {
         this.running.delete(task.id)
       }
@@ -125,8 +131,9 @@ export class ScheduleRunner {
           nextRunAt,
           enabled: status === 'cancelled' ? true : nextRunAt !== null
         })
-      } catch {
-        // 记录失败不影响本轮已执行的对话
+      } catch (err) {
+        // 记录失败不影响本轮已执行的对话，但排期没更新会让任务重复触发/不再触发，必须留痕
+        logger.warn(`[Schedule] Failed to record run for task #${task.id}:`, err)
       }
       executed += 1
     }
