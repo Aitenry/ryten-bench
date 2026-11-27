@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { theme, Button, Input, Switch, Pagination } from 'antd'
+﻿import React, { useState, useEffect, useCallback } from 'react'
+import { theme, Button, Input, Pagination } from 'antd'
 import { FolderOutlined, FileTextOutlined } from '@ant-design/icons'
 import { SkeletonSettingRows } from '@renderer/components/system/Skeleton'
 import EntityCard from '@renderer/components/system/EntityCard'
@@ -35,8 +35,6 @@ const SkillsSettings: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0)
   const PAGE_SIZE = 5
-
-  const enabledSkills = settings?.harness?.enabledSkills
 
   const loadSettings = useCallback(async () => {
     const msgKey = 'skills-settings-load'
@@ -134,23 +132,6 @@ const SkillsSettings: React.FC = () => {
     }
   }
 
-  const handleToggleSkill = async (skillId: string, checked: boolean): Promise<void> => {
-    const msgKey = `skill-toggle-${skillId}`
-    try {
-      // 启用清单的完整判定在主进程（需要完整技能目录）：这里只发「哪个技能、开还是关」
-      const next = await harnessApi.harness.setSkillEnabled(skillId, checked)
-      setSettings((prev) =>
-        prev ? { ...prev, harness: { ...(prev.harness ?? {}), enabledSkills: next } } : prev
-      )
-    } catch (error) {
-      viewMessage(
-        msgKey,
-        'error',
-        t('common.message.operationFailedWithReason', { reason: String(error) })
-      )
-    }
-  }
-
   return (
     <div>
       <SettingsPageHeader
@@ -213,27 +194,20 @@ const SkillsSettings: React.FC = () => {
               padding: 16
             }}
           >
-            {skills.map((skill) => {
-              const isEnabled = !enabledSkills || enabledSkills.includes(skill.id)
-              return (
-                <EntityCard
-                  key={skill.id}
-                  id={skill.id}
-                  icon={<FileTextOutlined />}
-                  title={skill.name}
-                  description={skill.description || undefined}
-                  footerEnd={
-                    <span style={{ marginLeft: 'auto' }}>
-                      <Switch
-                        checked={isEnabled}
-                        onChange={(checked) => handleToggleSkill(skill.id, checked)}
-                        size="small"
-                      />
-                    </span>
-                  }
-                />
-              )
-            })}
+            {skills.map((skill) => (
+              <EntityCard
+                key={skill.id}
+                id={skill.id}
+                icon={<FileTextOutlined />}
+                title={skill.name}
+                description={skill.description || undefined}
+                footerEnd={
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colorTextTertiary }}>
+                    {t('skillsSettings.selectInComposer')}
+                  </span>
+                }
+              />
+            ))}
           </div>
           {skillsTotal > PAGE_SIZE && (
             <div className="flex justify-center" style={{ padding: '10px 0' }}>

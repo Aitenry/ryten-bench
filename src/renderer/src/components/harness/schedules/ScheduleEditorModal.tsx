@@ -444,6 +444,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
       cancelText={t('schedulesPage.cancel')}
       onOk={() => void handleSave()}
       destroyOnHidden
+      /* 字段较多：弹窗内容区限高滚动，保证按钮栏始终可见 */
+      styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' } }}
     >
       <div style={{ fontSize: 12.3, lineHeight: 1.6, color: token.colorTextSecondary }}>
         {t('schedulesPage.editorDesc')}

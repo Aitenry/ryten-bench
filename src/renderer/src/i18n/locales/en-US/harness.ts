@@ -923,12 +923,13 @@ export const harnessEnUS: typeof harnessZhCN = {
   skillsSettings: {
     pageTitle: 'Skills',
     pageDescription:
-      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill, and you can enable or disable Skills individually. Leave it empty to disable Skills.',
+      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill. Skills are never enabled by default: pick the ones to use under the chat input (or in a scheduled task).',
     dirSectionTitle: 'Skills storage directory',
     dirSectionDescription: 'Every subdirectory containing a SKILL.md file counts as one Skill',
     dirPlaceholder: 'e.g. D:\\skills (leave empty to disable)',
     dirCurrent: 'Currently active: {{path}}',
     listTitle: 'Discovered skills ({{count}})',
+    selectInComposer: 'Enable it under the input',
     listTitle_one: 'Discovered skill ({{count}})',
     listTitle_other: 'Discovered skills ({{count}})',
     emptyDescription:
@@ -940,7 +941,7 @@ export const harnessEnUS: typeof harnessZhCN = {
   mcpSettings: {
     pageTitle: 'MCP',
     pageDescription:
-      'Connect external MCP servers (a local stdio process or a remote HTTP/SSE endpoint). The tools a server exposes show up in the agent tool list. Statuses come from the last connection attempt — use "Reconnect" to refresh.',
+      'Connect external MCP servers (a local stdio process or a remote HTTP/SSE endpoint). Servers are connected but not injected by default: choose the servers to use under the chat input; the tool checkboxes here are the default list used by subagents. Statuses come from the last connection attempt — use "Reconnect" to refresh.',
     list: {
       sectionTitle: 'Servers',
       newServer: 'Add',

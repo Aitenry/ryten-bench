@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="./resources/logo.png" alt="RytenBench logo" width="120" />
 </p>
 
@@ -186,9 +186,11 @@ from the hub or from a local package, and both paths end in the same host instal
   in the local database (`scheduled_tasks` / `scheduled_task_runs`, run history kept forever), fire a
   fresh turn when due while the app is running (missed runs are skipped, not replayed, and the live
   transcript mounts the scheduled turn immediately), and are managed from the sidebar **Schedules**
-  page: card list with pause / resume / edit / delete, new-task dialog (fixed conversation) and a
-  permanent run-history viewer. Optional tools, enabled under Settings → Agents. The old
-  Settings → Schedules tab was removed in favour of that page.
+  page: card list with pause / resume / edit / delete and a permanent run-history viewer. A task's
+  target is independent of the mode the app is currently in: pick **chat / work / plugin**, then an
+  existing conversation of that mode (across workspaces) or **"new conversation"** to open a fresh
+  conversation on every run. The new-task dialog also carries a per-task tool / skill / MCP selection.
+  The old Settings → Schedules tab was removed in favour of that page.
 - **Agent Teams & shared task board** — the main agent and its subagents coordinate through one
   task board (`team_task_create` / `team_task_list` / `team_task_claim` / `team_task_update`):
   tasks carry status, owner, `blockedBy` dependencies, advisory `writeScopes` and optimistic
@@ -219,13 +221,16 @@ from the hub or from a local package, and both paths end in the same host instal
   PGlite). It is exposed to the model as 13 `mnemon_*` tools and is configurable under
   More → Memory.
 - **Skills** — a local directory of skills, where every sub-directory containing a `SKILL.md`
-  (YAML frontmatter with `name` / `description`) is a skill. Enabled skills appear in the system
+  (YAML frontmatter with `name` / `description`) is a skill. Skills are **never enabled by default**:
+  pick them under the chat input (or in a scheduled task), and only the picked ones enter the system
   prompt as a short name/description index; their full instructions load on demand through a
   `skill` tool, so the prompt never carries every skill body at once. Managed under More → Skills.
 - **MCP servers** — connect Model Context Protocol servers over stdio (a local command such as
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
-  Streamable HTTP / SSE (URL plus request headers), and their tools join the same tool-call loop as
-  the built-in and plugin tools. Connected servers' **resources** are readable too:
+  Streamable HTTP / SSE (URL plus request headers). Servers connect when added but their tools are
+  **not injected by default**: choose the servers to use under the chat input (the MCP picker next
+  to Tools/Skills) or in a scheduled task; the tools then join the same tool-call loop as the
+  built-in and plugin tools. Connected servers' **resources** are readable too:
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` return text inline and
   turn image resources into viewable attachments. Managed under More → MCP.
 - **Web access** — two optional tools join the same tool loop: `web_fetch` retrieves one HTTP(S)

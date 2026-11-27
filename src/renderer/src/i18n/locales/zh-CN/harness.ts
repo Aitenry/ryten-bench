@@ -931,12 +931,13 @@ export const harnessZhCN = {
   skillsSettings: {
     pageTitle: '技能（Skills）',
     pageDescription:
-      '配置全局技能存储目录，子文件夹将作为独立技能加载；可单独启停每个技能。留空则不启用。',
+      '配置全局技能存储目录，子文件夹将作为独立技能加载。技能不会在添加时默认启用：在对话输入框下面（或定时任务表单里）选择要用的技能。',
     dirSectionTitle: '技能存储目录',
     dirSectionDescription: '每个含 SKILL.md 的子目录即为一个技能',
     dirPlaceholder: '例如：D:\\skills（留空不启用）',
     dirCurrent: '当前已生效：{{path}}',
     listTitle: '已发现的技能（{{count}}）',
+    selectInComposer: '在输入框下面选择启用',
     listTitle_one: '已发现的技能（{{count}}）',
     listTitle_other: '已发现的技能（{{count}}）',
     emptyDescription: '此目录中未发现任何技能，请确保子目录中包含 {{filename}} 文件',
@@ -948,7 +949,7 @@ export const harnessZhCN = {
   mcpSettings: {
     pageTitle: 'MCP',
     pageDescription:
-      '接入外部 MCP 服务器（stdio 本地进程或 HTTP/SSE 远程地址），服务器暴露的工具会出现在智能体的工具清单里。状态取最近一次连接结果，需要时点「重新连接」刷新。',
+      '接入外部 MCP 服务器（stdio 本地进程或 HTTP/SSE 远程地址）。服务器默认只连接、不注入模型：主对话在输入框下面选择要用的服务器；这里勾选的工具作为默认清单（子智能体使用）。状态取最近一次连接结果，需要时点「重新连接」刷新。',
     list: {
       sectionTitle: '服务器',
       newServer: '新增',
