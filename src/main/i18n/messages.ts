@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 主进程里**会出现在系统界面上**的文案：系统托盘菜单、原生文件对话框、启动页步骤名、独立窗口标题。
  *
  * 这里不放：日志、注释、抛给渲染进程的错误信息（那些属于各自的模块）、以及发给模型的提示词。
@@ -79,6 +79,8 @@ export const zhCN = {
     invalidPathAbsolute: '路径无效：必须传入 AI 工作区内的绝对路径',
     workspaceDirNotConfigured: '未配置 AI 工作区目录，拒绝文件访问',
     pathOutsideWorkspace: '路径不在 AI 工作区内，已拒绝访问',
+    workspacePathNotSelected:
+      '该目录不是通过系统选择框选定的，已拒绝将其设为工作区（请重新选择目录）',
     /** 侧栏工作区行「⋯ → 在文件夹中显示」：行已不存在 / 目录已不在 */
     workspaceNotFound: '工作区不存在：可能已被删除，请刷新后重试',
     workspaceDirMissing: '工作区目录不存在：{{path}}',
@@ -281,6 +283,8 @@ export const enUS: typeof zhCN = {
     invalidPathAbsolute: 'Invalid path: an absolute path inside the AI workspace is required',
     workspaceDirNotConfigured: 'No AI workspace folder configured — file access denied',
     pathOutsideWorkspace: 'The path is outside the AI workspace — access denied',
+    workspacePathNotSelected:
+      'This folder was not picked through the system folder dialog, so it cannot be used as the workspace (please pick it again)',
     workspaceNotFound: 'Workspace not found — it may have been deleted. Refresh and try again.',
     workspaceDirMissing: 'Workspace folder not found: {{path}}',
     graphModelNotConfigured:

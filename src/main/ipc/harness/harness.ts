@@ -48,6 +48,7 @@ import { currentMcpTools } from '../../runtime/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
 import { hasLatticeSession } from '../../lattice/session'
+import { rememberSelectedRoot } from '../../workspace/selected-roots'
 import { readVirtualTextFile } from '../../runtime/harness/fs-backend'
 import { getToolOutputStore } from '../../runtime/harness/tool-output-store'
 import type {
@@ -2512,7 +2513,11 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       title: mainMessages().dialog.selectWorkspaceDir
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0]
+    const picked = result.filePaths[0]
+    // 登记「用户亲手选过」：workspace-create / system-settings-update 只接受这类目录，
+    // 渲染层注入后无法凭空指定任意盘符当工作区根（安全审计 S03）。
+    rememberSelectedRoot(picked)
+    return picked
   })
 
   // ── 工具清单（设置 →「智能体」页的工具下拉）───────────────────────────────

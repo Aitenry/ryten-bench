@@ -10,6 +10,8 @@ import { APP_EVENT_WORKSPACE_CHANGED, type AppWorkspaceChangedPayload } from '..
 import { configurePluginsRoot } from '../workshop/paths'
 import { isSamePath, migrateChangedStoragePaths, storagePathOf } from '../storage'
 import { remapWorkspacePathsUnderRoot } from '../storage/workspace-refs'
+import { getAllWorkspaces } from '../database/mapper/harness/harness'
+import { isUserSelectedRoot, workspacePathKey } from '../workspace/selected-roots'
 
 /** 当前活动工作区（设置已落盘后读取；未配置时为 null/空串） */
 function workspaceChangedPayload(): AppWorkspaceChangedPayload {
@@ -18,6 +20,63 @@ function workspaceChangedPayload(): AppWorkspaceChangedPayload {
   return {
     workspaceId: harness?.activeWorkspaceId ?? null,
     workspacePath: harness?.workspacePath ?? ''
+  }
+}
+
+/**
+ * 工作区根 / 活动工作区 ID 的信任校验（安全审计 S03）。
+ *
+ * 渲染层可以调用 `system-settings-update` 改 `harness.workspacePath`，而所有文件类 IPC
+ * 都拿这个值当 `assertInsideWorkspace` 的根——一旦被改成 `C:\` 就能读写任意文件。
+ * 因此这里把它收敛为：目录必须是「用户经系统对话框亲手选过」或已登记的工作区行；
+ * `activeWorkspaceId` 必须对应真实工作区行。清空（切走/删除工作区）始终允许。
+ */
+async function validateWorkspacePatch(
+  next: HarnessSettings,
+  previous: HarnessSettings | undefined,
+  patch: Partial<HarnessSettings>
+): Promise<void> {
+  let cachedRows: Promise<Awaited<ReturnType<typeof getAllWorkspaces>>> | null = null
+  const rows = (): Promise<Awaited<ReturnType<typeof getAllWorkspaces>>> => {
+    cachedRows ??= getAllWorkspaces()
+    return cachedRows
+  }
+
+  if ('workspacePath' in patch) {
+    const nextPath = typeof next.workspacePath === 'string' ? next.workspacePath.trim() : ''
+    if (nextPath) {
+      let known = isUserSelectedRoot(nextPath)
+      if (!known) {
+        try {
+          known = (await rows()).some(
+            (row) => workspacePathKey(row.path) === workspacePathKey(nextPath)
+          )
+        } catch (err) {
+          // 数据库不可用时按拒绝处理（fail closed），避免校验被绕过
+          logger.warn('[Settings] Workspace path validation failed (database unavailable):', err)
+        }
+      }
+      if (!known) {
+        logger.warn('[Settings] Rejected harness.workspacePath that was not picked by the user')
+        next.workspacePath = previous?.workspacePath ?? ''
+      }
+    }
+  }
+
+  if ('activeWorkspaceId' in patch) {
+    const nextId = next.activeWorkspaceId
+    if (typeof nextId === 'number' && Number.isFinite(nextId)) {
+      let exists = false
+      try {
+        exists = (await rows()).some((row) => row.id === nextId)
+      } catch (err) {
+        logger.warn('[Settings] activeWorkspaceId validation failed (database unavailable):', err)
+      }
+      if (!exists) {
+        logger.warn('[Settings] Rejected harness.activeWorkspaceId that does not exist')
+        next.activeWorkspaceId = previous?.activeWorkspaceId
+      }
+    }
   }
 }
 
@@ -94,6 +153,7 @@ export function registerSettingsIpc(): void {
             ? (rawPreviousHarness as HarnessSettings)
             : {}
         nextHarness = { ...previousHarness, ...nextUpdates.harness }
+        await validateWorkspacePatch(nextHarness, previousHarness, nextUpdates.harness)
         await migrateChangedStoragePaths(previousHarness, nextHarness)
         nextUpdates.harness = nextHarness
       }

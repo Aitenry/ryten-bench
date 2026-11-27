@@ -23,6 +23,7 @@ import { isChatScope } from '../../../shared/harness/memory-scope'
 import { memoryScopeRoot, parseMemoryScope } from '../../services/harness/memory-scope'
 import { resolveTopicMemoryScope } from '../../services/harness/topic-scope'
 import { activateChatTopic } from '../../services/harness/chat/activation'
+import { isUserSelectedRoot, workspacePathKey } from '../../workspace/selected-roots'
 import {
   getAllWorkspaces,
   createWorkspace,
@@ -75,6 +76,21 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
 
   handle('workspace-create', async (name: string, path: string) => {
     try {
+      // 信任来源收敛（安全审计 S03）：工作区目录必须来自「用户经系统对话框亲手选择」
+      // 或已登记的工作区行。只校验字符串路径的话，渲染层被注入后可以把任意盘符
+      // 变成工作区根，随后所有文件类 IPC 的 assertInsideWorkspace 都会指向它。
+      if (typeof path !== 'string' || !path.trim()) {
+        throw new Error(mainMessages().error.invalidPathAbsolute)
+      }
+      const knownRoot =
+        isUserSelectedRoot(path) ||
+        (await getAllWorkspaces()).some(
+          (workspace) => workspacePathKey(workspace.path) === workspacePathKey(path)
+        )
+      if (!knownRoot) {
+        logger.warn('[Workspace] Rejected workspace-create for a folder not picked by the user')
+        throw new Error(mainMessages().error.workspacePathNotSelected)
+      }
       return await createWorkspace(name, path)
     } catch (error) {
       logger.error('Error in workspace-create:', error)
