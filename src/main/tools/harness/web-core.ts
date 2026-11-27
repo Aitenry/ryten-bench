@@ -13,33 +13,92 @@ import * as dns from 'node:dns/promises'
 // 判定与解析（纯函数）
 // ============================================================================
 
+/** 把点分 IPv4 解析成 4 个 0-255 的整数；非法返回 null */
+function parseIpv4(ip: string): [number, number, number, number] | null {
+  const parts = ip.split('.')
+  if (parts.length !== 4) return null
+  const nums = parts.map((part) => (part === '' ? Number.NaN : Number(part)))
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null
+  return nums as [number, number, number, number]
+}
+
 /** 判断一个 IPv4 字面量是否属于私有/保留网段 */
 export function isPrivateIpv4(ip: string): boolean {
-  const parts = ip.split('.').map((part) => Number(part))
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
-    return false
-  }
-  const [a, b] = parts
+  const parsed = parseIpv4(ip)
+  if (!parsed) return false
+  const [a, b, c] = parsed
   if (a === 0 || a === 10 || a === 127) return true
   if (a === 169 && b === 254) return true
   if (a === 172 && b >= 16 && b <= 31) return true
   if (a === 192 && b === 168) return true
   // 运营商级 NAT（100.64.0.0/10）
   if (a === 100 && b >= 64 && b <= 127) return true
+  // IETF 协议分配 / 文档示例 / 基准测试 / 组播 / 保留段（不会承载真实公网服务）
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true
+  if (a === 198 && (b === 18 || b === 19)) return true
+  if (a === 198 && b === 51 && c === 100) return true
+  if (a === 203 && b === 0 && c === 113) return true
+  if (a >= 224) return true
   return false
+}
+
+/**
+ * 解析 IPv6 为 8 个 16 位分组（支持 `::` 压缩、尾部内嵌 IPv4、`%zone`）。
+ * 非法输入返回 null，由调用方按"非私有"处理（与旧行为一致）。
+ */
+function parseIpv6(value: string): number[] | null {
+  let text = value.split('%')[0]
+  const ipv4Tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)
+  if (ipv4Tail) {
+    const v4 = parseIpv4(ipv4Tail[1])
+    if (!v4) return null
+    const high = ((v4[0] << 8) | v4[1]).toString(16)
+    const low = ((v4[2] << 8) | v4[3]).toString(16)
+    text = `${text.slice(0, -ipv4Tail[1].length).replace(/:$/, '')}:${high}:${low}`
+  }
+  const halves = text.split('::')
+  if (halves.length > 2) return null
+  const head = halves[0] ? halves[0].split(':') : []
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  if (halves.length === 1 && head.length !== 8) return null
+  if (head.length + tail.length > 8) return null
+  const groups = [...head, ...new Array<string>(8 - head.length - tail.length).fill('0'), ...tail]
+  const nums = groups.map((group) =>
+    /^[0-9a-f]{1,4}$/.test(group) ? Number.parseInt(group, 16) : Number.NaN
+  )
+  return nums.some((n) => Number.isNaN(n)) ? null : nums
+}
+
+/** 把两个 16 位分组还原成点分 IPv4（仅供私有网段判定） */
+function ipv4FromGroups(high: number, low: number): string {
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
 }
 
 /** 判断一个 IP 字面量（v4/v6）是否私有/保留 */
 export function isPrivateIp(ip: string): boolean {
   const value = ip.trim().toLowerCase().replace(/^\[|\]$/g, '')
-  if (value.includes(':')) {
-    if (value === '::1' || value === '::') return true
-    if (value.startsWith('fe80') || value.startsWith('fc') || value.startsWith('fd')) return true
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(value)
-    if (mapped) return isPrivateIpv4(mapped[1])
-    return false
+  if (!value.includes(':')) return isPrivateIpv4(value)
+  const groups = parseIpv6(value)
+  if (!groups) return false
+  // `::`（未指定地址）与 `::1`（回环）
+  if (groups.every((group) => group === 0)) return true
+  if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) return true
+  // fc00::/7（唯一本地地址，含 fd00::/8）与 fe80::/10（链路本地）
+  if ((groups[0] & 0xfe00) === 0xfc00) return true
+  if ((groups[0] & 0xffc0) === 0xfe80) return true
+  // fec0::/10（已废弃的站点本地地址）
+  if ((groups[0] & 0xffc0) === 0xfec0) return true
+  // IPv4 映射 `::ffff:a.b.c.d` / `::ffff:7f00:1` 与 IPv4 兼容 `::a.b.c.d`
+  const v4Mapped = groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff
+  const v4Compat =
+    groups.slice(0, 6).every((group) => group === 0) && (groups[6] !== 0 || groups[7] > 1)
+  if (v4Mapped || v4Compat) return isPrivateIpv4(ipv4FromGroups(groups[6], groups[7]))
+  // 64:ff9b::/96（NAT64）与 2002::/16（6to4）内嵌的 IPv4 同样按私有段判定
+  if (groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((g) => g === 0)) {
+    return isPrivateIpv4(ipv4FromGroups(groups[6], groups[7]))
   }
-  return isPrivateIpv4(value)
+  if (groups[0] === 0x2002) return isPrivateIpv4(ipv4FromGroups(groups[1], groups[2]))
+  return false
 }
 
 /** 私有/保留主机名（字面量判定：localhost、.local/.internal，以及私有 IP 字面量） */
@@ -180,8 +239,12 @@ export function parseDuckDuckGoResults(html: string, limit = 8): SearchHit[] {
 // 抓取（结构化失败，无本地化文案）
 // ============================================================================
 
-/** 一次抓取的最长时间 */
+/** 一次抓取的最长时间（包含手动跟随的全部重定向） */
 export const FETCH_TIMEOUT_MS = 20_000
+/** 手动跟随重定向的最大跳数（每跳都重新做私网校验，防止 302 到内网） */
+const MAX_REDIRECTS = 5
+/** 视为重定向的状态码 */
+const REDIRECT_STATUS_CODES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
 /** 响应体上限（字节）：超过直接拒绝，避免把大文件读进内存 */
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 /** 返回给模型的正文上限（字符） */
@@ -292,22 +355,53 @@ export async function fetchReadable(
     return { ok: false, failure: { code: 'invalid-url', url: rawUrl } }
   }
 
-  const blocked = await checkPublicAddress(url.hostname, options)
-  if (blocked) return { ok: false, failure: blocked }
-
   const doFetch = options.fetchImpl ?? globalThis.fetch
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   let response: Response
+  let finalUrl = url
   try {
-    response = await doFetch(url.toString(), {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'user-agent': WEB_USER_AGENT,
-        accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5'
+    // 手动跟随重定向：fetch 的 redirect:'follow' 只在发起前校验一次 host，
+    // 公网页面 302 到 http://127.0.0.1/ 或云 metadata 时绕过 SSRF 守卫。
+    // 这里每一跳都重新做「字面量 + DNS 解析」校验，并限制跳数与协议。
+    for (let hop = 0; ; hop += 1) {
+      if (hop > MAX_REDIRECTS) {
+        return {
+          ok: false,
+          failure: {
+            code: 'request-failed',
+            url: rawUrl,
+            message: `too many redirects (>${MAX_REDIRECTS})`
+          }
+        }
       }
-    })
+      const hopBlocked = await checkPublicAddress(finalUrl.hostname, options)
+      if (hopBlocked) return { ok: false, failure: hopBlocked }
+
+      response = await doFetch(finalUrl.toString(), {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'user-agent': WEB_USER_AGENT,
+          accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5'
+        }
+      })
+      if (!REDIRECT_STATUS_CODES.has(response.status)) break
+      const location = response.headers.get('location')
+      if (!location) break
+      // 重定向响应体不再需要：显式 cancel，避免占用连接
+      await response.body?.cancel().catch(() => undefined)
+      let next: URL
+      try {
+        next = new URL(location, finalUrl)
+      } catch {
+        return { ok: false, failure: { code: 'invalid-url', url: rawUrl } }
+      }
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+        return { ok: false, failure: { code: 'invalid-url', url: next.toString() } }
+      }
+      finalUrl = next
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return { ok: false, failure: { code: 'request-failed', url: rawUrl, message } }
@@ -352,7 +446,7 @@ export async function fetchReadable(
 
   return {
     ok: true,
-    url: response.url || url.toString(),
+    url: finalUrl.toString(),
     title,
     contentType,
     content: clipped.text,
