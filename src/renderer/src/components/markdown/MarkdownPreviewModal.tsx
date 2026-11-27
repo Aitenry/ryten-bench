@@ -46,7 +46,7 @@ const MarkdownPreviewModal: React.FC<MarkdownPreviewModalProps> = ({
       footer={null}
     >
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div className="app-modal-scroll" style={{ flex: 1, overflow: 'auto' }}>
+        <div className="custom-scrollbar app-modal-scroll" style={{ flex: 1, overflow: 'auto' }}>
           {loading ? (
             <div
               style={{

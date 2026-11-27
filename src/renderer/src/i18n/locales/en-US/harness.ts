@@ -1,4 +1,4 @@
-﻿import type { harnessZhCN } from '../zh-CN/harness'
+import type { harnessZhCN } from '../zh-CN/harness'
 
 /** `typeof harnessZhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错 */
 export const harnessEnUS: typeof harnessZhCN = {
@@ -213,6 +213,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       enterRun: 'Start',
       lineBreak: 'new line',
       start: 'Start',
+      startMessage: 'Start executing the goal: {{text}}',
       rounds: '{{rounds}} rounds',
       saveFailed: 'Failed to save goal: ',
       actionFailed: 'Goal action failed: '
@@ -911,7 +912,7 @@ export const harnessEnUS: typeof harnessZhCN = {
   skillsSettings: {
     pageTitle: 'Skills',
     pageDescription:
-      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill. Skills are never enabled by default: pick the ones to use under the chat input (or in a scheduled task). Click a card to read its SKILL.md; use the edit/delete actions on the card to manage it.',
+      'Configure the global Skills storage directory. Each subfolder is loaded as a separate Skill. Skills are never enabled by default: pick the ones to use under the chat input (or in a scheduled task). Click a card to read the skill body (frontmatter stripped); use the edit/delete actions on the card to manage the raw SKILL.md.',
     dirSectionTitle: 'Skills storage directory',
     dirSectionDescription: 'Every subdirectory containing a SKILL.md file counts as one Skill',
     dirPlaceholder: 'e.g. D:\\skills (leave empty to disable)',
@@ -937,7 +938,9 @@ export const harnessEnUS: typeof harnessZhCN = {
     savedSkill: 'Skill saved',
     deleteConfirmTitle: 'Delete skill "{{name}}"?',
     deleteConfirmBody:
-      'This removes the skill directory and its SKILL.md. The operation cannot be undone.',
+      'This removes the skill directory "{{id}}" and its SKILL.md. The operation cannot be undone. Make sure the directory name matches the skill you mean to delete.',
+    listLoadFailed:
+      'Failed to read the skills directory (missing, unreadable or locked). Check the path and try again.',
     deleteFailed: 'Failed to delete the skill',
     deleteFailedWithReason: 'Failed to delete the skill: {{reason}}',
     deleted: 'Skill deleted',
@@ -1262,6 +1265,8 @@ export const harnessEnUS: typeof harnessZhCN = {
     sectionServicesDesc: 'Pick one default · built-in search is used when nothing is configured',
     sectionBehavior: 'Behavior',
     sectionBehaviorDesc: 'Only affects search requests',
+    on: 'On',
+    off: 'Off',
     builtinName: 'Built-in search',
     builtinDesc: 'No configuration needed, works out of the box',
     deepseekName: 'DeepSeek search',

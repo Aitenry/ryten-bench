@@ -1494,17 +1494,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     async (objective: string): Promise<void> => {
       const text = objective.trim()
       if (!text || currentTopicArchivedRef.current) return
+      const userContent = t('harness.goalInline.startMessage', { text })
       window.dispatchEvent(new CustomEvent('harness-send-started'))
       const userMessage: Message = {
         id: Date.now().toString(),
         role: 'user',
-        content: `开始执行目标：${text}`,
-        blocks: [{ type: 'text', text: `开始执行目标：${text}` }],
+        content: userContent,
+        blocks: [{ type: 'text', text: userContent }],
         timestamp: Date.now()
       }
       await startTurn({ userMessage, attachments: [] })
     },
-    [startTurn]
+    [startTurn, t]
   )
 
   /**

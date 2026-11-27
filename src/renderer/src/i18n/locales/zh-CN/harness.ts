@@ -1,4 +1,4 @@
-﻿/**
+/**
  * harness 插件词条（简体中文 = 源语言）。
  *
  * 顶层键与原中央词条**完全一致**（`harness` 助手界面 / `agentSettings` 智能体设置页 /
@@ -220,6 +220,7 @@ export const harnessZhCN = {
       enterRun: '开始执行',
       lineBreak: '换行',
       start: '开始执行',
+      startMessage: '开始执行目标：{{text}}',
       rounds: '{{rounds}} 轮',
       saveFailed: '保存目标失败：',
       actionFailed: '操作目标失败：'
@@ -944,7 +945,9 @@ export const harnessZhCN = {
     saveFailedWithReason: '保存技能失败：{{reason}}',
     savedSkill: '技能已保存',
     deleteConfirmTitle: '删除技能「{{name}}」？',
-    deleteConfirmBody: '会删除该技能目录及其中的 SKILL.md，操作不可撤销。',
+    deleteConfirmBody:
+      '会删除技能目录「{{id}}」及其中的 SKILL.md，操作不可撤销。请确认目录名与要删的技能一致。',
+    listLoadFailed: '读取技能目录失败（目录不存在、没有权限或被占用），请检查后重试。',
     deleteFailed: '删除技能失败',
     deleteFailedWithReason: '删除技能失败：{{reason}}',
     deleted: '技能已删除',
@@ -1265,6 +1268,8 @@ export const harnessZhCN = {
     sectionServicesDesc: '单选默认服务 · 未配置时自动使用内置搜索',
     sectionBehavior: '行为',
     sectionBehaviorDesc: '只影响搜索行为',
+    on: '开',
+    off: '关',
     builtinName: '内置搜索',
     builtinDesc: '无需配置，开箱即用',
     deepseekName: 'DeepSeek 搜索',

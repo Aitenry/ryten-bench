@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   AgentConfigInput,
   AgentConfigRow,
   AgentPaginatedResult,
@@ -581,12 +581,6 @@ export const harnessApi = {
       invoke('harness:harness-list-skills') as Promise<
         { id: string; name: string; description: string }[]
       >,
-    /** 技能列表分页（主进程扫描 + 解析，渲染层只拿当前页） */
-    listSkillsPaginated: (page: number, pageSize: number) =>
-      invoke('harness:harness-list-skills-paginated', page, pageSize) as Promise<{
-        items: { id: string; name: string; description: string }[]
-        total: number
-      }>,
     /** 单个技能（content = 预览正文；raw = SKILL.md 原文，编辑用） */
     getSkill: (skillId: string) =>
       invoke('harness:harness-get-skill', skillId) as Promise<{

@@ -1,4 +1,4 @@
-﻿import { BrowserWindow, app, dialog } from 'electron'
+import { BrowserWindow, app, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'fs'
 import logger from 'electron-log'
@@ -2588,28 +2588,74 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 技能目录扫描（主进程）：只 stat 确认 SKILL.md 可读，不读文件内容。
-   * 分页时只解析当前页的 SKILL.md，扫描成本不随「页内要展示多少」增长。
+   * 技能根目录可用性检查：不存在 / 不是目录 / 无权限时直接抛错，让渲染层显示
+   * 「读取失败」而不是「没发现任何技能」——后者会让人误以为目录是空的。
    */
+  const assertSkillsRootReadable = (skillsPath: string): void => {
+    const stat = fs.statSync(skillsPath)
+    if (!stat.isDirectory()) throw new Error('skills path is not a directory')
+    fs.accessSync(skillsPath, fs.constants.R_OK | fs.constants.X_OK)
+  }
+
+  /**
+   * 技能目录扫描（主进程）：只确认 SKILL.md 是可读的**普通文件**，不读文件内容。
+   *
+   * 两个边界要挡：
+   * - `SKILL.md` 是同名目录：`accessSync(R_OK)` 对目录也成功，但后续 `readFileSync` 必然
+   *   EISDIR，技能会「永远打不开」；
+   * - `SKILL.md` 是符号链接：读写都会穿透到 skills 根之外，等于绕过了「只操作扫描结果」
+   *   这道路径守卫。这里用 `lstat` 拒绝链接、用 `stat` 确认是普通文件。
+   */
+  const isRegularSkillFile = (skillsPath: string, dirName: string): boolean => {
+    try {
+      const file = join(skillsPath, dirName, 'SKILL.md')
+      if (fs.lstatSync(file).isSymbolicLink()) return false
+      return fs.statSync(file).isFile()
+    } catch {
+      return false
+    }
+  }
+
   const listSkillDirNames = (skillsPath: string): string[] => {
     try {
       return fs
         .readdirSync(skillsPath, { withFileTypes: true })
+        // withFileTypes 基于 lstat：目录符号链接本身不会命中 isDirectory（不一致支持）
         .filter((entry) => entry.isDirectory())
-        .filter((entry) => {
-          try {
-            fs.accessSync(join(skillsPath, entry.name, 'SKILL.md'), fs.constants.R_OK)
-            return true
-          } catch {
-            return false
-          }
-        })
+        .filter((entry) => isRegularSkillFile(skillsPath, entry.name))
         .map((entry) => entry.name)
     } catch (error) {
       logger.error('Error scanning skills dir:', error)
       return []
     }
   }
+
+  /**
+   * 解码 SKILL.md：只接受 UTF-8。
+   *
+   * - UTF-8 BOM（EF BB BF）：剥掉，编辑/保存统一按「无 BOM 的 UTF-8」写回，避免首字符
+   *   变隐形 U+FEFF 后 frontmatter 匹配失败（列表标题退化成目录名、预览把 frontmatter
+   *   当正文显示）；
+   * - UTF-16 / 非法 UTF-8：`toString('utf8')` 会产生 U+FFFD，写回等于把原文替换字符永久
+   *   覆盖。这里直接返回 null，由调用方报「读不到 / 不支持的编码」，绝不静默损坏。
+   */
+  const decodeSkillText = (buffer: Buffer): string | null => {
+    if (buffer.length >= 2) {
+      const b0 = buffer[0]
+      const b1 = buffer[1]
+      if ((b0 === 0xff && b1 === 0xfe) || (b0 === 0xfe && b1 === 0xff)) return null
+    }
+    let start = 0
+    if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+      start = 3
+    }
+    const text = buffer.subarray(start).toString('utf8')
+    return text.includes('\uFFFD') ? null : text
+  }
+
+  /** frontmatter 剥离（get-skill 预览用；与 skills-core 的正文口径一致） */
+  const stripSkillFrontmatter = (raw: string): string =>
+    raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n)?/, '')
 
   /** 读单个技能的元信息（front matter 的 name / description） */
   const readSkillMeta = (
@@ -2619,8 +2665,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     let name = dirName
     let description = ''
     try {
-      const content = fs.readFileSync(join(skillsPath, dirName, 'SKILL.md'), 'utf-8')
-      const fm = content.match(/^---\s*\n([\s\S]*?)\n---/)
+      const raw = decodeSkillText(fs.readFileSync(join(skillsPath, dirName, 'SKILL.md')))
+      const fm = raw?.match(/^---\s*\n([\s\S]*?)\n---/)
       if (fm) {
         const n = fm[1].match(/^name:\s*(.+)$/m)
         const d = fm[1].match(/^description:\s*(.+)$/m)
@@ -2637,26 +2683,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   handle('harness-list-skills', async () => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath) return []
+    // 目录本身不可读时抛错（而不是返回空列表，让界面提示「没有技能」）
+    assertSkillsRootReadable(skillsPath)
     return listSkillDirNames(skillsPath).map((dirName) => readSkillMeta(skillsPath, dirName))
-  })
-
-  /**
-   * 技能列表分页（主进程）：只返回当前页的元信息 + total。
-   * 渲染层不再「全量拉取 + 前端切片」。
-   */
-  handle('harness-list-skills-paginated', async (page = 0, pageSize = 5) => {
-    const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
-    if (!skillsPath) return { items: [], total: 0 }
-    const dirs = listSkillDirNames(skillsPath)
-    const safeSize = Math.max(1, Math.min(100, Math.floor(pageSize)))
-    const safePage = Math.max(0, Math.floor(page))
-    const start = safePage * safeSize
-    return {
-      items: dirs
-        .slice(start, start + safeSize)
-        .map((dirName) => readSkillMeta(skillsPath, dirName)),
-      total: dirs.length
-    }
   })
 
   /**
@@ -2665,16 +2694,19 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
    * 只接受目录扫描结果里的 id：既挡住 `../` 之类的路径穿越，也不会把目录外任意文件
    * 读给渲染层。返回两份正文：
    * - `content`：剥掉 frontmatter 的正文，给 Markdown 预览；
-   * - `raw`：SKILL.md 原文（含 frontmatter），给「编辑」保存回去。
+   * - `raw`：SKILL.md 原文（含 frontmatter，UTF-8 BOM 已剥离），给「编辑」保存回去。
    */
   handle('harness-get-skill', async (skillId: string) => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath || typeof skillId !== 'string' || !skillId) return null
     if (!listSkillDirNames(skillsPath).includes(skillId)) return null
     try {
-      const raw = fs.readFileSync(join(skillsPath, skillId, 'SKILL.md'), 'utf-8')
-      const content = raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n)?/, '')
-      return { ...readSkillMeta(skillsPath, skillId), content, raw }
+      const raw = decodeSkillText(fs.readFileSync(join(skillsPath, skillId, 'SKILL.md')))
+      if (raw === null) {
+        logger.warn(`[Skills] Unsupported encoding for skill "${skillId}"; refusing to edit it`)
+        return null
+      }
+      return { ...readSkillMeta(skillsPath, skillId), content: stripSkillFrontmatter(raw), raw }
     } catch (error) {
       logger.warn('[Skills] Failed to read skill content:', error)
       return null
@@ -2684,16 +2716,32 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   /**
    * 保存技能原文（技能页「编辑」）。写入的是完整 SKILL.md，因此 frontmatter 里的
    * name / description 也可以一起改；保存后渲染层重新拉列表，卡片标题会跟着更新。
+   *
+   * 写入走「临时文件 + rename」：`writeFileSync` 直接写会先截断目标，中途出错会留下
+   * 半截 SKILL.md；rename 在同一目录内是原子替换。改完后统一是 UTF-8（无 BOM）。
    */
   handle('harness-save-skill', async (skillId: string, content: string) => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath || typeof skillId !== 'string' || !skillId) return false
     if (typeof content !== 'string' || content.trim().length === 0) return false
+    // 含替换字符说明上游用错编码解码过，写回会永久损坏原文：拒绝并留给用户重开
+    if (content.includes('\uFFFD')) {
+      logger.warn(`[Skills] Refusing to save skill "${skillId}": content contains U+FFFD`)
+      return false
+    }
     if (!listSkillDirNames(skillsPath).includes(skillId)) return false
+    const target = join(skillsPath, skillId, 'SKILL.md')
+    const temp = `${target}.saving-${process.pid}`
     try {
-      fs.writeFileSync(join(skillsPath, skillId, 'SKILL.md'), content, 'utf-8')
+      fs.writeFileSync(temp, content, 'utf-8')
+      fs.renameSync(temp, target)
       return true
     } catch (error) {
+      try {
+        fs.rmSync(temp, { force: true })
+      } catch {
+        // 清理失败不影响返回值
+      }
       logger.error('[Skills] Failed to save skill content:', error)
       return false
     }
@@ -2721,7 +2769,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
    *
    * 「全部启用」在配置里用 `enabledSkills: undefined` 表示；停用某个技能时必须展开成完整清单，
    * 而完整技能目录只有主进程知道——放在渲染层会依赖「前端刚好拉到了全部技能」，
-   * 分页后会漏掉其他页的技能。
+   * 目录一多或分页实现变化就会漏。
    */
   handle('harness-set-skill-enabled', async (skillId: string, enabled: boolean) => {
     const harness = (settingsStore.get('harness') as HarnessSettings | undefined) ?? {}

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 设置 →「联网搜索」页。
  *
  * 版式对齐设计稿：
@@ -362,8 +362,8 @@ const SearchSettings: React.FC = () => {
                 buttonStyle="solid"
                 size="small"
                 options={[
-                  { label: '开', value: 'on' },
-                  { label: '关', value: 'off' }
+                  { label: t('searchSettings.on'), value: 'on' },
+                  { label: t('searchSettings.off'), value: 'off' }
                 ]}
               />
             }
@@ -381,8 +381,8 @@ const SearchSettings: React.FC = () => {
                 buttonStyle="solid"
                 size="small"
                 options={[
-                  { label: '开', value: 'on' },
-                  { label: '关', value: 'off' }
+                  { label: t('searchSettings.on'), value: 'on' },
+                  { label: t('searchSettings.off'), value: 'off' }
                 ]}
               />
             }

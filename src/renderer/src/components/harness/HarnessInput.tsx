@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { App, Button, Input, Modal, Popover, Switch, Tooltip, theme } from 'antd'
 import type { InputRef } from 'antd'
 import {
@@ -361,6 +361,19 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
   /** 可选 MCP 服务器（选择项存服务器分组 mcp@<命名空间>，主进程挂载时展开） */
   const [mcpCatalog, setMcpCatalog] = useState<{ value: string; label: string }[]>([])
+  /**
+   * 幽灵选中：技能 / MCP 目录里被删掉或改名的旧选择仍留在会话选择里。
+   * 徽标只统计「目录里还存在」的项，否则会出现「技能 1」但面板里没有任何勾选行、
+   * 也无法取消的情况。选择本身保留——目录恢复同名项时会重新生效（运行时同样按目录过滤）。
+   */
+  const visibleSelectedSkills = useMemo(
+    () => selectedSkills.filter((id) => skillCatalog.some((skill) => skill.id === id)).length,
+    [selectedSkills, skillCatalog]
+  )
+  const visibleSelectedMcp = useMemo(
+    () => selectedMcp.filter((value) => mcpCatalog.some((server) => server.value === value)).length,
+    [selectedMcp, mcpCatalog]
+  )
   const [mcpOpen, setMcpOpen] = useState(false)
   const [mcpQuery, setMcpQuery] = useState('')
   const mcpSearchRef = useRef<InputRef | null>(null)
@@ -1808,7 +1821,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           <RiFileAi2Line size={14} style={{ color: token.colorTextTertiary }} />
           <span className="harness-permission-trigger-name">{t('harness.input.skillsLabel')}</span>
           <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-            {selectedSkills.length}
+            {visibleSelectedSkills}
           </span>
           {skillsOpen ? (
             <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />
@@ -1841,7 +1854,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           <RiPlug2Line size={14} style={{ color: token.colorTextTertiary }} />
           <span className="harness-permission-trigger-name">{t('harness.input.mcpLabel')}</span>
           <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-            {selectedMcp.length}
+            {visibleSelectedMcp}
           </span>
           {mcpOpen ? (
             <RiArrowUpSLine size={14} className="harness-permission-trigger-chev" />

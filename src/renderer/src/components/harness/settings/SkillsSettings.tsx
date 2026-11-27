@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { App, theme, Button, Input, Modal, Spin } from 'antd'
 import {
   DeleteOutlined,
@@ -48,11 +48,18 @@ const SkillsSettings: React.FC = () => {
   const { t } = useTranslation()
 
   const [settings, setSettings] = useState<SystemSettings | null>(null)
-  const [skillsPath, setSkillsPath] = useState('')
+  /**
+   * 目录输入框的**草稿**：允许用户先输入/浏览，点「保存」才生效。
+   * 技能列表与搜索只看已保存的 `savedSkillsPath`——否则每敲一个字都要重扫旧目录，
+   * 界面上还会出现「输入框是新路径、列表是旧目录」的对不上。
+   */
+  const [skillsPathDraft, setSkillsPathDraft] = useState('')
+  const savedSkillsPath = settings?.harness?.skillsPath ?? ''
   const [skills, setSkills] = useState<SkillInfo[]>([])
   /** 「已发现的技能」标题右侧的搜索词：只过滤当前列表，不改目录/启用状态 */
   const [skillQuery, setSkillQuery] = useState('')
   const [loadingSkills, setLoadingSkills] = useState(false)
+  const [skillsLoadFailed, setSkillsLoadFailed] = useState(false)
   const [savingPath, setSavingPath] = useState(false)
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0)
 
@@ -73,7 +80,7 @@ const SkillsSettings: React.FC = () => {
     try {
       const result = await window.api.systemSettings.getAll()
       setSettings(result)
-      setSkillsPath(result.harness?.skillsPath ?? '')
+      setSkillsPathDraft(result.harness?.skillsPath ?? '')
     } catch (error) {
       viewMessage(
         msgKey,
@@ -87,23 +94,27 @@ const SkillsSettings: React.FC = () => {
     loadSettings().then()
   }, [loadSettings])
 
-  // 目录有效时加载全部技能：技能数量是「本地目录里的子目录数」，一页 5 个会让宽屏
+  // 已保存目录有效时加载全部技能：技能数量是「本地目录里的子目录数」，一页 5 个会让宽屏
   // 只剩一行、下面大片空白，也看不到后面的技能；直接全量（主进程只读 frontmatter）。
   useEffect(() => {
-    if (!skillsPath) {
+    if (!savedSkillsPath) {
       setSkills([])
+      setSkillsLoadFailed(false)
       setLoadingSkills(false)
       return
     }
     let cancelled = false
     setLoadingSkills(true)
+    setSkillsLoadFailed(false)
     harnessApi.harness
       .listSkills()
       .then((result) => {
         if (!cancelled) setSkills(result)
       })
       .catch(() => {
-        if (!cancelled) setSkills([])
+        if (cancelled) return
+        setSkills([])
+        setSkillsLoadFailed(true)
       })
       .finally(() => {
         if (!cancelled) setLoadingSkills(false)
@@ -111,12 +122,12 @@ const SkillsSettings: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [skillsPath, skillsRefreshKey])
+  }, [savedSkillsPath, skillsRefreshKey])
 
   // 换目录后上一份搜索词没有意义，清掉，避免新目录一进来就是空列表
   useEffect(() => {
     setSkillQuery('')
-  }, [skillsPath])
+  }, [savedSkillsPath])
 
   /** 搜索：名称 / 目录 id / 描述都认（与输入框面板的搜索口径一致） */
   const filteredSkills = useMemo(() => {
@@ -133,7 +144,7 @@ const SkillsSettings: React.FC = () => {
   const handleBrowsePath = async (): Promise<void> => {
     try {
       const path = await harnessApi.harness.selectSkillsDirectory()
-      if (path) setSkillsPath(path)
+      if (path) setSkillsPathDraft(path)
     } catch (error) {
       viewMessage(
         'skills-path',
@@ -147,14 +158,14 @@ const SkillsSettings: React.FC = () => {
     const msgKey = 'skills-path'
     try {
       setSavingPath(true)
-      const trimmed = skillsPath.trim()
+      const trimmed = skillsPathDraft.trim()
       const nextHarness: HarnessSettings = {
         ...(settings?.harness ?? {}),
         skillsPath: trimmed || undefined
       }
       await window.api.systemSettings.update({ harness: nextHarness })
       setSettings((prev) => (prev ? { ...prev, harness: nextHarness } : prev))
-      setSkillsPath(trimmed)
+      setSkillsPathDraft(trimmed)
       setSkillsRefreshKey((k) => k + 1)
       viewMessage(
         msgKey,
@@ -273,7 +284,7 @@ const SkillsSettings: React.FC = () => {
   const handleDelete = (skill: SkillInfo): void => {
     modal.confirm({
       title: t('skillsSettings.deleteConfirmTitle', { name: skill.name }),
-      content: t('skillsSettings.deleteConfirmBody'),
+      content: t('skillsSettings.deleteConfirmBody', { id: skill.id }),
       okText: t('common.action.confirm'),
       okType: 'danger',
       cancelText: t('common.action.cancel'),
@@ -323,8 +334,8 @@ const SkillsSettings: React.FC = () => {
       >
         <div style={{ display: 'flex', gap: 8, maxWidth: 560 }}>
           <Input
-            value={skillsPath}
-            onChange={(e) => setSkillsPath(e.target.value)}
+            value={skillsPathDraft}
+            onChange={(e) => setSkillsPathDraft(e.target.value)}
             placeholder={t('skillsSettings.dirPlaceholder')}
             allowClear
             style={{ flex: 1 }}
@@ -333,13 +344,13 @@ const SkillsSettings: React.FC = () => {
           <Button
             type="primary"
             loading={savingPath}
-            disabled={skillsPath.trim() === (settings?.harness?.skillsPath ?? '')}
+            disabled={skillsPathDraft.trim() === savedSkillsPath}
             onClick={handleSavePath}
           >
             {t('common.action.save')}
           </Button>
         </div>
-        {settings?.harness?.skillsPath && (
+        {savedSkillsPath && (
           <p
             style={{
               margin: '10px 0 0',
@@ -348,13 +359,13 @@ const SkillsSettings: React.FC = () => {
               wordBreak: 'break-all'
             }}
           >
-            {t('skillsSettings.dirCurrent', { path: settings.harness.skillsPath })}
+            {t('skillsSettings.dirCurrent', { path: savedSkillsPath })}
           </p>
         )}
       </SettingsSection>
 
       {/* 技能列表：吃掉剩余高度，卡片网格自己滚动 */}
-      {skillsPath ? (
+      {savedSkillsPath ? (
         <SettingsSection
           style={{
             flex: 1,
@@ -381,6 +392,17 @@ const SkillsSettings: React.FC = () => {
         >
           {loadingSkills ? (
             <SkeletonSettingRows rows={5} />
+          ) : skillsLoadFailed ? (
+            <div
+              style={{
+                padding: '32px 0',
+                textAlign: 'center',
+                fontSize: 13,
+                color: colorTextTertiary
+              }}
+            >
+              {t('skillsSettings.listLoadFailed')}
+            </div>
           ) : filteredSkills.length > 0 ? (
             <div
               style={{

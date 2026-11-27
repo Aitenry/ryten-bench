@@ -310,8 +310,22 @@ const AgentSettings: React.FC = () => {
      * 校验失败时字段下方已经有 antd 的红色提示；此前这一步和保存放在同一个 try 里，
      * catch 还会再弹一条「保存失败: [object Object]」，看起来像后端出了错。先单独
      * 校验，失败就直接返回，只有真正的保存错误才弹错误条。
+     *
+     * 表单区是固定高度的独立滚动容器：出错字段可能滚在视口外，这时点「保存」看起来
+     * 像没反应。把第一个错误字段滚到中间，保留 antd 的字段提示、不再额外弹 toast。
      */
-    const values = await form.validateFields().catch(() => null)
+    const values = await form.validateFields().catch((error: unknown) => {
+      const firstField = (error as { errorFields?: Array<{ name?: unknown }> })?.errorFields?.[0]
+        ?.name
+      if (typeof firstField === 'string' || Array.isArray(firstField)) {
+        try {
+          form.scrollToField(firstField as never)
+        } catch {
+          // 滚动失败不影响校验提示
+        }
+      }
+      return null
+    })
     if (!values) return
 
     setSaving(true)

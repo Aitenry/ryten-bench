@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 新建 / 编辑定时任务弹窗（侧边栏「定时任务」页）。
  *
  * 目标可以在三种模式（对话 / 工作 / 插件）下任选一条已有会话，或选「新会话」每次触发都开一条；
@@ -144,7 +144,9 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         }))
         // 补齐对话根工作区（kind 可能是 chat）与插件工作区（可能不在工作区列表里）
         for (const id of chatIds) {
-          if (!wsList.some((w) => w.id === id)) wsList.push({ id, name: '对话', kind: 'chat' })
+          if (!wsList.some((w) => w.id === id)) {
+            wsList.push({ id, name: t('schedulesPage.modeChat'), kind: 'chat' })
+          }
         }
         for (const plugin of plugins) {
           if (!wsList.some((w) => w.id === plugin.workspaceId)) {
@@ -235,7 +237,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     return () => {
       cancelled = true
     }
-  }, [open, task])
+  }, [open, task, t])
 
   // 新建：每次打开重置表单（编辑由上面的预填负责）
   useEffect(() => {

@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="./resources/logo.png" alt="RytenBench logo" width="120" />
 </p>
 
@@ -225,8 +225,8 @@ from the hub or from a local package, and both paths end in the same host instal
   pick them under the chat input (or in a scheduled task); only picked skills enter the system
   prompt as a short name/description index, and their full instructions load on demand through a
   `skill` tool, so the prompt never carries every skill body at once. More → Skills lists every
-  skill with search; click a card to read the full `SKILL.md`, or use its edit/delete actions to
-  manage the file.
+  skill with search; click a card to read the skill body (frontmatter stripped), or use its
+  edit/delete actions to manage the raw `SKILL.md` file.
   In tool pickers the four scheduled-task tools appear as one **Schedules** choice and the MCP
   tools/resources as one **MCP** choice; selecting a choice expands to the underlying tools at run
   time, so the lists stay short and readable.
@@ -234,7 +234,7 @@ from the hub or from a local package, and both paths end in the same host instal
   `npx` / `uvx`, with arguments, working directory and extra environment variables) or over
   Streamable HTTP / SSE (URL plus request headers). Servers connect when added but their tools are
   **not injected by default**: choose the servers to use under the chat input (the MCP picker next
-  to Tools) or in a scheduled task; the tools then join the same tool-call loop as the
+  to the Tools and Skills pickers) or in a scheduled task; the tools then join the same tool-call loop as the
   built-in and plugin tools. Connected servers' **resources** are readable too:
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` return text inline and
   turn image resources into viewable attachments. Managed under More → MCP.
