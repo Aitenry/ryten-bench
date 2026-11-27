@@ -2706,13 +2706,27 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 技能根目录可用性检查：不存在 / 不是目录 / 无权限时直接抛错，让渲染层显示
+   * 技能根目录可用性检查：不存在 / 不是目录 / 无权限时抛错，让渲染层显示
    * 「读取失败」而不是「没发现任何技能」——后者会让人误以为目录是空的。
+   *
+   * 例外：目录**不存在**（ENOENT）按「空技能目录」处理，不抛错。典型场景是
+   * 打包版默认路径落在安装目录（如 `D:\Program Files\RytenBench\data\skills`），
+   * 应用被移动/卸载或安装目录只读后该目录消失，设置页会在「智能体」页报
+   * `ENOENT: no such file or directory, stat …`，把用户挡在页面外；
+   * 这里改成空列表，用户仍可在设置里改到可用目录。
    */
   const assertSkillsRootReadable = (skillsPath: string): void => {
-    const stat = fs.statSync(skillsPath)
-    if (!stat.isDirectory()) throw new Error('skills path is not a directory')
-    fs.accessSync(skillsPath, fs.constants.R_OK | fs.constants.X_OK)
+    try {
+      const stat = fs.statSync(skillsPath)
+      if (!stat.isDirectory()) throw new Error('skills path is not a directory')
+      fs.accessSync(skillsPath, fs.constants.R_OK | fs.constants.X_OK)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        logger.warn(`[Skills] Skills directory does not exist, treating as empty: ${skillsPath}`)
+        return
+      }
+      throw error
+    }
   }
 
   /**
