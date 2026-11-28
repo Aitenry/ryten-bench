@@ -32,4 +32,6 @@ out
 /mockup/
 /data/
 /test/
+/tests/
+/scripts/
 /docker/
