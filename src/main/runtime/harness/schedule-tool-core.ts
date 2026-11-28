@@ -2,13 +2,17 @@
  * Pure mapping between "what the model asked for" and "what the store accepts" for the scheduled
  * task tools (no electron / no DB / no runtime imports, so it can be unit tested under plain Node).
  *
- * Two jobs:
+ * Three jobs:
  * 1. **Form parity**: everything the Schedules page can set (target conversation / new session per
  *    run, task-level tools-skills-MCP) can also be set by `schedule_create` / `schedule_edit`;
  * 2. **True partial updates**: `schedule_edit` only touches the fields the caller passed. `undefined`
  *    means "leave it alone", `null` means "clear it" (for `agentConfig`: follow the conversation /
  *    defaults again) — the two must never collapse into each other, otherwise "change only the
- *    prompt" would silently reset the tool selection.
+ *    prompt" would silently reset the tool selection;
+ * 3. **Catalog filtering**: the task-level selection is a list of values the Schedules page could
+ *    also pick. Built-in runtime tools (`task`, `read_file`, `execute`, …) are mounted on every
+ *    turn and are absent from that catalog, so a model that copies its own toolset into
+ *    `agentConfig` must be rejected instead of storing names that are silently dropped at run time.
  *
  * The target rules mirror what the page IPC enforces (main/ipc/harness: `resolveScheduleTargetPayload`):
  * - chat → workspace kind `chat`, memory scope `chat`;
@@ -32,6 +36,37 @@ export interface ScheduleSelectionInput {
   tools?: string[] | null
   skills?: string[] | null
   mcpTools?: string[] | null
+}
+
+/**
+ * Values the Schedules page could pick, built from the same sources as `list_capabilities`:
+ * selectable tool names (group entries included), skill ids, and `mcp@<namespace>` values.
+ *
+ * `tools` also contains the MCP group values: the page's legacy migration keeps them in `tools`,
+ * and `mcp` (the old all-servers marker) is still expanded at run time.
+ */
+export interface ScheduleSelectionCatalog {
+  tools: ReadonlySet<string>
+  skills: ReadonlySet<string>
+  mcp: ReadonlySet<string>
+}
+
+/** Selection values that are not in the catalog, per dimension (caller order kept) */
+export interface UnknownSelectionValues {
+  tools: string[]
+  skills: string[]
+  mcp: string[]
+}
+
+/** Whether any dimension of an `UnknownSelectionValues` result contains something */
+export function hasUnknownSelectionValues(unknown: UnknownSelectionValues): boolean {
+  return unknown.tools.length > 0 || unknown.skills.length > 0 || unknown.mcp.length > 0
+}
+
+/** Filtered selection plus the values that were dropped because the catalog does not contain them */
+export interface SanitizedSelection {
+  selection: AgentSelection | null
+  ignored: UnknownSelectionValues | null
 }
 
 /** Fields a caller may create with */
@@ -132,6 +167,57 @@ export function normalizeSelectionInput(
     return null
   }
   return normalized
+}
+
+/**
+ * Drop every selection value that is not in the catalog.
+ *
+ * A dimension whose values are **all** dropped becomes `null` (follow the conversation) instead of
+ * an explicit empty override, so a task whose tools were all invalid still runs with the
+ * conversation's own selection rather than with nothing mounted.
+ */
+export function sanitizeSelectionInput(
+  raw: ScheduleSelectionInput | null | undefined,
+  catalog: ScheduleSelectionCatalog
+): SanitizedSelection {
+  if (!raw || typeof raw !== 'object') return { selection: null, ignored: null }
+  const filter = (
+    names: string[] | null,
+    isKnown: (name: string) => boolean
+  ): { kept: string[]; dropped: string[] } => {
+    const kept: string[] = []
+    const dropped: string[] = []
+    for (const name of names ?? []) {
+      if (isKnown(name)) kept.push(name)
+      else dropped.push(name)
+    }
+    return { kept, dropped }
+  }
+  const tools = filter(cleanNames(raw.tools), (name) => catalog.tools.has(name))
+  const skills = filter(cleanNames(raw.skills), (name) => catalog.skills.has(name))
+  const mcp = filter(cleanNames(raw.mcpTools), (name) => catalog.mcp.has(name))
+  const selection = normalizeSelectionInput({
+    tools: tools.kept,
+    skills: skills.kept,
+    mcpTools: mcp.kept
+  })
+  const ignored = { tools: tools.dropped, skills: skills.dropped, mcp: mcp.dropped }
+  return { selection, ignored: hasUnknownSelectionValues(ignored) ? ignored : null }
+}
+
+/**
+ * Values the caller passed that the Schedules page could not also pick (`null` = all valid).
+ *
+ * Used to reject `schedule_create` / `schedule_edit` calls that name built-in runtime tools
+ * (`task`, `read_file`, `execute`, …) or anything else outside the catalog: accepting them would
+ * store a tool override that the run-time registry silently drops, which replaces the
+ * conversation's tool selection with an empty set.
+ */
+export function findUnknownSelectionValues(
+  raw: ScheduleSelectionInput | null | undefined,
+  catalog: ScheduleSelectionCatalog
+): UnknownSelectionValues | null {
+  return sanitizeSelectionInput(raw, catalog).ignored
 }
 
 // ── Target ───────────────────────────────────────────────────────────

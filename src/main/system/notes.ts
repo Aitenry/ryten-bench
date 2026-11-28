@@ -15,10 +15,12 @@ import { notesToolContributions } from '../tools/notes'
  *
  * - **Channel table**: 5 domains (todo / document / wiki / node-position / graph), one file per
  *   domain, all channel names prefixed with `notes:*`;
- * - **AI tools**: `manage_materials` (material organization) is a single entry point covering
- *   documents / todos / knowledge bases / graphs (implementation in `tools/notes/**`); it is
- *   registered in the harness tool registry so the model can read and write the library. It uses
- *   the same `harness.tool` consumption point as third-party plugins, but comes from a built-in
+ * - **AI tools**: `materials-tools` (materials organization) is a single selectable entry that
+ *   expands into the document tools (`materials_docs_search` / `_read` / `_write` / `_edit`), the
+ *   to-do tools with the same granularity (`materials_todos_search` / `_read` / `_write` / `_edit`),
+ *   and `materials_wikis` / `materials_graph` (implementation in `tools/notes/**`); they are
+ *   registered in the harness tool registry so the model can read and write the library. They use
+ *   the same `harness.tool` consumption point as third-party plugins, but come from a built-in
  *   source compiled into the app;
  * - **Graph events**: `notes:graph-build-{progress,complete,error}` are broadcast by the main
  *   process and subscribed to by the renderer's `BuildProgressProvider`; the preload system

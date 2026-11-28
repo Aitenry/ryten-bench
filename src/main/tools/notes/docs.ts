@@ -1,4 +1,4 @@
-// Document domain handlers (dispatched uniformly by the manage_materials tool).
+// Document domain handlers (dispatched by the materials_docs_* tools).
 //
 // Design notes (2026-11 materials organization rework):
 // - Read: doc.search / doc.toc / doc.get / doc.find. doc.get outputs line numbers + the revision
@@ -128,24 +128,29 @@ function clip(text: string, max = 240): string {
 // ============================================================================
 
 export async function searchDocsHandler(params: {
-  query: string
+  query?: string
   page?: number
   pageSize?: number
 }): Promise<string> {
   const tr = getDocsToolTexts()
-  if (!params.query?.trim()) return missingParam('query')
+  // An omitted / blank query means "list documents" (most recently updated first). The model
+  // often wants the index before choosing one, and forcing a keyword just made it invent one.
+  const query = params.query?.trim() ?? ''
+  const isList = query === ''
   const { getDocPage } = await import('../../database/mapper/notes/document')
   const page = Math.max(1, params.page ?? 1)
   const pageSize = Math.min(50, Math.max(1, params.pageSize ?? 10))
-  // getDocPage searches title/summary/tags + body; the old getAllDocs missed the body, which is
-  // why the model often failed to find matches
-  const result = await getDocPage(params.query, page, pageSize)
-  if (!result.items.length) return mainFormat(tr.docs.searchEmpty, { query: params.query })
+  // getDocPage searches title/summary/tags + body; an empty pattern matches every row, so the
+  // same query serves as the plain document list
+  const result = await getDocPage(query, page, pageSize)
+  if (!result.items.length) {
+    return isList ? tr.docs.listEmpty : mainFormat(tr.docs.searchEmpty, { query })
+  }
+  const count = mainPlural(tr.docs.searchCount_one, tr.docs.searchCount_other, result.total)
   const lines = [
-    mainFormat(tr.docs.searchHeader, {
-      query: params.query,
-      count: mainPlural(tr.docs.searchCount_one, tr.docs.searchCount_other, result.total)
-    })
+    isList
+      ? mainFormat(tr.docs.listHeader, { count })
+      : mainFormat(tr.docs.searchHeader, { query, count })
   ]
   for (const doc of result.items) {
     lines.push(`  [${doc.id}] **${doc.title}**`)

@@ -8,12 +8,17 @@ import {
 } from '../../plugins/tool-contract'
 import { listContributions } from '../../plugins/contributions'
 import {
+  LIST_CAPABILITIES_TOOL_NAME,
+  MATERIALS_TOOL_GROUP,
+  MATERIALS_TOOL_NAMES,
+  MCP_RESOURCE_TOOL_NAMES,
   SCHEDULE_TOOL_GROUP,
   SCHEDULE_TOOL_NAMES,
   WEB_TOOL_GROUP,
   WEB_TOOL_NAMES,
   canonicalToolName,
   expandMcpServerGroups,
+  isMaterialsToolGroup,
   isMcpToolGroup,
   isScheduleToolGroup,
   isSelectableMainAgentTool,
@@ -34,7 +39,7 @@ import {
 import { getMcpToolTexts } from '../../i18n/tool-results-mcp'
 import { workshopToolBuilders, workshopToolInfos } from './workshop'
 import { latticeToolBuilders, latticeToolInfos } from './lattice'
-import { buildListCapabilitiesTool, LIST_CAPABILITIES_TOOL_NAME } from './capabilities'
+import { buildListCapabilitiesTool } from './capabilities'
 
 // ============================================================================
 // Tool Registry — local tools + plugin contributions (harness only provides the
@@ -65,8 +70,8 @@ type ToolFactory = () => StructuredToolInterface
  * planner / notes / music tools are **not here**: their implementations have moved into their
  * respective plugins (in the plugin source `main/tools.ts`), registered by the plugin's
  * `install(ctx)` via `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)`, and pulled in here during
- * assembly. The four data domains of notes have been consolidated into `manage_materials`
- * (built-in registration, see system/notes.ts).
+ * assembly. The notes data domains are provided as the `materials_*` tools (built-in
+ * registration, see system/notes.ts) that the picker shows as one `materials-tools` entry.
  */
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
@@ -79,12 +84,18 @@ export const toolBuilders: Record<string, ToolFactory> = {
   // Deliverable declaration (read-only validation via read + card display; writes no files)
   present: () => buildPresentTool(),
   // Scheduled tasks (4): when due, the main process starts a headless round (see
-  // runtime/harness/schedule-runner.ts)
+  // runtime/harness/schedule-runner.ts). The tools validate `agentConfig` against the selectable
+  // catalog, so they get the same live source the Schedules page / list_capabilities use.
   ...Object.fromEntries(
-    buildScheduleTools().map((instance) => [instance.name, () => instance])
+    buildScheduleTools({ availableTools: listAvailableTools }).map((instance) => [
+      instance.name,
+      () => instance
+    ])
   ),
-  // Capability catalog: the model copies `agentConfig` values from here. Registered but not
-  // selectable; `expandSelectionToolNames` mounts it automatically next to the schedule tools.
+  // Capability catalog: the model copies exact tool / skill / MCP values from here when it fills
+  // a built-in form (create a subagent, create/edit a scheduled task). Registered so a dirty old
+  // config can still resolve the name, but **not selectable**: the runtime mounts it in every
+  // main-agent conversation (see buildAllTools in runtime/harness/runtime.ts).
   [LIST_CAPABILITIES_TOOL_NAME]: () => buildListCapabilitiesTool(listAvailableTools()),
   ...workshopToolBuilders,
   ...latticeToolBuilders
@@ -163,8 +174,8 @@ const localToolInfos: ToolInfo[] = [
     icon: 'RiCalendar2Line',
     color: '#722ed1'
   },
-  // Mounted automatically next to the schedule tools; hidden from the selectable list (see the
-  // `hidden` set in listAvailableTools) because it is a dependency, not a feature to schedule.
+  // Mounted automatically in every main-agent conversation (runtime built-in); hidden from the
+  // selectable list (see the `hidden` set in listAvailableTools) because it is not a feature to pick.
   {
     name: LIST_CAPABILITIES_TOOL_NAME,
     label: 'Capability list',
@@ -227,21 +238,21 @@ export function setMcpResourceOps(ops?: McpResourceOps): void {
 /** Display metadata for the resource tools (fixed names, independent of the data source) */
 const MCP_RESOURCE_TOOL_INFOS: ToolInfo[] = [
   {
-    name: 'list_mcp_resources',
+    name: MCP_RESOURCE_TOOL_NAMES[0],
     label: 'MCP resources',
     description: 'List resources exposed by an MCP server',
     icon: 'RiPlug2Line',
     color: '#8c6b3f'
   },
   {
-    name: 'list_mcp_resource_templates',
+    name: MCP_RESOURCE_TOOL_NAMES[1],
     label: 'MCP resource templates',
     description: 'List parameterized resource URI templates',
     icon: 'RiPlug2Line',
     color: '#8c6b3f'
   },
   {
-    name: 'read_mcp_resource',
+    name: MCP_RESOURCE_TOOL_NAMES[2],
     label: 'Read MCP resource',
     description: 'Read one MCP resource by URI',
     icon: 'RiPlug2Line',
@@ -269,10 +280,19 @@ const WEB_GROUP_INFO: ToolInfo = {
   source: 'system'
 }
 
-/** The three resource tools when an MCP data source is injected (built fresh each time to use the latest connection) */
+/** "Materials organization" group selection entry: only this entry shows in the list; it expands into the materials_* tools before running */
+const MATERIALS_GROUP_INFO: ToolInfo = {
+  name: MATERIALS_TOOL_GROUP,
+  label: 'Materials',
+  description: 'Organize documents, to-dos, knowledge bases and graph entities (one selection)',
+  icon: 'RiFoldersLine',
+  color: '#722ed1',
+  source: 'system'
+}
+
 /**
- * Tools of built-in features (1: material organization): compiled into the app, not going through
- * the plugin registry.
+ * Tools of built-in features (4: materials organization domains): compiled into the app, not
+ * going through the plugin registry. The picker shows them as one `materials-tools` entry.
  *
  * Third-party plugins still go through the `harness.tool` contribution point
  * (`listContributions`); `toolSources()` merges both into one list — indistinguishable to the
@@ -384,11 +404,12 @@ export function listAvailableTools(): ToolInfo[] {
   const hidden = new Set<string>([
     ...SCHEDULE_TOOL_NAMES,
     ...MCP_RESOURCE_TOOL_INFOS.map((i) => i.name),
-    // Mounted automatically with the schedule tools; not a selectable item of its own
+    // Runtime built-in (always mounted in the main conversation); not a selectable item of its own
     LIST_CAPABILITIES_TOOL_NAME
   ])
   const out: ToolInfo[] = []
   let webGroupPlaced = false
+  let materialsGroupPlaced = false
   for (const info of infos) {
     if (!isSelectableMainAgentTool(info.name) || hidden.has(info.name)) continue
     /**
@@ -404,17 +425,35 @@ export function listAvailableTools(): ToolInfo[] {
       }
       continue
     }
+    /**
+     * Same treatment for the materials tools (user's wording, 2026-11-28: "split
+     * manage_materials into several tools like scheduled tasks, but show only one"): the group
+     * entry takes the position of the first member, members themselves never appear.
+     */
+    if ((MATERIALS_TOOL_NAMES as readonly string[]).includes(info.name)) {
+      if (!materialsGroupPlaced) {
+        out.push(MATERIALS_GROUP_INFO)
+        materialsGroupPlaced = true
+      }
+      continue
+    }
     // Group entries are added here; a same-named entry mixed into legacy config/plugins never
     // appears twice
-    if (isScheduleToolGroup(info.name) || isMcpToolGroup(info.name) || isWebToolGroup(info.name)) {
+    if (
+      isScheduleToolGroup(info.name) ||
+      isMaterialsToolGroup(info.name) ||
+      isMcpToolGroup(info.name) ||
+      isWebToolGroup(info.name)
+    ) {
       continue
     }
     out.push(info)
   }
-  // Group entries are added here: scheduled tasks always exist; the web group normally lands in
-  // the loop (both tools are always in the local tool table), so this is only a fallback in case
-  // the table is changed.
+  // Group entries are added here: scheduled tasks always exist; the web / materials groups
+  // normally land in the loop (their tools are always in the tool table), so this is only a
+  // fallback in case the table is changed.
   if (!webGroupPlaced) out.push(WEB_GROUP_INFO)
+  if (!materialsGroupPlaced) out.push(MATERIALS_GROUP_INFO)
   out.push(SCHEDULE_GROUP_INFO)
   return out
 }
@@ -489,6 +528,7 @@ function buildScopedResourceTools(toolNames: string[]): StructuredToolInterface[
  * Expand group entries in the selection list → real tool names (deduplicated):
  * - `schedule-tasks` → the 4 `schedule_*` tools;
  * - `web-tools` → `web_fetch` + `web_search`;
+ * - `materials-tools` → the 4 `materials_*` tools (documents / to-dos / knowledge bases / graph);
  * - `mcp@<server>` → that server's tools; plus 3 resource tools when the server declares
  *   resources;
  * - `mcp` → all tools of currently connected MCP servers (**legacy config compatibility only**;
@@ -496,7 +536,7 @@ function buildScopedResourceTools(toolNames: string[]): StructuredToolInterface[
  * - everything else is kept as is.
  *
  * The user checks one entry in the list; at runtime all tools it represents are attached (the
- * same idea as the material organization merge).
+ * same idea as the material organization and scheduled-task groups).
  */
 export function expandSelectionToolNames(
   toolNames: string[],
@@ -520,6 +560,10 @@ export function expandSelectionToolNames(
       out.push(...WEB_TOOL_NAMES)
       continue
     }
+    if (isMaterialsToolGroup(name)) {
+      out.push(...MATERIALS_TOOL_NAMES)
+      continue
+    }
     if (isMcpToolGroup(name)) {
       out.push(...allMcp, ...resourceNames)
       continue
@@ -530,12 +574,9 @@ export function expandSelectionToolNames(
     }
     out.push(name)
   }
-  // The schedule tools depend on the capability catalog to fill `agentConfig` with valid values
-  // (tool names / skill ids / mcp@namespace). Mount it automatically next to them, so the user
-  // only has to check the scheduled-task group.
-  if (out.some((name) => (SCHEDULE_TOOL_NAMES as readonly string[]).includes(name))) {
-    out.push(LIST_CAPABILITIES_TOOL_NAME)
-  }
+  // The capability catalog (`list_capabilities`) used to be appended here when the schedule tools
+  // were selected. It is now a runtime built-in mounted in every main-agent conversation, because
+  // subagent creation forms (`agent_create`) need it too — see buildAllTools in runtime.ts.
   return Array.from(new Set(out))
 }
 

@@ -1,6 +1,6 @@
-// Knowledge base domain handlers (dispatched uniformly by the manage_materials tool): knowledge
-// bases, directories and archived documents all go through notes' own wiki and document mappers,
-// no longer reading across domains.
+// Knowledge base domain handlers (dispatched by the materials_wikis tool): knowledge bases,
+// directories and archived documents all go through notes' own wiki and document mappers, no
+// longer reading across domains.
 import { mainFormat, mainPlural } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
 

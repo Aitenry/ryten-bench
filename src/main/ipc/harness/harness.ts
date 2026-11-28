@@ -32,6 +32,7 @@ import { resolveVirtualFilePath } from '../../runtime/harness/fs-backend'
 import { listFileOpenTargets, openFileWithTarget } from '../../services/harness/file-open'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
+import { sanitizeSelectionInput } from '../../runtime/harness/schedule-tool-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
 import { normalizeMemoryScope } from '../../../shared/harness/memory-scope'
 import {
@@ -56,6 +57,7 @@ import {
 import { currentMcpTools } from '../../runtime/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
+import { scheduleSelectionValues } from '../../tools/harness/capabilities'
 import { hasLatticeSession } from '../../lattice/session'
 import {
   isUserSelectedRoot,
@@ -358,6 +360,30 @@ async function runScheduledTurn(
   }
   const { topicId, workspaceContext } = target
   if (harnessQueue.isTurnActive(topicId)) return { cancelled: true, topicId }
+  // Repair tasks created before the tool validated `agentConfig`: names outside the selectable
+  // catalog (e.g. the built-in `task` tool) would otherwise override the conversation's selection
+  // with names the registry silently drops, leaving the run without its usual tools.
+  let taskSelection: ReturnType<typeof sanitizeSelectionInput> = {
+    selection: task.agentConfig ?? null,
+    ignored: null
+  }
+  if (task.agentConfig) {
+    try {
+      taskSelection = sanitizeSelectionInput(
+        task.agentConfig,
+        scheduleSelectionValues(listAvailableTools())
+      )
+      if (taskSelection.ignored) {
+        logger.warn(
+          `[Schedule] Ignoring unknown agentConfig values on task ${task.id}:`,
+          taskSelection.ignored
+        )
+      }
+    } catch (err) {
+      // Catalog lookup failure must not make the scheduled run fail: keep the stored selection
+      logger.warn('[Schedule] Failed to validate task agentConfig:', err)
+    }
+  }
   const sender = primarySender() ?? headlessSender()
   const turnId = harnessQueue.beginTurn(topicId)
   const startedAtMs = Date.now()
@@ -370,7 +396,7 @@ async function runScheduledTurn(
         topicId,
         workspaceContext,
         // Task-level selection applies to this turn only and is not written back to the topic (session selection belongs to the input box)
-        agentConfig: task.agentConfig,
+        agentConfig: taskSelection.selection,
         persistAgentConfig: false,
         turnMeta: {
           source: 'schedule',

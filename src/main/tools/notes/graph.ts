@@ -1,4 +1,4 @@
-// Graph domain handlers (dispatched uniformly by the manage_materials tool).
+// Graph domain handlers (dispatched by the materials_graph tool).
 //
 // 2026-11 materials organization rework:
 // - Search no longer returns only "names": it adds entity ID, type, aliases, confidence and source
@@ -62,15 +62,17 @@ async function sourceDocsText(sourceIds: number[], max = 5): Promise<string> {
 // ============================================================================
 
 export async function searchGraphHandler(params: {
-  query: string
+  query?: string
   wikiId?: number
   type?: string
   limit?: number
 }): Promise<string> {
   const tr = getDocsToolTexts()
-  if (!params.query?.trim()) {
-    return mainFormat(tr.docs.missingParam, { param: 'query' })
-  }
+  // Like materials_docs_search: an omitted / blank query lists entities (across the selected wiki
+  // or all wikis) instead of failing with "missing query". The mapper matches everything on an
+  // empty pattern, so no separate list query is needed.
+  const query = params.query?.trim() ?? ''
+  const isList = query === ''
   const { getAllWikis, getWikiById } = await import('../../database/mapper/notes/wiki')
   const { searchEntities } = await import('../../database/mapper/notes/graph')
 
@@ -84,7 +86,6 @@ export async function searchGraphHandler(params: {
   }
 
   const limit = Math.min(100, Math.max(1, Math.floor(params.limit ?? 20)))
-  const query = params.query.trim()
   const lines: string[] = []
   let total = 0
   let matchedWikis = 0
@@ -120,9 +121,11 @@ export async function searchGraphHandler(params: {
     if (total >= limit) break
   }
 
-  if (total === 0) return mainFormat(tr.graph.searchEmpty, { query })
+  if (total === 0) {
+    return isList ? tr.graph.listEmpty : mainFormat(tr.graph.searchEmpty, { query })
+  }
   const header = [
-    mainFormat(tr.graph.searchHeader, { query }),
+    isList ? tr.graph.listHeader : mainFormat(tr.graph.searchHeader, { query }),
     mainFormat(tr.graph.searchSummary, {
       count: mainPlural(tr.graph.entityCount_one, tr.graph.entityCount_other, total),
       wikis: matchedWikis

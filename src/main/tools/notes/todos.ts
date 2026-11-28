@@ -1,4 +1,4 @@
-// Todo domain handlers (dispatched uniformly by the manage_materials tool).
+// Todo domain handlers (dispatched by the materials_todos_* tools).
 //
 // 2026-11 materials organization rework:
 // - List filtering is now done in memory (the old implementation queried the DB by status, missing

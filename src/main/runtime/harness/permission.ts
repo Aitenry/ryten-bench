@@ -147,6 +147,8 @@ const READ_TOOLS = new Set([
   'terminal_list',
   // Model route list (read-only)
   'list_subagent_models',
+  // Capability catalog (read-only): lists tools / skills / MCP servers for built-in forms
+  'list_capabilities',
   // Action cards (read-only: show the options to the user)
   'propose_action',
   // Local tools

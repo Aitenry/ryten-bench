@@ -475,7 +475,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       toolOutputTotal: '{{total}} characters in total',
       toolOutputExpand: 'Show all',
       toolOutputCollapse: 'Collapse',
-      dispatched: 'Background task dispatched',
+      dispatched: 'Subagent task dispatched',
       subAgentRunning: '{{name}} · Running…',
       subAgentError: '{{name}} · Error',
       subAgentCompleted: '{{name}} · Completed',
@@ -686,16 +686,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       taskProgress: '{{running}} in progress · {{pending}} pending · {{completed}} completed',
       agentTaskCount: '{{count}} task(s)',
       agentUsage: '{{tokens}} tok',
-      lastActivity: 'Recent: {{name}} {{action}} "{{task}}"',
-      eventCreated: 'created',
-      eventClaimed: 'claimed',
-      eventCompleted: 'completed',
-      eventUpdated: 'updated',
-      eventDeleted: 'deleted',
-      footerShared: 'Shared by the main agent and its subagents',
-      footerAgentsHint: 'Open a subagent to view its conversation',
-      taskOpenOwner: 'This task is owned by a subagent; click to open its session',
-      footerTasksHint: 'Tasks are maintained by the main agent and its subagents'
+      taskOpenOwner: 'This task is owned by a subagent; click to open its session'
     },
     team: {
       unowned: 'Unowned',

@@ -40,8 +40,9 @@ import type {
  * Continuable subagent sessions.
  *
  * Mechanics (adapted to conversations organized by topicId):
- * - task(background=true) starts a "continuable" subagent session: persistent message
- *   history + an inbox queue that survives across main-agent turns;
+ * - every `task` delegation starts a "continuable" subagent session and returns immediately
+ *   (non-blocking): persistent message history + an inbox queue that survives across main-agent
+ *   turns; the transcript is viewed from the top-bar subagent list;
  * - the session snapshot is persisted to the `subagent_session` table (event stream /
  *   message history / config snapshot / terminal state / model descriptor / usage): the
  *   history is still there after a restart, and restored sessions are marked `inactive`;
@@ -866,12 +867,12 @@ export function buildSubagentControlTools(
       {
         name: 'send_message',
         description:
-          'Send the next message to a background subagent session so it keeps working (continuing the same conversation and context). If that session is currently running, the message is queued and runs automatically after its current turn ends. Returns only a delivery confirmation (messageId); poll the subagent reply with job_output(job_id).',
+          'Send the next message to a subagent session so it keeps working (continuing the same conversation and context). If that session is currently running, the message is queued and runs automatically after its current turn ends. Returns only a delivery confirmation (messageId); poll the subagent reply with job_output(job_id).',
         schema: z.object({
           subagent_id: z
             .string()
             .describe(
-              'Subagent session ID (returned when the task tool starts in background mode, e.g. subagent-1)'
+              'Subagent session ID (returned when the task tool starts a session, e.g. subagent-1)'
             ),
           message: z.string().describe('Message content to send to the subagent')
         })
@@ -885,7 +886,7 @@ export function buildSubagentControlTools(
       {
         name: 'interrupt_agent',
         description:
-          'Interrupt the turn currently running in a background subagent session. Messages already queued but not yet started are kept and can be resumed later with send_message. A harmless no-op when the session does not exist or is idle.',
+          'Interrupt the turn currently running in a subagent session. Messages already queued but not yet started are kept and can be resumed later with send_message. A harmless no-op when the session does not exist or is idle.',
         schema: z.object({
           agent_id: z.string().describe('ID of the subagent session to interrupt')
         })
@@ -899,7 +900,7 @@ export function buildSubagentControlTools(
       {
         name: 'list_agents',
         description:
-          'List all background subagent sessions for this topic with their statuses (running = current turn in progress / idle = waiting between turns) and queued message counts.',
+          'List all subagent sessions for this topic with their statuses (running = current turn in progress / idle = waiting between turns) and queued message counts.',
         schema: z.object({
           scope: z
             .enum(['children', 'descendants'])

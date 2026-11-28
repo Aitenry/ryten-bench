@@ -32,6 +32,11 @@ export interface AgentAuthoringContext {
   workspaceId: number
   /** Main agent tool names this turn (a new subagent inherits this list when `tools` is omitted) */
   availableToolNames: string[]
+  /**
+   * Skill ids that exist under the configured skills root (every skill, not only the main agent's
+   * enabled subset): `agent_create` must reject ids that a run could never load.
+   */
+  availableSkillIds: string[]
 }
 
 export function createAgentAuthoringTool(ctx: AgentAuthoringContext): StructuredToolInterface {
@@ -68,18 +73,35 @@ export function createAgentAuthoringTool(ctx: AgentAuthoringContext): Structured
       .array(z.string())
       .optional()
       .describe(
-        `Tool names the subagent may use (real tool names only). Omit to inherit the main agent's current toolset (${defaultTools.length} tools).`
+        `Selectable tool names the subagent may use (e.g. "materials-tools", "schedule-tasks", "web-tools", "mcp@<server>"). Call list_capabilities (kind:"tools") first to get the exact selectable values. Expanded names of grouped tools (materials_docs_read, schedule_create, web_fetch, mcp__<server>__<tool>) are accepted and collapsed to their entry. Runtime built-in tools (task, read_file, execute, …) cannot be assigned and are rejected, as are unknown names. Omit to inherit the main agent's current toolset (${defaultTools.length} tools).`
       ),
     model: z
       .string()
       .optional()
       .describe('Optional "provider:model" override. Omit to inherit the main model.'),
-    skills: z.array(z.string()).optional().describe('Optional enabled skill ids; omit for none.')
+    skills: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Optional enabled skill ids (exactly as listed in the skills section of the system prompt); unknown ids are rejected. Omit for none.'
+      )
   })
 
   return tool(
     async (args) => {
       const m = getAgentToolTexts()
+      const requestedSkills = Array.from(
+        new Set((args.skills ?? []).map((id) => id.trim()).filter(Boolean))
+      )
+      const unknownSkills = requestedSkills.filter((id) => !ctx.availableSkillIds.includes(id))
+      if (unknownSkills.length > 0) {
+        // Same rule as the settings page: only skills that exist under the skills root can be
+        // declared. A stored ghost id would silently load no skill on every run.
+        return mainFormat(m.agentAuthoring.unknownSkills, {
+          ids: unknownSkills.join(', '),
+          available: ctx.availableSkillIds.join(', ') || m.subagent.noneAvailable
+        })
+      }
       try {
         const result = await createSubAgentDefinition({
           workspaceId: ctx.workspaceId,
@@ -89,7 +111,7 @@ export function createAgentAuthoringTool(ctx: AgentAuthoringContext): Structured
           systemPrompt: args.system_prompt,
           tools: args.tools ?? defaultTools,
           model: args.model,
-          skills: args.skills
+          skills: requestedSkills.length > 0 ? requestedSkills : undefined
         })
         return mainFormat(m.agentAuthoring.created, {
           name: result.config.name,

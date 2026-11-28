@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { mainFormat } from '../../i18n'
 import { getScheduleToolTexts } from '../../i18n/tool-results-schedule'
+import type { ToolInfo } from '../../plugins/tool-contract'
 import {
   MAX_SCHEDULED_TASKS,
   isScheduleStoreConfigured,
@@ -34,15 +35,19 @@ import {
 import {
   buildCreateInput,
   buildUpdatePatch,
+  findUnknownSelectionValues,
   type ScheduleCreateFailure,
   type ScheduleEditField,
   type ScheduleEditFailure,
-  type TargetSession
+  type ScheduleSelectionCatalog,
+  type TargetSession,
+  type UnknownSelectionValues
 } from '../../runtime/harness/schedule-tool-core'
 import {
   isScheduleConversationResolverConfigured,
   resolveScheduleConversation
 } from '../../runtime/harness/schedule-target'
+import { scheduleSelectionValues } from './capabilities'
 
 /** Only topicId is needed from the tool invoke config */
 interface ScheduleToolConfig {
@@ -77,19 +82,22 @@ const selectionSchema = z.object({
     .array(z.string())
     .nullish()
     .describe(
-      'Tool names exactly as listed in the tool selector (e.g. "personal_ledger", "schedule-tasks"); call list_capabilities with kind:"tools" for the full list'
+      'Selectable tool names exactly as returned by list_capabilities with kind:"tools" (e.g. "personal_ledger", "schedule-tasks"). ' +
+        'MCP servers belong in mcpTools (`mcp@<namespace>`), not here. ' +
+        'Runtime built-in tools (task, read_file, write_file, execute, ask_user_question, skill, …) are provided automatically by the runtime and must NOT be listed here. ' +
+        'Any unknown name rejects the whole call.'
     ),
   skills: z
     .array(z.string())
     .nullish()
     .describe(
-      'Skill ids (omit / null = no skills); call list_capabilities with kind:"skills" for the full list'
+      'Skill ids exactly as returned by list_capabilities with kind:"skills" (omit / null = no skills); unknown ids reject the whole call'
     ),
   mcpTools: z
     .array(z.string())
     .nullish()
     .describe(
-      'MCP server group values such as "mcp@filesystem" (omit / null = no MCP); call list_capabilities with kind:"mcp" for the full list'
+      'MCP server values exactly as returned by list_capabilities with kind:"mcp", e.g. "mcp@filesystem" (omit / null = no MCP); unknown values reject the whole call'
     )
 })
 
@@ -120,6 +128,28 @@ function editFailureText(reason: ScheduleEditFailure): string {
   if (reason === 'no-topic') return texts.noTopic
   if (reason === 'no-target') return texts.noTargetResolved
   return texts.nothingChanged
+}
+
+/**
+ * Unknown `agentConfig` values → readable text.
+ *
+ * Rejecting (instead of silently dropping) keeps "what the model asked for" and "what is stored"
+ * identical: a bad value would otherwise override the conversation's selection with names the
+ * run-time registry drops, leaving the run without the tools the user picked in the input box.
+ */
+function invalidSelectionText(unknown: UnknownSelectionValues): string {
+  const texts = getScheduleToolTexts()
+  const details: string[] = []
+  if (unknown.tools.length > 0) {
+    details.push(mainFormat(texts.selectionUnknownTools, { values: unknown.tools.join(', ') }))
+  }
+  if (unknown.skills.length > 0) {
+    details.push(mainFormat(texts.selectionUnknownSkills, { values: unknown.skills.join(', ') }))
+  }
+  if (unknown.mcp.length > 0) {
+    details.push(mainFormat(texts.selectionUnknownMcp, { values: unknown.mcp.join(', ') }))
+  }
+  return mainFormat(texts.invalidSelection, { details: details.join(texts.selectionSeparator) })
 }
 
 /** Run state → localized label */
@@ -206,14 +236,29 @@ function describeFields(
   return fields.map((field) => labels[field]).join(texts.fieldSeparator)
 }
 
+/** Dependencies the schedule tools need from the registry (injected by builders.ts) */
+export interface ScheduleToolDeps {
+  /**
+   * Selectable tool catalog — the same source as the Schedules page and `list_capabilities`.
+   * Called per invocation so plugin enable/disable and MCP changes are reflected immediately.
+   */
+  availableTools: () => ToolInfo[]
+}
+
 /** Build the four scheduled-task tools */
-export function buildScheduleTools(): StructuredToolInterface[] {
+export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterface[] {
+  /** Values the Schedules page could pick (same source as list_capabilities) */
+  const selectionCatalog = (): ScheduleSelectionCatalog =>
+    scheduleSelectionValues(deps.availableTools())
+
   const create = tool(
     async ({ title, prompt, when, targetSession, targetConversationId, agentConfig }, config) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
       const callerTopicId = topicIdOf(config)
       if (callerTopicId <= 0) return texts.noTopic
+      const unknownSelection = findUnknownSelectionValues(agentConfig, selectionCatalog())
+      if (unknownSelection) return invalidSelectionText(unknownSelection)
       const validated = validateScheduleWhen(when as ScheduleWhen)
       if (!validated.ok) return invalidWhenText(validated.reason)
       // Explicit conversation wins over "this"; "new" still inherits from the caller's conversation
@@ -260,6 +305,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         '`targetSession`: "this" (default) keeps running in this conversation, "new" opens a brand-new conversation on every run (inheriting this conversation\'s mode, workspace and memory). ' +
         '`targetConversationId`: run in another existing conversation instead (id from conversation_list). ' +
         '`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation\'s own selection. Before filling it, call list_capabilities (kind: tools / skills / mcp) to get the exact values — pass an id as query to read one item in full. ' +
+        'Only values returned by list_capabilities are accepted: built-in runtime tools (task, read_file, write_file, execute, ask_user_question, skill, …) are provided automatically by the runtime and must not be listed; a name outside the catalog rejects the call. ' +
         'Use this whenever the user asks for something recurring or at a fixed time ("every day / every week", 每天/每晚/每周/定时) — do not turn such requests into a long-running goal. Tasks fire while the app is running; missed runs are skipped, not replayed.',
       schema: z.object({
         title: z.string().describe('Short title shown in the task list (<=120 chars)'),
@@ -346,6 +392,11 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         return mainFormat(texts.deleted, { id })
       }
 
+      if (agentConfig !== undefined) {
+        const unknownSelection = findUnknownSelectionValues(agentConfig, selectionCatalog())
+        if (unknownSelection) return invalidSelectionText(unknownSelection)
+      }
+
       const callerTopicId = topicIdOf(config)
       const normalizedWhen = when as ScheduleWhen | undefined
       let nextRunAt: string | null | undefined
@@ -399,6 +450,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         'Fields: title, prompt, when (same rules as schedule_create), targetSession ("this" conversation or "new" conversation per run), targetConversationId (move the task to that existing conversation), ' +
         'agentConfig (tools / skills / MCP for every run; pass null to clear it and follow the conversation again), enabled (false = pause, true = resume). ' +
         'For agentConfig values, call list_capabilities (kind: tools / skills / mcp) first; pass an id as query to read one item in full. ' +
+        'Only catalog values are accepted — built-in runtime tools (task, read_file, execute, …) are provided automatically by the runtime and must not be listed; an unknown name rejects the call. ' +
         'Use action:"delete" to delete the task.',
       schema: z.object({
         id: z.string().describe('Task id from schedule_list'),

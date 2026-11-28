@@ -253,6 +253,42 @@ export function isWebToolGroup(value?: string): boolean {
   return value === WEB_TOOL_GROUP
 }
 
+/**
+ * "Materials organization" tool group selection entry (user requirement 2026-11-28: "manage_materials
+ * has to be split into multiple tools, like scheduled tasks: several tools but only one entry in
+ * the list").
+ *
+ * Same mechanism as the schedule / web groups: the settings page and the tool picker show only
+ * this entry, and `expandSelectionToolNames` expands it into the real tools before a turn.
+ * The reason for the split is schema focus: one entry with 35 commands and every parameter
+ * flattened into a single object made the model guess which fields applied, so the document and
+ * to-do domains are further split by intent (search / read / write / edit) and every tool now only
+ * declares the parameters its own commands use.
+ */
+export const MATERIALS_TOOL_GROUP = 'materials-tools'
+
+/** Real tool names of the materials group (order = expansion order) */
+export const MATERIALS_TOOL_NAMES = [
+  // Documents: search across documents vs. read one vs. whole-document writes vs. fine edits
+  'materials_docs_search',
+  'materials_docs_read',
+  'materials_docs_write',
+  'materials_docs_edit',
+  // To-dos use the same granularity (list / one item / single write / batch edit)
+  'materials_todos_search',
+  'materials_todos_read',
+  'materials_todos_write',
+  'materials_todos_edit',
+  // Other domains
+  'materials_wikis',
+  'materials_graph'
+] as const
+
+/** Whether this selection entry is the "materials organization" group */
+export function isMaterialsToolGroup(value?: string): boolean {
+  return value === MATERIALS_TOOL_GROUP
+}
+
 /** Whether this selection entry is some MCP server's group entry */
 export function isMcpServerGroup(value?: string): boolean {
   return parseMcpServerGroup(value) !== null
@@ -376,13 +412,70 @@ export function isPluginModeTool(name: string): boolean {
 }
 
 /**
- * Official name of the unified "materials" tool.
+ * Capability catalog tool (`list_capabilities`): always mounted in the main conversation as a
+ * runtime built-in, never a selectable entry (see `buildAllTools` in runtime/harness/runtime.ts).
+ */
+export const LIST_CAPABILITIES_TOOL_NAME = 'list_capabilities'
+
+/** MCP resource tools: auto-mounted per selected server, never selectable entries */
+export const MCP_RESOURCE_TOOL_NAMES = [
+  'list_mcp_resources',
+  'list_mcp_resource_templates',
+  'read_mcp_resource'
+] as const
+
+/**
+ * Map **mounted** tool names back to the values a tool selection stores.
  *
- * In 2026-11 the four original tools manage_docs / manage_todos / manage_wikis / search_graph
- * were merged into one entry; old configs (settings page checkmarks, subagent config, old topic
- * snapshots) may still carry the old names, and reads/writes migrate them uniformly through
+ * A runtime is assembled from tool instances, where group entries are already expanded
+ * (`schedule-tasks` → 4 tools, `web-tools` → 2) and MCP servers appear as concrete
+ * `mcp__<server>__<tool>` names. Configs written from that runtime (e.g. `agent_create` inheriting
+ * the main agent's toolset) must store the selector values again:
+ * - group members collapse back to their group entry;
+ * - concrete MCP tools collapse to `mcp@<server>` (the run expands it with the same MCP page
+ *   toggles);
+ * - auto-mounted dependencies (`list_capabilities`, the MCP resource tools) and plugin-mode tools
+ *   are dropped — they are not selectable values.
+ *
+ * Names that already are selection values pass through unchanged. This module stays free of
+ * relative imports so the rule can be unit-tested under plain Node.
+ */
+export function toSelectionToolNames(toolNames: readonly string[]): string[] {
+  const out: string[] = []
+  for (const raw of toolNames) {
+    const name = typeof raw === 'string' ? raw.trim() : ''
+    if (!name) continue
+    let value: string | null = name
+    if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) {
+      value = SCHEDULE_TOOL_GROUP
+    } else if ((WEB_TOOL_NAMES as readonly string[]).includes(name)) {
+      value = WEB_TOOL_GROUP
+    } else if ((MATERIALS_TOOL_NAMES as readonly string[]).includes(name)) {
+      value = MATERIALS_TOOL_GROUP
+    } else if (
+      (MCP_RESOURCE_TOOL_NAMES as readonly string[]).includes(name) ||
+      name === LIST_CAPABILITIES_TOOL_NAME ||
+      isPluginModeTool(name)
+    ) {
+      value = null
+    } else {
+      const parsed = parseMcpToolName(name)
+      if (parsed) value = mcpServerGroupValue(parsed.server)
+    }
+    if (value && !out.includes(value)) out.push(value)
+  }
+  return out
+}
+
+/**
+ * Legacy name of the unified "materials" tool that existed between the 2026-11 merge and the
+ * 2026-11-28 split.
+ *
+ * Old configs (settings page checkmarks, subagent config, old topic snapshots) may still carry
+ * `manage_materials` as well as the four original names `manage_docs` / `manage_todos` /
+ * `manage_wikis` / `search_graph`; reads/writes migrate all of them to `materials-tools` through
  * `canonicalToolName`, so that "I clearly checked the tools but they all disappeared" doesn't
- * happen after an upgrade.
+ * happen after an upgrade, and the name is expanded back into the real tools at runtime.
  */
 export const MATERIALS_TOOL_NAME = 'manage_materials'
 
@@ -395,7 +488,10 @@ export const LEGACY_MATERIAL_TOOL_NAMES = [
 ] as const
 
 const LEGACY_TOOL_ALIASES: Record<string, string> = {
-  ...Object.fromEntries(LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_NAME])),
+  ...Object.fromEntries(LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_GROUP])),
+  // 2026-11-28: the single `manage_materials` entry was split into domain tools (documents were
+  // then further split by intent: search / read / write / edit)
+  [MATERIALS_TOOL_NAME]: MATERIALS_TOOL_GROUP,
   // 2026-11-27: web fetch / web search merged into one selection entry (see WEB_TOOL_GROUP);
   // the two names checked individually in old configs are normalized to the group entry here and
   // expanded back into two real tools at runtime.
@@ -406,10 +502,10 @@ const LEGACY_TOOL_ALIASES: Record<string, string> = {
 /**
  * Old tool name → current tool name; other names are returned as is.
  *
- * Besides the four old materials names (→ `manage_materials`), from 2026-11-27 `web_fetch` /
- * `web_search` are also normalized to the `web-tools` group entry (web fetch and search merged
- * into one selection, see `WEB_TOOL_GROUP`); at runtime `expandSelectionToolNames` expands them
- * back into the two real tools.
+ * The four old materials names and `manage_materials` all normalize to the `materials-tools` group
+ * entry; from 2026-11-27 `web_fetch` / `web_search` normalize to the `web-tools` group entry
+ * (web fetch and search merged into one selection, see `WEB_TOOL_GROUP`). At runtime
+ * `expandSelectionToolNames` expands both groups back into their real tools.
  */
 export function canonicalToolName(name: string): string {
   return LEGACY_TOOL_ALIASES[name] ?? name
@@ -426,8 +522,19 @@ export function canonicalToolName(name: string): string {
  */
 export function isSelectableMainAgentTool(name?: string): boolean {
   if (typeof name !== 'string' || name.length === 0) return false
-  // Savable "group entries": scheduled tasks, web fetch and search; `mcp` is only a legacy marker that new configs never write
-  if (isScheduleToolGroup(name) || isWebToolGroup(name) || isMcpToolGroup(name)) return true
+  // Runtime built-ins are mounted automatically and are not config values (subagent creation and
+  // schedules read the catalog, but never list the catalog tool itself).
+  if (name === LIST_CAPABILITIES_TOOL_NAME) return false
+  // Savable "group entries": scheduled tasks, web fetch and search, materials organization;
+  // `mcp` is only a legacy marker that new configs never write
+  if (
+    isScheduleToolGroup(name) ||
+    isWebToolGroup(name) ||
+    isMaterialsToolGroup(name) ||
+    isMcpToolGroup(name)
+  ) {
+    return true
+  }
   if (isMcpToolName(name) || isMcpServerGroup(name) || isPluginModeTool(name)) return false
   return true
 }
@@ -477,10 +584,10 @@ export function effectiveMainAgentTools(
     for (const name of names ?? []) {
       if (typeof name !== 'string' || !name) continue
       const canonical = canonicalToolName(name)
-      // Group entries (MCP server / legacy "MCP" marker / scheduled tasks / web fetch and
-      // search) are kept until the assembly stage, which expands them uniformly, so "one entry
-      // in the selection list" and "the tools actually mounted" don't each maintain their own
-      // list.
+      // Group entries (MCP server / legacy "MCP" marker / scheduled tasks / web fetch and search /
+      // materials organization) are kept until the assembly stage, which expands them uniformly,
+      // so "one entry in the selection list" and "the tools actually mounted" don't each maintain
+      // their own list.
       if (isPluginModeTool(canonical)) continue
       if (!out.includes(canonical)) out.push(canonical)
     }

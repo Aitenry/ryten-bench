@@ -18,9 +18,11 @@ import {
 } from '../../services/harness/subagents'
 
 /**
- * The legacy material tool names (manage_docs/manage_todos/manage_wikis/search_graph) were merged
- * into manage_materials in 2026-11. Sub-agent configs store tools as a JSON string, so migrate
- * them on read to keep previously checked tools from showing up unchecked in the UI.
+ * Material tools went through two renames (the four domain tools were merged into manage_materials
+ * in 2026-11, then split back into `materials_*` tools under one `materials-tools` entry in
+ * 2026-11-28, with documents and to-dos further split by intent). Sub-agent configs store tools as
+ * a JSON string, so migrate them on read to keep previously checked tools from showing up
+ * unchecked in the UI.
  */
 function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
   if (!row.tools) return row
@@ -168,7 +170,8 @@ export function agentIpcHandlers(): IpcHandlerMap {
     const current = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {}
     // Normalize in the main process before writing: MCP tools, grouped entries and plugin mode
     // tools do not belong in this list (MCP goes through mcp-tools-set; mode tools are mounted
-    // automatically per plugin mode); legacy material tool names migrate to the unified entry.
+    // automatically per plugin mode); legacy material tool names migrate to the `materials-tools`
+    // group entry.
     const tools = Array.from(
       new Set((config?.tools ?? []).map((name) => canonicalToolName(name)))
     ).filter(isSelectableMainAgentTool)

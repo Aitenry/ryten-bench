@@ -7,7 +7,6 @@ import { useTranslation } from '@renderer/i18n'
 import type {
   SubagentSessionRow,
   TeamBoardSnapshot,
-  TeamTaskEventView,
   TeamTaskView
 } from '../../../../shared/harness/types'
 import { harnessApi } from '../../api/harness'
@@ -73,22 +72,6 @@ function formatTokenCount(tokens: number): string {
   return `${(tokens / 1_000_000).toFixed(1)}m`
 }
 
-/** Task event action → localized phrase (for the recent activity line; falls back to updated) */
-const eventActionLabel = (t: TFunction, action: TeamTaskEventView['action']): string => {
-  switch (action) {
-    case 'created':
-      return t('harness.collab.eventCreated')
-    case 'claimed':
-      return t('harness.collab.eventClaimed')
-    case 'completed':
-      return t('harness.collab.eventCompleted')
-    case 'deleted':
-      return t('harness.collab.eventDeleted')
-    default:
-      return t('harness.collab.eventUpdated')
-  }
-}
-
 const CollabButton: React.FC<CollabButtonProps> = ({
   currentTopicId,
   onSelectAgent,
@@ -103,23 +86,19 @@ const CollabButton: React.FC<CollabButtonProps> = ({
   const refreshSeqRef = useRef(0)
   /** Time of the latest agents push: a fetch started before it has stale results */
   const lastAgentsPushAtRef = useRef(0)
-  /** Latest task event (appended by the storage adapter; the panel footer shows recent team activity) */
-  const [lastEvent, setLastEvent] = useState<TeamTaskEventView | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     if (currentTopicId == null) {
       setAgents([])
       setBoard(null)
-      setLastEvent(null)
       return
     }
     const requestId = ++refreshSeqRef.current
     const startedAt = Date.now()
     const api = harnessApi.harness
-    const [agentsResult, boardResult, eventsResult] = await Promise.allSettled([
+    const [agentsResult, boardResult] = await Promise.allSettled([
       api.listAgents(currentTopicId),
-      api.listTeamTasks(currentTopicId),
-      api.listTeamEvents(currentTopicId, 1)
+      api.listTeamTasks(currentTopicId)
     ])
     if (requestId !== refreshSeqRef.current) return
     if (agentsResult.status === 'fulfilled' && lastAgentsPushAtRef.current <= startedAt) {
@@ -129,9 +108,6 @@ const CollabButton: React.FC<CollabButtonProps> = ({
       const pulled = boardResult.value ?? null
       // Fetched results also de-dup by revision: a slow request must not roll the board back
       setBoard((prev) => (prev && pulled && pulled.revision < prev.revision ? prev : pulled))
-    }
-    if (eventsResult.status === 'fulfilled') {
-      setLastEvent(eventsResult.value?.[0] ?? null)
     }
   }, [currentTopicId])
 
@@ -147,11 +123,6 @@ const CollabButton: React.FC<CollabButtonProps> = ({
       if (snapshot.topicId !== currentTopicId) return
       // Whole-board snapshots carry a revision: only accept snapshots no older than the current board (guards against IPC reordering)
       setBoard((prev) => (prev && snapshot.revision < prev.revision ? prev : snapshot))
-      // Task changes append events; refresh the recent activity while the panel is open (throttled by task change rate)
-      void api
-        .listTeamEvents(currentTopicId, 1)
-        .then((rows) => setLastEvent(rows[0] ?? null))
-        .catch(() => {})
     })
     return () => {
       unsubscribeAgents()
@@ -440,54 +411,6 @@ const CollabButton: React.FC<CollabButtonProps> = ({
           })}
         </>
       ) : null}
-
-      <div
-        className="flex items-center justify-between"
-        style={{
-          marginTop: 6,
-          padding: '9px 14px 10px',
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-          fontSize: 10.5,
-          color: token.colorTextTertiary
-        }}
-      >
-        <span className="inline-flex items-center gap-1.5 min-w-0">
-          <span
-            aria-hidden="true"
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: '50%',
-              flex: '0 0 5px',
-              background: token.colorTextTertiary
-            }}
-          />
-          {lastEvent ? (
-            <span
-              className="truncate"
-              style={{ maxWidth: 205 }}
-              title={t('harness.collab.lastActivity', {
-                name: lastEvent.actorName,
-                action: eventActionLabel(t, lastEvent.action),
-                task: lastEvent.subject
-              })}
-            >
-              {t('harness.collab.lastActivity', {
-                name: lastEvent.actorName,
-                action: eventActionLabel(t, lastEvent.action),
-                task: lastEvent.subject
-              })}
-            </span>
-          ) : (
-            t('harness.collab.footerShared')
-          )}
-        </span>
-        <span>
-          {agents.length > 0
-            ? t('harness.collab.footerAgentsHint')
-            : t('harness.collab.footerTasksHint')}
-        </span>
-      </div>
     </div>
   )
 

@@ -3,6 +3,7 @@ import {
   RiBrain4Line,
   RiEye2Line,
   RiFileEditLine,
+  RiFileTextLine,
   RiFolderOpenLine,
   RiFoldersLine,
   RiImageLine,
@@ -10,6 +11,7 @@ import {
   RiPencilLine,
   RiPlug2Line,
   RiSearchLine,
+  RiShareLine,
   RiTerminalBoxLine
 } from '@remixicon/react'
 
@@ -48,7 +50,20 @@ export const TOOL_IN_PROGRESS_ICONS: Record<
   execute: RiTerminalBoxLine,
   write_todos: RiListCheck,
   read_todos: RiListCheck,
-  // Materials management (single entry point for documents / todos / knowledge base / graph)
+  // Materials organization: domain tools behind one selectable entry (materials-tools).
+  // Documents are split by intent (search / read / write / edit).
+  // `manage_materials` is kept as a legacy alias for tool calls recorded before the 2026-11-28 split.
+  materials_docs_search: RiSearchLine,
+  materials_docs_read: RiFileTextLine,
+  materials_docs_write: RiFileEditLine,
+  materials_docs_edit: RiPencilLine,
+  materials_todos_search: RiSearchLine,
+  materials_todos_read: RiListCheck,
+  materials_todos_write: RiFileEditLine,
+  materials_todos_edit: RiPencilLine,
+  materials_wikis: RiFoldersLine,
+  materials_graph: RiShareLine,
+  'materials-tools': RiFoldersLine,
   manage_materials: RiFoldersLine,
   // Prefix fallbacks: external MCP tools (plug) and Mnemon memory tools (brain) — names are only known at runtime
   [MCP_TOOL_ICON_KEY]: RiPlug2Line,

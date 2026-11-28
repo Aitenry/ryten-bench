@@ -27,7 +27,12 @@ import { buildTerminalTools } from './terminal-tools'
 import { buildRunCodeTool } from './run-code-tool'
 import { buildModelRoutesTool } from './model-routes'
 import { buildProposeActionTool } from './propose-action'
-import { buildSubAgentTools as buildSubAgentToolsFromRegistry } from '../../tools/harness/builders'
+import {
+  buildSubAgentTools as buildSubAgentToolsFromRegistry,
+  listAvailableTools
+} from '../../tools/harness/builders'
+import { buildListCapabilitiesTool } from '../../tools/harness/capabilities'
+import { LIST_CAPABILITIES_TOOL_NAME } from '../../../shared/harness/mcp'
 import { createTaskTool } from './subagent'
 import { createAgentAuthoringTool } from './subagent-authoring'
 import { resolveSubAgentModelSpec } from './subagent-model'
@@ -192,7 +197,11 @@ export class Runtime {
     if (opts.workspaceId > 0) {
       this.authoringTool = createAgentAuthoringTool({
         workspaceId: opts.workspaceId,
-        availableToolNames: opts.tools.map((tool) => tool.name)
+        // Mounted names (groups already expanded): the service maps them back to selector values
+        availableToolNames: opts.tools.map((tool) => tool.name),
+        // Validation source for agent_create.skills: every skill on disk, not only the main agent's
+        // enabled subset (a subagent's skill list is independent of the session selection)
+        availableSkillIds: loadSkills({ skillsPath: opts.skillsPath }).map((skill) => skill.id)
       })
     }
 
@@ -253,6 +262,14 @@ export class Runtime {
       // Model route list: agent_create's `model` field only accepts enabled provider:model values,
       // so it is mounted only with a workspace (where subagents can be created)
       ...(this.opts.workspaceId > 0 ? [buildModelRoutesTool()] : []),
+      // Capability catalog: a runtime built-in, always mounted in the main conversation. The
+      // subagent-creation form (`agent_create`) and the schedule form (`schedule_create` /
+      // `schedule_edit.agentConfig`) only accept exact tool / skill / MCP values, and this is where
+      // the model reads them. Rebuilt per turn so plugin enable/disable and MCP changes apply;
+      // skipped when a dirty old config already mounted it (avoid a duplicate tool name).
+      ...(this.opts.tools.some((tool) => tool.name === LIST_CAPABILITIES_TOOL_NAME)
+        ? []
+        : [buildListCapabilitiesTool(listAvailableTools())]),
       // Action cards: renders clickable actions under the reply; clicking sends one message back
       // (no side effects, always mounted)
       buildProposeActionTool()
@@ -326,7 +343,7 @@ export class Runtime {
 You can use the task tool to delegate suitable work to a dedicated subagent (each subagent has its own system prompt, tools, and model). Prefer delegation when a task is beyond your current reach or falls in a subagent's area of expertise. Available subagents:
 ${list}
 If no existing subagent fits, you can create a reusable one yourself with agent_create (name in lowercase kebab-case, a precise description, a complete system_prompt, and optionally tools/model). It persists for this workspace (visible and editable in Settings → Agents) and can be used immediately with task, including later in this same turn. Do not create a subagent that duplicates an existing one.
-Once a delegation finishes, the subagent's full output is shown to the user directly; your final answer only needs a brief summary or a short wrap-up — do not restate the detail the subagent already produced.`
+task is non-blocking: it returns a session id immediately and keeps running in the top-bar subagent list. Call job_output(job_id, wait=true) when the next step depends on the subagent's result; otherwise continue working and poll later. The subagent's full output is shown to the user in its session view, so your final answer only needs a brief summary or a short wrap-up — do not restate the detail the subagent already produced.`
     }
     const skillsSection = buildSkillsPromptSection(this.skills)
     if (skillsSection) {

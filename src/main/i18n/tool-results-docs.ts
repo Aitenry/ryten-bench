@@ -1,6 +1,6 @@
 import { getMainLanguage } from './index'
 
-/** Result copy for the document / knowledge base / graph tools (manage_materials); follows the UI language. */
+/** Result copy for the document / knowledge base / graph tools (materials_docs_* / materials_wikis / materials_graph); follows the UI language. */
 export const zhCNDocsToolTexts = {
   /** List separator between documents (Chinese enumeration comma / English comma) */
   listSeparator: '、',
@@ -11,6 +11,8 @@ export const zhCNDocsToolTexts = {
     searchCount_other: '共 {{count}} 条',
     searchHeader: '**搜索 "{{query}}"**（{{count}}）\n',
     searchEmpty: '没有找到匹配 "{{query}}" 的文档。',
+    listHeader: '**文档列表**（{{count}}）\n',
+    listEmpty: '资料库里还没有文档。',
     searchPage: '第 {{page}}/{{pages}} 页（用 page 参数翻页）',
     notFound: '未找到 ID 为 {{docId}} 的文档。',
     noContent: '文档 "{{title}}" 没有内容。',
@@ -136,6 +138,8 @@ export const zhCNDocsToolTexts = {
     searchHeader: '**知识图谱搜索 "{{query}}"**\n',
     searchSummary: '{{count}} · {{wikis}} 个知识库命中',
     searchEmpty: '未在知识图谱中找到与 "{{query}}" 相关的实体。',
+    listHeader: '**知识图谱实体**\n',
+    listEmpty: '知识图谱里还没有实体。',
     wikiLabel: '  Wiki [{{wikiId}}]：',
     wikiTitleLabel: '  Wiki [{{wikiId}}] {{title}}：',
     aliasSuffix: '（别名：{{aliases}}）',
@@ -167,6 +171,8 @@ export const enUSDocsToolTexts: typeof zhCNDocsToolTexts = {
     searchCount_other: '{{count}} results',
     searchHeader: '**Search "{{query}}"** ({{count}})\n',
     searchEmpty: 'No documents match "{{query}}".',
+    listHeader: '**Documents** ({{count}})\n',
+    listEmpty: 'No documents yet.',
     searchPage: 'Page {{page}}/{{pages}} (use the page parameter to paginate)',
     notFound: 'Document {{docId}} not found.',
     noContent: 'Document "{{title}}" has no content.',
@@ -296,6 +302,8 @@ export const enUSDocsToolTexts: typeof zhCNDocsToolTexts = {
     searchHeader: '**Knowledge graph search "{{query}}"**\n',
     searchSummary: '{{count}} · {{wikis}} knowledge bases matched',
     searchEmpty: 'No entities related to "{{query}}" were found in the knowledge graph.',
+    listHeader: '**Graph entities**\n',
+    listEmpty: 'The knowledge graph has no entities yet.',
     wikiLabel: '  Wiki [{{wikiId}}]:',
     wikiTitleLabel: '  Wiki [{{wikiId}}] {{title}}:',
     aliasSuffix: ' (aliases: {{aliases}})',

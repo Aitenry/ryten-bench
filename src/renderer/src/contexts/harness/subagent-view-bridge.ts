@@ -1,11 +1,12 @@
 import { createContext, useContext } from 'react'
 
 /**
- * Bridge for opening the background subagent conversation view from the message stream.
+ * Bridge for opening the subagent conversation view from the message stream.
  *
- * Background: the lightweight "dispatched" card for task(background=true) in the main
- * conversation only has the name, summary and conversation id; besides the top-bar entry,
- * clicking that card should also land in the same view for replaying its full streaming session.
+ * Background: every `task` delegation now runs as a subagent session, and the main conversation
+ * only shows the lightweight "dispatched" card (name + summary, plus the conversation id when the
+ * receipt returned immediately). Besides the top-bar entry, a card that carries the id should also
+ * land in the same view for replaying the session.
  *
  * Why a Context instead of adding callback props to AssistantMessage:
  * - AssistantMessage caches rendering per block (WeakMap keyed by block object identity), and

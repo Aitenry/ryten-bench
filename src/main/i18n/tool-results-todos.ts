@@ -1,8 +1,8 @@
 import { getMainLanguage } from './index'
 
 /**
- * Result texts for the **todo tools** (used by the manage_materials todo.* commands; they are
- * rendered on tool cards and follow the UI language).
+ * Result texts for the **todo tools** (used by the materials_todos_* tools; they are rendered on
+ * tool cards and follow the UI language).
  *
  * Priority numbering matches the UI: 0=P0 (highest) ... 7=P7 (lowest); the old "1=urgent"
  * mapping is gone.

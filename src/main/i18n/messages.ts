@@ -175,6 +175,52 @@ export const zhCN = {
     list_subagent_models: { label: '模型路由', description: '列出已启用的 provider:model 路由与能力' },
     conversation_list: { label: '会话列表', description: '列出当前工作区的最近会话' },
     propose_action: { label: '动作选项', description: '在回答下方给出可点选的动作按钮' },
+    'materials-tools': {
+      label: '资料整理',
+      description: '文档、待办、知识库与图谱（合并为一个选择）'
+    },
+    materials_docs_search: {
+      label: '资料整理 · 文档搜索',
+      description: '跨文档全文搜索'
+    },
+    materials_docs_read: {
+      label: '资料整理 · 文档读取',
+      description: '读取文档标题树、正文或在文档内查找'
+    },
+    materials_docs_write: {
+      label: '资料整理 · 文档写入',
+      description: '新建、整篇更新或删除文档'
+    },
+    materials_docs_edit: {
+      label: '资料整理 · 文档精修',
+      description: '按行、列区间或文本片段精修文档'
+    },
+    materials_todos_search: {
+      label: '资料整理 · 待办搜索',
+      description: '筛选与列出待办事项'
+    },
+    materials_todos_read: {
+      label: '资料整理 · 待办详情',
+      description: '查看单条待办正文与时间戳'
+    },
+    materials_todos_write: {
+      label: '资料整理 · 待办写入',
+      description: '新建、更新或删除单条待办'
+    },
+    materials_todos_edit: {
+      label: '资料整理 · 待办批量编辑',
+      description: '批量修改多条待办的状态、优先级、到期日或分类'
+    },
+    materials_wikis: {
+      label: '资料整理 · 知识库',
+      description: '管理知识库、目录与文档归档'
+    },
+    materials_graph: {
+      label: '资料整理 · 图谱',
+      description: '搜索图谱实体并查看关系'
+    },
+    // 2026-11 legacy name (split into materials_* on 2026-11-28 and migrated to
+    // `materials-tools`); kept as a fallback label for old snapshots.
     manage_materials: {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
@@ -379,6 +425,52 @@ export const enUS: typeof zhCN = {
       label: 'Propose actions',
       description: 'Offer clickable action buttons under the reply'
     },
+    'materials-tools': {
+      label: 'Materials',
+      description: 'Documents, to-dos, knowledge bases and graph (one selection)'
+    },
+    materials_docs_search: {
+      label: 'Materials: document search',
+      description: 'Full-text search across documents'
+    },
+    materials_docs_read: {
+      label: 'Materials: document read',
+      description: 'Read a document outline / body or find inside one document'
+    },
+    materials_docs_write: {
+      label: 'Materials: document write',
+      description: 'Create, update or delete a whole document'
+    },
+    materials_docs_edit: {
+      label: 'Materials: document edit',
+      description: 'Fine-grained line, range and text-fragment edits'
+    },
+    materials_todos_search: {
+      label: 'Materials: todo search',
+      description: 'Filter and list to-do items'
+    },
+    materials_todos_read: {
+      label: 'Materials: todo detail',
+      description: 'Read one to-do item with its body and timestamps'
+    },
+    materials_todos_write: {
+      label: 'Materials: todo write',
+      description: 'Add, update or delete a single to-do item'
+    },
+    materials_todos_edit: {
+      label: 'Materials: todo batch edit',
+      description: 'Batch update status, priority, due date or category of several items'
+    },
+    materials_wikis: {
+      label: 'Materials: knowledge bases',
+      description: 'Manage knowledge bases, directories and archived documents'
+    },
+    materials_graph: {
+      label: 'Materials: graph',
+      description: 'Search graph entities and read their relations'
+    },
+    // 2026-11 legacy name (split into materials_* on 2026-11-28 and migrated to
+    // `materials-tools`); kept as a fallback label for old snapshots.
     manage_materials: {
       label: 'Materials',
       description:

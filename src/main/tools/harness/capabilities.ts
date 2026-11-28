@@ -5,7 +5,11 @@ import { mainFormat } from '../../i18n'
 import { getContextToolTexts } from '../../i18n/tool-results-context'
 import { loadSkills } from '../../runtime/harness/skills-core'
 import { mcpServerViews } from '../../runtime/harness/mcp'
-import { mcpNamespace } from '../../../shared/harness/mcp'
+import {
+  LIST_CAPABILITIES_TOOL_NAME,
+  mcpNamespace,
+  MCP_TOOL_GROUP
+} from '../../../shared/harness/mcp'
 import type { ToolInfo } from '../../plugins/tool-contract'
 import {
   findCapability,
@@ -17,13 +21,13 @@ import {
 } from '../../runtime/harness/capability-catalog-core'
 
 /**
- * `list_capabilities` — the capability catalog the model copies values from when it fills a
- * scheduled task's `agentConfig`.
+ * `list_capabilities` — the capability catalog for **filling built-in forms with exact values**.
  *
- * Why it exists: `schedule_create` / `schedule_edit` take exact identifiers (`tools` names,
- * `skills` ids, `mcp@<namespace>` values), but a model that only sees its own tool schemas cannot
- * know what else the app offers, nor what an item does. This tool lists the complete catalog per
- * kind, so the form can be filled from real values instead of guesses.
+ * Why it exists: `agent_create` (creating a subagent) and `schedule_create` / `schedule_edit`
+ * (scheduling a task) take exact identifiers (`tools` names, `skills` ids, `mcp@<namespace>`), but
+ * a model that only sees its own tool schemas cannot know what else the app offers, nor what an
+ * item does. This tool lists the complete catalog per kind, so those forms can be filled from real
+ * values instead of guesses.
  *
  * Design (user requirement):
  * - listing only ever shows **name + description** — no source, no enabled or connection state;
@@ -32,11 +36,11 @@ import {
  *   one row with its full description; it is not a fuzzy search;
  * - the output is text, one `value — description` row per line, so the model can copy it verbatim.
  *
- * It is registered automatically whenever the scheduled-task tool group is selected (see
- * `expandSelectionToolNames`); it is not a user-selectable entry of its own.
+ * It is **not** a selectable tool: the runtime mounts it unconditionally in every main-agent
+ * conversation (see `buildAllTools` in `runtime/harness/runtime.ts`), instead of only next to the
+ * schedule tools, because subagent creation needs the same catalog. It is also classified as a
+ * read-only tool in the permission policy.
  */
-
-export const LIST_CAPABILITIES_TOOL_NAME = 'list_capabilities'
 
 /** Tools: the selectable catalog (system + plugin + group entries) */
 function toolEntries(infos: ToolInfo[]): CapabilityEntry[] {
@@ -78,6 +82,27 @@ function entriesOf(kind: CapabilityKind, availableTools: ToolInfo[]): Capability
   return mcpEntries()
 }
 
+/**
+ * Accepted values for a scheduled task's `agentConfig`, derived from the same catalog the tool
+ * lists.
+ *
+ * `tools` also contains the MCP group values: the Schedules page's legacy migration keeps
+ * `mcp@<namespace>` in `tools`, and the old all-servers marker `mcp` is still expanded at run
+ * time. Everything else that is mounted unconditionally (built-in runtime tools such as `task`,
+ * `read_file`, `execute`, …) is deliberately absent, so validation can reject it.
+ */
+export function scheduleSelectionValues(availableTools: ToolInfo[]): {
+  tools: ReadonlySet<string>
+  skills: ReadonlySet<string>
+  mcp: ReadonlySet<string>
+} {
+  const tools = new Set(toolEntries(availableTools).map((entry) => entry.value))
+  const skills = new Set(skillEntries().map((entry) => entry.value))
+  const mcp = new Set([...mcpEntries().map((entry) => entry.value), MCP_TOOL_GROUP])
+  for (const value of mcp) tools.add(value)
+  return { tools, skills, mcp }
+}
+
 export function buildListCapabilitiesTool(availableTools: ToolInfo[]): StructuredToolInterface {
   return tool(
     async ({ kind, query }) => {
@@ -100,10 +125,9 @@ export function buildListCapabilitiesTool(availableTools: ToolInfo[]): Structure
       name: LIST_CAPABILITIES_TOOL_NAME,
       isConcurrencySafe: () => true,
       description:
-        "List this app's tools, skills or MCP servers for a scheduled task's agentConfig. " +
-        'Call once per kind (tools, skills, mcp) to see everything; pass query with an exact id ' +
-        "(tool name, skill id or mcp@<namespace>) to read one item's full description. " +
-        'Read-only. Use the returned values verbatim in schedule_create / schedule_edit agentConfig.',
+        "Look up this app's selectable capabilities (tools / skills / MCP servers) so built-in forms can be filled with exact identifiers: creating a subagent (agent_create → tools / skills) and creating or editing a scheduled task (schedule_create / schedule_edit → agentConfig). " +
+        'Call once per kind; pass query with an exact value (tool name, skill id or mcp@<namespace>) to read one item\'s full description. ' +
+        'Read-only. Copy the returned values verbatim — those forms reject values outside this catalog.',
       schema: z.object({
         kind: z
           .enum(['tools', 'skills', 'mcp'])

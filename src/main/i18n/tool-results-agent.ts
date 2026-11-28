@@ -115,9 +115,9 @@ export const zhCNAgentToolTexts = {
     notFound: '子智能体 "{{type}}" 不存在。可用子智能体：{{names}}',
     /** List placeholder when no subagent is configured */
     noneAvailable: '（无）',
-    /** Start receipt for background=true (includes job_output/send_message/interrupt_agent/list_agents usage) */
+    /** Start receipt for task (non-blocking; includes job_output/send_message/interrupt_agent/list_agents usage) */
     backgroundStarted:
-      '已启动后台子智能体会话（subagent_id={{id}}）：{{label}}。会话在后台继续执行，用 job_output(job_id="{{id}}", wait=true) 读取当前轮输出；send_message(subagent_id="{{id}}", message=...) 让它继续下一轮工作；interrupt_agent(agent_id="{{id}}") 中断当前轮；list_agents 查看全部会话状态。',
+      '已派发子智能体会话（subagent_id={{id}}）：{{label}}。任务在后台继续执行，不会阻塞当前回合。需要结果时用 job_output(job_id="{{id}}", wait=true) 读取当前轮输出；send_message(subagent_id="{{id}}", message=...) 让它继续下一轮工作；interrupt_agent(agent_id="{{id}}") 中断当前轮；list_agents 查看全部会话状态。',
     failed: '子智能体执行失败: {{message}}',
     /** Tool call rounds exhausted but some output was produced */
     roundLimitNote: '\n（子智能体已达到工具调用轮次上限，自动停止）',
@@ -132,6 +132,7 @@ export const zhCNAgentToolTexts = {
   agentAuthoring: {
     created:
       '已创建子代理「{{name}}」（id={{id}}）：它会出现在设置 → 智能体的列表中，并已注册为可复用子代理。现在可以直接调用 task(subagent_type="{{name}}", prompt=...) 派发任务。',
+    unknownSkills: '技能不存在：{{ids}}。可用技能：{{available}}（省略 skills = 不启用技能）。本次未创建子代理。',
     failed: '创建子代理失败：{{message}}'
   },
   subagentSessions: {
@@ -247,7 +248,7 @@ export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
     notFound: 'Subagent "{{type}}" does not exist. Available subagents: {{names}}',
     noneAvailable: '(none)',
     backgroundStarted:
-      'Background subagent session started (subagent_id={{id}}): {{label}}. The session keeps running in the background; use job_output(job_id="{{id}}", wait=true) to read the current turn output, send_message(subagent_id="{{id}}", message=...) to give it its next turn, interrupt_agent(agent_id="{{id}}") to interrupt the current turn, and list_agents to inspect every session status.',
+      'Subagent session dispatched (subagent_id={{id}}): {{label}}. It keeps running without blocking this turn; use job_output(job_id="{{id}}", wait=true) when you need the current turn output, send_message(subagent_id="{{id}}", message=...) to give it its next turn, interrupt_agent(agent_id="{{id}}") to interrupt the current turn, and list_agents to inspect every session status.',
     failed: 'Subagent execution failed: {{message}}',
     roundLimitNote: '\n(The subagent reached its tool call round limit and stopped automatically)',
     roundLimitIncomplete:
@@ -258,6 +259,8 @@ export const enUSAgentToolTexts: typeof zhCNAgentToolTexts = {
   agentAuthoring: {
     created:
       'Subagent "{{name}}" created (id={{id}}). It is persisted in Settings → Agents and can now be reused. Delegate with task(subagent_type="{{name}}", prompt=...).',
+    unknownSkills:
+      'Unknown skill id(s): {{ids}}. Available skills: {{available}} (omit skills for none). The subagent was not created.',
     failed: 'Failed to create subagent: {{message}}'
   },
   subagentSessions: {

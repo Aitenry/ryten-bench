@@ -5,7 +5,14 @@ import { mainMessages } from '../../i18n'
 import { settingsStore } from '../../context'
 import type { HarnessSettings } from '../../types/settings'
 import { listAvailableTools } from '../../tools/harness/builders'
-import { canonicalToolName, isMcpServerGroup } from '../../../shared/harness/mcp'
+import { mcpServerViews } from '../../runtime/harness/mcp'
+import {
+  canonicalToolName,
+  isMcpServerGroup,
+  mcpNamespace,
+  mcpServerGroupValue,
+  toSelectionToolNames
+} from '../../../shared/harness/mcp'
 import { validateSubAgentDraft, type SubAgentDraft } from '../../../shared/harness/subagent'
 import type { SubAgentConfig } from './types'
 import {
@@ -20,15 +27,21 @@ import {
 import { getAllWorkspaces } from '../../database/mapper/harness/harness'
 
 /**
- * Tool name normalization: legacy name migration (canonicalToolName) + dedupe + trim.
- * Shared by settings-page writes, IPC read display and gent_create, so there aren't two
+ * Tool name normalization: mounted names → selection values (`schedule_create` → `schedule-tasks`,
+ * `mcp__<server>__<tool>` → `mcp@<server>`; auto-mounted dependencies dropped), plus legacy name
+ * migration (canonicalToolName) + trim + dedupe.
+ *
+ * Why the mounted→selection mapping matters: `agent_create` inherits the main agent's toolset from
+ * the **built** tool instances, where groups are already expanded. Without mapping them back, a
+ * perfectly valid inheritance would fail validation (the expanded names are not selectable values).
+ * Shared by settings-page writes, IPC read display and agent_create, so there aren't two
  * "seemingly identical" normalization implementations.
  */
 export function normalizeSubAgentTools(tools: string[] | null | undefined): string[] | null {
   if (!tools) return null
   const out: string[] = []
-  for (const raw of tools) {
-    const canonical = canonicalToolName(String(raw).trim())
+  for (const value of toSelectionToolNames(tools)) {
+    const canonical = canonicalToolName(value)
     if (canonical && !out.includes(canonical)) out.push(canonical)
   }
   return out
@@ -81,9 +94,19 @@ export interface SubAgentDefinitionResult {
 function assertKnownTools(tools: string[] | null): void {
   if (!tools || tools.length === 0) return
   const available = new Set(listAvailableTools().map((tool) => tool.name))
-  // MCP server group entries (mcp@<server>) get their concrete tools from the MCP page; only syntax
-  // is validated here, availability is expanded at runtime
-  const unknown = tools.filter((name) => !available.has(name) && !isMcpServerGroup(name))
+  // MCP server group entries (mcp@<server>) are expanded into concrete tools from the MCP page at
+  // run time, so a name that does not match a configured server would silently mount nothing.
+  let configuredMcp = new Set<string>()
+  try {
+    configuredMcp = new Set(
+      mcpServerViews().map((view) => mcpServerGroupValue(mcpNamespace(view.config.name)))
+    )
+  } catch (err) {
+    logger.warn('[SubAgentConfig] Failed to read MCP servers for tool validation:', err)
+  }
+  const unknown = tools.filter(
+    (name) => !available.has(name) && !(isMcpServerGroup(name) && configuredMcp.has(name))
+  )
   if (unknown.length > 0) {
     throw new Error(
       `unknown tool(s): ${unknown.join(', ')}. Use tools that exist in the tool registry, or omit tools to inherit the main agent toolset.`
@@ -227,7 +250,10 @@ export async function updateSubAgentDefinition(
   }
 
   const tools = normalizeSubAgentTools(merged.tools)
-  assertKnownTools(tools)
+  // Validate only when the caller actually changes the tool list: an unrelated edit (rename /
+  // enable toggle) of an old config must not fail because a plugin or MCP server disappeared since
+  // it was created — the stale entry is inert at run time and can be removed explicitly.
+  if (patch.tools !== undefined) assertKnownTools(tools)
 
   // Pass expectedRevision once more when writing: if a concurrent update happens between read and
   // write, CAS fails instead of overwriting

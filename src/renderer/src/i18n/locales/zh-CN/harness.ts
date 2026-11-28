@@ -470,7 +470,7 @@ export const harnessZhCN = {
       toolOutputTotal: '全文 {{total}} 字符',
       toolOutputExpand: '显示全部',
       toolOutputCollapse: '收起',
-      dispatched: '已派发后台任务',
+      dispatched: '已派发子代理任务',
       subAgentRunning: '{{name}} · 执行中…',
       subAgentError: '{{name}} · 出错',
       subAgentCompleted: '{{name}} · 已完成',
@@ -698,16 +698,7 @@ export const harnessZhCN = {
       taskProgress: '进行中 {{running}} · 待办 {{pending}} · 已完成 {{completed}}',
       agentTaskCount: '{{count}} 任务',
       agentUsage: '{{tokens}} tok',
-      lastActivity: '最近：{{name}} {{action}}「{{task}}」',
-      eventCreated: '创建了',
-      eventClaimed: '认领了',
-      eventCompleted: '完成了',
-      eventUpdated: '更新了',
-      eventDeleted: '删除了',
-      footerShared: '主智能体与子智能体共享',
-      footerAgentsHint: '点击子代理可查看会话',
-      taskOpenOwner: '该任务由子代理负责，点击打开它的会话',
-      footerTasksHint: '任务由主智能体与子智能体共同维护'
+      taskOpenOwner: '该任务由子代理负责，点击打开它的会话'
     } /**
      * Agent Teams / shared task board: the top-bar entry.
      *

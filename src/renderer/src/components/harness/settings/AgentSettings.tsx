@@ -33,6 +33,7 @@ import type {
 } from '../../../../../shared/harness/types'
 import {
   canonicalToolName,
+  isMcpServerGroup,
   isMcpToolName,
   isPluginModeTool,
   mcpNamespace,
@@ -362,6 +363,12 @@ const AgentSettings: React.FC = () => {
        * that on this save. The old generic `mcp` marker is upgraded too.
        */
       const migrated: string[] = []
+      // Server groups that still exist (any configured server, even one that is temporarily
+      // unreachable): a stale `mcp@<deleted server>` would be rejected by the save validation, so
+      // drop it here instead of trapping the user on an unrelated edit.
+      const knownMcpGroups = new Set(
+        mcpServers.map((view) => mcpServerGroupValue(mcpNamespace(view.config.name)))
+      )
       for (const name of storedTools) {
         // The plugin's mode-workshop tools (plugin_draft etc.) are not subagent options: they are
         // plugin-mode mode tools mounted automatically by the mode (see shared/mcp.ts). Historical
@@ -378,6 +385,11 @@ const AgentSettings: React.FC = () => {
               migrated.push(mcpServerGroupValue(mcpNamespace(view.config.name)))
             }
           }
+          continue
+        }
+        // A stale server group (server deleted / no longer offered): cannot be resolved at run time
+        if (isMcpServerGroup(name)) {
+          if (knownMcpGroups.has(name)) migrated.push(name)
           continue
         }
         // Normalize old tool names: the four material tools merged into one, and web fetch/search

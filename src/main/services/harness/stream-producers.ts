@@ -18,8 +18,8 @@ import { buildToolProjection, projectToolInput, PROJECTED_TOOLS } from './tool-p
  * Behavior matches the previous streamEvents(v3) implementation:
  * - Message producer: dedupe reasoning/text deltas (handles both delta and full-text forms) and
  *   throttle tool `preparing`;
- * - Tool producer: executing → completed + custom cards; the task tool is converted into sub-agent
- *   started/completed;
+ * - Tool producer: executing → completed + custom cards; the task tool is converted into a
+ *   compact "dispatched" card (the transcript lives in the top-bar subagent session view);
  * - Sub-agent producer: group by (name, causeId), forward running events record by record, and send
  *   an early completed at the end.
  *
@@ -391,47 +391,24 @@ export async function produceToolCalls(
       // answer, retract the mark
       if (answerMark) answerMark.value = false
       const input = call.input as Record<string, unknown>
-      // The task tool is the agent dispatcher: convert it into subAgent events so the frontend
-      // only sees agent blocks
+      // The task tool is the agent dispatcher: convert it into a compact "dispatched" card. The
+      // tool always returns the session receipt immediately (non-blocking), so the session id is
+      // available for the inline jump; the transcript itself is viewed in the top-bar list.
       if (call.name === 'task') {
         const saName =
           (typeof input?.subagent_type === 'string' && input.subagent_type) || 'subAgent'
         const taskDesc = (typeof input?.description === 'string' && input.description) || ''
         const causeId = call.callId
-        // Background mode (background=true): no started/completed activity block; after a successful
-        // start emit a lightweight "dispatched" event (name + brief description + session id), with
-        // agent content/results collected in the top bar list
-        if (input?.background === true) {
-          const raw = await safeGetOutput(call)
-          const output = typeof raw === 'string' ? raw : JSON.stringify(raw)
-          const idMatch = /subagent_id=([A-Za-z0-9-]+)/.exec(output)
-          enqueue({
-            subAgent: {
-              name: saName,
-              causeId,
-              status: 'dispatched',
-              taskDescription: taskDesc,
-              subagentId: idMatch?.[1]
-            }
-          })
-          continue
-        }
-        // executing → emit the started agent event (with task description)
-        enqueue({
-          subAgent: { name: saName, causeId, status: 'started', taskDescription: taskDesc }
-        })
-        await sleep(100)
-        if (signal?.aborted) break
         const raw = await safeGetOutput(call)
         const output = typeof raw === 'string' ? raw : JSON.stringify(raw)
-        // completed → emit the completed agent event
+        const idMatch = /subagent_id=([A-Za-z0-9-]+)/.exec(output)
         enqueue({
           subAgent: {
             name: saName,
             causeId,
-            status: 'completed',
-            output,
-            taskDescription: taskDesc
+            status: 'dispatched',
+            taskDescription: taskDesc,
+            subagentId: idMatch?.[1]
           }
         })
         continue
