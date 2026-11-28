@@ -3401,6 +3401,26 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
+  /**
+   * Re-run one execution record and overwrite that record's data (rows keep their id / time, so
+   * nothing is appended). The turn runs through the same headless pipeline as a scheduled trigger;
+   * the schedule itself is not shifted by a manual re-run.
+   */
+  handle('harness-schedule-rerun', async (payload: { taskId: string; runId: number }) => {
+    if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
+    const taskId = typeof payload?.taskId === 'string' ? payload.taskId : ''
+    const runId = Number(payload?.runId)
+    if (!taskId || !Number.isInteger(runId) || runId <= 0) {
+      return { ok: false, error: 'invalid-input' }
+    }
+    try {
+      return await scheduleRunner.rerun(taskId, runId)
+    } catch (err) {
+      logger.warn('[Schedule] Failed to re-run record:', err)
+      return { ok: false, error: 'rerun-failed' }
+    }
+  })
+
   handle(
     'harness-schedule-update',
     async (payload: { id: string; action: 'pause' | 'resume' | 'delete' }) => {

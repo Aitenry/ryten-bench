@@ -50,6 +50,8 @@ const Schedules: React.FC = () => {
   const [runPanel, setRunPanel] = useState<{ task: ScheduleView; run: ScheduleRunView } | null>(
     null
   )
+  /** A run-panel "re-run" is in flight (the panel button shows progress) */
+  const [rerunning, setRerunning] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -100,14 +102,26 @@ const Schedules: React.FC = () => {
 
   /** Run panel → select the conversation that run executed in, then show it */
   const openConversation = useCallback(
-    (topicId: number): void => {
-      const row = topicRows.get(topicId)
-      if (!row) return
+    async (topicId: number): Promise<void> => {
+      // `topicRows` is a snapshot from page load; re-read the row so a conversation deleted in the
+      // meantime reports clearly instead of navigating to a dead session.
+      let row: HarnessTopicRow | undefined
+      try {
+        row = (await harnessApi.harness.getTopicById(topicId))[0]
+      } catch {
+        row = topicRows.get(topicId)
+      }
+      if (!row) {
+        // The conversation (or the whole task, via the topic cascade) was deleted after this page
+        // loaded: say so instead of a silent no-op.
+        message.error(t('schedulesPage.conversationMissing'))
+        return
+      }
       // Selection lives in the app-level harness context, so it can be triggered from this page
       void handleSelectTopic(row).catch(() => undefined)
       navigate('/harness')
     },
-    [handleSelectTopic, navigate, topicRows]
+    [handleSelectTopic, message, navigate, t, topicRows]
   )
 
   /** Run panel → open one artifact: select the run's conversation, then open the file there */
@@ -121,6 +135,58 @@ const Schedules: React.FC = () => {
     },
     [handleSelectTopic, navigate, runPanel, topicRows]
   )
+
+  /** Run panel → re-execute this record, overwriting its data (same row, no new history entry) */
+  const handleRerunRun = useCallback((): void => {
+    if (!runPanel || rerunning) return
+    const target = runPanel
+    const execute = async (): Promise<void> => {
+      setRerunning(true)
+      try {
+        const result = await harnessApi.harness.rerunScheduleRun({
+          taskId: target.task.id,
+          runId: target.run.id
+        })
+        if (!result.ok) {
+          // Fixed-session tasks cascade with their conversation: the task and this record are gone,
+          // so there is nothing left to overwrite. Close the stale panel and refresh the list.
+          if (result.error === 'not-found' || result.error === 'run-not-found') {
+            message.error(t('schedulesPage.runPanelRerunRecordGone'))
+            setRunPanel(null)
+            void load()
+            return
+          }
+          const key =
+            result.error === 'target-missing'
+              ? 'schedulesPage.runPanelRerunTargetGone'
+              : result.error === 'busy' || result.error === 'not-executed'
+                ? 'schedulesPage.runPanelRerunBlocked'
+                : 'schedulesPage.runPanelRerunFailed'
+          message.error(t(key))
+          return
+        }
+        // Replace the record shown in the panel; the list refreshes inside the panel because
+        // the shown run changed.
+        setRunPanel((prev) => (prev ? { ...prev, run: result.run } : prev))
+        message.success(t('schedulesPage.runPanelRerunDone'))
+      } catch {
+        message.error(t('schedulesPage.runPanelRerunFailed'))
+      } finally {
+        setRerunning(false)
+      }
+    }
+    modal.confirm({
+      title: t('schedulesPage.runPanelRerunTitle'),
+      content: t('schedulesPage.runPanelRerunBody'),
+      okText: t('schedulesPage.runPanelRerunConfirm'),
+      cancelText: t('schedulesPage.cancel'),
+      // Close the dialog immediately and let the panel button show progress: a scheduled run can
+      // take minutes, and the page must stay usable meanwhile.
+      onOk: () => {
+        void execute()
+      }
+    })
+  }, [load, message, modal, rerunning, runPanel, t])
 
   /** Filter + search, with enabled tasks sorted first by next run */
   const visibleTasks = useMemo(() => {
@@ -398,6 +464,8 @@ const Schedules: React.FC = () => {
           // Keep the panel open and swap the record; the history list stays closed
           setRunPanel((prev) => (prev ? { ...prev, run: next } : prev))
         }}
+        onRerun={handleRerunRun}
+        rerunning={rerunning}
         onOpenArtifact={openArtifact}
       />
     </div>

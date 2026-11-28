@@ -51,6 +51,25 @@ export interface ScheduleStore {
   /** Permanent run records (paginated, newest first) */
   listRuns(taskId: string, limit?: number, offset?: number): Promise<ScheduleRunRecord[]>
   countRuns(taskId: string): Promise<number>
+  /** One run record of a task (undefined when it no longer exists) */
+  getRun(taskId: string, runId: number): Promise<ScheduleRunRecord | undefined>
+  /**
+   * Overwrite one existing run record in place (manual "re-run"); `ran_at` and the row id are kept
+   * so the record does not move in the history.
+   */
+  replaceRun(
+    taskId: string,
+    runId: number,
+    result: {
+      status: ScheduleRunStatus
+      detail?: string | null
+      topicId?: number | null
+      dialogueId?: number | null
+      usage?: ScheduleRunUsage | null
+      steps?: ScheduleRunStep[] | null
+      artifacts?: ScheduleRunArtifact[] | null
+    }
+  ): Promise<ScheduleRunRecord | undefined>
 }
 
 /** Currently injected backend (set by system wiring; cleared on exit) */
@@ -88,5 +107,7 @@ export const scheduleStore: ScheduleStore = {
   remove: async (id) => requireBackend().remove(id),
   markRun: async (id, result) => requireBackend().markRun(id, result),
   listRuns: async (taskId, limit, offset) => requireBackend().listRuns(taskId, limit, offset),
-  countRuns: async (taskId) => requireBackend().countRuns(taskId)
+  countRuns: async (taskId) => requireBackend().countRuns(taskId),
+  getRun: async (taskId, runId) => requireBackend().getRun(taskId, runId),
+  replaceRun: async (taskId, runId, result) => requireBackend().replaceRun(taskId, runId, result)
 }

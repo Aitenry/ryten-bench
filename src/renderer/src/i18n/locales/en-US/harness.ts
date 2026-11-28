@@ -1345,6 +1345,22 @@ export const harnessEnUS: typeof harnessZhCN = {
     runRowHint: 'View run details',
     runPanelRunOrdinal: 'run {{index}} / {{total}}',
     runPanelSwitch: 'Switch run',
+    runPanelRerun: 'Run again',
+    runPanelRerunHint: 'Run the task again with its current settings, overwriting this record',
+    runPanelRerunRunning: 'Running again…',
+    runPanelRerunTitle: 'Run this task again?',
+    runPanelRerunBody:
+      'The task will run again with its current settings and this record will be overwritten with the new result (status, duration, process, artifacts and conversation). No new history row is added. This cannot be undone.',
+    runPanelRerunConfirm: 'Run again',
+    runPanelRerunDone: 'Re-run finished; the record has been updated',
+    runPanelRerunFailed: 'Re-run failed; the original record was left unchanged',
+    runPanelRerunBlocked:
+      'The conversation is busy with another turn, or the target is unavailable. Nothing ran and the original record is unchanged.',
+    runPanelRerunTargetGone:
+      'The target conversation or workspace was deleted, so this run cannot be repeated. Edit the task and choose a new target.',
+    runPanelRerunRecordGone:
+      'The task or this run record no longer exists (its conversation may have been deleted).',
+    conversationMissing: 'This conversation was deleted and cannot be opened',
     runStepsCount: '{{count}} steps',
     runArtifactsCount: '{{count}} artifacts',
     runsEmpty: 'No runs recorded yet',

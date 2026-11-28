@@ -205,6 +205,8 @@ export interface FileOpenTargetView {
 }
 
 export interface ScheduleRunView {
+  /** Stable record id (used by "re-run" to overwrite this record) */
+  id: number
   at: string
   status: 'completed' | 'cancelled' | 'failed'
   detail?: string | null
@@ -549,6 +551,14 @@ export const harnessApi = {
         runs: ScheduleRunView[]
         total: number
       }>,
+    /**
+     * Re-run one execution record, overwriting that record's data in place (no new history row).
+     * Resolves when the turn finished; `error` is a stable code the page translates.
+     */
+    rerunScheduleRun: (payload: { taskId: string; runId: number }) =>
+      invoke('harness:harness-schedule-rerun', payload) as Promise<
+        { ok: true; run: ScheduleRunView } | { ok: false; error: string }
+      >,
 
     // Web search settings (Settings → "Web Search" page)
     getSearchSettings: () =>

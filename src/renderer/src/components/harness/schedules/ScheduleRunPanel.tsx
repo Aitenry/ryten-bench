@@ -17,6 +17,8 @@ import {
   RiErrorWarningFill,
   RiFileImageLine,
   RiFileTextLine,
+  RiLoader4Line,
+  RiRestartLine,
   RiTimeLine
 } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
@@ -33,6 +35,10 @@ interface Props {
   onOpenConversation?: (topicId: number) => void
   /** Switch the panel to another record of the same task (keeps the panel open) */
   onSelectRun?: (run: ScheduleRunView) => void
+  /** Re-run this record and overwrite its data (the page owns the IPC call + confirmation) */
+  onRerun?: () => void
+  /** A re-run is in flight: the button shows progress and is disabled */
+  rerunning?: boolean
   /** Open one artifact in the workspace panel (via the conversation handoff) */
   onOpenArtifact?: (path: string) => void
 }
@@ -57,6 +63,8 @@ const ScheduleRunPanel: React.FC<Props> = ({
   onClose,
   onOpenConversation,
   onSelectRun,
+  onRerun,
+  rerunning = false,
   onOpenArtifact
 }) => {
   const { t } = useTranslation()
@@ -65,8 +73,8 @@ const ScheduleRunPanel: React.FC<Props> = ({
   /** Recent runs of this task, newest first (for the "第 N 次 / 切换" control) */
   const [runs, setRuns] = useState<ScheduleRunView[]>([])
 
-  // Load the run list whenever the panel opens: the switcher should work without going back to
-  // the history list first.
+  // Load the run list whenever the panel opens (or the shown record changes, e.g. after a re-run
+  // rewrote its status/usage): the switcher should work without going back to the history list first.
   useEffect(() => {
     if (!open || !task) return
     let cancelled = false
@@ -81,10 +89,10 @@ const ScheduleRunPanel: React.FC<Props> = ({
     return () => {
       cancelled = true
     }
-  }, [open, task])
+  }, [open, task, run?.id, run?.status, run?.at])
 
   // Newest-first list → chronological ordinal ("第 3 / 5 次")
-  const runIndex = runs.findIndex((item) => item.at === run?.at && item.status === run?.status)
+  const runIndex = runs.findIndex((item) => item.id === run?.id)
   const runOrdinal = runIndex >= 0 ? runs.length - runIndex : 0
 
   const steps = run?.steps ?? []
@@ -497,6 +505,38 @@ const ScheduleRunPanel: React.FC<Props> = ({
             {t('schedulesPage.runPanelOpenConversation')}
             <RiArrowRightSLine size={13} />
           </button>
+          {onRerun ? (
+            <button
+              type="button"
+              disabled={rerunning}
+              onClick={onRerun}
+              title={t('schedulesPage.runPanelRerunHint')}
+              style={{
+                height: 30,
+                padding: '0 12px',
+                borderRadius: 8,
+                border: `1px solid ${token.colorPrimaryBorder}`,
+                background: token.colorPrimaryBg,
+                color: token.colorPrimary,
+                fontSize: 12.5,
+                fontWeight: 550,
+                cursor: rerunning ? 'progress' : 'pointer',
+                opacity: rerunning ? 0.75 : 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6
+              }}
+            >
+              {rerunning ? (
+                <RiLoader4Line size={13} className="animate-spin" />
+              ) : (
+                <RiRestartLine size={13} />
+              )}
+              {rerunning
+                ? t('schedulesPage.runPanelRerunRunning')
+                : t('schedulesPage.runPanelRerun')}
+            </button>
+          ) : null}
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: token.colorTextTertiary }}>
             <RiTimeLine size={12} />
             {run.usage?.durationMs ? t('schedulesPage.runPanelDuration', {

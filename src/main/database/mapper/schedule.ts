@@ -6,7 +6,7 @@
  * The rule column is split into `when_kind` + `when_json`; this mapper serializes/deserializes it and skips
  * invalid rules as null (one bad row must not break the whole list).
  */
-import { desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { withOrm } from '../orm'
 import { scheduled_task_runs, scheduled_tasks } from '../schema'
 import { normalizeAgentSelection, type AgentSelection } from '../../../shared/harness/agent-config'
@@ -265,6 +265,21 @@ export async function markScheduledTaskRun(args: {
   })
 }
 
+/** Run row → domain object */
+function toRun(row: RunRow): ScheduleRunRecord {
+  return {
+    id: row.id,
+    at: toIso(row.ran_at) ?? new Date().toISOString(),
+    status: row.status,
+    detail: row.detail,
+    topicId: row.topic_id ?? null,
+    dialogueId: row.dialogue_id ?? null,
+    usage: parseJson<ScheduleRunUsage>(row.usage_json),
+    steps: parseJson<ScheduleRunStep[]>(row.steps_json),
+    artifacts: parseJson<ScheduleRunArtifact[]>(row.artifacts_json)
+  }
+}
+
 /** Read run records (reverse-order pagination; kept permanently, never trimmed) */
 export async function listScheduledTaskRuns(
   taskId: string,
@@ -279,16 +294,61 @@ export async function listScheduledTaskRuns(
       .orderBy(desc(scheduled_task_runs.ran_at), desc(scheduled_task_runs.id))
       .limit(Math.max(1, Math.min(500, Math.floor(limit))))
       .offset(Math.max(0, Math.floor(offset)))
-    return rows.map((row: RunRow) => ({
-      at: toIso(row.ran_at) ?? new Date().toISOString(),
-      status: row.status,
-      detail: row.detail,
-      topicId: row.topic_id ?? null,
-      dialogueId: row.dialogue_id ?? null,
-      usage: parseJson<ScheduleRunUsage>(row.usage_json),
-      steps: parseJson<ScheduleRunStep[]>(row.steps_json),
-      artifacts: parseJson<ScheduleRunArtifact[]>(row.artifacts_json)
-    }))
+    return rows.map(toRun)
+  })
+}
+
+/** Read one run record (used by "re-run" before executing, so a missing row never starts a turn) */
+export async function getScheduledTaskRun(
+  taskId: string,
+  runId: number
+): Promise<ScheduleRunRecord | undefined> {
+  return withOrm('getScheduledTaskRun', async (db) => {
+    const rows = await db
+      .select()
+      .from(scheduled_task_runs)
+      .where(and(eq(scheduled_task_runs.id, runId), eq(scheduled_task_runs.task_id, taskId)))
+    return rows[0] ? toRun(rows[0]) : undefined
+  })
+}
+
+/**
+ * Overwrite one existing run record in place ("re-run"): the row id, its `ran_at` and its place in
+ * the history stay the same; status / detail / conversation / usage / steps / artifacts are replaced
+ * by the new execution's data.
+ *
+ * Deliberately does not touch the task row's schedule fields: a manual re-run is not a new scheduled
+ * occurrence, so `next_run_at` and `last_run_at` keep describing the real schedule (the runner may
+ * sync `last_status` separately when this record is the newest one).
+ */
+export async function replaceScheduledTaskRun(
+  taskId: string,
+  runId: number,
+  result: {
+    status: ScheduleRunStatus
+    detail?: string | null
+    topicId?: number | null
+    dialogueId?: number | null
+    usage?: ScheduleRunUsage | null
+    steps?: ScheduleRunStep[] | null
+    artifacts?: ScheduleRunArtifact[] | null
+  }
+): Promise<ScheduleRunRecord | undefined> {
+  return withOrm('replaceScheduledTaskRun', async (db) => {
+    const rows = await db
+      .update(scheduled_task_runs)
+      .set({
+        status: result.status,
+        detail: result.detail ?? null,
+        topic_id: result.topicId ?? null,
+        dialogue_id: result.dialogueId ?? null,
+        usage_json: serializeJson(result.usage),
+        steps_json: serializeJson(result.steps),
+        artifacts_json: serializeJson(result.artifacts)
+      })
+      .where(and(eq(scheduled_task_runs.id, runId), eq(scheduled_task_runs.task_id, taskId)))
+      .returning()
+    return rows[0] ? toRun(rows[0]) : undefined
   })
 }
 

@@ -17,10 +17,12 @@ import {
   createScheduledTask,
   deleteScheduledTask,
   getScheduledTask,
+  getScheduledTaskRun,
   importScheduledTasks,
   listScheduledTaskRuns,
   listScheduledTasks,
   markScheduledTaskRun,
+  replaceScheduledTaskRun,
   updateScheduledTask
 } from './mapper/schedule'
 import {
@@ -102,6 +104,26 @@ export class DbScheduleStore implements ScheduleStore {
 
   async countRuns(taskId: string): Promise<number> {
     return countScheduledTaskRuns(taskId)
+  }
+
+  async getRun(taskId: string, runId: number): Promise<ScheduleRunRecord | undefined> {
+    return getScheduledTaskRun(taskId, runId)
+  }
+
+  async replaceRun(
+    taskId: string,
+    runId: number,
+    result: {
+      status: ScheduleRunStatus
+      detail?: string | null
+      topicId?: number | null
+      dialogueId?: number | null
+      usage?: ScheduleRunUsage | null
+      steps?: ScheduleRunStep[] | null
+      artifacts?: ScheduleRunArtifact[] | null
+    }
+  ): Promise<ScheduleRunRecord | undefined> {
+    return replaceScheduledTaskRun(taskId, runId, result)
   }
 }
 

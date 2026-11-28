@@ -38,6 +38,8 @@ export interface ScheduleRunArtifact {
 
 /** One run record (kept forever, never trimmed) */
 export interface ScheduleRunRecord {
+  /** Stable row id (used to overwrite this exact record when the run is re-executed) */
+  id: number
   /** When execution actually started (ISO UTC) */
   at: string
   status: ScheduleRunStatus
