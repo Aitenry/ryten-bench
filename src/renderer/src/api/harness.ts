@@ -173,6 +173,8 @@ export interface ScheduleView {
   targetMemoryScope: string | null
   /** Task-level run selection (tools/skills/MCP; null dimension follows the topic or defaults) */
   agentConfig: AgentSelectionView | null
+  /** Model override `provider:model` (null = the default model) */
+  model: string | null
   createdAt: string
   updatedAt: string
   nextRunAt: string | null
@@ -217,11 +219,13 @@ export interface ScheduleRunView {
     durationMs: number | null
   } | null
   steps?: { name: string; path: string | null; status: 'ok' | 'error' }[] | null
-  artifacts?: {
-    kind: 'file' | 'deliverable'
-    path: string
-    description: string | null
-  }[] | null
+  artifacts?:
+    | {
+        kind: 'file' | 'deliverable'
+        path: string
+        description: string | null
+      }[]
+    | null
 }
 
 /** Create/edit result: expected failures don't throw, `error` is a stable code (translated by
@@ -513,6 +517,8 @@ export const harnessApi = {
       targetMemoryScope?: string | null
       /** Task-level run selection */
       agentConfig?: AgentSelectionView | null
+      /** Model override `provider:model`; omitted/null = default model */
+      model?: string | null
     }) => invoke('harness:harness-schedule-create', payload) as Promise<ScheduleMutationResult>,
     updateScheduleFull: (payload: {
       id: string
@@ -525,6 +531,8 @@ export const harnessApi = {
       targetWorkspaceId?: number | null
       targetMemoryScope?: string | null
       agentConfig?: AgentSelectionView | null
+      /** Model override `provider:model`; omitted = keep, null = clear */
+      model?: string | null
     }) =>
       invoke('harness:harness-schedule-update-full', payload) as Promise<ScheduleMutationResult>,
     // Topic-level run selection (tools/skills/MCP chosen below the input box, persisted per topic)
@@ -980,7 +988,12 @@ export const harnessApi = {
       }>,
     /** Open a workspace file with a system app (`default` or `app:<exe>` from the targets call) */
     openFileWith: (virtualPath: string, targetId: string, memoryScope?: string | null) =>
-      invoke('harness:harness-file-open-with', virtualPath, targetId, memoryScope ?? null) as Promise<{
+      invoke(
+        'harness:harness-file-open-with',
+        virtualPath,
+        targetId,
+        memoryScope ?? null
+      ) as Promise<{
         ok: boolean
         error?: string
       }>
@@ -1159,8 +1172,7 @@ export const harnessApi = {
       rows?: number
     }) =>
       invoke('harness:pty-terminal-open', payload) as Promise<
-        | { ok: true; session: PtySessionView }
-        | { ok: false; error: string; detail?: string }
+        { ok: true; session: PtySessionView } | { ok: false; error: string; detail?: string }
       >,
     write: (sessionId: string, data: string) =>
       invoke('harness:pty-terminal-write', { sessionId, data }) as Promise<{ ok: boolean }>,

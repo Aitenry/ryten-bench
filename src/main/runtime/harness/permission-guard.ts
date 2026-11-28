@@ -21,6 +21,11 @@ export interface GuardContext {
   topicId: number
   /** Workspace root (cwd of execute; used for command out-of-bounds checks) */
   workspaceRoot?: string
+  /**
+   * Unattended turn (scheduled task): an approval-required call is denied immediately instead of
+   * suspending the turn on a dialog nobody will answer.
+   */
+  nonInteractive?: boolean
 }
 
 /** Permission-plane arguments: not the tool's business arguments, must be stripped before reaching the real tool */
@@ -64,7 +69,8 @@ export function guardTool(
         toolName: target.name,
         args: args ?? {},
         signal: (config as { signal?: AbortSignal } | undefined)?.signal,
-        workspaceRoot: ctx.workspaceRoot
+        workspaceRoot: ctx.workspaceRoot,
+        nonInteractive: ctx.nonInteractive
       })
 
       if (!verdict.run) {

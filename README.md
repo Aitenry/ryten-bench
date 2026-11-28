@@ -632,6 +632,7 @@ the `WORKSHOP.md` contract generated for every draft).
 | Icons            | [Remix Icon](https://remixicon.com/) + Ant Design Icons                                                                                                                      |
 | Logging          | [electron-log](https://github.com/megahertz/electron-log)                                                                                                                    |
 | Packaging        | [electron-builder](https://www.electron.build/) 26                                                                                                                           |
+| App updates      | [electron-updater](https://www.electron.build/auto-update) behind an `UpdateSource` abstraction (GitHub Releases now, Lattice feed later)                                     |
 | Plugin hub       | Lattice platform: `/v1` REST over HTTP(S), device-bound token sessions, sha256-verified packages and sources                                                                 |
 | Sandbox          | Self-built, no third-party dependency: Windows restricted token + capability SIDs, Linux Landlock or `bwrap`, macOS `sandbox-exec`                                           |
 
@@ -753,6 +754,31 @@ present and the sandbox inside the packaged app has passed its self-check. After
 publish the version is committed back to `main` as `chore(release): <version> [skip ci]`, which
 never counts as a change; rerunning a workflow for an already published commit is a no-op.
 
+### App updates
+
+The app checks GitHub Releases in the background (shortly after startup, then every six hours) and
+shows an update entry in the sidebar brand row when the latest release is newer. Downloading is
+explicit; when it finishes the app offers a restart. Packaging writes `latest.yml` /
+`latest-mac.yml` / `latest-linux.yml`, and the release workflow uploads those files next to the
+installers — electron-updater reads them, verifies the installer checksum, and performs the
+platform-specific install on restart.
+
+**Same-version content updates.** Some fixes are not worth a version bump. Each manifest also gets
+a `contentSha256` (SHA-256 of the packaged `app.asar`, written by
+`.github/scripts/stamp-update-content-hash.mjs`). The app computes the same hash from its installed
+`app.asar`; when the version is equal but the hash differs, it treats that as a content update
+(labelled `内容更新` / `Content update`) and offers the normal download/restart flow. If the hash
+matches, nothing is shown. The release workflow exposes a manual **Run workflow → republish**
+switch that rebuilds the current stable version and overwrites that release's assets, so clients on
+the same version pick up the new content without a tag bump.
+
+Update **sources** are abstracted in `src/main/update/sources.ts` (`UpdateSource`):
+`GitHubUpdateSource` is the production source today; `LatticeUpdateSource` implements the same
+contract for a generic update feed and can be selected for staging with
+`RYTENBENCH_UPDATE_SOURCE=lattice` + `RYTENBENCH_LATTICE_UPDATE_URL`. A Lattice feed must include
+`contentSha256` in its manifests to participate in same-version updates. Moving to Lattice therefore
+does not touch the update state machine, IPC, or renderer UI.
+
 ---
 
 ## Project structure
@@ -763,6 +789,7 @@ RytenBench/
 │   ├── main/                         # Electron main process
 │   │   ├── index.ts                  # Single instance, protocol, startup, windows, tray, host init
 │   │   ├── lifecycle.ts  context.ts  safe-send.ts
+│   │   ├── update/                   # App updater: source abstraction + GitHub/Lattice feed
 │   │   ├── weather.ts                # Open-Meteo + IP geolocation, cached and pushed
 │   │   ├── address/  crypto/  resource/  tray/  windows/
 │   │   ├── database/                 # PGlite + Drizzle engine

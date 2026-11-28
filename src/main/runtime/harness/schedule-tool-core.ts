@@ -4,7 +4,8 @@
  *
  * Three jobs:
  * 1. **Form parity**: everything the Schedules page can set (target conversation / new session per
- *    run, task-level tools-skills-MCP) can also be set by `schedule_create` / `schedule_edit`;
+ *    run, task-level tools-skills-MCP, model override) can also be set by `schedule_create` /
+ *    `schedule_edit`;
  * 2. **True partial updates**: `schedule_edit` only touches the fields the caller passed. `undefined`
  *    means "leave it alone", `null` means "clear it" (for `agentConfig`: follow the conversation /
  *    defaults again) — the two must never collapse into each other, otherwise "change only the
@@ -38,6 +39,13 @@ export interface ScheduleSelectionInput {
   mcpTools?: string[] | null
 }
 
+/** Trim a `provider:model` override; empty / non-string collapses to null (= default model) */
+function normalizeModelSpec(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  return value || null
+}
+
 /**
  * Values the Schedules page could pick, built from the same sources as `list_capabilities`:
  * selectable tool names (group entries included), skill ids, and `mcp@<namespace>` values.
@@ -49,6 +57,15 @@ export interface ScheduleSelectionCatalog {
   tools: ReadonlySet<string>
   skills: ReadonlySet<string>
   mcp: ReadonlySet<string>
+  /**
+   * Maps a legacy tool name to the selection value the catalog lists today (`manage_materials` →
+   * `materials-tools`, `web_fetch` → `web-tools`).
+   *
+   * Injected by the caller (`scheduleSelectionValues`) instead of importing `canonicalToolName`
+   * here: this module stays free of runtime imports so it can be unit tested under plain Node.
+   * When omitted, names are matched as written.
+   */
+  canonicalTool?: (name: string) => string
 }
 
 /** Selection values that are not in the catalog, per dimension (caller order kept) */
@@ -78,6 +95,8 @@ export interface ScheduleCreateArgs {
   targetSession?: TargetSession
   /** `undefined`/`null` = follow the conversation / defaults */
   agentConfig?: ScheduleSelectionInput | null
+  /** Model override `provider:model`; omitted/null = the default provider */
+  model?: string | null
 }
 
 /** Context the tool must supply when creating */
@@ -99,6 +118,8 @@ export interface ScheduleEditArgs {
   when?: ScheduleWhen
   /** `null` clears the task-level selection (run with the conversation's own selection) */
   agentConfig?: ScheduleSelectionInput | null
+  /** `null` clears the model override (back to the default provider) */
+  model?: string | null
   targetSession?: TargetSession
   enabled?: boolean
 }
@@ -111,18 +132,12 @@ export interface ScheduleEditContext {
 
 /** Which fields an edit actually changed (used for the tool's result text) */
 export type ScheduleEditField =
-  | 'title'
-  | 'prompt'
-  | 'when'
-  | 'target'
-  | 'agentConfig'
-  | 'enabled'
+  'title' | 'prompt' | 'when' | 'target' | 'agentConfig' | 'model' | 'enabled'
 
 export type ScheduleEditFailure = 'no-topic' | 'no-target' | 'empty'
 
 export type ScheduleCreateResult =
-  | { ok: true; input: ScheduleCreateInput }
-  | { ok: false; reason: ScheduleCreateFailure }
+  { ok: true; input: ScheduleCreateInput } | { ok: false; reason: ScheduleCreateFailure }
 
 export type ScheduleEditResult =
   | { ok: true; patch: ScheduledTaskPatch; changed: ScheduleEditField[] }
@@ -172,6 +187,12 @@ export function normalizeSelectionInput(
 /**
  * Drop every selection value that is not in the catalog.
  *
+ * Tool names are canonicalized first (`manage_materials` / `web_fetch` / … → the current group
+ * entry): tasks and forms created before the 2026-11-28 materials split still store the old name,
+ * and the catalog only lists the replacement. Checking the raw name dropped a perfectly valid old
+ * selection at run time, which is exactly the "I scheduled it with the knowledge-base tool, but the
+ * run had no such tool" failure.
+ *
  * A dimension whose values are **all** dropped becomes `null` (follow the conversation) instead of
  * an explicit empty override, so a task whose tools were all invalid still runs with the
  * conversation's own selection rather than with nothing mounted.
@@ -183,17 +204,24 @@ export function sanitizeSelectionInput(
   if (!raw || typeof raw !== 'object') return { selection: null, ignored: null }
   const filter = (
     names: string[] | null,
-    isKnown: (name: string) => boolean
+    isKnown: (name: string) => boolean,
+    canonicalize?: (name: string) => string
   ): { kept: string[]; dropped: string[] } => {
     const kept: string[] = []
     const dropped: string[] = []
     for (const name of names ?? []) {
-      if (isKnown(name)) kept.push(name)
-      else dropped.push(name)
+      const value = canonicalize ? canonicalize(name) : name
+      if (isKnown(value)) {
+        if (!kept.includes(value)) kept.push(value)
+      } else {
+        // Report the value the caller wrote, not its normalized form, so the warning stays actionable
+        dropped.push(name)
+      }
     }
     return { kept, dropped }
   }
-  const tools = filter(cleanNames(raw.tools), (name) => catalog.tools.has(name))
+  const canonicalizeTool = catalog.canonicalTool
+  const tools = filter(cleanNames(raw.tools), (name) => catalog.tools.has(name), canonicalizeTool)
   const skills = filter(cleanNames(raw.skills), (name) => catalog.skills.has(name))
   const mcp = filter(cleanNames(raw.mcpTools), (name) => catalog.mcp.has(name))
   const selection = normalizeSelectionInput({
@@ -362,6 +390,7 @@ export function buildCreateInput(
       targetWorkspaceId: target.targetWorkspaceId,
       targetMemoryScope: target.targetMemoryScope,
       agentConfig: normalizeSelectionInput(args.agentConfig),
+      model: normalizeModelSpec(args.model),
       nextRunAt: ctx.nextRunAt
     }
   }
@@ -405,6 +434,13 @@ export function buildUpdatePatch(
     if (JSON.stringify(next) !== JSON.stringify(current)) {
       patch.agentConfig = next
       changed.push('agentConfig')
+    }
+  }
+  if (args.model !== undefined) {
+    const next = normalizeModelSpec(args.model)
+    if ((task.model ?? null) !== next) {
+      patch.model = next
+      changed.push('model')
     }
   }
   if (args.enabled !== undefined && args.enabled !== task.enabled) {

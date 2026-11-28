@@ -108,6 +108,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [modelOptions, setModelOptions] = useState<{ label: string; value: string }[]>([])
   const [toolOptions, setToolOptions] = useState<
     { label: string; value: string; source?: ToolSourceKind }[]
   >([])
@@ -134,16 +136,25 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     setCatalogLoading(true)
     void (async () => {
       try {
-        const [allWorkspaces, chatResult, workshopState, drafts, tools, skills, servers] =
-          await Promise.all([
-            harnessApi.harness.getAllWorkspaces().catch(() => []),
-            harnessApi.harness.chatWorkspaces().catch(() => null),
-            harnessApi.workshop.state().catch(() => null),
-            harnessApi.workshop.list().catch(() => []),
-            harnessApi.harness.getTools().catch(() => []),
-            harnessApi.harness.listSkills().catch(() => []),
-            harnessApi.mcp.list().catch(() => [])
-          ])
+        const [
+          allWorkspaces,
+          chatResult,
+          workshopState,
+          drafts,
+          tools,
+          skills,
+          servers,
+          providers
+        ] = await Promise.all([
+          harnessApi.harness.getAllWorkspaces().catch(() => []),
+          harnessApi.harness.chatWorkspaces().catch(() => null),
+          harnessApi.workshop.state().catch(() => null),
+          harnessApi.workshop.list().catch(() => []),
+          harnessApi.harness.getTools().catch(() => []),
+          harnessApi.harness.listSkills().catch(() => []),
+          harnessApi.mcp.list().catch(() => []),
+          window.api.providers.getEnabled().catch(() => [])
+        ])
         if (cancelled) return
         const chatIds = chatResult?.ok && chatResult.data ? chatResult.data.ids : []
         const plugins = workshopState?.pluginWorkspaces ?? []
@@ -197,11 +208,17 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
             label: server.config.name
           }))
         )
+        setModelOptions(
+          (providers as { name: string; provider: string; model: string }[])
+            .filter((provider) => provider.provider?.trim() && provider.model?.trim())
+            .map((provider) => ({
+              value: `${provider.provider.trim()}:${provider.model.trim()}`,
+              label: `${provider.name}（${provider.provider.trim()}:${provider.model.trim()}）`
+            }))
+        )
 
         // Fetch topics per workspace (chat mode uses the chat workspace list)
-        const targetWorkspaceIds = Array.from(
-          new Set(wsList.map((workspace) => workspace.id))
-        )
+        const targetWorkspaceIds = Array.from(new Set(wsList.map((workspace) => workspace.id)))
         const topicLists = await Promise.all(
           targetWorkspaceIds.map((workspaceId) =>
             harnessApi.harness.getAllTopics(workspaceId).catch(() => [])
@@ -238,10 +255,10 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         setSelectedTools(Array.from(new Set(migratedTools.map((name) => canonicalToolName(name)))))
         setSelectedSkills(selectionArrays.skills)
         setSelectedMcp(selectionArrays.mcpTools)
+        setSelectedModel(task?.model ?? null)
         if (task) {
           const topic = task.topicId != null ? flat.find((item) => item.id === task.topicId) : null
-          const nextMode: Mode =
-            (task.targetMode as Mode | null) ?? topic?.mode ?? 'work'
+          const nextMode: Mode = (task.targetMode as Mode | null) ?? topic?.mode ?? 'work'
           setMode(nextMode)
           setTopicId(task.topicId)
           setTargetWorkspaceId(task.targetWorkspaceId ?? topic?.workspaceId ?? null)
@@ -272,11 +289,11 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     setSelectedTools([])
     setSelectedSkills([])
     setSelectedMcp([])
+    setSelectedModel(null)
     setTimeText('09:00')
     setMinutes(30)
     setOnceAt(dayjs().add(1, 'hour').startOf('minute'))
   }, [open, task])
-
 
   const topicsOfMode = useMemo(() => topics.filter((item) => item.mode === mode), [topics, mode])
   const workWorkspaces = useMemo(
@@ -328,7 +345,9 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     if (next === 'chat') setTargetWorkspaceId(chatRootId)
     else if (next === 'plugin') {
       setTargetWorkspaceId(pluginWorkspaceOptions[0]?.value ?? null)
-      const plugin = pluginWorkspaces.find((item) => item.workspaceId === pluginWorkspaceOptions[0]?.value)
+      const plugin = pluginWorkspaces.find(
+        (item) => item.workspaceId === pluginWorkspaceOptions[0]?.value
+      )
       setTargetMemoryScope(plugin ? `plugin:${plugin.draftId}` : null)
     } else setTargetWorkspaceId(workWorkspaces[0]?.id ?? null)
   }
@@ -403,14 +422,16 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
             prompt: trimmedPrompt,
             when: currentWhen,
             ...targetPayload,
-            agentConfig
+            agentConfig,
+            model: selectedModel
           })
         : await harnessApi.harness.createSchedule({
             title: trimmedTitle,
             prompt: trimmedPrompt,
             when: currentWhen,
             ...targetPayload,
-            agentConfig
+            agentConfig,
+            model: selectedModel
           })
       if (!result.ok) {
         message.error(
@@ -418,7 +439,9 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
             ? t('schedulesPage.invalidTime')
             : result.error === 'invalid-target'
               ? t('schedulesPage.invalidTarget')
-              : t('schedulesPage.actionFailed')
+              : result.error === 'invalid-model'
+                ? t('schedulesPage.invalidModel')
+                : t('schedulesPage.actionFailed')
         )
         return
       }
@@ -557,9 +580,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
       {isNewSession && (mode === 'work' || mode === 'plugin') && (
         <div style={fieldStyle}>
           <div style={labelStyle}>
-            {mode === 'plugin'
-              ? t('schedulesPage.fieldPlugin')
-              : t('schedulesPage.fieldWorkspace')}
+            {mode === 'plugin' ? t('schedulesPage.fieldPlugin') : t('schedulesPage.fieldWorkspace')}
           </div>
           <Select
             style={{ width: '100%' }}
@@ -575,13 +596,25 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
                   }))
             }
             placeholder={
-              mode === 'plugin'
-                ? t('schedulesPage.fieldPlugin')
-                : t('schedulesPage.fieldWorkspace')
+              mode === 'plugin' ? t('schedulesPage.fieldPlugin') : t('schedulesPage.fieldWorkspace')
             }
           />
         </div>
       )}
+
+      <div style={fieldStyle}>
+        <div style={labelStyle}>{t('schedulesPage.fieldModel')}</div>
+        <Select
+          allowClear
+          style={{ width: '100%' }}
+          value={selectedModel ?? undefined}
+          loading={catalogLoading}
+          onChange={(value?: string) => setSelectedModel(value ?? null)}
+          options={modelOptions}
+          optionFilterProp="label"
+          placeholder={t('schedulesPage.modelPlaceholder')}
+        />
+      </div>
 
       <div style={fieldStyle}>
         <div style={labelStyle}>{t('schedulesPage.fieldWhen')}</div>

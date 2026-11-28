@@ -183,6 +183,13 @@
       "when": 1795841264543,
       "tag": "0025_zippy_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795882843638,
+      "tag": "0026_schedule_model",
+      "breakpoints": true
     }
   ]
 }

@@ -60,6 +60,8 @@ class HarnessService {
   private readonly modelDescriptor?: SubAgentMainModelDescriptor
   /** Goal auto-continuation rounds: skip plan-mode tools/prompts */
   private readonly suppressPlanMode: boolean
+  /** Unattended turn (scheduled task): no interactive tools, no approval waits */
+  private readonly nonInteractive: boolean
   /** Whether the model routed for this turn declares image input support (runtime gate for read_image) */
   private readonly supportsImageInput: boolean
 
@@ -78,6 +80,7 @@ class HarnessService {
    * @param modelDescriptor Main model descriptor at spawn time (optional; for background subagent cold recovery)
    * @param suppressPlanMode Goal auto-continuation rounds: ignore plan mode
    * @param supportsImageInput Whether the current model profile declares image input support (false = read_image refuses to execute)
+   * @param nonInteractive Unattended turn (scheduled task): omit interactive tools and never wait for approvals
    */
   constructor(
     model: BaseChatModel,
@@ -93,7 +96,8 @@ class HarnessService {
     memoryScope?: MemoryScope,
     modelDescriptor?: SubAgentMainModelDescriptor,
     suppressPlanMode = false,
-    supportsImageInput = false
+    supportsImageInput = false,
+    nonInteractive = false
   ) {
     this.model = model
     this.tools = tools
@@ -109,6 +113,7 @@ class HarnessService {
     this.modelDescriptor = modelDescriptor
     this.suppressPlanMode = suppressPlanMode
     this.supportsImageInput = supportsImageInput
+    this.nonInteractive = nonInteractive
     logger.info(
       `HarnessService initialized with the agent Runtime (skillsPath=${this.skillsPath ?? 'disabled'}, workspacePath=${this.workspacePath ?? 'disabled'}, memoryPath=${this.memoryPath ?? 'disabled'}, workspaceId=${this.workspaceId}, memoryScope=${this.memoryScopeDirName ?? 'disabled'}, subAgents=${this.subAgents.length}, maxToolRounds=${this.maxToolRounds}, model=${this.modelDescriptor ? `${this.modelDescriptor.providerId}/${this.modelDescriptor.model}` : 'default'})`
     )
@@ -138,6 +143,7 @@ class HarnessService {
       modelDescriptor: this.modelDescriptor,
       suppressPlanMode: this.suppressPlanMode,
       supportsImageInput: this.supportsImageInput,
+      nonInteractive: this.nonInteractive,
       onUsageRecord,
       mnemon: getMnemonComponent(
         this.memoryPath,

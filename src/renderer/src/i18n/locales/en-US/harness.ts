@@ -109,9 +109,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceRevealInFolder: 'Show in folder',
       workspaceRevealInFinder: 'Show in Finder',
       workspaceRevealInFileManager: 'Show in file manager',
-      workspaceCreateFailed: 'Failed to create the workspace — check that the folder is writable and retry',
-    workspaceDeleteFailed: 'Failed to delete the workspace — please retry',
-    workspaceSwitchFailed:
+      workspaceCreateFailed:
+        'Failed to create the workspace — check that the folder is writable and retry',
+      workspaceDeleteFailed: 'Failed to delete the workspace — please retry',
+      workspaceSwitchFailed:
         'Could not switch workspace. Check that the folder still exists and try again.',
       workspaceDelete: 'Delete workspace',
       workspaceDeleteConfirmTitle: 'Delete workspace',
@@ -1281,6 +1282,8 @@ export const harnessEnUS: typeof harnessZhCN = {
     modeChat: 'Chat',
     modeWork: 'Work',
     modePlugin: 'Plugin',
+    fieldModel: 'Model',
+    modelPlaceholder: 'Empty = default model',
     newSessionOption: 'New conversation (each run)',
     newSessionTag: 'New conversation',
     fieldWorkspace: 'Target workspace',
@@ -1298,6 +1301,7 @@ export const harnessEnUS: typeof harnessZhCN = {
     skillsPlaceholder: 'Empty = none',
     mcpPlaceholder: 'Empty = none',
     invalidTarget: 'Choose a conversation or New conversation',
+    invalidModel: 'The selected model is unavailable; check that it is enabled in model settings',
     fieldWhen: 'Schedule',
     whenDaily: 'Daily',
     whenEvery: 'Interval',
@@ -1419,5 +1423,3 @@ export const harnessEnUS: typeof harnessZhCN = {
     }
   }
 }
-
-

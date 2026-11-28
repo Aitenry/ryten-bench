@@ -75,6 +75,12 @@ export interface ScheduledTask {
   targetMemoryScope: string | null
   /** Task-level run selection (overrides the session-level selection) */
   agentConfig: AgentSelection | null
+  /**
+   * Model override for every run as `provider:model` (same form as subagent configs).
+   * null = the default provider; a spec whose provider was disabled/deleted also falls back to
+   * the default at run time.
+   */
+  model: string | null
   createdAt: string
   updatedAt: string
   /** Next trigger (ISO UTC); null when disabled or after a one-off task has run */
@@ -97,6 +103,8 @@ export interface ScheduleCreateInput {
   targetWorkspaceId?: number | null
   targetMemoryScope?: string | null
   agentConfig?: AgentSelection | null
+  /** Model override `provider:model`; omitted/null = the default provider */
+  model?: string | null
   nextRunAt: string
 }
 

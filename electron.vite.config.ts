@@ -12,7 +12,11 @@ export default defineConfig({
     },
     build: {
       // electron-vite v6: use build.externalizeDeps instead of the deprecated externalizeDepsPlugin
-      externalizeDeps: true
+      externalizeDeps: true,
+      // Electron's built-in unpatched fs module is not in node_modules; keep it as a runtime require.
+      rolldownOptions: {
+        external: ['original-fs']
+      }
     }
   },
   preload: {

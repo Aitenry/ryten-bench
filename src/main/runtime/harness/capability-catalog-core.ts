@@ -1,8 +1,9 @@
 /**
  * Capability catalog formatting (pure logic, no electron / no fs).
  *
- * Backs the `list_capabilities` tool: it turns the app's tools / skills / MCP servers into the
- * short "value — description" list a model copies into a scheduled task's `agentConfig`.
+ * Backs the `list_capabilities` tool: it turns the app's tools / skills / MCP servers / models into
+ * the short "value — description" list a model copies into a subagent's or a scheduled task's
+ * form fields.
  *
  * Rules (user requirement):
  * - only the **name and description** are shown — no source, no enabled/connected state;
@@ -12,7 +13,7 @@
  * - identifiers are never truncated.
  */
 
-export type CapabilityKind = 'tools' | 'skills' | 'mcp'
+export type CapabilityKind = 'tools' | 'skills' | 'mcp' | 'models'
 
 /** One row of the catalog: the exact value plus its human readable description */
 export interface CapabilityEntry {

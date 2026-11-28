@@ -102,10 +102,11 @@ function toTask(row: TaskRow): ScheduledTask | null {
     enabled: row.enabled,
     topicId: row.topic_id ?? null,
     workspaceId: row.workspace_id ?? null,
-    targetMode: (row.target_mode as ScheduledTask["targetMode"]) ?? null,
+    targetMode: (row.target_mode as ScheduledTask['targetMode']) ?? null,
     targetWorkspaceId: row.target_workspace_id ?? null,
     targetMemoryScope: row.target_memory_scope ?? null,
     agentConfig: parseAgentConfig(row.agent_config),
+    model: row.model ?? null,
     createdAt,
     updatedAt: toIso(row.updated_at) ?? createdAt,
     nextRunAt: toIso(row.next_run_at),
@@ -117,10 +118,7 @@ function toTask(row: TaskRow): ScheduledTask | null {
 /** List all tasks (newest first; rows with invalid rules are skipped) */
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   return withOrm('listScheduledTasks', async (db) => {
-    const rows = await db
-      .select()
-      .from(scheduled_tasks)
-      .orderBy(desc(scheduled_tasks.created_at))
+    const rows = await db.select().from(scheduled_tasks).orderBy(desc(scheduled_tasks.created_at))
     return rows.map(toTask).filter((task): task is ScheduledTask => task !== null)
   })
 }
@@ -157,6 +155,7 @@ export async function createScheduledTask(
       target_workspace_id: input.targetWorkspaceId ?? null,
       target_memory_scope: input.targetMemoryScope ?? null,
       agent_config: serializeAgentConfig(input.agentConfig),
+      model: input.model ?? null,
       title: input.title,
       prompt: input.prompt,
       when_kind: when.kind,
@@ -188,7 +187,9 @@ export async function updateScheduledTask(
     if (patch.targetMode !== undefined) values.target_mode = patch.targetMode
     if (patch.targetWorkspaceId !== undefined) values.target_workspace_id = patch.targetWorkspaceId
     if (patch.targetMemoryScope !== undefined) values.target_memory_scope = patch.targetMemoryScope
-    if (patch.agentConfig !== undefined) values.agent_config = serializeAgentConfig(patch.agentConfig)
+    if (patch.agentConfig !== undefined)
+      values.agent_config = serializeAgentConfig(patch.agentConfig)
+    if (patch.model !== undefined) values.model = patch.model ?? null
     if (patch.workspaceId !== undefined) values.workspace_id = patch.workspaceId ?? null
     if (patch.enabled !== undefined) values.enabled = patch.enabled
     if (patch.nextRunAt !== undefined) values.next_run_at = patch.nextRunAt
@@ -312,10 +313,11 @@ export async function importScheduledTasks(
     enabled: boolean
     topicId: number | null
     workspaceId: number | null
-    targetMode?: "chat" | "work" | "plugin" | null
+    targetMode?: 'chat' | 'work' | 'plugin' | null
     targetWorkspaceId?: number | null
     targetMemoryScope?: string | null
     agentConfig?: AgentSelection | null
+    model?: string | null
     nextRunAt: string | null
     createdAt: string
     updatedAt: string
@@ -340,6 +342,7 @@ export async function importScheduledTasks(
           target_workspace_id: task.targetWorkspaceId ?? null,
           target_memory_scope: task.targetMemoryScope ?? null,
           agent_config: serializeAgentConfig(task.agentConfig),
+          model: task.model ?? null,
           title: task.title,
           prompt: task.prompt,
           when_kind: when.kind,

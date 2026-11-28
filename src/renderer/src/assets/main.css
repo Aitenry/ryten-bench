@@ -1132,6 +1132,455 @@ body.home-resizing * {
   color: #6f6f76;
 }
 
+/**
+ * Brand-row app update entry.
+ *
+ * Sits after the version and is pushed to the right edge of the 272px sidebar brand row.
+ * The state colors are injected as CSS variables from antd tokens (see AppUpdateEntry.tsx), so
+ * light/dark and the custom shell palette stay in sync. The entry deliberately stays 22px high:
+ * it is a status/actions affordance in the brand row, not a second primary button.
+ */
+.app-update {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--app-update-border, rgba(255, 255, 255, 0.16));
+  border-radius: 6px;
+  background: var(--app-update-bg, rgba(255, 255, 255, 0.08));
+  color: var(--app-update-fg, #f0f0f2);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.app-update:hover {
+  background: var(--app-update-hover-bg, rgba(255, 255, 255, 0.14));
+  border-color: var(--app-update-hover-border, rgba(255, 255, 255, 0.26));
+}
+.app-update:active {
+  transform: translateY(0.5px);
+}
+.app-update:disabled {
+  cursor: default;
+}
+.app-update:focus-visible {
+  outline: 2px solid var(--app-update-accent, #1677ff);
+  outline-offset: 2px;
+}
+
+.app-update-dot {
+  position: relative;
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-update-accent, #1677ff);
+}
+.app-update-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 1px solid var(--app-update-accent, #1677ff);
+  border-radius: inherit;
+  opacity: 0.28;
+}
+
+/* Downloading: a quiet inline status, so the moving ring remains the only focus. */
+.app-update--progress {
+  padding: 0 5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--shell-text-secondary, #b0b0b8);
+  cursor: default;
+}
+.app-update--progress:hover {
+  border-color: transparent;
+  background: transparent;
+}
+.app-update-ring {
+  display: block;
+  flex: 0 0 auto;
+}
+.app-update-percent {
+  min-width: 25px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  letter-spacing: 0.01em;
+}
+
+/* Ready: turning the update entry into the restart shortcut after the prompt is dismissed. */
+.app-update--ready {
+  padding: 0 7px;
+}
+
+@keyframes app-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.app-update-spin {
+  animation: app-update-spin 1s linear infinite;
+}
+
+/* ======== App update restart prompt (hand-built dialog, no antd Modal) ========
+ *
+ * The prompt should feel like a small native part of the shell, not a generic form dialog:
+ * frosted backdrop, dark glass card, a brand emblem with a success badge, and a single high-
+ * contrast inverse button (white on dark / black on light) echoing the sidebar's mode thumb.
+ * All colors are supplied as CSS variables from AppUpdateEntry (antd tokens), so light/dark and
+ * the custom shell palette stay in sync.
+ */
+.app-update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
+  animation: app-update-overlay-in 0.2s ease-out both;
+}
+.app-update-overlay--dark {
+  background: radial-gradient(
+    120% 120% at 50% 0%,
+    rgba(38, 41, 50, 0.55) 0%,
+    rgba(6, 7, 10, 0.72) 62%,
+    rgba(3, 4, 6, 0.82) 100%
+  );
+}
+.app-update-overlay--light {
+  background: radial-gradient(
+    120% 120% at 50% 0%,
+    rgba(255, 255, 255, 0.58) 0%,
+    rgba(224, 227, 235, 0.6) 58%,
+    rgba(207, 211, 221, 0.72) 100%
+  );
+}
+
+.app-update-dialog {
+  position: relative;
+  width: 432px;
+  max-width: 100%;
+  padding: 26px 26px 22px;
+  overflow: hidden;
+  border: 1px solid var(--app-update-dialog-border, rgba(255, 255, 255, 0.1));
+  border-radius: 20px;
+  background: var(--app-update-panel, rgba(24, 25, 29, 0.97));
+  box-shadow: var(--app-update-dialog-shadow, 0 34px 100px rgba(0, 0, 0, 0.68));
+  -webkit-backdrop-filter: blur(22px) saturate(120%);
+  backdrop-filter: blur(22px) saturate(120%);
+  outline: none;
+  animation: app-update-dialog-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* A hairline of light along the top edge keeps the card floating instead of looking pasted on. */
+.app-update-dialog::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--app-update-dialog-highlight, rgba(255, 255, 255, 0.18)),
+    transparent
+  );
+  pointer-events: none;
+}
+.app-update-dialog-aura {
+  position: absolute;
+  top: -132px;
+  right: -86px;
+  width: 300px;
+  height: 300px;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--app-update-accent, #52c41a) 15%, transparent) 0%,
+    transparent 68%
+  );
+  filter: blur(18px);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.app-update-dialog-close {
+  position: absolute;
+  top: 13px;
+  right: 13px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--app-update-dialog-faint, #8b8b92);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+.app-update-dialog-close:hover:not(:disabled) {
+  background: var(--app-update-dialog-chip, rgba(255, 255, 255, 0.045));
+  color: var(--app-update-dialog-text, #f0f0f2);
+}
+.app-update-dialog-close:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-update-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding-right: 28px;
+}
+.app-update-dialog-emblem {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-update-dialog-border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  background: var(--app-update-dialog-chip, rgba(255, 255, 255, 0.045));
+}
+.app-update-dialog-emblem img {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  pointer-events: none;
+}
+.app-update-dialog-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+.app-update-dialog-mini-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.3px solid rgba(255, 255, 255, 0.38);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: app-update-spin 0.8s linear infinite;
+}
+
+.app-update-dialog-heading {
+  min-width: 0;
+}
+.app-update-dialog-heading h2 {
+  margin: 0;
+  color: var(--app-update-dialog-text, #f0f0f2);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.app-update-dialog-version {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--app-update-dialog-muted, #b0b0b8);
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.app-update-dialog-version strong {
+  color: var(--app-update-dialog-text, #f0f0f2);
+  font-weight: 600;
+}
+.app-update-dialog-arrow {
+  color: var(--app-update-dialog-faint, #8b8b92);
+  transform: translateY(-0.5px);
+}
+.app-update-dialog-content-tag {
+  margin-left: 2px;
+  padding: 1px 5px;
+  border: 1px solid var(--app-update-dialog-border, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  background: var(--app-update-dialog-chip, rgba(255, 255, 255, 0.045));
+  color: var(--app-update-dialog-muted, #b0b0b8);
+  font-size: 9.5px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.app-update-dialog-copy {
+  margin: 18px 0 0;
+  padding: 0 1px;
+  color: var(--app-update-dialog-muted, #b0b0b8);
+  font-size: 13px;
+  line-height: 1.72;
+}
+
+.app-update-dialog-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--app-update-dialog-chip, rgba(255, 255, 255, 0.045));
+  color: var(--app-update-dialog-muted, #b0b0b8);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.app-update-dialog-status-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-update-accent, #52c41a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-update-accent, #52c41a) 14%, transparent);
+}
+.app-update-dialog-status--busy .app-update-dialog-status-dot {
+  background: var(--app-update-dialog-muted, #b0b0b8);
+  box-shadow: none;
+  animation: app-update-status-pulse 1.4s ease-in-out infinite;
+}
+.app-update-dialog-status-percent {
+  margin-left: auto;
+  color: var(--app-update-dialog-faint, #8b8b92);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.app-update-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 22px;
+}
+.app-update-dialog-later,
+.app-update-dialog-confirm {
+  height: 34px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.app-update-dialog-later {
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--app-update-dialog-muted, #b0b0b8);
+}
+.app-update-dialog-later:hover:not(:disabled) {
+  background: var(--app-update-dialog-chip, rgba(255, 255, 255, 0.045));
+  color: var(--app-update-dialog-text, #f0f0f2);
+}
+.app-update-dialog-confirm {
+  min-width: 104px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  background: var(--app-update-dialog-primary, #f0f0f2);
+  color: var(--app-update-dialog-primary-fg, #18181b);
+  font-weight: 600;
+}
+.app-update-dialog-confirm:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.app-update-dialog-confirm:active:not(:disabled) {
+  transform: translateY(0);
+}
+.app-update-dialog-later:disabled,
+.app-update-dialog-confirm:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.app-update-dialog-spinner {
+  width: 12px;
+  height: 12px;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: app-update-spin 0.8s linear infinite;
+}
+
+.app-update-dialog button:focus-visible {
+  outline: 2px solid var(--app-update-dialog-focus, #1677ff);
+  outline-offset: 2px;
+}
+
+@keyframes app-update-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes app-update-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes app-update-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-update-overlay,
+  .app-update-dialog,
+  .app-update-dialog-spinner,
+  .app-update-dialog-mini-spinner,
+  .app-update-dialog-status--busy .app-update-dialog-status-dot {
+    animation: none;
+  }
+}
+
 .shell-nav {
   padding: 2px 11px 4px;
   display: flex;

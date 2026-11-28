@@ -34,6 +34,7 @@ import { formatSyncTime } from '@renderer/lattice/format'
 import NotificationList from '../NotificationList'
 import { openSettingsModal } from '../settings/settings-modal-state'
 import AssistantSidebar from './AssistantSidebar'
+import AppUpdateEntry from '../update/AppUpdateEntry'
 import ShellTitleBar from './ShellTitleBar'
 
 /**
@@ -659,6 +660,7 @@ const AppShell: React.FC = () => {
               <span className="shell-brand-name">RytenBench</span>
               {appVersion && <span className="shell-brand-ver">{appVersion}</span>}
             </span>
+            <AppUpdateEntry currentVersion={appVersion} />
           </div>
 
           <nav className="shell-nav">

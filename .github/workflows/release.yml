@@ -3,6 +3,8 @@ name: Release
 # Stable releases (policy 2026-10: "everything from now on is a real version").
 #
 # - Only main produces builds; every push to main is one stable release.
+# - Manual workflow_dispatch with republish=true rebuilds the current stable version and overwrites
+#   its release assets (a same-version content update; clients detect it via contentSha256).
 # - Version numbers are no longer assembled from "commit counts" (the old 0.1.0-alpha.<commit-count>.<retry> was fake);
 #   they are computed by .github/scripts/resolve-version.mjs from the previous stable tag + this batch's commit types:
 #     · feat                → minor (0.1.1 → 0.2.0)
@@ -25,6 +27,12 @@ on:
       - 'main'
   # Only trigger manually when "the last build failed and needs a rerun"; an already-released version is skipped automatically (should_release=false)
   workflow_dispatch:
+    inputs:
+      republish:
+        description: 'Rebuild the current version and overwrite the existing release assets (content update, no version bump)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release
@@ -55,6 +63,10 @@ jobs:
 
       - name: Resolve next version
         id: resolve
+        env:
+          # Manual same-version content rebuild: reuse the latest stable tag and overwrite its
+          # release assets. The app detects the new content via contentSha256, not the version.
+          REPUBLISH: ${{ inputs.republish }}
         run: node .github/scripts/resolve-version.mjs
 
   build:
@@ -70,19 +82,26 @@ jobs:
           - platform: windows
             os: windows-latest
             script: build:win
-            artifact_pattern: dist/*.exe
+            artifact_pattern: |
+              dist/*.exe
+              dist/latest.yml
+              dist/*.blockmap
           - platform: macos
             os: macos-latest
             script: build:mac
             artifact_pattern: |
               dist/*.dmg
               dist/*.zip
+              dist/latest-mac.yml
+              dist/*.blockmap
           - platform: linux
             os: ubuntu-latest
             script: build:linux
             artifact_pattern: |
               dist/*.AppImage
               dist/*.deb
+              dist/latest-linux.yml
+              dist/*.blockmap
 
     steps:
       - name: Checkout
@@ -136,6 +155,12 @@ jobs:
         run: pnpm ${{ matrix.script }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # Same-version content updates: latest*.yml gets the SHA-256 of the packaged app.asar so the
+      # app can detect a rebuilt package even when the semantic version did not change. This must
+      # run before the metadata is uploaded.
+      - name: Stamp update content hash
+        run: node .github/scripts/stamp-update-content-hash.mjs
 
       - name: Verify sandbox assets were built
         shell: bash
@@ -243,12 +268,21 @@ jobs:
           body_path: release-body.md
           files: |
             release/windows/*.exe
+            release/windows/latest.yml
+            release/windows/*.blockmap
             release/macos/*.dmg
             release/macos/*.zip
+            release/macos/latest-mac.yml
+            release/macos/*.blockmap
             release/linux/*.AppImage
             release/linux/*.deb
+            release/linux/latest-linux.yml
+            release/linux/*.blockmap
           # Don't publish if any platform's artifact is missing: better to fail this run than ship a stable release with only half the files
           fail_on_unmatched_files: true
+          # Same-version republish replaces the existing assets in place; the content hash in
+          # latest*.yml is what tells clients that the payload changed.
+          overwrite_files: true
           prerelease: false
           make_latest: true
 

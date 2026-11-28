@@ -55,12 +55,8 @@ export type ScheduleDriveFn = (request: ScheduledTurnRequest) => Promise<Schedul
 
 /** Default delivery text (English; the wiring layer can inject a localized version) */
 export function defaultScheduleQuestion(task: ScheduledTask): string {
-  return [
-    `[Scheduled task: ${task.title}]`,
-    task.prompt,
-    '',
-    '(This message was delivered automatically by a schedule the user created. Work on it now; do not ask the user for confirmation.)'
-  ].join('\n')
+  // No "delivered automatically / do not ask" suffix: the task prompt is the whole instruction.
+  return [`[Scheduled task: ${task.title}]`, task.prompt].join('\n')
 }
 
 export interface ScheduleRunnerOptions {

@@ -5,6 +5,7 @@ import { registerProviderIpc } from './provider'
 import { registerDialogIpc } from './dialog'
 import { registerPluginsIpc } from './plugins'
 import { registerLatticeIpc } from './lattice'
+import { registerUpdateIpc } from './update'
 
 /**
  * core (shell) IPC: window misc / system settings / lock screen / model providers / dialogs /
@@ -32,6 +33,9 @@ export function registerCoreIpc(): void {
   registerDialogIpc()
   registerProviderIpc()
   registerPluginsIpc()
+  // App updates: snapshot / check / download / restart. The source (GitHub now, Lattice later) is
+  // resolved in the main-process service, never by the renderer.
+  registerUpdateIpc()
   // Plugin center: channel registration + restore login state / fetch cloud install records at
   // startup (initializes lattice/index.ts internally)
   registerLatticeIpc()

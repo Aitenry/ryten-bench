@@ -97,6 +97,14 @@ export interface AgentRuntimeOptions {
   modelDescriptor?: SubAgentMainModelDescriptor
   /** Goal auto-continuation round: ignore plan mode (planning is only for the first user-started round, to avoid a review prompt every round) */
   suppressPlanMode?: boolean
+  /**
+   * Unattended turn (scheduled task): no human is present to answer or approve anything.
+   *
+   * Suppresses the interactive tools (`ask_user_question`, plan approval, action cards) and makes
+   * the permission gate deny approval-required calls immediately instead of suspending the turn
+   * forever. A scheduled run must always reach a reply on its own.
+   */
+  nonInteractive?: boolean
   /** Mnemon memory component (process-level singleton, injected by HarnessService) */
   mnemon?: MnemonComponent
   /** Total tool-call cap (the model-level "tool call rounds"; defaults to the built-in value) */
@@ -243,12 +251,16 @@ export class Runtime {
       ...buildTerminalTools({ workspacePath: this.opts.workspacePath }),
       ...buildTodoTools(todoStore, topicId),
       ...buildGoalTools(goalStore, topicId),
-      // Plan mode: the exit tool is only exposed while active (it appears with the planning guidance)
-      ...(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)
+      // Plan mode: the exit tool is only exposed while active (it appears with the planning guidance).
+      // Unattended turns never expose it: nobody can approve the plan.
+      ...(!this.opts.suppressPlanMode &&
+      !this.opts.nonInteractive &&
+      planModeStore.isActive(topicId)
         ? [buildExitPlanModeTool(topicId)]
         : []),
       ...buildJobTools(jobsRegistry, topicId),
-      buildAskUserTool(topicId),
+      // Nobody can answer an in-turn question during a scheduled run
+      ...(!this.opts.nonInteractive ? [buildAskUserTool(topicId)] : []),
       ...buildSubagentControlTools(subagentSessions, topicId),
       // Shared task board (opt-in): injected only when team collaboration is enabled for the topic
       ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
@@ -271,8 +283,8 @@ export class Runtime {
         ? []
         : [buildListCapabilitiesTool(listAvailableTools())]),
       // Action cards: renders clickable actions under the reply; clicking sends one message back
-      // (no side effects, always mounted)
-      buildProposeActionTool()
+      // (no side effects, always mounted). Unattended turns have nobody to click them.
+      ...(!this.opts.nonInteractive ? [buildProposeActionTool()] : [])
     ]
     // PTC (run_code) must be built **after all tools are assembled**: it bridges read-only tools
     // to model code and must see the final list (excluding itself). Mounted only with a workspace,
@@ -311,7 +323,8 @@ export class Runtime {
   private guard(tools: StructuredToolInterface[], topicId?: number): StructuredToolInterface[] {
     return guardTools(tools, {
       topicId: topicId ?? this.currentTopicId,
-      workspaceRoot: this.opts.workspacePath
+      workspaceRoot: this.opts.workspacePath,
+      nonInteractive: this.opts.nonInteractive
     })
   }
 
@@ -369,8 +382,11 @@ task is non-blocking: it returns a session id immediately and keeps running in t
     return (
       this.systemPrompt +
       sandboxPromptSection(permissionGate.modeFor(topicId)) +
-      // Plan mode: append planning guidance only while active (no extra tokens when inactive)
-      planModePromptSection(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)) +
+      // Plan mode: append planning guidance only while active (no extra tokens when inactive);
+      // unattended turns skip it entirely (there is no plan-approval tool mounted)
+      planModePromptSection(
+        !this.opts.suppressPlanMode && !this.opts.nonInteractive && planModeStore.isActive(topicId)
+      ) +
       // Team collaboration: opt-in (persisted per topic); nothing is appended when off
       teamModePromptSection(teamModeStore.isEnabled(topicId))
     )

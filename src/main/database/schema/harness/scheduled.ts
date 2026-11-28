@@ -52,6 +52,12 @@ export const scheduled_tasks = pgTable(
     target_memory_scope: text(),
     /** Task-level run selection (JSON: {tools,skills,mcpTools}; null = follow the session/defaults) */
     agent_config: text(),
+    /**
+     * Model override for every run, in the same `provider:model` form as subagent configs.
+     * null = use the default provider (see `resolveScheduledProviderId`); a spec that no longer
+     * matches an enabled provider also falls back to the default instead of failing the run.
+     */
+    model: text(),
     title: text().notNull(),
     prompt: text().notNull(),
     /** once / every / daily */
@@ -81,10 +87,7 @@ export const scheduled_tasks = pgTable(
       foreignColumns: [harness_topic.id],
       name: 'scheduled_tasks_topic_id_fkey'
     }).onDelete('cascade'),
-    check(
-      'scheduled_tasks_when_kind_check',
-      sql`${table.when_kind} in ('once', 'every', 'daily')`
-    ),
+    check('scheduled_tasks_when_kind_check', sql`${table.when_kind} in ('once', 'every', 'daily')`),
     check(
       'scheduled_tasks_last_status_check',
       sql`${table.last_status} is null or ${table.last_status} in ('completed', 'cancelled', 'failed')`

@@ -16,10 +16,7 @@ import {
 } from '../../database/mapper/topic-agent-config'
 import { chatTopicDir, ensureChatTopicDir } from '../../services/harness/chat/workspace'
 import { scheduleRunner } from '../../runtime/harness/schedule-runner'
-import {
-  isScheduleStoreConfigured,
-  scheduleStore
-} from '../../runtime/harness/schedule-store'
+import { isScheduleStoreConfigured, scheduleStore } from '../../runtime/harness/schedule-store'
 import type { ScheduledTurnResult } from '../../runtime/harness/schedule-runner'
 import type {
   ScheduledTask,
@@ -57,7 +54,7 @@ import {
 import { currentMcpTools } from '../../runtime/harness/mcp'
 import { HarnessService } from '../../services/harness/harness'
 import { buildTools, listAvailableTools } from '../../tools/harness/builders'
-import { scheduleSelectionValues } from '../../tools/harness/capabilities'
+import { scheduleSelectionValues, modelSelectionValues } from '../../tools/harness/capabilities'
 import { hasLatticeSession } from '../../lattice/session'
 import {
   isUserSelectedRoot,
@@ -93,6 +90,7 @@ import type {
   SubagentPromptResult
 } from '../../runtime/harness/subagent-conversation'
 import { startMemoryAgent, type StartMemoryAgentResult } from '../../runtime/harness/memory-agent'
+import { resolveModelSpecProviderId } from '../../runtime/harness/subagent-model'
 import { questionService } from '../../runtime/harness/ask'
 import {
   permissionGate,
@@ -132,6 +130,7 @@ import {
   type MemoryScope
 } from '../../services/harness/memory-scope'
 import { getActiveWorkspaceId } from '../../database/workspace-context'
+import { getDefaultProvider } from '../../database/mapper/provider'
 import { sumUsage, type ModelUsageRecord } from '../../runtime/harness/usage'
 import {
   startRendererMemorySampling,
@@ -233,7 +232,10 @@ async function resolveScheduledTarget(task: ScheduledTask): Promise<{
       }
     }
     const workspace = workspaceId ? await getWorkspaceById(workspaceId) : null
-    return { topicId: task.topicId, workspaceContext: { workspaceId, workspacePath: workspace?.path } }
+    return {
+      topicId: task.topicId,
+      workspaceContext: { workspaceId, workspacePath: workspace?.path }
+    }
   }
   // New-topic task: each run creates a fresh topic; workspace/memory scope comes from the target stored on the task
   if (!task.targetWorkspaceId) return null
@@ -254,7 +256,10 @@ async function resolveScheduledTarget(task: ScheduledTask): Promise<{
     }
     return {
       topicId,
-      workspaceContext: { workspaceId: task.targetWorkspaceId, workspacePath: chatTopicDir(topicId) }
+      workspaceContext: {
+        workspaceId: task.targetWorkspaceId,
+        workspacePath: chatTopicDir(topicId)
+      }
     }
   }
   const workspace = await getWorkspaceById(task.targetWorkspaceId)
@@ -339,8 +344,34 @@ function virtualFileRoots(scope?: string | null): {
       memoryScopeRoot(
         harnessSettings?.memoryPath || undefined,
         parseMemoryScope(scope, harnessSettings?.activeWorkspaceId ?? 0)
-      ) ?? (harnessSettings?.memoryPath || undefined)
+      ) ??
+      (harnessSettings?.memoryPath || undefined)
   }
+}
+
+/**
+ * Model for a scheduled run: the task's `provider:model` override when it still resolves to an
+ * enabled provider, otherwise the default provider (which itself falls back to the first enabled
+ * one).
+ *
+ * A scheduled turn has no input-box selection to carry `providerId` (unlike a user send, where the
+ * renderer passes the currently selected model), and `ProviderService.createModel()` no longer
+ * falls back to the default provider. Without this lookup every triggered task died in
+ * `createModel(undefined)` with "目标模型不存在" right after persisting the user message — the
+ * "task fired but produced no reply" symptom.
+ *
+ * A stale override (provider disabled/deleted) must not fail the run: log it and use the default.
+ */
+async function resolveScheduledProviderId(model: string | null): Promise<number | undefined> {
+  if (model) {
+    const overridden = await resolveModelSpecProviderId(model)
+    if (overridden != null) return overridden
+    logger.warn(
+      `[Schedule] Model "${model}" is not an enabled provider route, falling back to the default model`
+    )
+  }
+  const provider = await getDefaultProvider()
+  return provider?.id
 }
 
 async function runScheduledTurn(
@@ -360,6 +391,14 @@ async function runScheduledTurn(
   }
   const { topicId, workspaceContext } = target
   if (harnessQueue.isTurnActive(topicId)) return { cancelled: true, topicId }
+  let providerId: number | undefined
+  try {
+    providerId = await resolveScheduledProviderId(task.model)
+  } catch (err) {
+    // Leave it undefined: runHarnessTurn then fails with the localized "no model" message, which
+    // is recorded as this run's detail and is far clearer than aborting silently here.
+    logger.warn('[Schedule] Failed to resolve the default model provider:', err)
+  }
   // Repair tasks created before the tool validated `agentConfig`: names outside the selectable
   // catalog (e.g. the built-in `task` tool) would otherwise override the conversation's selection
   // with names the registry silently drops, leaving the run without its usual tools.
@@ -394,6 +433,7 @@ async function runScheduledTurn(
       turnId,
       options: {
         topicId,
+        providerId,
         workspaceContext,
         // Task-level selection applies to this turn only and is not written back to the topic (session selection belongs to the input box)
         agentConfig: taskSelection.selection,
@@ -411,6 +451,11 @@ async function runScheduledTurn(
       logger.warn('[Schedule] Failed to collect run detail:', err)
       return null
     })
+    if (result.error) {
+      // A phase failure returns normally from runHarnessTurn; surface it so the runner records
+      // `failed` with the reason instead of `completed` with an empty reply.
+      return { cancelled: false, topicId, detail: result.error }
+    }
     return {
       cancelled: result.cancelled,
       topicId,
@@ -578,11 +623,23 @@ async function persistTurnUsage(params: {
  */
 async function resolveTrustedWorkspacePath(
   requested: string | undefined,
-  fallback: string | undefined
+  fallback: string | undefined,
+  topicId?: number
 ): Promise<string | undefined> {
   if (!requested) return fallback
   try {
     if (isUserSelectedRoot(requested)) return requested
+    // Chat sessions work in `<chat root>/<topic id>`, a directory the app creates itself and never
+    // asks the user to pick, so it has no row in the workspace table (only the chat root does).
+    // Scheduled runs pass it as the turn's mount root; without this check it was rejected and the
+    // turn silently fell back to whichever workspace the UI happened to sit on.
+    if (
+      topicId != null &&
+      topicId > 0 &&
+      workspacePathKey(requested) === workspacePathKey(chatTopicDir(topicId))
+    ) {
+      return requested
+    }
     const rows = await getAllWorkspaces()
     if (rows.some((row) => workspacePathKey(row.path) === workspacePathKey(requested))) {
       return requested
@@ -594,9 +651,7 @@ async function resolveTrustedWorkspacePath(
   return fallback
 }
 
-async function runHarnessTurn(
-  params: RunHarnessTurnParams
-): Promise<{ topicId: number; cancelled: boolean; turnId: number }> {
+async function runHarnessTurn(params: RunHarnessTurnParams): Promise<TurnOutcome> {
   const { event, question, options } = params
 
   // User-uploaded/pasted images share the same normalization as read_image: before entering the context or being persisted they are
@@ -623,7 +678,8 @@ async function runHarnessTurn(
     options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
   const turnWorkspacePath = await resolveTrustedWorkspacePath(
     options?.workspaceContext?.workspacePath,
-    harnessSettings?.workspacePath
+    harnessSettings?.workspacePath,
+    options?.topicId
   )
 
   // 0. This turn's memory scope and "plugin mode". **Must be fixed before creating the topic and tools**:
@@ -723,12 +779,12 @@ async function runHarnessTurn(
     })
 
   // Unified failure close-out for a chat turn: notify the frontend of the error and reset the loading state (so the UI can stop for a failure in any phase)
-  const failTurn = (error: unknown): { topicId: number; cancelled: boolean; turnId: number } => {
+  const failTurn = (error: unknown): TurnOutcome => {
     const errMsg = error instanceof Error ? error.message : String(error)
     logger.error('[Harness] Turn failed:', error)
     safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
     safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
-    return { topicId, cancelled: false, turnId }
+    return { topicId, cancelled: false, turnId, error: errMsg }
   }
 
   // 2. Save the user message (including images, documents and the goal auto-continue marker).
@@ -905,7 +961,9 @@ async function runHarnessTurn(
       memoryScope,
       modelDescriptor,
       options?.turnMeta?.source === 'goal-round',
-      supportsImageInput
+      supportsImageInput,
+      // Scheduled runs are unattended: no ask/plan-approval tools, no approval suspension
+      options?.turnMeta?.source === 'schedule'
     )
   } catch (err) {
     // HarnessService initialization (including sub-agent definition loading) failed: clean up this turn's resources and notify the frontend,
@@ -1639,6 +1697,12 @@ interface TurnOutcome {
   topicId: number
   cancelled: boolean
   turnId: number
+  /**
+   * Set when the turn ended in a phase failure (missing model, persistence failure, …) instead of
+   * producing a reply. Scheduled runs read it to record the run as `failed` with the reason,
+   * rather than as a completed run that mysteriously has no answer.
+   */
+  error?: string
 }
 
 /**
@@ -1876,7 +1940,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
       const syncWorkspacePath = await resolveTrustedWorkspacePath(
         options?.workspaceContext?.workspacePath,
-        harnessSettings?.workspacePath
+        harnessSettings?.workspacePath,
+        options?.topicId
       )
       const syncRequestSelection = normalizeAgentSelection(options?.agentConfig)
       const syncTopicSelection = options?.topicId
@@ -1953,7 +2018,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         syncMemoryScope,
         syncModelDescriptor,
         false,
-        syncSupportsImageInput
+        syncSupportsImageInput,
+        false
       )
       return await harnessService.sendMessage(question, options)
     }
@@ -2807,21 +2873,18 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   // system default plus (Windows) the apps registered for that extension, with real icons.
   // The virtual path is resolved through the same mounts as the fs tools, so a renderer cannot ask
   // the OS to open an arbitrary path.
-  handle(
-    'harness-file-open-targets',
-    async (virtualPath: string, scope?: string | null) => {
-      try {
-        const roots = virtualFileRoots(scope)
-        const resolved = resolveVirtualFilePath(roots, virtualPath)
-        if ('error' in resolved) return { targets: [], error: resolved.error }
-        const targets = await listFileOpenTargets(resolved.realPath)
-        return { targets }
-      } catch (err) {
-        logger.error('Error in harness-file-open-targets:', err)
-        return { targets: [], error: (err as Error).message }
-      }
+  handle('harness-file-open-targets', async (virtualPath: string, scope?: string | null) => {
+    try {
+      const roots = virtualFileRoots(scope)
+      const resolved = resolveVirtualFilePath(roots, virtualPath)
+      if ('error' in resolved) return { targets: [], error: resolved.error }
+      const targets = await listFileOpenTargets(resolved.realPath)
+      return { targets }
+    } catch (err) {
+      logger.error('Error in harness-file-open-targets:', err)
+      return { targets: [], error: (err as Error).message }
     }
-  )
+  })
 
   handle(
     'harness-file-open-with',
@@ -2913,12 +2976,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
   const listSkillDirNames = (skillsPath: string): string[] => {
     try {
-      return fs
-        .readdirSync(skillsPath, { withFileTypes: true })
-        // withFileTypes is based on lstat: a directory symlink itself will not match isDirectory (inconsistent support)
-        .filter((entry) => entry.isDirectory())
-        .filter((entry) => isRegularSkillFile(skillsPath, entry.name))
-        .map((entry) => entry.name)
+      return (
+        fs
+          .readdirSync(skillsPath, { withFileTypes: true })
+          // withFileTypes is based on lstat: a directory symlink itself will not match isDirectory (inconsistent support)
+          .filter((entry) => entry.isDirectory())
+          .filter((entry) => isRegularSkillFile(skillsPath, entry.name))
+          .map((entry) => entry.name)
+      )
     } catch (error) {
       logger.error('Error scanning skills dir:', error)
       return []
@@ -3082,79 +3147,95 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return next
   })
 
+  /** Target config submitted by the scheduled task page (fixed topic or new topic per run) */
+  interface ScheduleTargetPayload {
+    topicId?: number | null
+    targetMode?: unknown
+    targetWorkspaceId?: number | null
+    targetMemoryScope?: unknown
+  }
 
-/** Target config submitted by the scheduled task page (fixed topic or new topic per run) */
-interface ScheduleTargetPayload {
-  topicId?: number | null
-  targetMode?: unknown
-  targetWorkspaceId?: number | null
-  targetMemoryScope?: unknown
-}
-
-/**
- * Validate and resolve the task target: fixed-topic tasks resolve the workspace from the topic; new-topic tasks require mode and workspace to match.
- *
- * Returns null for invalid input (the handler replies invalid-input).
- */
-async function resolveScheduleTargetPayload(
-  payload: ScheduleTargetPayload
-): Promise<{
-  topicId: number | null
-  workspaceId: number | null
-  targetMode: 'chat' | 'work' | 'plugin' | null
-  targetWorkspaceId: number | null
-  targetMemoryScope: string | null
-} | null> {
-  const topicId =
-    typeof payload.topicId === 'number' && Number.isFinite(payload.topicId) && payload.topicId > 0
-      ? payload.topicId
-      : null
-  const mode =
-    payload.targetMode === 'chat' || payload.targetMode === 'work' || payload.targetMode === 'plugin'
-      ? payload.targetMode
-      : null
-  if (topicId != null) {
-    const rows = await getTopicById(topicId).catch(() => [])
-    const topic = rows[0]
-    if (!topic) return null
+  /**
+   * Validate and resolve the task target: fixed-topic tasks resolve the workspace from the topic; new-topic tasks require mode and workspace to match.
+   *
+   * Returns null for invalid input (the handler replies invalid-input).
+   */
+  async function resolveScheduleTargetPayload(payload: ScheduleTargetPayload): Promise<{
+    topicId: number | null
+    workspaceId: number | null
+    targetMode: 'chat' | 'work' | 'plugin' | null
+    targetWorkspaceId: number | null
+    targetMemoryScope: string | null
+  } | null> {
+    const topicId =
+      typeof payload.topicId === 'number' && Number.isFinite(payload.topicId) && payload.topicId > 0
+        ? payload.topicId
+        : null
+    const mode =
+      payload.targetMode === 'chat' ||
+      payload.targetMode === 'work' ||
+      payload.targetMode === 'plugin'
+        ? payload.targetMode
+        : null
+    if (topicId != null) {
+      const rows = await getTopicById(topicId).catch(() => [])
+      const topic = rows[0]
+      if (!topic) return null
+      return {
+        topicId,
+        workspaceId: topic.workspace_id ?? null,
+        targetMode: mode,
+        targetWorkspaceId: topic.workspace_id ?? null,
+        targetMemoryScope: null
+      }
+    }
+    // New-topic type: mode and workspace must match; plugin mode must also carry a plugin:<id> scope
+    const workspaceId =
+      typeof payload.targetWorkspaceId === 'number' &&
+      Number.isFinite(payload.targetWorkspaceId) &&
+      payload.targetWorkspaceId > 0
+        ? payload.targetWorkspaceId
+        : null
+    if (!mode || !workspaceId) return null
+    const workspace = await getWorkspaceById(workspaceId).catch(() => null)
+    if (!workspace) return null
+    const kind = workspace.kind ?? 'user'
+    if (mode === 'chat' && kind !== 'chat') return null
+    if (mode === 'plugin' && kind !== 'plugin') return null
+    if (mode === 'work' && kind !== 'user') return null
+    const scope = normalizeMemoryScope(payload.targetMemoryScope)
+    if (mode === 'chat' && scope !== 'chat') return null
+    if (mode === 'plugin' && !String(scope ?? '').startsWith('plugin:')) return null
+    if (mode === 'work' && scope !== null) return null
     return {
-      topicId,
-      workspaceId: topic.workspace_id ?? null,
+      topicId: null,
+      workspaceId: null,
       targetMode: mode,
-      targetWorkspaceId: topic.workspace_id ?? null,
-      targetMemoryScope: null
+      targetWorkspaceId: workspaceId,
+      targetMemoryScope: scope
     }
   }
-  // New-topic type: mode and workspace must match; plugin mode must also carry a plugin:<id> scope
-  const workspaceId =
-    typeof payload.targetWorkspaceId === 'number' &&
-    Number.isFinite(payload.targetWorkspaceId) &&
-    payload.targetWorkspaceId > 0
-      ? payload.targetWorkspaceId
-      : null
-  if (!mode || !workspaceId) return null
-  const workspace = await getWorkspaceById(workspaceId).catch(() => null)
-  if (!workspace) return null
-  const kind = workspace.kind ?? 'user'
-  if (mode === 'chat' && kind !== 'chat') return null
-  if (mode === 'plugin' && kind !== 'plugin') return null
-  if (mode === 'work' && kind !== 'user') return null
-  const scope = normalizeMemoryScope(payload.targetMemoryScope)
-  if (mode === 'chat' && scope !== 'chat') return null
-  if (mode === 'plugin' && !String(scope ?? '').startsWith('plugin:')) return null
-  if (mode === 'work' && scope !== null) return null
-  return {
-    topicId: null,
-    workspaceId: null,
-    targetMode: mode,
-    targetWorkspaceId: workspaceId,
-    targetMemoryScope: scope
-  }
-}
 
   // ── Scheduled task management (sidebar → Scheduled tasks page) ─────────────
   // List / create / full edit / pause-resume-delete / execution records.
   // The `schedule_*` model tools and the page share the same storage backend.
+
+  /**
+   * Page input → stored model override: undefined/null/empty = the default model, otherwise the
+   * value must be one of the currently enabled `provider:model` routes (same catalog as
+   * list_capabilities kind:"models"). Rejecting an unknown route keeps "what the page shows" and
+   * "what actually runs" identical.
+   */
+  async function normalizeScheduleModelInput(
+    raw: unknown
+  ): Promise<{ ok: true; value: string | null } | { ok: false }> {
+    if (raw === undefined || raw === null) return { ok: true, value: null }
+    if (typeof raw !== 'string') return { ok: false }
+    const value = raw.trim()
+    if (!value) return { ok: true, value: null }
+    const models = await modelSelectionValues()
+    return models.has(value) ? { ok: true, value } : { ok: false }
+  }
   handle('harness-schedule-list', async () => {
     if (!isScheduleStoreConfigured()) return []
     try {
@@ -3174,6 +3255,7 @@ async function resolveScheduleTargetPayload(
         prompt: string
         when: unknown
         agentConfig?: unknown
+        model?: unknown
       } & ScheduleTargetPayload
     ) => {
       if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
@@ -3184,6 +3266,8 @@ async function resolveScheduleTargetPayload(
       if (!target) return { ok: false, error: 'invalid-target' }
       const validated = validateScheduleWhen(payload.when as ScheduleWhen)
       if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
+      const model = await normalizeScheduleModelInput(payload.model)
+      if (!model.ok) return { ok: false, error: 'invalid-model' }
       try {
         const task = await scheduleStore.create({
           title,
@@ -3195,6 +3279,7 @@ async function resolveScheduleTargetPayload(
           targetWorkspaceId: target.targetWorkspaceId,
           targetMemoryScope: target.targetMemoryScope,
           agentConfig: normalizeAgentSelection(payload.agentConfig),
+          model: model.value,
           nextRunAt: validated.nextRunAt
         })
         return { ok: true, task }
@@ -3216,11 +3301,14 @@ async function resolveScheduleTargetPayload(
         when?: unknown
         enabled?: boolean
         agentConfig?: unknown
+        model?: unknown
       } & ScheduleTargetPayload
     ) => {
       if (!isScheduleStoreConfigured()) return { ok: false, error: 'unavailable' }
       const id = typeof payload?.id === 'string' ? payload.id : ''
       if (!id) return { ok: false, error: 'invalid-input' }
+      const model = await normalizeScheduleModelInput(payload.model)
+      if (!model.ok) return { ok: false, error: 'invalid-model' }
       try {
         const task = await scheduleStore.get(id)
         if (!task) return { ok: false, error: 'not-found' }
@@ -3235,6 +3323,7 @@ async function resolveScheduleTargetPayload(
           targetWorkspaceId?: number | null
           targetMemoryScope?: string | null
           agentConfig?: ReturnType<typeof normalizeAgentSelection>
+          model?: string | null
           workspaceId?: number | null
         } = {}
         const wantsTargetChange =
@@ -3254,14 +3343,17 @@ async function resolveScheduleTargetPayload(
         if (payload.agentConfig !== undefined) {
           patch.agentConfig = normalizeAgentSelection(payload.agentConfig)
         }
+        // undefined = keep the current override; null / "" = clear it and use the default model
+        if (payload.model !== undefined) {
+          patch.model = model.value
+        }
         if (typeof payload.title === 'string' && payload.title.trim()) {
           patch.title = payload.title.trim()
         }
         if (typeof payload.prompt === 'string' && payload.prompt.trim()) {
           patch.prompt = payload.prompt.trim()
         }
-        const nextWhen =
-          payload.when !== undefined ? (payload.when as ScheduleWhen) : task.when
+        const nextWhen = payload.when !== undefined ? (payload.when as ScheduleWhen) : task.when
         if (payload.when !== undefined) {
           const validated = validateScheduleWhen(nextWhen)
           if (!validated.ok) return { ok: false, error: `invalid-when:${validated.reason}` }
@@ -3318,7 +3410,9 @@ async function resolveScheduleTargetPayload(
           return { ok: await scheduleStore.remove(payload.id) }
         }
         if (payload.action === 'pause') {
-          return { ok: Boolean(await scheduleStore.update(payload.id, { enabled: false, nextRunAt: null })) }
+          return {
+            ok: Boolean(await scheduleStore.update(payload.id, { enabled: false, nextRunAt: null }))
+          }
         }
         const task = await scheduleStore.get(payload.id)
         if (!task) return { ok: false }
@@ -3326,7 +3420,10 @@ async function resolveScheduleTargetPayload(
         if (!validated.ok) return { ok: false }
         return {
           ok: Boolean(
-            await scheduleStore.update(payload.id, { enabled: true, nextRunAt: validated.nextRunAt })
+            await scheduleStore.update(payload.id, {
+              enabled: true,
+              nextRunAt: validated.nextRunAt
+            })
           )
         }
       } catch (err) {
@@ -3367,17 +3464,14 @@ async function resolveScheduleTargetPayload(
     }
   })
 
-  handle(
-    'harness-search-default-set',
-    async (payload: { provider: string }) => {
-      try {
-        return await setSearchDefaultProvider(payload?.provider)
-      } catch (err) {
-        logger.warn('[Search] Failed to change default provider:', err)
-        return { ok: false, error: 'save-failed' }
-      }
+  handle('harness-search-default-set', async (payload: { provider: string }) => {
+    try {
+      return await setSearchDefaultProvider(payload?.provider)
+    } catch (err) {
+      logger.warn('[Search] Failed to change default provider:', err)
+      return { ok: false, error: 'save-failed' }
     }
-  )
+  })
 
   handle(
     'harness-search-behavior-set',

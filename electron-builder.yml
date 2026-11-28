@@ -1,5 +1,14 @@
 appId: com.ryten.bench
 productName: RytenBench
+# Compiles the update metadata (`latest.yml` / `latest-mac.yml` / `latest-linux.yml`) during every
+# package build. The release workflow uploads those files next to the installers, which is what
+# electron-updater's GitHub provider reads. Publishing stays explicit (`--publish never` in the
+# build scripts); the release job publishes the artifacts itself.
+publish:
+  provider: github
+  owner: Aitenry
+  repo: ryten-bench
+  releaseType: release
 directories:
   buildResources: build
 files:

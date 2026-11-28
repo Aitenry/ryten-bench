@@ -7,6 +7,7 @@ import type {
   SystemSettings
 } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
+import type { AppUpdateState } from '../shared/update/types'
 import type {
   HubDetail,
   HubListResult,
@@ -114,6 +115,14 @@ interface Api {
   systemSettings: {
     getAll: () => Promise<SystemSettings>
     update: (updates: Partial<SystemSettings>) => Promise<boolean>
+  }
+  /** App update snapshot / actions (source and installer stay in the main process) */
+  appUpdate: {
+    getState: () => Promise<AppUpdateState>
+    check: () => Promise<AppUpdateState>
+    download: () => Promise<boolean>
+    restart: () => Promise<boolean>
+    onState: (callback: (state: AppUpdateState) => void) => () => void
   }
   window: {
     minimize: () => void

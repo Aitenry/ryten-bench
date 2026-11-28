@@ -15,6 +15,7 @@ import { createMainWindow } from './windows/main-window'
 import { registerMermaidPreviewIpc } from './windows/mermaid-preview'
 import { createTray } from './tray'
 import { setupWeather } from './weather'
+import { updateService } from './update/service'
 import { bootstrapStorageLayout } from './storage'
 import { initAccountProfile } from './profiles/runtime'
 
@@ -184,6 +185,9 @@ app
     registerStartupIpc()
     createMainWindow()
     void runStartupInitialization()
+    // Update service: idle until the window exists; checks in the background after startup and
+    // then every few hours. All network/installer work stays in the main process.
+    void updateService.start()
 
     // Weather IPC and auto-refresh are registered/started exactly once (pushed to the main window;
     // previously repeated calls alongside createMainWindow registered ipcMain.handle twice and

@@ -19,11 +19,12 @@ export const zhCNScheduleToolTexts = {
   fieldWhen: '触发规则',
   fieldTarget: '目标会话',
   fieldSelection: '运行选择',
+  fieldModel: '模型',
   fieldEnabled: '启用状态',
   fieldSeparator: '、',
   nextSuffixInResult: '；下次执行 {{next}}',
   nothingChanged:
-    '没有需要更新的内容：请至少给出标题、提示词、触发规则、目标会话、运行选择、启用状态中的一项。',
+    '没有需要更新的内容：请至少给出标题、提示词、触发规则、目标会话、模型、运行选择、启用状态中的一项。',
   noTargetResolved:
     '无法确定任务的目标会话/工作区（会话可能已被删除，或这个插件会话缺少插件标识），请先在一个具体会话里创建。',
   viewTarget: '目标: {{target}}',
@@ -31,6 +32,8 @@ export const zhCNScheduleToolTexts = {
   targetNew: '每次触发新建会话（{{mode}}）',
   targetModeWork: '工作',
   viewSelection: '运行选择: 工具 {{tools}} · 技能 {{skills}} · MCP {{mcp}}',
+  viewModel: '模型: {{model}}',
+  modelDefault: '默认模型',
   selectionNone: '跟随会话',
   paused: '已暂停定时任务 {{id}}「{{title}}」。',
   resumed: '已恢复定时任务 {{id}}「{{title}}」：下次执行 {{next}}。',
@@ -42,6 +45,8 @@ export const zhCNScheduleToolTexts = {
   selectionUnknownSkills: '未知技能 {{values}}',
   selectionUnknownMcp: '未知 MCP {{values}}',
   selectionSeparator: '；',
+  invalidModel:
+    '模型不可用：{{model}}。model 只能填 list_capabilities（kind:"models"）返回的 provider:model；当前可用：{{ids}}。本次未创建或修改任务。',
   tooMany: '定时任务数量已达上限（{{max}} 个），请先删除不再需要的任务。',
   noTopic: '无法确定任务归属的会话，请在某个会话里创建定时任务。',
   listEmpty: '当前没有定时任务。',
@@ -64,8 +69,7 @@ export const zhCNScheduleToolTexts = {
   runStatusFailed: '失败',
   none: '—',
   /** Message header used when a scheduled task is delivered to the model (by the runner) */
-  question:
-    '[定时任务：{{title}}]\n{{prompt}}\n\n（这条消息由用户创建的定时任务自动投递。请直接开始处理，不要向用户确认。）',
+  question: '[定时任务：{{title}}]\n{{prompt}}',
   /** Reasons the trigger rule is invalid */
   reasons: {
     missing: '缺少触发规则',
@@ -88,11 +92,12 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   fieldWhen: 'rule',
   fieldTarget: 'target conversation',
   fieldSelection: 'run selection',
+  fieldModel: 'model',
   fieldEnabled: 'enabled state',
   fieldSeparator: ', ',
   nextSuffixInResult: '; next run {{next}}',
   nothingChanged:
-    'Nothing to update: pass at least one of title, prompt, rule, target conversation, run selection or enabled state.',
+    'Nothing to update: pass at least one of title, prompt, rule, target conversation, model, run selection or enabled state.',
   noTargetResolved:
     'Could not resolve a target conversation/workspace for this task (the conversation may have been deleted, or this plugin session has no plugin id). Create it from a concrete conversation first.',
   viewTarget: 'Target: {{target}}',
@@ -100,6 +105,8 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   targetNew: 'a new conversation on every run ({{mode}})',
   targetModeWork: 'work',
   viewSelection: 'Run selection: tools {{tools}} · skills {{skills}} · MCP {{mcp}}',
+  viewModel: 'Model: {{model}}',
+  modelDefault: 'default model',
   selectionNone: 'follows the conversation',
   paused: 'Paused scheduled task {{id}} "{{title}}".',
   resumed: 'Resumed scheduled task {{id}} "{{title}}": next run {{next}}.',
@@ -111,8 +118,11 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   selectionUnknownSkills: 'unknown skill(s) {{values}}',
   selectionUnknownMcp: 'unknown MCP {{values}}',
   selectionSeparator: '; ',
+  invalidModel:
+    'Unknown model: {{model}}. The model field only accepts a provider:model returned by list_capabilities (kind:"models"); available now: {{ids}}. Nothing was created or changed.',
   tooMany: 'The schedule limit is reached ({{max}} tasks); delete unused ones first.',
-  noTopic: 'Cannot tell which conversation this task belongs to; create it from inside a conversation.',
+  noTopic:
+    'Cannot tell which conversation this task belongs to; create it from inside a conversation.',
   listEmpty: 'There are no scheduled tasks.',
   listHeader: 'Scheduled tasks ({{count}}):',
   listItem: '- {{id}} "{{title}}" {{when}} · {{state}}{{next}}',
@@ -132,8 +142,7 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   runStatusCancelled: 'cancelled',
   runStatusFailed: 'failed',
   none: '—',
-  question:
-    '[Scheduled task: {{title}}]\n{{prompt}}\n\n(This message was delivered automatically by a schedule the user created. Work on it now; do not ask the user for confirmation.)',
+  question: '[Scheduled task: {{title}}]\n{{prompt}}',
   reasons: {
     missing: 'the schedule rule is missing',
     'unknown-kind': 'unknown kind (only once / every / daily are supported)',

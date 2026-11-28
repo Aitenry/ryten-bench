@@ -7,7 +7,7 @@
  *
  * The tool surface mirrors the Schedules page one-for-one (2026-11-28 redesign):
  * - create: title / prompt / rule / target (this conversation or a new one per run) / run
- *   selection (tools, skills, MCP);
+ *   selection (tools, skills, MCP) / model override;
  * - edit: **partial** — only the fields passed are written; `null` clears a value.
  *
  * The "pure" mapping (args → store input / patch, target derivation rules) lives in
@@ -47,7 +47,7 @@ import {
   isScheduleConversationResolverConfigured,
   resolveScheduleConversation
 } from '../../runtime/harness/schedule-target'
-import { scheduleSelectionValues } from './capabilities'
+import { scheduleSelectionValues, modelSelectionValues } from './capabilities'
 
 /** Only topicId is needed from the tool invoke config */
 interface ScheduleToolConfig {
@@ -101,6 +101,15 @@ const selectionSchema = z.object({
     )
 })
 
+/** Model override: `provider:model` exactly as listed by list_capabilities (kind:"models") */
+const modelSchema = z
+  .string()
+  .nullish()
+  .describe(
+    'Model for every run as "provider:model", exactly as returned by list_capabilities with kind:"models" (e.g. "deepseek:deepseek-chat"). ' +
+      'Omit / null = use the app default model; an unknown value rejects the call. If the chosen provider is later disabled or deleted, the run falls back to the default model.'
+  )
+
 /** Current conversation id (used as task ownership at creation and as the "this" target; <=0 = none) */
 function topicIdOf(config: unknown): number {
   const cfg = config as ScheduleToolConfig | undefined
@@ -152,6 +161,30 @@ function invalidSelectionText(unknown: UnknownSelectionValues): string {
   return mainFormat(texts.invalidSelection, { details: details.join(texts.selectionSeparator) })
 }
 
+/**
+ * Validate the task's model override against the enabled model routes.
+ *
+ * `undefined` = keep the current value (edit) / use the default (create); `null`/empty = clear the
+ * override. An unknown non-empty spec is rejected: silently substituting a different model would
+ * make the task run on something the user did not choose. A spec that becomes unavailable *later*
+ * (provider disabled/deleted) falls back to the default at run time, which the user cannot act on
+ * from the tool call.
+ */
+async function validateScheduleModel(
+  raw: string | null | undefined
+): Promise<{ ok: true; value: string | null | undefined } | { ok: false; error: string }> {
+  if (raw === undefined) return { ok: true, value: undefined }
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (!value) return { ok: true, value: null }
+  const texts = getScheduleToolTexts()
+  const models = await modelSelectionValues()
+  if (!models.has(value)) {
+    const ids = Array.from(models).join(', ') || texts.none
+    return { ok: false, error: mainFormat(texts.invalidModel, { model: value, ids }) }
+  }
+  return { ok: true, value }
+}
+
 /** Run state → localized label */
 function runStatusText(
   texts: ReturnType<typeof getScheduleToolTexts>,
@@ -164,7 +197,10 @@ function runStatusText(
 }
 
 /** Human-readable target for list/detail views */
-function describeTarget(texts: ReturnType<typeof getScheduleToolTexts>, task: ScheduledTask): string {
+function describeTarget(
+  texts: ReturnType<typeof getScheduleToolTexts>,
+  task: ScheduledTask
+): string {
   if (task.topicId != null) return mainFormat(texts.targetThis, { topicId: String(task.topicId) })
   return mainFormat(texts.targetNew, { mode: task.targetMode ?? texts.targetModeWork })
 }
@@ -195,6 +231,7 @@ function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
     }),
     mainFormat(texts.viewNext, { next: task.nextRunAt ?? texts.none }),
     mainFormat(texts.viewTarget, { target: describeTarget(texts, task) }),
+    mainFormat(texts.viewModel, { model: task.model ?? texts.modelDefault }),
     describeSelection(texts, task),
     mainFormat(texts.viewTopic, { topicId: String(task.topicId ?? texts.none) }),
     mainFormat(texts.viewPrompt, { prompt: task.prompt })
@@ -231,6 +268,7 @@ function describeFields(
     when: texts.fieldWhen,
     target: texts.fieldTarget,
     agentConfig: texts.fieldSelection,
+    model: texts.fieldModel,
     enabled: texts.fieldEnabled
   }
   return fields.map((field) => labels[field]).join(texts.fieldSeparator)
@@ -252,13 +290,18 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
     scheduleSelectionValues(deps.availableTools())
 
   const create = tool(
-    async ({ title, prompt, when, targetSession, targetConversationId, agentConfig }, config) => {
+    async (
+      { title, prompt, when, targetSession, targetConversationId, agentConfig, model },
+      config
+    ) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
       const callerTopicId = topicIdOf(config)
       if (callerTopicId <= 0) return texts.noTopic
       const unknownSelection = findUnknownSelectionValues(agentConfig, selectionCatalog())
       if (unknownSelection) return invalidSelectionText(unknownSelection)
+      const modelCheck = await validateScheduleModel(model)
+      if (!modelCheck.ok) return modelCheck.error
       const validated = validateScheduleWhen(when as ScheduleWhen)
       if (!validated.ok) return invalidWhenText(validated.reason)
       // Explicit conversation wins over "this"; "new" still inherits from the caller's conversation
@@ -276,7 +319,8 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
           targetSession: (targetConversationId != null
             ? 'this'
             : (targetSession ?? 'this')) as TargetSession,
-          agentConfig
+          agentConfig,
+          model: modelCheck.value
         },
         { topicId, conversation, nextRunAt: validated.nextRunAt }
       )
@@ -304,14 +348,18 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
         '`when`: {kind:"once", at: ISO time} | {kind:"every", minutes: 5-10080} | {kind:"daily", time: "HH:MM"} in local 24-hour time (midnight is "00:00"; "24:00" is rejected). ' +
         '`targetSession`: "this" (default) keeps running in this conversation, "new" opens a brand-new conversation on every run (inheriting this conversation\'s mode, workspace and memory). ' +
         '`targetConversationId`: run in another existing conversation instead (id from conversation_list). ' +
-        '`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation\'s own selection. Before filling it, call list_capabilities (kind: tools / skills / mcp) to get the exact values — pass an id as query to read one item in full. ' +
+        "`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation's own selection. Before filling it, call list_capabilities (kind: tools / skills / mcp) to get the exact values — pass an id as query to read one item in full. " +
+        '`model`: optional model override "provider:model" for every run (from list_capabilities kind:"models"); omit it to use the app default model. ' +
         'Only values returned by list_capabilities are accepted: built-in runtime tools (task, read_file, write_file, execute, ask_user_question, skill, …) are provided automatically by the runtime and must not be listed; a name outside the catalog rejects the call. ' +
+        'Scheduled runs are unattended: ask_user_question / plan-approval and other blocking interactions are not mounted, so write the prompt so the task can finish without user input. ' +
         'Use this whenever the user asks for something recurring or at a fixed time ("every day / every week", 每天/每晚/每周/定时) — do not turn such requests into a long-running goal. Tasks fire while the app is running; missed runs are skipped, not replayed.',
       schema: z.object({
         title: z.string().describe('Short title shown in the task list (<=120 chars)'),
         prompt: z
           .string()
-          .describe('The message to deliver when the task fires; write it as a complete instruction'),
+          .describe(
+            'The message to deliver when the task fires; write it as a complete instruction'
+          ),
         when: whenSchema,
         targetSession: targetSessionSchema.optional(),
         targetConversationId: z
@@ -322,7 +370,8 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
           .describe(
             'Run in that existing conversation instead of this one (id from conversation_list). Ignored when targetSession is "new".'
           ),
-        agentConfig: selectionSchema.nullish()
+        agentConfig: selectionSchema.nullish(),
+        model: modelSchema
       })
     }
   )
@@ -372,14 +421,25 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
       name: 'schedule_view',
       isConcurrencySafe: () => true,
       description:
-        'Read one scheduled task in full: rule, state, next run, target conversation, run selection (tools / skills / MCP) and prompt.',
+        'Read one scheduled task in full: rule, state, next run, target conversation, model, run selection (tools / skills / MCP) and prompt.',
       schema: z.object({ id: z.string().describe('Task id from schedule_list') })
     }
   )
 
   const edit = tool(
     async (
-      { id, action, title, prompt, when, agentConfig, targetSession, targetConversationId, enabled },
+      {
+        id,
+        action,
+        title,
+        prompt,
+        when,
+        agentConfig,
+        model,
+        targetSession,
+        targetConversationId,
+        enabled
+      },
       config
     ) => {
       const texts = getScheduleToolTexts()
@@ -396,6 +456,8 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
         const unknownSelection = findUnknownSelectionValues(agentConfig, selectionCatalog())
         if (unknownSelection) return invalidSelectionText(unknownSelection)
       }
+      const modelCheck = await validateScheduleModel(model)
+      if (!modelCheck.ok) return modelCheck.error
 
       const callerTopicId = topicIdOf(config)
       const normalizedWhen = when as ScheduleWhen | undefined
@@ -415,7 +477,15 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
           ? await resolveScheduleConversation(topicId)
           : null
       const built = buildUpdatePatch(
-        { title, prompt, when: normalizedWhen, agentConfig, targetSession: effectiveTargetSession, enabled },
+        {
+          title,
+          prompt,
+          when: normalizedWhen,
+          agentConfig,
+          model: modelCheck.value,
+          targetSession: effectiveTargetSession,
+          enabled
+        },
         task,
         { topicId, conversation }
       )
@@ -448,16 +518,13 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
       description:
         'Update a scheduled task. Only the fields you pass are written — everything else stays as it is (undefined = keep, null = clear). ' +
         'Fields: title, prompt, when (same rules as schedule_create), targetSession ("this" conversation or "new" conversation per run), targetConversationId (move the task to that existing conversation), ' +
-        'agentConfig (tools / skills / MCP for every run; pass null to clear it and follow the conversation again), enabled (false = pause, true = resume). ' +
-        'For agentConfig values, call list_capabilities (kind: tools / skills / mcp) first; pass an id as query to read one item in full. ' +
+        'agentConfig (tools / skills / MCP for every run; pass null to clear it and follow the conversation again), model (provider:model for every run; pass null to return to the default model), enabled (false = pause, true = resume). ' +
+        'For agentConfig / model values, call list_capabilities (kind: tools / skills / mcp / models) first; pass an id as query to read one item in full. ' +
         'Only catalog values are accepted — built-in runtime tools (task, read_file, execute, …) are provided automatically by the runtime and must not be listed; an unknown name rejects the call. ' +
         'Use action:"delete" to delete the task.',
       schema: z.object({
         id: z.string().describe('Task id from schedule_list'),
-        action: z
-          .enum(['update', 'delete'])
-          .optional()
-          .describe('"update" (default) or "delete"'),
+        action: z.enum(['update', 'delete']).optional().describe('"update" (default) or "delete"'),
         title: z.string().optional().describe('New title'),
         prompt: z.string().optional().describe('New delivered prompt'),
         when: whenSchema.optional().describe('New schedule rule'),
@@ -471,6 +538,7 @@ export function buildScheduleTools(deps: ScheduleToolDeps): StructuredToolInterf
             'Move the task to that existing conversation (id from conversation_list); ignored when targetSession is "new"'
           ),
         agentConfig: selectionSchema.nullish(),
+        model: modelSchema,
         enabled: z.boolean().optional().describe('false = pause, true = resume')
       })
     }

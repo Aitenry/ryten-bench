@@ -118,8 +118,8 @@ export const harnessZhCN = {
       workspaceRevealInFinder: '在访达中显示',
       workspaceRevealInFileManager: '在文件管理器中显示',
       workspaceSwitchFailed: '切换工作区失败：请检查目录是否仍然存在，然后重试',
-    workspaceCreateFailed: '新建工作区失败：请检查目录是否可写，然后重试',
-    workspaceDeleteFailed: '删除工作区失败：请稍后重试',
+      workspaceCreateFailed: '新建工作区失败：请检查目录是否可写，然后重试',
+      workspaceDeleteFailed: '删除工作区失败：请稍后重试',
       workspaceDelete: '删除工作区',
       workspaceDeleteConfirmTitle: '删除工作区',
       workspaceDeleteConfirmContent:
@@ -1292,6 +1292,8 @@ export const harnessZhCN = {
     modeChat: '对话',
     modeWork: '工作',
     modePlugin: '插件',
+    fieldModel: '模型',
+    modelPlaceholder: '不选则使用默认模型',
     newSessionOption: '新的会话（每次触发新建）',
     newSessionTag: '新的会话',
     fieldWorkspace: '目标工作区',
@@ -1308,6 +1310,7 @@ export const harnessZhCN = {
     skillsPlaceholder: '不选则不启用',
     mcpPlaceholder: '不选则不启用',
     invalidTarget: '请选择目标会话或「新的会话」',
+    invalidModel: '所选模型不可用，请在模型设置中确认它已启用',
     fieldWhen: '执行时间',
     whenDaily: '每天',
     whenEvery: '按间隔',
@@ -1424,5 +1427,3 @@ export const harnessZhCN = {
     }
   }
 }
-
-

@@ -5,6 +5,7 @@ import type { SystemSettings } from '../main/types/settings'
 import type { PluginListEntry } from '../shared/plugin/types'
 import { PLUGIN_CHANNEL_RE } from '../shared/plugin/protocol'
 import { LATTICE_IPC } from '../main/lattice/types'
+import { APP_UPDATE_CHANNELS, type AppUpdateState } from '../shared/update/types'
 import type {
   HubDetail,
   HubListResult,
@@ -183,6 +184,25 @@ const api = {
     getAll: () => ipcRenderer.invoke('system-settings-get-all') as Promise<SystemSettings>,
     update: (updates: Partial<SystemSettings>) =>
       ipcRenderer.invoke('system-settings-update', updates) as Promise<boolean>
+  },
+  /**
+   * App update bridge. The renderer only reads a snapshot and asks for actions; the source
+   * (GitHub Releases now, Lattice later) and installer hand-off live entirely in the main process.
+   */
+  appUpdate: {
+    getState: () => ipcRenderer.invoke(APP_UPDATE_CHANNELS.getState) as Promise<AppUpdateState>,
+    check: () => ipcRenderer.invoke(APP_UPDATE_CHANNELS.check) as Promise<AppUpdateState>,
+    download: () => ipcRenderer.invoke(APP_UPDATE_CHANNELS.download) as Promise<boolean>,
+    restart: () => ipcRenderer.invoke(APP_UPDATE_CHANNELS.restart) as Promise<boolean>,
+    onState: (callback: (state: AppUpdateState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: AppUpdateState): void => {
+        callback(state)
+      }
+      ipcRenderer.on(APP_UPDATE_CHANNELS.stateChanged, handler)
+      return () => {
+        ipcRenderer.off(APP_UPDATE_CHANNELS.stateChanged, handler)
+      }
+    }
   },
   window: {
     minimize: () => ipcRenderer.send('window-minimize'),

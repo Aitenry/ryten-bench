@@ -5,8 +5,10 @@ import { mainFormat } from '../../i18n'
 import { getContextToolTexts } from '../../i18n/tool-results-context'
 import { loadSkills } from '../../runtime/harness/skills-core'
 import { mcpServerViews } from '../../runtime/harness/mcp'
+import { getEnabledProviders } from '../../database/mapper/provider'
 import {
   LIST_CAPABILITIES_TOOL_NAME,
+  canonicalToolName,
   mcpNamespace,
   MCP_TOOL_GROUP
 } from '../../../shared/harness/mcp'
@@ -24,14 +26,14 @@ import {
  * `list_capabilities` — the capability catalog for **filling built-in forms with exact values**.
  *
  * Why it exists: `agent_create` (creating a subagent) and `schedule_create` / `schedule_edit`
- * (scheduling a task) take exact identifiers (`tools` names, `skills` ids, `mcp@<namespace>`), but
- * a model that only sees its own tool schemas cannot know what else the app offers, nor what an
- * item does. This tool lists the complete catalog per kind, so those forms can be filled from real
- * values instead of guesses.
+ * (scheduling a task) take exact identifiers (`tools` names, `skills` ids, `mcp@<namespace>`,
+ * `provider:model`), but a model that only sees its own tool schemas cannot know what else the app
+ * offers, nor what an item does. This tool lists the complete catalog per kind, so those forms can
+ * be filled from real values instead of guesses.
  *
  * Design (user requirement):
  * - listing only ever shows **name + description** — no source, no enabled or connection state;
- * - `kind` is required (`tools` / `skills` / `mcp`); there is no `all` option — call once per kind;
+ * - `kind` is required (`tools` / `skills` / `mcp` / `models`); there is no `all` option — call once per kind;
  * - `query` is an **exact identifier** (`name` / skill `id` / `mcp@<namespace>`) and returns that
  *   one row with its full description; it is not a fuzzy search;
  * - the output is text, one `value — description` row per line, so the model can copy it verbatim.
@@ -76,10 +78,45 @@ function mcpEntries(): CapabilityEntry[] {
   }
 }
 
-function entriesOf(kind: CapabilityKind, availableTools: ToolInfo[]): CapabilityEntry[] {
+/**
+ * Models: every enabled provider route as `provider:model`, the value subagent configs and
+ * scheduled-task `model` fields accept.
+ *
+ * Providers are read fresh on every call (like tools/skills) so enabling/disabling a model in
+ * settings shows up without a restart. The row key is the route spec; the provider's display name
+ * is the human label, and the model name is the description.
+ */
+async function modelEntries(): Promise<CapabilityEntry[]> {
+  try {
+    const providers = await getEnabledProviders()
+    const out: CapabilityEntry[] = []
+    for (const provider of providers) {
+      const modelName = provider.model?.trim()
+      const providerType = provider.provider?.trim()
+      if (!modelName || !providerType) continue
+      const value = `${providerType}:${modelName}`
+      if (out.some((entry) => entry.value === value)) continue
+      out.push({ value, name: provider.name, description: provider.model })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+async function entriesOf(
+  kind: CapabilityKind,
+  availableTools: ToolInfo[]
+): Promise<CapabilityEntry[]> {
   if (kind === 'tools') return toolEntries(availableTools)
   if (kind === 'skills') return skillEntries()
+  if (kind === 'models') return modelEntries()
   return mcpEntries()
+}
+
+/** Accepted `provider:model` values for a scheduled task's (or subagent's) model field */
+export async function modelSelectionValues(): Promise<ReadonlySet<string>> {
+  return new Set((await modelEntries()).map((entry) => entry.value))
 }
 
 /**
@@ -95,19 +132,22 @@ export function scheduleSelectionValues(availableTools: ToolInfo[]): {
   tools: ReadonlySet<string>
   skills: ReadonlySet<string>
   mcp: ReadonlySet<string>
+  canonicalTool: (name: string) => string
 } {
   const tools = new Set(toolEntries(availableTools).map((entry) => entry.value))
   const skills = new Set(skillEntries().map((entry) => entry.value))
   const mcp = new Set([...mcpEntries().map((entry) => entry.value), MCP_TOOL_GROUP])
   for (const value of mcp) tools.add(value)
-  return { tools, skills, mcp }
+  // Old tasks/forms still carry pre-split names (`manage_materials`, `web_fetch`, …); the run-time
+  // sanitizer uses this to migrate them to the group entries above instead of dropping them.
+  return { tools, skills, mcp, canonicalTool: canonicalToolName }
 }
 
 export function buildListCapabilitiesTool(availableTools: ToolInfo[]): StructuredToolInterface {
   return tool(
     async ({ kind, query }) => {
       const texts = getContextToolTexts()
-      const entries = entriesOf(kind as CapabilityKind, availableTools)
+      const entries = await entriesOf(kind as CapabilityKind, availableTools)
       const trimmed = typeof query === 'string' ? query.trim() : ''
       if (!trimmed) return formatCapabilityList(kind as CapabilityKind, entries, texts)
 
@@ -125,13 +165,13 @@ export function buildListCapabilitiesTool(availableTools: ToolInfo[]): Structure
       name: LIST_CAPABILITIES_TOOL_NAME,
       isConcurrencySafe: () => true,
       description:
-        "Look up this app's selectable capabilities (tools / skills / MCP servers) so built-in forms can be filled with exact identifiers: creating a subagent (agent_create → tools / skills) and creating or editing a scheduled task (schedule_create / schedule_edit → agentConfig). " +
-        'Call once per kind; pass query with an exact value (tool name, skill id or mcp@<namespace>) to read one item\'s full description. ' +
+        "Look up this app's selectable capabilities (tools / skills / MCP servers / models) so built-in forms can be filled with exact identifiers: creating a subagent (agent_create → tools / skills / model) and creating or editing a scheduled task (schedule_create / schedule_edit → agentConfig / model). " +
+        "Call once per kind; pass query with an exact value (tool name, skill id, mcp@<namespace> or provider:model) to read one item's full description. " +
         'Read-only. Copy the returned values verbatim — those forms reject values outside this catalog.',
       schema: z.object({
         kind: z
-          .enum(['tools', 'skills', 'mcp'])
-          .describe('Which catalog to list: tools, skills or MCP servers'),
+          .enum(['tools', 'skills', 'mcp', 'models'])
+          .describe('Which catalog to list: tools, skills, MCP servers or models'),
         query: z
           .string()
           .optional()

@@ -16,6 +16,11 @@ import { createTurnGuard } from '@renderer/utils/harness/turn-guard'
 import { applyChunkToMessages } from '../../utils/harness/applyChunk'
 import { mergeLoadedHistory } from '../../utils/harness/history-merge'
 import {
+  TURN_RECONCILE_POLL_MS,
+  nextTurnReconcile,
+  pickPersistedTurn
+} from '../../utils/harness/turn-reconcile'
+import {
   applySettledDialogue,
   ensureStreamTarget,
   isEmptyAssistantCard
@@ -992,6 +997,150 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     },
     [activeCauseIdsFor, syncLoadingTopics]
   )
+
+  /**
+   * Settle a turn the renderer believes is still running but the main process has already finished.
+   *
+   * This is the second half of the 2026-11-28 incident: the stream can lose **every** event,
+   * including `done`, and `isLoading` is only ever cleared by a stream event — so the screen kept
+   * showing "generating…" with the stop button lit long after the turn had ended (and its answer
+   * had been persisted). Nothing else in the renderer can prove the turn is over; the main
+   * process's turn state is the only witness that survives a lost stream, so it is the trigger here.
+   *
+   * What it does: clear the loading flags, drop the stale listeners/cache of that turn, then fill
+   * the empty card from the persisted row — or remove the empty card when the turn persisted
+   * nothing (a blank answer is not a state the user can act on).
+   */
+  const settleLostTurn = useCallback(
+    (topicId: number): void => {
+      const targetId = assistantIdByTopicRef.current.get(topicId) ?? null
+      const session = sessionsRef.current.get(topicId)
+      const target =
+        targetId != null && session ? session.messages.find((msg) => msg.id === targetId) : undefined
+      // When the turn started: used to decide whether a persisted row can be this turn's answer
+      const startedAt = target?.timestamp ?? Date.now()
+
+      console.warn(
+        `[Stream] Turn for topic ${topicId} is no longer running but the UI still shows "generating"; settling it`
+      )
+
+      // Drop the lost turn's listeners first: their cleanup drains queued chunks (the tail of the
+      // answer may still be worth showing) and unregisters them so a later turn is not fed by them.
+      chunkCleanupsRef.current.get(topicId)?.()
+      chunkCleanupsRef.current.delete(topicId)
+      doneCleanupsRef.current.get(topicId)?.()
+      doneCleanupsRef.current.delete(topicId)
+      errorCleanupsRef.current.get(topicId)?.()
+      errorCleanupsRef.current.delete(topicId)
+
+      isLoadingMapRef.current.delete(topicId)
+      syncLoadingTopics()
+      if (currentTopicIdRef.current === topicId) setIsLoading(false)
+
+      assistantIdByTopicRef.current.delete(topicId)
+      activeSubAgentCauseIdsRef.current.delete(topicId)
+      sessionsRef.current.delete(topicId)
+
+      if (currentTopicIdRef.current === topicId) {
+        setMessages((prev) => prev.map((msg) => (msg.loading ? { ...msg, loading: false } : msg)))
+      }
+      refreshTopics().then()
+
+      if (targetId == null) return
+      void (async () => {
+        try {
+          const page = await harnessApi.harness.getDialoguesByTopicPaginated(topicId, 0, 40)
+          if (currentTopicIdRef.current !== topicId) return
+          const row = pickPersistedTurn(page.items, startedAt)
+          if (row) {
+            console.warn(
+              `[Stream] Recovered settled dialogue ${row.id} for topic ${topicId} from the database (turn ended without a done event)`
+            )
+            setMessages((prev) => applySettledDialogue(prev, targetId, row))
+            return
+          }
+          // Nothing was persisted for this turn: an empty answer card would just spin forever
+          setMessages((prev) => prev.filter((msg) => !(msg.id === targetId && isEmptyAssistantCard(msg))))
+        } catch (error) {
+          console.warn('[Stream] Failed to settle the lost turn from the database:', error)
+        }
+      })()
+    },
+    [refreshTopics, syncLoadingTopics]
+  )
+
+  /**
+   * Reconciliation watchdog: while any topic claims to be generating, ask the main process (the
+   * only surviving witness) whether a turn is really running there. A turn that ended without a
+   * `done` reaching this window is settled — see {@link settleLostTurn}.
+   *
+   * A single interval covers every topic; it costs nothing while nothing is loading, and it is
+   * deliberately conservative (several consecutive "not running" answers plus a minimum loading
+   * age) so the few-millisecond gap between a goal round and its continuation cannot cut a turn.
+   *
+   * The callback goes through a ref and the effect has no dependencies: recreating the interval on
+   * every render would reset the "how long has this been loading" bookkeeping and the watchdog
+   * could then never accumulate enough age to act.
+   */
+  const settleLostTurnRef = useRef(settleLostTurn)
+  settleLostTurnRef.current = settleLostTurn
+
+  useEffect(() => {
+    const strikes = new Map<number, number>()
+    const loadingSince = new Map<number, number>()
+    let busy = false
+
+    const timer = setInterval(() => {
+      // Forget bookkeeping for topics that stopped loading (done / error / user stop arrived)
+      for (const id of [...loadingSince.keys()]) {
+        if (!isLoadingMapRef.current.has(id)) {
+          loadingSince.delete(id)
+          strikes.delete(id)
+        }
+      }
+      if (isLoadingMapRef.current.size === 0 || busy) return
+
+      busy = true
+      const topicIds = [...isLoadingMapRef.current.keys()]
+      void (async () => {
+        try {
+          for (const topicId of topicIds) {
+            if (!loadingSince.has(topicId)) loadingSince.set(topicId, Date.now())
+            const state = await harnessApi.harness.getTurnState(topicId).catch(() => null)
+            // No answer is not evidence of a dead turn: keep waiting
+            if (!state) continue
+            // Last proof of life for this turn: a live stream keeps bumping `lastChunkAt`, so data
+            // still arriving always wins over a stale "not running" reading. The bubble is looked
+            // up in the cache first and in the live list second — a lost stream may have dropped
+            // the cache, and then only the on-screen list can still answer "when did we last hear
+            // from this turn".
+            const targetId = assistantIdByTopicRef.current.get(topicId)
+            const list =
+              sessionsRef.current.get(topicId)?.messages ??
+              (currentTopicIdRef.current === topicId ? messagesSnapshotRef.current : [])
+            const target =
+              targetId != null ? list.find((msg) => msg.id === targetId) : undefined
+            const lastActivity = target ? (target.lastChunkAt ?? target.timestamp) : null
+            const decision = nextTurnReconcile({
+              active: state.active,
+              loadingForMs: Date.now() - (loadingSince.get(topicId) ?? Date.now()),
+              inactiveStrikes: strikes.get(topicId) ?? 0,
+              msSinceLastChunk: lastActivity == null ? undefined : Date.now() - lastActivity
+            })
+            strikes.set(topicId, decision.strikes)
+            if (!decision.settle) continue
+            strikes.delete(topicId)
+            loadingSince.delete(topicId)
+            settleLostTurnRef.current(topicId)
+          }
+        } finally {
+          busy = false
+        }
+      })()
+    }, TURN_RECONCILE_POLL_MS)
+
+    return () => clearInterval(timer)
+  }, [])
 
   // ── Listeners for turns initiated by the main process (always mounted; not cleared by a normal turn's done) ──
   //

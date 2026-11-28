@@ -199,6 +199,11 @@ export class PermissionGate {
     signal?: AbortSignal
     /** Workspace root (the caller usually knows it better, e.g. the Runtime has one); defaults to the injected source */
     workspaceRoot?: string
+    /**
+     * Unattended turn (scheduled task): there is no user to approve anything, so an
+     * approval-required call is denied immediately instead of suspending the turn forever.
+     */
+    nonInteractive?: boolean
   }): Promise<AuthorizeResult> {
     const { topicId, toolName, args, signal } = input
     const mode = this.modeFor(topicId)
@@ -230,6 +235,22 @@ export class PermissionGate {
         }
       }
       const { request } = parsed
+      // Nobody can answer an escalation prompt during a scheduled run: fail closed right away
+      if (input.nonInteractive) {
+        this.deniedCalls.add(signature)
+        return {
+          run: false,
+          text: this.texts.denial({
+            mode,
+            reason: 'risky-command',
+            evidence: request.justification,
+            detail
+          }),
+          cardMessage: this.texts.reason('risky-command', request.justification),
+          effectiveMode: mode,
+          reason: 'risky-command'
+        }
+      }
       const approved = await this.ask(
         {
           topicId,
@@ -281,6 +302,18 @@ export class PermissionGate {
     }
 
     // 3) Approval required: ask the user (out-of-bounds / dangerous command / external tool under read-only)
+    // An unattended run has no user to ask, so deny immediately (fail closed) instead of hanging.
+    if (input.nonInteractive) {
+      this.deniedCalls.add(signature)
+      const reason = verdict.reason ?? 'risky-command'
+      return {
+        run: false,
+        text: this.texts.denial({ mode, reason, evidence: verdict.evidence, detail }),
+        cardMessage: this.texts.reason(reason, verdict.evidence),
+        effectiveMode: mode,
+        reason: verdict.reason
+      }
+    }
     const approved = await this.ask(
       {
         topicId,

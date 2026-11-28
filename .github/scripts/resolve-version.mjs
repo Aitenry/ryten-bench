@@ -26,7 +26,9 @@
  * - a `package.json` version newer than the last stable tag means someone is setting it manually
  *   (e.g. 0.2.x → 1.0.0): release it as-is, without automatic bump;
  * - a computed version that already has a tag of the same name (workflow rerun) →
- *   `should_release=false`, no duplicate release.
+ *   `should_release=false`, no duplicate release;
+ * - manual `REPUBLISH=true` reuses the latest stable tag and forces a build so the release assets
+ *   can be overwritten (same-version content update; detected by contentSha256, not semver).
  *
  * Output (written to `GITHUB_OUTPUT` when present, otherwise only printed):
  *   version / tag / previous_tag / bump / should_release / sha
@@ -115,9 +117,7 @@ function readCommits(range) {
 }
 
 function main() {
-  const tags = git('tag', '--list')
-    .split(/\r?\n/)
-    .filter(Boolean)
+  const tags = git('tag', '--list').split(/\r?\n/).filter(Boolean)
 
   const stable = tags
     .map((tag) => {
@@ -134,11 +134,18 @@ function main() {
   const pkgVersion = pkg.version
   const pkgParts = parseVersion(pkgVersion)
   const sha = git('rev-parse', 'HEAD')
+  const republish = process.env.REPUBLISH === 'true'
 
   let version
   let kind
 
-  if (!latest) {
+  if (republish) {
+    if (!latest) throw new Error('没有可复用的正式版本 tag，无法执行同版本重发')
+    // Same-version content rebuild: reuse the latest stable version. The release job overwrites
+    // the existing assets; clients see a new contentSha256 in latest*.yml.
+    version = format(latest.parts)
+    kind = 'republish'
+  } else if (!latest) {
     // First stable release: package.json has the final say (0.1.0)
     version = format(pkgParts)
     kind = 'initial'
@@ -154,13 +161,13 @@ function main() {
 
   const releaseTag = `v${version}`
   const alreadyReleased = tags.includes(releaseTag) || tags.includes(version)
-  const shouldRelease = kind !== 'none' && !alreadyReleased
+  const shouldRelease = republish || (kind !== 'none' && !alreadyReleased)
 
   const outputs = {
     version,
     tag: releaseTag,
     previous_tag: latest ? latest.tag : '',
-    bump: alreadyReleased ? 'none' : kind,
+    bump: republish ? 'republish' : alreadyReleased ? 'none' : kind,
     should_release: String(shouldRelease),
     sha
   }

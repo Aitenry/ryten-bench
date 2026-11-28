@@ -47,7 +47,9 @@ const Schedules: React.FC = () => {
   const [editingTask, setEditingTask] = useState<ScheduleView | null>(null)
   const [runsTask, setRunsTask] = useState<ScheduleView | null>(null)
   /** Floating run-detail panel (opened from one row of the run history) */
-  const [runPanel, setRunPanel] = useState<{ task: ScheduleView; run: ScheduleRunView } | null>(null)
+  const [runPanel, setRunPanel] = useState<{ task: ScheduleView; run: ScheduleRunView } | null>(
+    null
+  )
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -63,9 +65,7 @@ const Schedules: React.FC = () => {
         for (const id of chatResult.data.ids) workspaceIds.add(id)
       }
       const topicLists = await Promise.all(
-        Array.from(workspaceIds).map((id) =>
-          harnessApi.harness.getAllTopics(id).catch(() => [])
-        )
+        Array.from(workspaceIds).map((id) => harnessApi.harness.getAllTopics(id).catch(() => []))
       )
       const titles: Record<number, string> = {}
       const rowsById = new Map<number, HarnessTopicRow>()
@@ -208,6 +208,7 @@ const Schedules: React.FC = () => {
           targetWorkspaceId: task.targetWorkspaceId,
           targetMemoryScope: task.targetMemoryScope,
           agentConfig: task.agentConfig,
+          model: task.model,
           title: `${task.title} 副本`,
           prompt: task.prompt,
           when: task.when as ScheduleWhenView
