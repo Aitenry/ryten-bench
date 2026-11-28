@@ -34,6 +34,7 @@ import {
 import { getMcpToolTexts } from '../../i18n/tool-results-mcp'
 import { workshopToolBuilders, workshopToolInfos } from './workshop'
 import { latticeToolBuilders, latticeToolInfos } from './lattice'
+import { buildListCapabilitiesTool, LIST_CAPABILITIES_TOOL_NAME } from './capabilities'
 
 // ============================================================================
 // Tool Registry — local tools + plugin contributions (harness only provides the
@@ -82,6 +83,9 @@ export const toolBuilders: Record<string, ToolFactory> = {
   ...Object.fromEntries(
     buildScheduleTools().map((instance) => [instance.name, () => instance])
   ),
+  // Capability catalog: the model copies `agentConfig` values from here. Registered but not
+  // selectable; `expandSelectionToolNames` mounts it automatically next to the schedule tools.
+  [LIST_CAPABILITIES_TOOL_NAME]: () => buildListCapabilitiesTool(listAvailableTools()),
   ...workshopToolBuilders,
   ...latticeToolBuilders
 }
@@ -157,6 +161,15 @@ const localToolInfos: ToolInfo[] = [
     label: 'Edit schedule',
     description: 'Update, pause, resume or delete a scheduled task',
     icon: 'RiCalendar2Line',
+    color: '#722ed1'
+  },
+  // Mounted automatically next to the schedule tools; hidden from the selectable list (see the
+  // `hidden` set in listAvailableTools) because it is a dependency, not a feature to schedule.
+  {
+    name: LIST_CAPABILITIES_TOOL_NAME,
+    label: 'Capability list',
+    description: 'List tools, skills and MCP servers a scheduled task can mount',
+    icon: 'RiListCheck',
     color: '#722ed1'
   },
   // Plugin workshop (4) + plugin center release (1): label/description are fallbacks only;
@@ -370,7 +383,9 @@ export function listAvailableTools(): ToolInfo[] {
   const infos = mergeToolSources({ ...toolSources(), onWarn: (message) => logger.warn(message) }).infos
   const hidden = new Set<string>([
     ...SCHEDULE_TOOL_NAMES,
-    ...MCP_RESOURCE_TOOL_INFOS.map((i) => i.name)
+    ...MCP_RESOURCE_TOOL_INFOS.map((i) => i.name),
+    // Mounted automatically with the schedule tools; not a selectable item of its own
+    LIST_CAPABILITIES_TOOL_NAME
   ])
   const out: ToolInfo[] = []
   let webGroupPlaced = false
@@ -514,6 +529,12 @@ export function expandSelectionToolNames(
       continue
     }
     out.push(name)
+  }
+  // The schedule tools depend on the capability catalog to fill `agentConfig` with valid values
+  // (tool names / skill ids / mcp@namespace). Mount it automatically next to them, so the user
+  // only has to check the scheduled-task group.
+  if (out.some((name) => (SCHEDULE_TOOL_NAMES as readonly string[]).includes(name))) {
+    out.push(LIST_CAPABILITIES_TOOL_NAME)
   }
   return Array.from(new Set(out))
 }

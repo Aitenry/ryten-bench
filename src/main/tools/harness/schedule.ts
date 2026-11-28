@@ -76,12 +76,21 @@ const selectionSchema = z.object({
   tools: z
     .array(z.string())
     .nullish()
-    .describe('Tool names exactly as listed in the tool selector (e.g. "personal_ledger", "schedule-tasks")'),
-  skills: z.array(z.string()).nullish().describe('Skill ids (omit / null = no skills)'),
+    .describe(
+      'Tool names exactly as listed in the tool selector (e.g. "personal_ledger", "schedule-tasks"); call list_capabilities with kind:"tools" for the full list'
+    ),
+  skills: z
+    .array(z.string())
+    .nullish()
+    .describe(
+      'Skill ids (omit / null = no skills); call list_capabilities with kind:"skills" for the full list'
+    ),
   mcpTools: z
     .array(z.string())
     .nullish()
-    .describe('MCP server group values such as "mcp@filesystem" (omit / null = no MCP)')
+    .describe(
+      'MCP server group values such as "mcp@filesystem" (omit / null = no MCP); call list_capabilities with kind:"mcp" for the full list'
+    )
 })
 
 /** Current conversation id (used as task ownership at creation and as the "this" target; <=0 = none) */
@@ -250,7 +259,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         '`when`: {kind:"once", at: ISO time} | {kind:"every", minutes: 5-10080} | {kind:"daily", time: "HH:MM"} in local 24-hour time (midnight is "00:00"; "24:00" is rejected). ' +
         '`targetSession`: "this" (default) keeps running in this conversation, "new" opens a brand-new conversation on every run (inheriting this conversation\'s mode, workspace and memory). ' +
         '`targetConversationId`: run in another existing conversation instead (id from conversation_list). ' +
-        '`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation\'s own selection. ' +
+        '`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation\'s own selection. Before filling it, call list_capabilities (kind: tools / skills / mcp) to get the exact values — pass an id as query to read one item in full. ' +
         'Use this whenever the user asks for something recurring or at a fixed time ("every day / every week", 每天/每晚/每周/定时) — do not turn such requests into a long-running goal. Tasks fire while the app is running; missed runs are skipped, not replayed.',
       schema: z.object({
         title: z.string().describe('Short title shown in the task list (<=120 chars)'),
@@ -389,6 +398,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         'Update a scheduled task. Only the fields you pass are written — everything else stays as it is (undefined = keep, null = clear). ' +
         'Fields: title, prompt, when (same rules as schedule_create), targetSession ("this" conversation or "new" conversation per run), targetConversationId (move the task to that existing conversation), ' +
         'agentConfig (tools / skills / MCP for every run; pass null to clear it and follow the conversation again), enabled (false = pause, true = resume). ' +
+        'For agentConfig values, call list_capabilities (kind: tools / skills / mcp) first; pass an id as query to read one item in full. ' +
         'Use action:"delete" to delete the task.',
       schema: z.object({
         id: z.string().describe('Task id from schedule_list'),
