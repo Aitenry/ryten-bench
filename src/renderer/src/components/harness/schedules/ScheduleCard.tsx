@@ -113,17 +113,35 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
         transition: 'background .15s, border-color .15s'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 14.5, fontWeight: 650, color: token.colorText }}>{task.title}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        {/* The title takes the remaining width and truncates: a long task name must not push the
+            status pill / icons to a second line (narrow cards used to break the label mid-word). */}
+        <span
+          title={task.title}
+          style={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            fontSize: 14.5,
+            fontWeight: 650,
+            color: token.colorText,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {task.title}
+        </span>
         <span
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 5,
+            flex: '0 0 auto',
             height: 20,
             padding: '0 8px',
             borderRadius: 999,
             fontSize: 10.5,
+            whiteSpace: 'nowrap',
             color: task.enabled ? '#7bd13f' : token.colorTextTertiary,
             background: task.enabled ? 'rgba(73,170,25,.12)' : token.colorFillTertiary
           }}
@@ -139,7 +157,15 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
           {task.enabled ? t('schedulesPage.stateEnabled') : t('schedulesPage.statePaused')}
         </span>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            flex: '0 0 auto'
+          }}
+        >
           <Tooltip title={task.enabled ? t('schedulesPage.pause') : t('schedulesPage.resume')}>
             <Button
               type="text"
