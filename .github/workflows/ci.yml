@@ -4,10 +4,10 @@ name: CI
 #
 # Division of labor with release.yml:
 # - release.yml runs the release pipeline only on pushes to main (version resolution → three-platform packaging → publish);
-# - this workflow blocks regressions before merge: typecheck + full unit test suite.
+# - this workflow blocks regressions before merge: typecheck + ESLint errors.
 #
-# Note: lint is not in CI yet — the repository carries 40k+ outstanding prettier/CRLF warnings;
-# enable it after a formatting cleanup pass.
+# The offline suites under tests/ (and their runner in scripts/) are local tooling and are not
+# tracked, so this workflow does not run them; run `pnpm test:all` locally instead.
 on:
   pull_request:
   push:
@@ -50,6 +50,3 @@ jobs:
       # Only fail on errors (prettier formatting warnings are pre-existing; --quiet suppresses warnings)
       - name: Lint (errors only)
         run: pnpm lint:errors
-
-      - name: Unit tests
-        run: pnpm test:all
