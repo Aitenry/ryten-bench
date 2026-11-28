@@ -14,6 +14,12 @@ import {
 } from '@renderer/utils/providerMeta'
 import { createTurnGuard } from '@renderer/utils/harness/turn-guard'
 import { applyChunkToMessages } from '../../utils/harness/applyChunk'
+import { mergeLoadedHistory } from '../../utils/harness/history-merge'
+import {
+  applySettledDialogue,
+  ensureStreamTarget,
+  isEmptyAssistantCard
+} from '../../utils/harness/stream-target'
 import type {
   HarnessTopicRow,
   QueuedMessageView,
@@ -695,8 +701,22 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       const applyPendingChunks = (): void => {
         flushTimer = null
         if (pendingChunks.length === 0) return
-        const session = sessionsRef.current.get(topicId)
-        if (!session) return
+        /**
+         * The cache can disappear **mid-turn** (topic switch, a queued-send rollback, another
+         * turn's completion). This used to `return` and silently discard the entire remaining
+         * stream: the bubble stayed at "generating…" forever while the main process kept
+         * producing content (production 2026-11-28, topic 6 / dialogue 98: 155 blocks persisted,
+         * nothing rendered). Rebuild the cache from the live list instead of dropping the batch.
+         */
+        let session = sessionsRef.current.get(topicId)
+        if (!session) {
+          const base = currentTopicIdRef.current === topicId ? messagesSnapshotRef.current : []
+          console.warn(
+            `[Stream] Session cache missing for topic ${topicId}; rebuilding from ${base.length} visible message(s)`
+          )
+          session = { messages: [...base], inputValue: '', attachments: [], sessionId: aiMessageId }
+          sessionsRef.current.set(topicId, session)
+        }
         // First coalesce same-kind "cumulative" deltas: applying per chunk copies the whole text
         // at every step (O(L²)); after coalescing each batch copies it once (O(F×L)). Deltas
         // already in incremental form are kept as-is, so semantics do not change.
@@ -707,8 +727,16 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         // (see isSteerChunk), and the assistant message keeps accumulating in the same bubble —
         // a question/answer turn always has exactly one assistant message
         const dataChunks = coalesced.filter((chunk) => !isSteerChunk(chunk))
-        let updatedMessages = session.messages
         const targetId = assistantIdByTopicRef.current.get(topicId) ?? aiMessageId
+        // `applyChunkToMessages` only maps over existing messages: a missing target id is a silent
+        // no-op, which is indistinguishable from "the model produced nothing". Guarantee the bubble
+        // exists before applying, so a batch always lands somewhere visible.
+        let updatedMessages = ensureStreamTarget(session.messages, targetId)
+        if (updatedMessages !== session.messages) {
+          console.warn(
+            `[Stream] Streaming target ${targetId} missing from topic ${topicId}'s list; mounting it`
+          )
+        }
         for (const chunk of dataChunks) {
           updatedMessages = applyChunkToMessages(
             updatedMessages,
@@ -753,7 +781,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         if (chunk.__topicId !== topicId) return
         // Turn guard: drop chunks outside this turn (late events from the previous turn / concurrent other turns)
         if (!matchesTurn(chunk.__turnId)) return
-        if (!sessionsRef.current.get(topicId)) return
+        // No "session cache present?" check here: the cache is rebuilt from the live list inside
+        // applyPendingChunks, so a cache that was dropped mid-turn cannot swallow the stream.
         pendingChunks.push(chunk)
         scheduleFlush()
       })
@@ -762,6 +791,31 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         applyPendingChunks()
         chunkCleanup()
       })
+
+      /**
+       * Fill an empty settled card with the content the main process already persisted.
+       *
+       * The renderer has no stream replay: once a turn's events are missed there is no way to get
+       * them back except the database. Reading the row back is what makes "the page says generating
+       * forever, but the answer exists" self-correcting instead of requiring a topic switch.
+       */
+      const reloadSettledTurn = async (
+        turnTopicId: number,
+        targetId: string,
+        dialogueId: number
+      ): Promise<void> => {
+        try {
+          const page = await harnessApi.harness.getDialoguesByTopicPaginated(turnTopicId, 0, 40)
+          const row = page.items.find((item) => item.id === dialogueId)
+          if (!row) return
+          console.warn(
+            `[Stream] Recovered settled dialogue ${row.id} for topic ${turnTopicId} from the database (live stream was lost)`
+          )
+          setMessages((prev) => applySettledDialogue(prev, targetId, row))
+        } catch (error) {
+          console.warn('[Stream] Failed to recover the settled turn from the database:', error)
+        }
+      }
 
       const doneCleanup = harnessApi.harness.onStreamDone(
         ({
@@ -781,6 +835,24 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           // chunk batch, and without draining, the trailing text would be lost (the session
           // cache is cleared right after)
           applyPendingChunks()
+
+          /**
+           * Self-heal: when this turn's bubble is still empty, the renderer lost the stream (see
+           * the 2026-11-28 production incident: 155 blocks and 1107 characters were persisted as
+           * dialogue 98 while the screen kept showing "generating…" and never even received the
+           * done event). The content is never lost — it is already in the database — so the card is
+           * filled from the persisted row instead of leaving an empty answer on screen.
+           *
+           * Captured **before** the cache is cleared below, and applied after the settle commit.
+           */
+          const liveTargetId = assistantIdByTopicRef.current.get(doneTopicId) ?? aiMessageId
+          const liveTarget = sessionsRef.current
+            .get(doneTopicId)
+            ?.messages.find((msg) => msg.id === liveTargetId)
+          // Only recover when the main process named **this turn's** row: using "the newest
+          // assistant row" instead could fill the card with a previous turn's answer.
+          const needsRecovery =
+            assistantDialogueId != null && isEmptyAssistantCard(liveTarget)
 
           // Clear the loading state for this topic
           isLoadingMapRef.current.delete(doneTopicId)
@@ -871,6 +943,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
                 return msg
               })
             })
+          }
+
+          if (needsRecovery && assistantDialogueId != null) {
+            void reloadSettledTurn(doneTopicId, liveTargetId, assistantDialogueId)
           }
         }
       )
@@ -1203,12 +1279,39 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             if (older.items.length === 0) break
           }
         }
-        setMessages(loadedMessages)
+        /**
+         * A send can start while this page load is still in flight (open a session and type
+         * quickly). `startTurn` has then already appended the optimistic pair — the user's message
+         * and its streaming bubble — to the live state **and** to the session cache, so replacing
+         * the list here erased what the user just sent; the following chunk write then replaced it
+         * back with the cache, and the history that was just loaded went missing (production
+         * 2026-11-28: the screen showed a single user message and an empty assistant card).
+         *
+         * Merge instead: loaded history first, then the live tail this topic already holds, by id.
+         * With no live session (the normal path) this reduces to the loaded page, unchanged.
+         */
+        const liveSession = sessionsRef.current.get(topic.id)
+        const mergedMessages = mergeLoadedHistory(
+          loadedMessages,
+          liveSession
+            ? liveSession.messages
+            : messagesBelongToTopicRef.current === topic.id
+              ? messagesSnapshotRef.current
+              : []
+        )
+        if (liveSession) {
+          // Keep the cache and the screen in sync: the next chunk batch writes the cache back to
+          // the screen, and a cache without the loaded history would undo this merge.
+          sessionsRef.current.set(topic.id, { ...liveSession, messages: mergedMessages })
+        }
+        setMessages(mergedMessages)
         setMessagesPage(loadedPage)
         setMessagesHasMore(hasMore)
       } catch (err) {
         console.error('Failed to load dialogues:', err)
-        setMessages([])
+        // A live turn survives a failed history read: show its tail instead of a blank screen
+        const liveSession = sessionsRef.current.get(topic.id)
+        setMessages(liveSession ? liveSession.messages : [])
       }
 
       messagesBelongToTopicRef.current = topic.id

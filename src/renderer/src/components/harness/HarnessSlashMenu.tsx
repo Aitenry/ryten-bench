@@ -6,10 +6,11 @@ import { filterSlashCommands, type HarnessSlashCommandId } from './slashCommands
 /**
  * Slash command panel for the input box — opened by typing `/` at the **start** of the input.
  *
- * Shaped like a dark floating panel attached to the top edge of the input card, with a group
- * header "Add" and one row per command: icon + localized name + English alias + description on
- * the right. The first row is highlighted by default; arrow keys move and Enter picks (keyboard
- * handling lives in the input's handleKeyDown).
+ * It is a normal (in-flow) row of the input stack, mounted at the top of the column above the
+ * goal / plan / task cards: opening it grows the input area upwards instead of drawing an overlay
+ * on top of the cards. Group header "Add" plus one row per command: icon + localized name +
+ * English alias + description on the right. The first row is highlighted by default; arrow keys
+ * move and Enter picks (keyboard handling lives in the input's handleKeyDown).
  *
  * Only the two goal/plan commands are kept for now (the remaining rows in the mock were struck
  * out):

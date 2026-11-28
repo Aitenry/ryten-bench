@@ -154,6 +154,12 @@ const Harness: React.FC = () => {
   /** Round limit for goal compose mode (null = backend default of 256) */
   const [goalRoundsLimit, setGoalRoundsLimit] = useState<number | null>(null)
   /**
+   * Mount node for the `/` command palette: the palette is stacked in the input column *above*
+   * the goal / plan / task cards, so it never covers them (the page owns the slot, the input
+   * portals the panel into it).
+   */
+  const [slashMenuHost, setSlashMenuHost] = useState<HTMLDivElement | null>(null)
+  /**
    * Plan review pending: locks goal actions and the input; review feedback stays in the plan card
    */
   const [planReviewPending, setPlanReviewPending] = useState(false)
@@ -815,6 +821,8 @@ const Harness: React.FC = () => {
       colorBorderSecondary={colorBorderSecondary}
       top={
         <>
+          {/* Slot for the `/` palette: first row of the input stack, above the topic cards */}
+          <div ref={setSlashMenuHost} />
           <InlinePlanTray
             currentTopicId={currentTopicId}
             toggleSignal={planToggleSignal}
@@ -879,6 +887,7 @@ const Harness: React.FC = () => {
         locked={planReviewPending}
         onGoalCommand={() => void beginGoalCompose()}
         onPlanCommand={() => setPlanToggleSignal((value) => value + 1)}
+        slashMenuHost={slashMenuHost}
         agentSelection={agentSelection}
         onAgentSelectionChange={setAgentSelection}
         pendingTeamMode={pendingTeamMode}

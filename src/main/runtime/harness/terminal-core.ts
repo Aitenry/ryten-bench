@@ -98,17 +98,132 @@ export function normalizeCommand(
   return { ok: true, command }
 }
 
+/** ESC (0x1b): every ANSI escape sequence starts here */
+const ESC = '\u001b'
+
+/** Stripper state machine states (see `AnsiStripper`) */
+type AnsiState =
+  | 'text'
+  | 'escape'
+  | 'escapeIntermediate'
+  | 'csi'
+  | 'osc'
+  | 'oscEscape'
+  | 'controlString'
+  | 'controlStringEscape'
+
+/**
+ * Guard against a malformed escape swallowing an unbounded amount of output.
+ *
+ * A genuine sequence is short (an OSC title/clipboard payload is the longest realistic case,
+ * still far below this); anything longer means the ESC was never terminated, so it is dropped as
+ * broken instead of being treated as a sequence forever.
+ */
+const ANSI_MAX_SEQUENCE_CHARS = 8192
+
+/**
+ * **Streaming** ANSI stripper: removes colors, cursor control, OSC titles and other escape
+ * sequences while keeping readable text.
+ *
+ * Why not a regex on the whole string: output arrives as arbitrary stdout/stderr chunks and a
+ * chunk boundary can fall **inside** an escape sequence ("…\u001b[3" + "2m"). Per-chunk regexes
+ * would then leave the remainder ("2m") visible as garbage, which is exactly the mojibake this
+ * exists to prevent. This keeps its parser state across `push` calls, so a split sequence is still
+ * removed as a whole. Incomplete trailing sequences are held back and only emitted if the next
+ * chunk proves they were ordinary text.
+ */
+export class AnsiStripper {
+  private state: AnsiState = 'text'
+  /** Characters consumed by the current sequence (malformed-sequence guard) */
+  private pending = 0
+
+  /** Feed one output chunk; returns the readable text it contained */
+  push(chunk: string): string {
+    if (!chunk) return ''
+    const out: string[] = []
+    for (const char of chunk) {
+      if (this.state === 'text') {
+        if (char === ESC) {
+          this.state = 'escape'
+          this.pending = 0
+        } else {
+          out.push(char)
+        }
+        continue
+      }
+      const next = this.advance(char)
+      if (next === 'text') {
+        this.state = 'text'
+        this.pending = 0
+        continue
+      }
+      if (next === 'keep') {
+        // Not a valid sequence after all: drop the ESC and keep the character as text
+        this.state = 'text'
+        this.pending = 0
+        out.push(char)
+        continue
+      }
+      this.state = next
+      if (++this.pending > ANSI_MAX_SEQUENCE_CHARS) {
+        this.state = 'text'
+        this.pending = 0
+      }
+    }
+    return out.join('')
+  }
+
+  /** Next state for one character inside a sequence; 'keep' emits it as text, 'text' ends the sequence */
+  private advance(char: string): AnsiState | 'keep' | 'text' {
+    // A new ESC always (re)starts a sequence (an abandoned one is simply dropped)
+    if (char === ESC) return 'escape'
+    switch (this.state) {
+      case 'escape':
+        // CSI and OSC/string introducers
+        if (char === '[') return 'csi'
+        if (char === ']') return 'osc'
+        if (char === 'P' || char === '^' || char === '_' || char === 'X') return 'controlString'
+        // Two-byte escapes such as ESC 7 / ESC =; three-byte ones such as ESC ( B / ESC # 8
+        if (char >= ' ' && char <= '/') return 'escapeIntermediate'
+        if (char >= '0' && char <= '~') return 'text'
+        return 'keep'
+      case 'escapeIntermediate':
+        if (char >= ' ' && char <= '/') return 'escapeIntermediate'
+        if (char >= '0' && char <= '~') return 'text'
+        return 'keep'
+      case 'csi':
+        // Parameter bytes 0x30-0x3F, intermediate bytes 0x20-0x2F, final byte 0x40-0x7E
+        if (char >= ' ' && char <= '?') return 'csi'
+        if (char >= '@' && char <= '~') return 'text'
+        return 'keep'
+      case 'osc':
+        // OSC ends with BEL or ST (ESC \); other characters are payload (e.g. the window title).
+        // A line break means the introducer was never a real sequence: keep it as text instead of
+        // swallowing output until the length guard fires.
+        if (char === '\n' || char === '\r') return 'keep'
+        if (char === '\u0007') return 'text'
+        if (char === ESC) return 'oscEscape'
+        return 'osc'
+      case 'oscEscape':
+        if (char === '\\') return 'text'
+        return 'osc'
+      case 'controlString':
+        if (char === '\n' || char === '\r') return 'keep'
+        if (char === ESC) return 'controlStringEscape'
+        return 'controlString'
+      case 'controlStringEscape':
+        if (char === '\\') return 'text'
+        return 'controlString'
+      default:
+        return 'text'
+    }
+  }
+}
+
 /** Strip ANSI escapes (colors, cursor control, OSC titles, etc.) while keeping readable text */
 export function stripAnsi(text: string): string {
-  // ANSI escape sequences necessarily consist of control characters such as ESC(0x1b)/BEL(0x07),
-  // so `no-control-regex` is a false positive here: an inline disable is more precise than
-  // relaxing the global rule.
-  /* eslint-disable no-control-regex */
-  return text
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\u001b[@-Z\\-_]/g, '')
-  /* eslint-enable no-control-regex */
+  // A one-shot strip: a trailing incomplete sequence is malformed, so it stays dropped
+  return new AnsiStripper().push(text)
 }
 
 /**

@@ -131,6 +131,12 @@ const InlineGoalCard: React.FC<InlineGoalCardProps> = ({
     )
   }
 
+  // A finished goal leaves the input stack: after `complete` the record is kept in the database
+  // (it can be reviewed / replaced via `/goal`), but a done goal must not keep occupying the
+  // composer area. It is still rendered while selected so `/goal` can show the finished objective
+  // and prefill the input for a new one.
+  if (goal.phase === 'complete' && !selected) return null
+
   const phaseColor =
     goal.phase === 'active'
       ? token.colorPrimary

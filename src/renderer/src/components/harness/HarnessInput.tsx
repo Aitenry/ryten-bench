@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { App, Button, Input, InputNumber, Modal, Popover, Switch, Tooltip, theme } from 'antd'
 import type { InputRef } from 'antd'
 import {
@@ -262,6 +263,15 @@ interface HarnessInputProps {
   /** Slash command "plan": the page toggles plan mode above the input */
   onPlanCommand?: () => void
   /**
+   * Mount node for the `/` palette, rendered by the page as the top row of the input stack.
+   *
+   * The palette used to be an absolutely positioned overlay anchored to the composer, which drew
+   * it *over* the goal / plan / task cards. It now lives in normal flow at the top of the stack
+   * (portal target): when it opens the stack simply grows upwards, so nothing is covered and the
+   * panel is not detached from the input.
+   */
+  slashMenuHost?: HTMLElement | null
+  /**
    * Session-level run selection (tools / skills / MCP): owned by the page and sent with agentConfig.
    * Changes are reported back via onAgentSelectionChange; for an existing session the input
    * persists them directly.
@@ -299,6 +309,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   simpleMode = false,
   onGoalCommand,
   onPlanCommand,
+  slashMenuHost = null,
   placeholder,
   goalCompose = false,
   goalRoundsLimit = null,
@@ -2011,28 +2022,24 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)'
       }}
     >
-      {/* `/` command palette: pops up flush with the top edge of the input card (left/right aligned
-          with it). Only appears when `/` is typed at the start of the input; closes on Esc or an
-          outside click. */}
-      {!simpleMode && slashOpen ? (
-        <div
-          style={{
-            position: 'absolute',
-            left: 6,
-            right: 6,
-            bottom: '100%',
-            zIndex: 60
-          }}
-        >
-          <HarnessSlashMenu
-            query={slashQuery}
-            activeIndex={slashIndex}
-            onActiveIndexChange={setSlashIndex}
-            onPick={pickSlashCommand}
-            menuRef={slashMenuRef}
-          />
-        </div>
-      ) : null}
+      {/* `/` command palette: a normal row of the input stack, portaled into the slot the page
+          renders above the goal / plan / task cards. It therefore *stacks* instead of overlaying:
+          opening it grows the footer upwards, and it never covers the cards or the input. Only
+          appears when `/` is typed at the start of the input; closes on Esc or an outside click. */}
+      {!simpleMode && slashOpen && slashMenuHost
+        ? createPortal(
+            <div style={{ marginBottom: 8 }}>
+              <HarnessSlashMenu
+                query={slashQuery}
+                activeIndex={slashIndex}
+                onActiveIndexChange={setSlashIndex}
+                onPick={pickSlashCommand}
+                menuRef={slashMenuRef}
+              />
+            </div>,
+            slashMenuHost
+          )
+        : null}
       {/* Assistant mascot: sits at the top-right of the input only in a blank session; hidden once
           there is conversation content so it does not cover messages / reasoning (decoration only,
           does not intercept the mouse). */}

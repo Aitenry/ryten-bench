@@ -20,6 +20,7 @@ import { isPermissionMode } from './permission'
 import { runConfinedShell, sandboxDenialText, sandboxUnavailableText } from '../../sandbox/exec'
 import type { SandboxMode } from '../../sandbox/types'
 import { jobsRegistry } from './jobs'
+import { AnsiStripper, stripAnsi } from './terminal-core'
 import {
   MAX_EXEC_CHARS,
   MAX_FILE_CHARS,
@@ -164,16 +165,25 @@ function startBackgroundCommand(params: {
   void (async () => {
     let captured = 0
     let truncated = false
+    /**
+     * Command output is often colored even without a TTY (picocolors enables colors on win32
+     * unconditionally), and those escapes used to be stored verbatim: the tray showed "…[32m"
+     * mojibake and `job_output` fed the model escape noise. Strip them as the bytes stream in —
+     * the stripper keeps state across chunks, so a sequence split between two reads is removed
+     * too.
+     */
+    const ansi = new AnsiStripper()
     const onOutput = (chunk: string): void => {
       if (captured >= MAX_BACKGROUND_OUTPUT_CHARS) {
         truncated = true
         return
       }
+      const text = ansi.push(chunk)
       const room = MAX_BACKGROUND_OUTPUT_CHARS - captured
-      const kept = chunk.length > room ? chunk.slice(0, room) : chunk
+      const kept = text.length > room ? text.slice(0, room) : text
       captured += kept.length
       if (kept) job.appendOutput(kept)
-      if (kept.length < chunk.length) truncated = true
+      if (kept.length < text.length) truncated = true
     }
 
     try {
@@ -1404,7 +1414,9 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
               return text
             }
 
-            let text = result.output
+            // Strip color/cursor escapes: a piped child still colors its output on win32, and the
+            // model must see readable text, not "\u001b[32m" noise
+            let text = stripAnsi(result.output)
             if (result.timedOut) {
               text += (text ? '\n' : '') + tr.exec.timedOut
             }

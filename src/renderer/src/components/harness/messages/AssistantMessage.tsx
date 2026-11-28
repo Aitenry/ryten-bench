@@ -28,6 +28,7 @@ import {
   type ToolCardStyle
 } from './ToolResultCard'
 import { toolIconFor } from '../../../utils/harness/toolIcons'
+import { isEmptyAssistantCard } from '../../../utils/harness/stream-target'
 import { MONO_FONT, TruncatedTooltipText } from './TruncatedTooltipText'
 import { useSubagentViewBridge } from '../../../contexts/harness/subagent-view-bridge'
 
@@ -364,15 +365,13 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       return st === 'preparing' || st === 'executing' || (!st && !last.tool.output)
     }
 
-    if (
-      message.loading &&
-      !message.content &&
-      !message.reasoning_content &&
-      (!message.toolCalls || message.toolCalls.length === 0) &&
-      !hasMemoryBlock &&
-      !hasCompactingBlock &&
-      !hasRetryingBlock
-    ) {
+    // The "generating…" row replaces the card **only when the card has nothing to show**. The old
+    // check looked at content / reasoning / toolCalls but not at `blocks`, so a message whose
+    // content lived only in blocks (e.g. a dispatched sub-agent card, or any structured block that
+    // arrives before the first text delta) was swapped for the placeholder and the streaming
+    // progress became invisible. Delegating to the shared predicate keeps this in sync with the
+    // stream path and with the done-path recovery.
+    if (message.loading && isEmptyAssistantCard(message)) {
       return <LoadingMessage colorTextSecondary={colorTextSecondary} />
     }
 
