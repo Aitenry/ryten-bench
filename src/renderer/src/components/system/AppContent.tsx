@@ -14,13 +14,15 @@ import {
 import type { LockUnlockResult } from '@renderer/types/settings'
 
 /**
- * 应用内容层：外壳 + 锁屏。
+ * Application content layer: shell + lock screen.
  *
- * 锁屏状态不再由这里的 `useState` 持有（旧实现刷新页面就解锁）：
- * `locked` 来自主进程快照（`lock-screen-state.ts`），验证/退避/自动锁屏也在主进程
- * （`src/main/lock/service.ts`）。这里只负责两件事：
- * - Esc 请求锁屏；
- * - 把解锁码转交主进程校验，并把失败结果交还锁屏界面展示。
+ * Lock screen state is no longer held by a `useState` here (the old implementation
+ * unlocked on page refresh): `locked` comes from the main-process snapshot
+ * (`lock-screen-state.ts`), and verification/backoff/auto-lock also live in the main
+ * process (`src/main/lock/service.ts`). This component only does two things:
+ * - request the lock on Esc;
+ * - hand the unlock code to the main process for verification and return the failure
+ *   result to the lock screen for display.
  */
 const AppContent: React.FC = () => {
   const { viewMessage } = useMessage()
@@ -28,13 +30,14 @@ const AppContent: React.FC = () => {
   const { enabled, hasCode, locked } = useLockScreenState()
 
   /**
-   * 挂主进程的锁屏推送 + 首次拉取。StrictMode 下会挂载两次，桥内部按引用计数
-   * 只保留一个 IPC 监听，不会重复处理事件。
+   * Attach the main-process lock-screen push + initial fetch. Under StrictMode this mounts
+   * twice; the bridge keeps a single IPC listener by reference counting, so events are not
+   * handled twice.
    */
   useEffect(() => installLockScreenBridge(), [])
 
-  // Esc 手动锁屏：未启用 / 还没设置解锁码时主进程不会锁（宁可 Esc 没反应，也不能锁出
-  // 一个进不去的界面）
+  // Manual lock on Esc: the main process refuses to lock when disabled / no unlock code is set
+  // (better for Esc to do nothing than to lock into a screen you cannot get past)
   const handleLockScreen = useCallback((): void => {
     if (!enabled || !hasCode) return
     void requestLock().catch((error) => {
@@ -42,7 +45,8 @@ const AppContent: React.FC = () => {
     })
   }, [enabled, hasCode])
 
-  // 解锁：校验在主进程（scrypt + 失败退避）；失败原因交给 LockScreen 就地展示
+  // Unlock: verification runs in the main process (scrypt + failure backoff); the failure
+  // reason is rendered in place by LockScreen
   const handleUnlock = useCallback(
     async (password: string): Promise<LockUnlockResult> => {
       try {

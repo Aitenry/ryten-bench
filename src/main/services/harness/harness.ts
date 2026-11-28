@@ -49,35 +49,35 @@ class HarnessService {
   private readonly memoryPath?: string
   private readonly workspaceId: number
   /**
-   * 这条会话的记忆作用域（`workspace` / `plugin` / `chat`，见 main/memory-scope.ts）：
-   * 插件会话走**这份插件自己的**目录（`<memoryPath>/plugin-<id>/`），
-   * 「对话」模式的会话走 `<memoryPath>/chat/`，都与工作记忆零交叉。
+   * Memory scope of this session (`workspace` / `plugin` / `chat`, see main/memory-scope.ts):
+   * plugin sessions use **this plugin's own** directory (`<memoryPath>/plugin-<id>/`), and "chat"
+   * mode sessions use `<memoryPath>/chat/`, with zero crossover with working memory.
    */
   private readonly memoryScope: MemoryScope
-  /** 工具调用总次数上限（来自当前模型的「高级配置 → 工具调用轮数」） */
+  /** Total tool-call limit (from the current model's "advanced config → tool call rounds") */
   private readonly maxToolRounds: number
-  /** spawn 时主模型描述符（provider 行 + 模型名）：后台子代理会话持久化，冷恢复时回到同一模型 */
+  /** Main model descriptor at spawn time (provider row + model name): background subagent sessions persist it so cold recovery returns to the same model */
   private readonly modelDescriptor?: SubAgentMainModelDescriptor
-  /** 目标自动续跑轮：跳过计划模式工具/提示词 */
+  /** Goal auto-continuation rounds: skip plan-mode tools/prompts */
   private readonly suppressPlanMode: boolean
-  /** 本轮路由的模型是否声明支持图片输入（read_image 的执行期门禁） */
+  /** Whether the model routed for this turn declares image input support (runtime gate for read_image) */
   private readonly supportsImageInput: boolean
 
   /**
-   * @param model 已创建的 BaseChatModel 实例（由外部 ProviderService 提供）
-   * @param tools 工具列表
-   * @param subAgents 智能体定义列表
-   * @param loadHistory 从数据库加载历史对话的回调（由主进程注入，避免循环依赖）
-   * @param skillsPath 技能存储目录（含 SKILL.md 的子目录即技能），空表示不启用
-   * @param enabledSkills 启用的技能 ID 列表，undefined 表示全部启用
-   * @param workspacePath AI 工作区目录，挂载为虚拟 /
-   * @param memoryPath 记忆存储根目录，空表示不启用（其下按作用域分隔，每个作用域一套独立记忆）
-   * @param workspaceId 当前工作区 ID，用于按工作区隔离记忆目录
-   * @param maxToolRounds 工具调用总次数上限（模型设置「工具调用轮数」；缺省用工程默认值）
-   * @param memoryScope 这条会话的记忆作用域；缺省 = 按 workspaceId 的工作区作用域
-   * @param modelDescriptor spawn 时主模型描述符（可选；后台子代理冷恢复用）
-   * @param suppressPlanMode 目标自动续跑轮：忽略计划模式
-   * @param supportsImageInput 当前模型档案是否声明支持图片输入（false = read_image 拒绝执行）
+   * @param model Created BaseChatModel instance (provided by the external ProviderService)
+   * @param tools Tool list
+   * @param subAgents Agent definition list
+   * @param loadHistory Callback that loads historical dialogues from the database (injected by the main process to avoid circular dependencies)
+   * @param skillsPath Skill storage directory (subdirectories containing SKILL.md are skills); empty = disabled
+   * @param enabledSkills Enabled skill ID list; undefined = all enabled
+   * @param workspacePath AI workspace directory, mounted as virtual /
+   * @param memoryPath Memory storage root; empty = disabled (split by scope underneath, each scope has its own memory)
+   * @param workspaceId Current workspace ID, used to isolate memory directories by workspace
+   * @param maxToolRounds Total tool-call limit (model setting "tool call rounds"; defaults to the project default)
+   * @param memoryScope Memory scope of this session; default = workspace scope by workspaceId
+   * @param modelDescriptor Main model descriptor at spawn time (optional; for background subagent cold recovery)
+   * @param suppressPlanMode Goal auto-continuation rounds: ignore plan mode
+   * @param supportsImageInput Whether the current model profile declares image input support (false = read_image refuses to execute)
    */
   constructor(
     model: BaseChatModel,
@@ -115,10 +115,10 @@ class HarnessService {
   }
 
   /**
-   * 创建 Agent 运行时（每次请求独立实例，隔离性好）。
-   * Mnemon 记忆组件为进程级单例（跨请求共享，见 mnemon-singleton.ts）。
+   * Create an agent runtime (a separate instance per request, for good isolation).
+   * The Mnemon memory component is a process-level singleton (shared across requests, see mnemon-singleton.ts).
    *
-   * @param onUsageRecord 生成中每次模型调用结束的回调（IPC 层用来广播本轮实时用量）
+   * @param onUsageRecord Callback invoked after each model call during generation (the IPC layer uses it to broadcast live usage for this turn)
    */
   private createRuntime(onUsageRecord?: (records: ModelUsageRecord[]) => void): Runtime {
     return new Runtime({
@@ -128,9 +128,10 @@ class HarnessService {
       skillsPath: this.skillsPath,
       enabledSkills: this.enabledSkills,
       workspacePath: this.workspacePath,
-      // 记忆按**作用域**隔离：Runtime 的 /memories/ 挂载与 Mnemon 存储根都在
-      // <memoryPath>/<作用域目录>/ 下——工作模式的会话按工作区，插件会话按插件，
-      // 「对话」模式的会话走 chat（见 memory-scope.ts / mnemon-singleton.ts）
+      // Memory is isolated by **scope**: the Runtime's /memories/ mount and the Mnemon storage
+      // root both live under <memoryPath>/<scope dir>/ — work-mode sessions by workspace, plugin
+      // sessions by plugin, "chat"-mode sessions under chat (see memory-scope.ts /
+      // mnemon-singleton.ts)
       memoryPath: this.scopeMemoryPath,
       workspaceId: this.workspaceId,
       maxToolCalls: this.maxToolRounds,
@@ -146,23 +147,24 @@ class HarnessService {
     })
   }
 
-  /** 作用域目录名（`workspace-<id>` / `plugin-<id>` / `chat`），日志用 */
+  /** Scope directory name (`workspace-<id>` / `plugin-<id>` / `chat`), for logs */
   private get memoryScopeDirName(): string | undefined {
     if (!this.memoryPath) return undefined
     return memoryScopeDirName(this.memoryScope)
   }
 
-  /** 作用域级记忆目录（记忆根 + 作用域目录名定位） */
+  /** Scope-level memory directory (memory root + scope directory name) */
   private get scopeMemoryPath(): string | undefined {
     return memoryScopeRoot(this.memoryPath, this.memoryScope)
   }
 
   /**
-   * 将用户上传的文件复制到 agent 工作区 /uploads/ 目录，
-   * 返回 agent 文件系统中的虚拟路径引用。
+   * Copy user-uploaded files into the agent workspace /uploads/ directory,
+   * returning virtual path references in the agent filesystem.
    *
-   * 不直接将文件内容嵌入消息，而是让 agent 通过 read_file 工具按需读取，
-   * 大文件读取结果在工具层截断（20K 字符），避免上下文膨胀。
+   * Instead of embedding file content in the message, the agent reads it on demand with the
+   * read_file tool; large read results are truncated at the tool layer (20K chars) to avoid
+   * context bloat.
    */
   private async copyUploadedFiles(
     docs?: { fileName: string; filePath: string }[]
@@ -177,7 +179,8 @@ class HarnessService {
     const refs: UploadedFileRef[] = []
     for (const doc of docs) {
       try {
-        // 文件名净化：renderer 传入的 fileName 可能含路径分隔符/..，直接拼接会写出 uploads 目录
+        // Sanitize the file name: the renderer-supplied fileName may contain path separators or
+        // .., which would write outside the uploads directory if joined directly
         const safeName = path.basename(doc.fileName)
         if (!safeName) {
           logger.warn(`[Harness] Ignoring invalid upload file name: ${doc.fileName}`)
@@ -191,7 +194,7 @@ class HarnessService {
         })
       } catch (err) {
         logger.warn(`Failed to copy uploaded file ${doc.fileName}:`, err)
-        // 复制失败时仍告知 agent，让其尝试直接从原始路径读取
+        // On copy failure, still tell the agent so it can try reading from the original path
         refs.push({
           fileName: doc.fileName,
           virtualPath: doc.filePath
@@ -203,11 +206,12 @@ class HarnessService {
   }
 
   /**
-   * 上一轮模型调用真实用掉的上下文（token），供压缩压力判定。
+   * Context actually consumed by the previous model call (tokens), used for compaction pressure.
    *
-   * 数据源是 harness_dialogue_usage（一轮一行，行内明细数组的最后一条 = 最近一次调用）。
-   * 拿不到（模型/网关不回传 usage_metadata、新会话还没有用量行）返回 null，
-   * 调用方退回「字符 ÷ 预算」的启发式。
+   * The data source is harness_dialogue_usage (one row per turn; the last entry of the row's
+   * detail array = the most recent call). Returns null when unavailable (the model/gateway does
+   * not return usage_metadata, or a new session has no usage row yet), and the caller falls back
+   * to the "chars ÷ budget" heuristic.
    */
   private async measureContextTokens(topicId: number): Promise<number | null> {
     try {
@@ -223,10 +227,11 @@ class HarnessService {
   }
 
   /**
-   * 压缩后重注入的待办清单文本（没有待办返回空串）。
+   * Todo list text re-injected after compaction (empty string when there are no todos).
    *
-   * 待办清单是模型自己维护的“工作记忆”，压缩只动历史消息、不动这份进程级清单；
-   * 但摘要未必记得住每一项，所以压缩后连同文件内容一起重注入。
+   * The todo list is the "working memory" the model maintains itself; compaction only touches
+   * historical messages and never this process-level list, but the summary may not remember every
+   * item, so it is re-injected along with the file contents after compaction.
    */
   private buildRestoreNote(topicId: number): string {
     const todos = todoStore.get(topicId)
@@ -236,13 +241,13 @@ class HarnessService {
   }
 
   /**
-   * 从数据库加载历史消息上下文
-   * @param topicId 话题 ID
-   * @param onCompactionStart 摘要压缩开始时回调（LLM 调用前触发，前端展示「压缩中」）
-   * @param contextBudget 历史上下文字符预算（由模型上下文窗口换算，缺省用默认下限）
-   * @param signal 取消信号（贯通到摘要压缩调用：停止后压缩请求真正中断，且不落库 checkpoint）
-   * @param contextWindow 当前模型上下文窗口（token）；压缩压力按真实 token 判定时用
-   * @returns 转换后的 BaseMessage 数组及本轮发生的摘要压缩信息
+   * Load historical message context from the database
+   * @param topicId Topic ID
+   * @param onCompactionStart Callback when summary compaction starts (fired before the LLM call; the frontend shows "compacting")
+   * @param contextBudget Character budget for historical context (converted from the model context window; defaults to the default floor)
+   * @param signal Cancellation signal (threaded into the summary compaction call: after stop, the compaction request is actually interrupted and no checkpoint is persisted)
+   * @param contextWindow Current model context window (tokens); used when compaction pressure is judged by real tokens
+   * @returns Converted BaseMessage array and the summary compaction info for this turn
    */
   private async loadContextMessages(
     topicId: number,
@@ -268,7 +273,7 @@ class HarnessService {
         this.measureContextTokens(topicId)
       ])
       logger.info(`[Harness] Fetched ${dialogues.length} dialogues for topic ${topicId}`)
-      // 排除最后一条（当前用户消息），只取之前的对话
+      // Exclude the last entry (the current user message) and take only earlier dialogues
       const historyDialogues = dialogues.slice(0, -1)
       if (historyDialogues.length === 0) {
         logger.info(
@@ -278,14 +283,18 @@ class HarnessService {
       }
 
       const context = await convertDialoguesToMessages(historyDialogues, {
-        // 摘要压缩：压力达标时把最老对话压缩为 checkpoint（持久化复用，增量合并），
-        // 压缩模型请求与正文同款恢复：自动重试（带进度）+ 换模型继续；
-        // 用户放弃/询问不可用才回退字符截断。checkpoint 存于 topic_compactions 表。
-        // 压力优先按真实 token（上一轮实际上下文 ÷ 窗口 ≥ 79%），拿不到才退回字符口径。
+        // Summary compaction: when pressure is reached, compact the oldest dialogues into a
+        // checkpoint (persisted and reused, incrementally merged); the compaction model request
+        // recovers like the main stream: automatic retry (with progress) + continue with another
+        // model; only when the user gives up or the model is unavailable does it fall back to
+        // character truncation. The checkpoint is stored in the topic_compactions table.
+        // Pressure prefers real tokens (previous turn's actual context ÷ window ≥ 79%) and falls
+        // back to the character measure only when unavailable.
         maxChars: contextBudget,
         measuredContextTokens,
         contextWindowTokens: contextWindow,
-        // 压缩后重注入：用同一份工作区快照重读最近读/改过的文件（读不到就跳过）
+        // Post-compaction re-injection: re-read recently read/modified files from the same
+        // workspace snapshot (skip any that cannot be read)
         readFile: (virtualPath) =>
           readVirtualTextFile(
             {
@@ -295,7 +304,8 @@ class HarnessService {
             },
             virtualPath
           ),
-        // 压缩后把当前待办一起带回来（清单在进程里，压缩本身不会动它）
+        // Bring the current todos back after compaction (the list lives in the process;
+        // compaction itself does not touch it)
         restoreNote: () => this.buildRestoreNote(topicId),
         summarizer: (transcript, priorSummary) =>
           summarizeDialoguesWithRecovery(this.model, transcript, priorSummary, {
@@ -313,8 +323,10 @@ class HarnessService {
           await upsertCompaction({ topic_id: tid, boundary_id: cp.boundaryId, summary: cp.summary })
         },
         onCompactionStart,
-        // 取消信号贯通到压缩链路：中止后跳过摘要与 checkpoint 落库（此前漏传，
-        // history.ts 里的取消守卫全是死代码，取消窗口内仍会落库 checkpoint）
+        // The cancellation signal threads into the compaction chain: after abort, skip the
+        // summary and checkpoint persistence (previously not passed, so the cancellation guards
+        // in history.ts were all dead code and a checkpoint was still persisted inside the
+        // cancellation window)
         signal
       })
       logger.info(
@@ -328,21 +340,21 @@ class HarnessService {
   }
 
   /**
-   * 发送消息并返回结构化的消息列表
-   * @param message 用户输入
-   * @param options 可选配置（含 topicId 用于加载历史）
-   * @returns 结构化消息数组，每个元素包含工具调用信息或文本内容
+   * Send a message and return the structured message list
+   * @param message User input
+   * @param options Optional config (includes topicId for loading history)
+   * @returns Structured message array, each element containing tool call info or text content
    */
   async sendMessage(message: string, options?: HarnessOptions): Promise<StructuredMessage[]> {
     try {
-      // 计划模式 / 团队模式状态回填（非流式路径同样按话题生效）
+      // Backfill plan-mode / team-mode state (the non-streaming path also applies per topic)
       if (options?.topicId && options.topicId > 0) {
         await planModeStore.ensure(options.topicId)
         await teamModeStore.ensure(options.topicId)
       }
       const runtime = this.createRuntime()
 
-      // 将上传文件复制到 agent 可访问的工作区目录
+      // Copy uploaded files into a workspace directory the agent can access
       const uploadedRefs = await this.copyUploadedFiles(options?.documents)
       const userMessage = buildHumanMessage(message, options?.images, uploadedRefs)
       const context = options?.topicId
@@ -367,7 +379,8 @@ class HarnessService {
       )
 
       const structured = extractStructuredMessages(resultMessages)
-      // 非流式路径同样携带本轮热记忆注入与摘要压缩信息（前端据此显示卡片）
+      // The non-streaming path also carries this turn's hot-memory injection and summary
+      // compaction info (the frontend shows cards from these)
       const meta: StructuredMessage[] = []
       if (context.compaction) meta.push({ historyCompacted: context.compaction })
       const injection = runtime.memoryInjection
@@ -384,17 +397,17 @@ class HarnessService {
   }
 
   /**
-   * 发送消息并以流式方式返回内容
-   * @param message 用户输入
-   * @param options 可选配置（含 topicId 用于加载历史）
-   * @returns 异步生成器，返回 StructuredMessage
+   * Send a message and stream the content back
+   * @param message User input
+   * @param options Optional config (includes topicId for loading history)
+   * @returns Async generator yielding StructuredMessage
    */
   async *sendMessageStream(
     message: string,
     options?: HarnessOptions,
-    /** 本轮真实用量回调（由 IPC 层在助手消息落库后写入 harness_dialogue_usage） */
+    /** Real usage callback for this turn (the IPC layer writes it into harness_dialogue_usage after the assistant message is persisted) */
     onUsage?: (records: ModelUsageRecord[]) => void,
-    /** 生成中每次模型调用的用量回调（IPC 层广播给输入框底栏，实时显示本轮进度） */
+    /** Usage callback for each model call during generation (the IPC layer broadcasts it to the input footer to show this turn's progress live) */
     onUsageRecord?: (records: ModelUsageRecord[]) => void
   ): AsyncGenerator<StructuredMessage> {
     yield* runStream(

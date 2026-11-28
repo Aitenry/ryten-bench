@@ -2,17 +2,18 @@
 import { RiCalendarTodoLine, RiTargetLine } from '@remixicon/react'
 
 /**
- * 输入框命令面（slash menu）的命令目录与过滤规则。
+ * Command catalog and filtering rules for the input slash menu.
  *
- * 与视图分开（`HarnessSlashMenu.tsx` 只导出组件）：Fast Refresh 要求组件文件只导出组件，
- * 纯数据/纯函数放在这里，输入框也能直接复用同一份目录做键盘导航。
+ * Kept separate from the view (`HarnessSlashMenu.tsx` only exports the component): Fast Refresh
+ * requires component files to export only components, so pure data/pure functions live here, and
+ * the input can reuse the same catalog for keyboard navigation.
  *
- * 当前只保留「目标 / 计划」两条（参考截图里其余命令行被用户划掉）。
+ * Only the "goal / plan" entries are kept for now; the other command lines were dropped.
  */
 
 export type HarnessSlashCommandId = 'goal' | 'plan'
 
-/** 命令文案键（中文源语言推导的类型；两边保持一致才能过 `t()` 的键校验） */
+/** Command label keys (types derived from the Chinese source locale; both sides must match to pass `t()` key validation) */
 export type HarnessSlashCommandLabelKey =
   'harness.input.commands.goalLabel' | 'harness.input.commands.planLabel'
 
@@ -21,7 +22,7 @@ export type HarnessSlashCommandDescriptionKey =
 
 export interface HarnessSlashCommandDef {
   id: HarnessSlashCommandId
-  /** 命令英文名（行内别名；DSH 菜单里的 `goal` / `plan`） */
+  /** Command alias used inline (`goal` / `plan` in the slash menu) */
   alias: string
   labelKey: HarnessSlashCommandLabelKey
   descriptionKey: HarnessSlashCommandDescriptionKey
@@ -46,10 +47,11 @@ export const HARNESS_SLASH_COMMANDS: HarnessSlashCommandDef[] = [
 ]
 
 /**
- * 按查询词过滤命令（中文名 / 英文名 / 说明的子串匹配，忽略大小写与首尾空白）。
+ * Filter commands by query (substring match on alias / label / description, ignoring case and
+ * surrounding whitespace).
  *
- * @param translate i18n 的 `t`（只用到「返回字符串」这一面）
- * @param query `/` 后面的文本（空串 = 全部）
+ * @param translate the i18n `t` (only its string-returning facet is used)
+ * @param query text after `/` (empty string = all commands)
  */
 export function filterSlashCommands(
   translate: (key: HarnessSlashCommandLabelKey | HarnessSlashCommandDescriptionKey) => string,

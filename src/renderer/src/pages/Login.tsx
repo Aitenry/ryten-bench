@@ -18,14 +18,15 @@ import { useLattice } from '@renderer/lattice/useLattice'
 import { resolveLoginReturn } from '@renderer/utils/login-return'
 
 /**
- * 独立登录页（`/login`）。
+ * Standalone login page (`/login`).
  *
- * 布局：左品牌面板（logo + 定位语 + 3 条能力点 + 极淡网格/柔光背景），右登录卡片
- * （账号 / 密码 / 记住我 + 服务器地址高级折叠 / 错误提示）。外壳在 AppShell 里对
- * `/login` 走独立渲染分支（不显示侧栏），所以这一页占满整个窗口。
+ * Layout: brand panel on the left (logo + tagline + 3 capability points + a very faint grid and
+ * soft-light background), login card on the right (account / password / remember me + collapsible
+ * advanced server address / error alert). The shell renders `/login` through a standalone branch
+ * (no sidebar), so this page fills the whole window.
  *
- * 颜色全部来自 antd token（经内联 CSS 变量下发给样式表）与 `--shell-*` 同源的颜色语义，
- * 深色模式随主题自动适配；不新增任何依赖。
+ * All colours come from antd tokens (passed to the stylesheet as inline CSS variables) and from
+ * the same `--shell-*` colour semantics; dark mode adapts with the theme, with no new dependency.
  */
 
 interface LoginFormValues {
@@ -38,7 +39,7 @@ interface RememberedLogin {
   baseUrl?: string
 }
 
-/** 「记住我」只保存用户名与服务器地址（绝不在本地保存密码） */
+/** "Remember me" only stores the username and server address (never the password locally) */
 const REMEMBER_KEY = 'rytenbench.lattice.login'
 
 function readRemembered(): RememberedLogin {
@@ -61,7 +62,8 @@ function writeRemembered(value: RememberedLogin | null): void {
     if (value) window.localStorage.setItem(REMEMBER_KEY, JSON.stringify(value))
     else window.localStorage.removeItem(REMEMBER_KEY)
   } catch {
-    // localStorage 不可用（隐私模式等）时静默跳过：记住我退化为不记忆
+    // When localStorage is unavailable (private mode, etc.) skip silently: remember-me degrades
+    // to not remembering
   }
 }
 
@@ -85,8 +87,9 @@ const Login: React.FC = () => {
   const passwordRefAutoFocused = useRef(false)
 
   /**
-   * 自动聚焦：没记住用户名时聚焦账号框；记住过用户名时直接跳到密码框。
-   * 用 effect 而不是 autoFocus，是为了在「回填了用户名」的场景下把焦点放对位置。
+   * Auto focus: focus the username field when no username was remembered, otherwise jump
+   * straight to the password field. An effect instead of autoFocus keeps the focus in the right
+   * place when a username was pre-filled.
    */
   useEffect(() => {
     if (passwordRefAutoFocused.current) return
@@ -95,26 +98,31 @@ const Login: React.FC = () => {
     else usernameRef.current?.focus()
   }, [remembered.username])
 
-  /** 服务器地址默认取主进程 status 的基址；用户手动改过之后不再覆盖 */
+  /** Server address defaults to the base URL in main-process status; manual edits are kept */
   useEffect(() => {
     if (serverTouched || serverUrl || !status.baseUrl) return
     setServerUrl(status.baseUrl)
   }, [serverTouched, serverUrl, status.baseUrl])
 
   /**
-   * 登录页的统一出口：回到**进来之前停的那一页**（见 utils/login-return.ts）。
+   * Single exit for the login page: return to **the page the user came from** (see
+   * utils/login-return.ts).
    *
-   * 以前三处出口都写死 `/plugins`：从对话页的「未登录」进来，点「返回工作台」却落到插件
-   * 仓库，侧栏记住的插件会话还在、主区域却换了页（用户口径 2026-11-23「无论我选中哪一个
-   * 内容，回来都是选中插件仓库」）。从插件仓库进来时记录的就是插件仓库，行为不变。
+   * The three exits used to hard-code `/plugins`: arriving from the "not logged in" prompt on a
+   * conversation page and clicking "back to workbench" landed in the plugin repository, with the
+   * plugin session still remembered in the sidebar while the main area showed a different page
+   * (user feedback 2026-11-23). Arriving from the plugin repository still records the plugin
+   * repository, so that behaviour is unchanged.
    *
-   * 用 replace 而不是 push：登录页是一次性的中间页，返回后不该还能「后退」回登录页。
+   * Uses replace instead of push: the login page is a one-off intermediate page and "back" must
+   * not return to it after leaving.
    */
   const leaveLogin = useCallback((): void => {
     navigate(resolveLoginReturn(), { replace: true })
   }, [navigate])
 
-  /** 已登录用户访问 /login：直接回进来之前那一页（如需要换号，先在账号菜单里退出登录） */
+  /** Logged-in users hitting /login go straight back to the previous page (to switch accounts,
+   *  log out from the account menu first) */
   useEffect(() => {
     if (loggedIn) leaveLogin()
   }, [loggedIn, leaveLogin])
@@ -146,7 +154,8 @@ const Login: React.FC = () => {
     [login, message, leaveLogin, remember, serverUrl, t]
   )
 
-  /** 内联样式变量：把 antd token 映射成样式表可用的 CSS 变量（亮/暗主题自动跟随） */
+  /** Inline style variables: map antd tokens to CSS variables for the stylesheet (the light and
+   *  dark themes follow automatically) */
   const loginVars = useMemo(
     () =>
       ({
@@ -196,7 +205,8 @@ const Login: React.FC = () => {
 
   return (
     <div className="login-page" style={loginVars}>
-      {/* macOS 交通灯覆盖层下保留可拖拽区域；Windows/Linux 原生标题栏下无副作用 */}
+      {/* Keeps a draggable region under the macOS traffic lights; harmless with the native
+          Windows/Linux title bar */}
       <div className="login-drag-region" />
 
       <div className="login-shell">
@@ -297,7 +307,8 @@ const Login: React.FC = () => {
                 <Checkbox checked={remember} onChange={(e) => setRemember(e.target.checked)}>
                   {t('login.remember')}
                 </Checkbox>
-                {/* 服务器地址是次要动作：与「记住我」同一行右对齐，展开后输入框落在下一行 */}
+                {/* The server address is a secondary action: right-aligned on the "remember me"
+                    row, with its input opening on the next line */}
                 <button
                   type="button"
                   className="login-advanced-toggle"

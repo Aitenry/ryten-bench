@@ -1,86 +1,92 @@
 import { join } from 'path'
 
 /**
- * 「在应用中打开」的应用探测（纯函数 + 依赖注入，不碰 electron）。
+ * App detection for "open in app" (pure functions + dependency injection, no electron).
  *
- * 三个平台各有一套「这个应用在不在」的判断：
- * - **Windows**：先读卸载登记（覆盖装在 `D:\Program Files` 这类非标准目录的 JetBrains），
- *   再看 PATH（VS Code / JetBrains 安装器会把 `bin` 加进去），最后试常见安装路径；
- * - **macOS**：`/Applications` 与 `~/Applications` 下的 `.app`（Toolbox 装的会以符号链接出现在
- *   后者；社区版、Insiders 这些名字也一并列上），启动用 `open -a <app> <dir>`；
- * - **Linux**：PATH 上的启动命令、JetBrains Toolbox 的 `~/.local/share/JetBrains/Toolbox/scripts/`、
- *   `/snap/bin/`，最后按 flatpak 应用 id 走 `flatpak run`。
+ * Each of the three platforms has its own way of deciding whether an app exists:
+ * - **Windows**: read the uninstall registry first (covers JetBrains installed in non-standard
+ *   directories such as `D:\Program Files`), then PATH (VS Code / JetBrains installers add `bin`
+ *   to it), and finally try common install paths;
+ * - **macOS**: `.app` bundles under `/Applications` and `~/Applications` (Toolbox installs show up
+ *   as symlinks in the latter; community and Insiders names are listed too), launched with
+ *   `open -a <app> <dir>`;
+ * - **Linux**: launch commands on PATH, JetBrains Toolbox's
+ *   `~/.local/share/JetBrains/Toolbox/scripts/`, `/snap/bin/`, and finally `flatpak run` by
+ *   flatpak app id.
  *
- * 探测逻辑放在这里、依赖从外面注入（`exists` / `readdir` / `which` / `flatpakApps` / `windowsEntries`），
- * 是为了能在任意平台上用假依赖跑单测（本机是 Windows，跑不了真的 macOS/Linux）。
+ * Detection lives here with dependencies injected from outside (`exists` / `readdir` / `which` /
+ * `flatpakApps` / `windowsEntries`) so unit tests can run with fake dependencies on any platform
+ * (the dev machine is Windows, so real macOS/Linux cannot be exercised).
  */
 
-/** 系统文件管理器的固定 id（不参与安装探测，永远排第一） */
+/** Fixed id of the system file manager (not part of install detection; always first) */
 export const EXPLORER_ID = 'explorer'
 
-/** 一个「在应用中打开」目标（渲染层只拿 id + 文案 + 图标） */
+/** One "open in app" target (the renderer only gets id + label + icon) */
 export interface OpenInAppTarget {
   id: string
   label: string
-  /** 系统里那个应用的真实图标（PNG data URL）；取不到时界面退回通用图标 */
+  /** Real icon of that app (PNG data URL); the UI falls back to a generic icon if unavailable */
   icon?: string
 }
 
-/** 探测出来的目标：带启动方式（不发给渲染层） */
+/** A detected target: carries the launch method (not sent to the renderer) */
 export interface DetectedApp extends OpenInAppTarget {
-  /** 直接 spawn 的可执行文件 / 启动器；缺省 = 系统默认程序（文件管理器） */
+  /** Executable / launcher to spawn directly; when absent = system default program (file manager) */
   command?: string
-  /** 目录前的前缀参数（macOS 的 `open -a <app>`、Linux 的 `flatpak run <id>`） */
+  /** Prefix args placed before the directory (macOS `open -a <app>`, Linux `flatpak run <id>`) */
   commandArgs?: string[]
 }
 
-/** Windows 卸载登记里的一行 */
+/** One row from the Windows uninstall registry */
 export interface WindowsInstallEntry {
   displayName: string
   displayIcon: string
   installLocation: string
 }
 
-/** 应用定义：三端各写各的识别方式，缺的项就跳过 */
+/** App definition: each platform declares its own detection method; missing entries are skipped */
 export interface AppDefinition {
   id: string
   label: string
-  /** Windows：卸载登记里的 DisplayName 匹配规则 */
+  /** Windows: DisplayName matching rule in the uninstall registry */
   windowsPattern?: RegExp
-  /** Windows：可执行文件名（PATH / 安装目录里找它） */
+  /** Windows: executable file name (looked up on PATH / in the install directory) */
   windowsExe?: string
-  /** Windows：常见安装位置（`*` 只匹配一层目录名） */
+  /** Windows: common install locations (`*` matches one directory level only) */
   windowsPaths?: string[]
-  /** macOS：`/Applications`、`~/Applications` 下可能的 .app 名（含社区版 / Insiders） */
+  /** macOS: possible .app names under `/Applications`, `~/Applications` (incl. community / Insiders) */
   macApps?: string[]
-  /** Linux：PATH / Toolbox 脚本 / snap 里的启动命令（按顺序试） */
+  /** Linux: launch commands on PATH / Toolbox scripts / snap (tried in order) */
   linuxCommands?: string[]
-  /** Linux：flatpak 应用 id（按顺序试） */
+  /** Linux: flatpak app ids (tried in order) */
   flatpakIds?: string[]
 }
 
-/** 探测依赖（真实现由 open-in-app.ts 提供；测试里换成假实现） */
+/** Detection dependencies (real implementations come from open-in-app.ts; tests swap in fakes) */
 export interface DetectDeps {
   platform: NodeJS.Platform
   env: NodeJS.ProcessEnv
-  /** 文件管理器的文案（各平台叫法不同，由主进程 i18n 给） */
+  /** File manager label (named differently per platform; provided by main-process i18n) */
   explorerLabel: string
   exists: (path: string) => boolean
   readdir: (dir: string) => string[]
-  /** 命令在 PATH 上的绝对路径；找不到返回 null */
+  /** Absolute path of the command on PATH; null when not found */
   which: (command: string) => Promise<string | null>
-  /** flatpak 已装应用 id；没装 flatpak 返回空数组 */
+  /** Ids of installed flatpak apps; empty array when flatpak is not installed */
   flatpakApps: () => Promise<string[]>
-  /** Windows 卸载登记（读失败返回空数组） */
+  /** Windows uninstall registry (empty array when reading fails) */
   windowsEntries: () => Promise<WindowsInstallEntry[]>
 }
 
 /**
- * 支持的编辑器清单（顺序即菜单顺序：先 JetBrains 全家桶，再 VS Code / Cursor）。
+ * Supported editor list (order = menu order: the JetBrains family first, then VS Code / Cursor).
  *
- * 只收「把目录当项目打开」这一种用法明确的应用：IDEA 系（`idea64.exe <dir>` / `open -a` / `idea <dir>`）、
- * VS Code 系（`Code.exe <dir>` / `code <dir>`）。GitHub Desktop 这类「打开仓库/仓库管理器」的应用
- * 不在这里——它要的是 git 仓库且各平台入口不同，硬塞进「打开工作区」只会点出个空窗口。
+ * Only apps whose "open a directory as a project" usage is unambiguous are included: the IDEA
+ * family (`idea64.exe <dir>` / `open -a` / `idea <dir>`) and the VS Code family
+ * (`Code.exe <dir>` / `code <dir>`). Apps like GitHub Desktop that "open a repo / repo manager"
+ * are not here — they want a git repository and differ per platform, so forcing them into "open
+ * workspace" would only pop up an empty window.
  */
 export const APP_DEFINITIONS: AppDefinition[] = [
   {
@@ -171,10 +177,10 @@ export const APP_DEFINITIONS: AppDefinition[] = [
   }
 ]
 
-/** JetBrains Toolbox 在 Linux 上的启动脚本目录（相对 home） */
+/** JetBrains Toolbox launch script directory on Linux (relative to home) */
 const LINUX_TOOLBOX_SCRIPTS = join('.local', 'share', 'JetBrains', 'Toolbox', 'scripts')
 
-/** 展开 `%VAR%` 与 `~/`，`*` 只匹配一层目录名 */
+/** Expand `%VAR%` and `~/`; `*` matches one directory level only */
 function expandCandidates(pattern: string, deps: DetectDeps): string[] {
   const expanded = pattern
     .replace(/%([^%]+)%/g, (_m, name: string) => deps.env[name] ?? `%${name}%`)
@@ -200,7 +206,7 @@ function expandCandidates(pattern: string, deps: DetectDeps): string[] {
   return results
 }
 
-/** 卸载登记的 DisplayIcon → 可执行文件路径（去掉引号与末尾的 `,0` 图标序号） */
+/** Uninstall-registry DisplayIcon → executable path (strips quotes and the trailing `,0` icon index) */
 function iconToExe(icon: string | undefined): string | null {
   if (!icon) return null
   const cleaned = icon
@@ -211,7 +217,7 @@ function iconToExe(icon: string | undefined): string | null {
   return /\.exe$/i.test(cleaned) ? cleaned : null
 }
 
-/** Windows：卸载登记 → PATH → 常见安装路径 */
+/** Windows: uninstall registry → PATH → common install paths */
 function resolveWindowsExe(
   def: AppDefinition,
   entries: WindowsInstallEntry[],
@@ -248,12 +254,12 @@ function resolveWindowsExe(
   return null
 }
 
-/** macOS：`/Applications`、`~/Applications` 与旧版 Toolbox 的 `~/Applications/JetBrains Toolbox` */
+/** macOS: `/Applications`, `~/Applications`, and the old Toolbox's `~/Applications/JetBrains Toolbox` */
 export function resolveMacApp(def: AppDefinition, deps: DetectDeps): string | null {
   const roots = ['/Applications']
   const home = deps.env.HOME
   if (home) {
-    // Toolbox 默认把 .app 的符号链接放在 ~/Applications；旧版本放在子目录里，一并认
+    // Toolbox puts .app symlinks in ~/Applications by default; older versions use a subdirectory, recognized too
     roots.push(join(home, 'Applications'), join(home, 'Applications', 'JetBrains Toolbox'))
   }
   for (const name of def.macApps ?? []) {
@@ -265,7 +271,7 @@ export function resolveMacApp(def: AppDefinition, deps: DetectDeps): string | nu
   return null
 }
 
-/** Linux：PATH → Toolbox 启动脚本 → snap → flatpak */
+/** Linux: PATH → Toolbox launch scripts → snap → flatpak */
 async function resolveLinuxApp(
   def: AppDefinition,
   flatpaks: string[],
@@ -289,7 +295,8 @@ async function resolveLinuxApp(
 }
 
 /**
- * 探测本机可用的「在应用中打开」目标：系统文件管理器永远在第一位，其余按本机安装情况。
+ * Detect the "open in app" targets available on this machine: the system file manager always comes
+ * first, the rest depend on what is installed.
  */
 export async function detectApps(deps: DetectDeps): Promise<DetectedApp[]> {
   const apps: DetectedApp[] = [{ id: EXPLORER_ID, label: deps.explorerLabel }]
@@ -306,7 +313,7 @@ export async function detectApps(deps: DetectDeps): Promise<DetectedApp[]> {
   if (deps.platform === 'darwin') {
     for (const def of APP_DEFINITIONS) {
       const app = resolveMacApp(def, deps)
-      // `open -a <app> <dir>`：把目录交给这个应用打开（JetBrains / VS Code 都认目录参数）
+      // `open -a <app> <dir>`: hand the directory to this app (JetBrains / VS Code both accept a directory argument)
       if (app) {
         apps.push({ id: def.id, label: def.label, command: 'open', commandArgs: ['-a', app] })
       }
@@ -314,7 +321,7 @@ export async function detectApps(deps: DetectDeps): Promise<DetectedApp[]> {
     return apps
   }
 
-  // 其余平台（Linux / 其它类 Unix）走命令 + flatpak
+  // Other platforms (Linux / other Unix-like) go through commands + flatpak
   const flatpaks = await deps.flatpakApps()
   for (const def of APP_DEFINITIONS) {
     const target = await resolveLinuxApp(def, flatpaks, deps)

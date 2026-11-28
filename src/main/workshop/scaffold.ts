@@ -21,19 +21,24 @@ import { listDraftFiles, readDraftMeta } from './store'
 import { releaseWorkshopDir, resumeWorkshopDirs } from './dir-release'
 
 /**
- * 从模板生成草稿（工坊的入口动作）。
+ * Generate a draft from a template (the workshop's entry action).
  *
- * 设计取舍：
- * - **默认拒绝覆盖**已存在的草稿：助手在同一个话题里连续调用 create 是很常见的行为，
- *   静默清空它刚写完的代码是最糟的失败模式；要重来必须显式 `overwrite: true`；
- * - **覆盖前先整份备份**：草稿目录是用户自己的源码（能进 git、能用编辑器打开），
- *   直接 `rm -rf` 可能删掉他还没提交的工作。旧目录先拷到
- *   `<userData>/plugin-workshop/backups/<id>-<时间戳>/`（只留最近 3 份），再重建；
- * - **写入是原子的**：先写同盘 staging 目录，成功后再 rename 到位。中途失败
- *   （磁盘满 / 写权限 / 文件被占用）不会留下「半个草稿」——旧目录也原样恢复；
- * - `WORKSHOP.md` 里的宿主模块白名单来自**运行期注入**（`hostMainKeys` / `hostUiKeys`），
- *   因此永远不会写出一份过期的清单（宿主加了新桥键，下一次生成的草稿就能用到）；
- * - 生成完立刻返回文件清单，助手可以据此决定「先读哪个文件再改」。
+ * Design tradeoffs:
+ * - **Overwriting an existing draft is denied by default**: the assistant calling create
+ *   repeatedly in the same topic is common behaviour, and silently wiping code it just wrote is
+ *   the worst failure mode; retrying requires an explicit `overwrite: true`;
+ * - **Back up everything before overwriting**: the draft directory is the user's own source (it
+ *   can be in git, opened in an editor), so a bare `rm -rf` could delete uncommitted work. Copy
+ *   the old directory to `<userData>/plugin-workshop/backups/<id>-<timestamp>/` (keeping only
+ *   the latest 3) before rebuilding;
+ * - **Writes are atomic**: write to a staging directory on the same volume first, then rename it
+ *   into place. A failure midway (disk full / no write permission / file in use) never leaves a
+ *   half-written draft — the old directory is restored as-is as well;
+ * - The host module allowlist in `WORKSHOP.md` comes from **runtime injection** (`hostMainKeys` /
+ *   `hostUiKeys`), so a stale list is never emitted (when the host adds a new bridge key, the
+ *   next generated draft can use it);
+ * - The file list is returned right after generation, so the assistant can decide which file to
+ *   read before editing.
  */
 
 export interface CreateDraftOptions {
@@ -43,24 +48,24 @@ export interface CreateDraftOptions {
   description?: string
   css?: WorkshopCssMode
   overwrite?: boolean
-  /** 宿主主进程可用的 `@host/main/**` 键 */
+  /** `@host/main/**` keys available to the host main process */
   hostMainKeys?: string[]
-  /** 宿主渲染层可用的 `@host/renderer/**`、`@host/vendor/**` 键 */
+  /** `@host/renderer/**`, `@host/vendor/**` keys available to the host renderer */
   hostUiKeys?: string[]
 }
 
 export interface CreateDraftResult {
   meta: WorkshopDraftMeta
-  /** 生成的文件相对路径（已排序） */
+  /** Generated file relative paths (sorted) */
   files: string[]
-  /** 被覆盖的旧草稿是否存在 */
+  /** Whether an old draft was overwritten */
   overwritten: boolean
-  /** 覆盖时旧草稿的备份目录（没有覆盖则为 undefined） */
+  /** Backup directory of the old draft when overwritten (undefined otherwise) */
   backupDir?: string
   dir: string
 }
 
-/** 模板是否合法（非法时给出可用取值，避免模型瞎猜）；缺省 = `full`（全部内容） */
+/** Whether the template is valid (invalid input lists the available values so the model cannot guess); default = `full` (all content) */
 export function normalizeTemplate(value: unknown): WorkshopTemplate {
   const known = TEMPLATE_INFOS.map((t) => t.template)
   if (typeof value !== 'string' || value === '') return 'full'
@@ -70,13 +75,13 @@ export function normalizeTemplate(value: unknown): WorkshopTemplate {
   return value as WorkshopTemplate
 }
 
-/** 备份目录名里的时间戳（UTC、可排序、不含 Windows 非法字符；加随机后缀防同一毫秒撞名） */
+/** Timestamp in backup directory names (UTC, sortable, free of Windows-invalid characters; a random suffix avoids collisions within the same millisecond) */
 function backupStamp(): string {
   const iso = new Date().toISOString().replace(/[:.]/g, '-')
   return `${iso}-${Math.random().toString(36).slice(2, 6)}`
 }
 
-/** 只保留该插件最近 `keep` 份备份（旧的整份删掉，避免备份目录无限增长） */
+/** Keep only the latest `keep` backups for this plugin (old ones are deleted entirely so the backup directory stays bounded) */
 function pruneBackups(id: string, keep = 3): void {
   const root = backupsRoot()
   let entries: string[] = []
@@ -93,7 +98,7 @@ function pruneBackups(id: string, keep = 3): void {
     try {
       fs.rmSync(path.join(root, name), { recursive: true, force: true })
     } catch {
-      // 删不掉就留着：备份多点不是问题
+      // If it cannot be deleted, leave it: extra backups are not a problem
     }
   }
 }
@@ -108,7 +113,8 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     )
   }
 
-  // 源码落在用户配置的插件存放路径下（未配置时 draftDir 会抛可读错误，界面据此引导去配置）
+  // Source lives under the user-configured plugin storage path (draftDir throws a readable error
+  // when unconfigured, and the UI prompts configuration from it)
   const dir = draftDir(id)
   const root = requirePluginsRoot()
   ensureDir(root)
@@ -133,17 +139,19 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     updatedAt: now
   }
 
-  // ① 覆盖前备份：整份拷到工坊自己的 backups/ 下（不动用户目录里的其它文件）
+  // 1) Back up before overwriting: copy everything into the workshop's own backups/ (leaving the
+  // user's other files in that directory alone)
   //
-  // 判据用「目录是否存在」而不是 draftExists：一个只有 README、没有 plugin.json 的
-  // 残留目录同样不能被 rename 覆盖掉（Windows 上 rename 到已存在的目录会失败）。
+  // The check is "does the directory exist" rather than draftExists: a leftover directory holding
+  // only a README and no plugin.json must not be silently replaced by rename either (on Windows
+  // renaming onto an existing directory fails).
   const existingDir = fs.existsSync(dir)
   let backupDir: string | undefined
   if (existingDir) {
     backupDir = path.join(backupsRoot(), `${id}-${backupStamp()}`)
     ensureDir(backupsRoot())
     fs.cpSync(dir, backupDir, { recursive: true, force: true })
-    // 覆盖时旧目录可能正被工作区监听（插件模式打开着它的源码）：先放掉监听再删
+    // When overwriting, the old directory may be watched by the workspace (plugin mode has its source open): drop the watch before deleting
     const release = releaseWorkshopDir(dir)
     try {
       fs.rmSync(dir, { recursive: true, force: true })
@@ -153,7 +161,7 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     pruneBackups(id)
   }
 
-  // ② 先写 staging，再 rename 到位：中途失败不会留下半个草稿
+  // 2) Write to staging first, then rename into place: a failure midway never leaves a half draft
   const staging = path.join(root, `.${id}.staging-${process.pid}-${now}`)
   try {
     fs.mkdirSync(staging, { recursive: true })
@@ -164,20 +172,21 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
     }
     writeJson(path.join(staging, 'workshop.json'), meta)
     fs.renameSync(staging, dir)
-    // 覆盖重建时旧目录的监听在删除阶段被放掉了（当时目录还不存在）：新目录已就位，重新对齐
+    // On overwrite the watch on the old directory was dropped during the delete phase (the
+    // directory did not exist then): the new directory is in place, so re-align
     resumeWorkshopDirs()
   } catch (err) {
     try {
       fs.rmSync(staging, { recursive: true, force: true })
     } catch {
-      // 忽略：staging 本身是个不会被列举的临时目录（id 不合法 → draftExists 为 false）
+      // Ignore: staging is itself a temporary directory that is never listed (invalid id -> draftExists is false)
     }
-    // 覆盖失败就把备份放回去，用户至少回到操作前
+    // If overwriting failed, put the backup back so the user is at least back to the pre-action state
     if (existingDir && backupDir && !fs.existsSync(dir)) {
       try {
         fs.renameSync(backupDir, dir)
       } catch {
-        // 恢复失败：错误信息里带上备份路径，用户仍可手工找回
+        // Restore failed: include the backup path in the error so the user can still recover manually
         throw new Error(
           `重建草稿 '${id}' 失败，且旧目录恢复到原位也失败；` +
             `旧源码在备份目录里：${backupDir}。原始错误：${err instanceof Error ? err.message : String(err)}`
@@ -188,17 +197,19 @@ export function createDraft(opts: CreateDraftOptions): CreateDraftResult {
   }
 
   /**
-   * 覆盖 = 换了一份源码：旧产物与旧验收报告不再对应当前草稿，必须一起清掉。
+   * Overwrite means a different source tree: the old build output and the old verification
+   * report no longer correspond to the current draft and must be cleared together.
    *
-   * 不清的后果：`hasBuild` 仍为 true，面板的「导出 / 安装」会拿到上一份源码的包
-   * （指纹能挡住 `plugin_publish install`，但挡不住 `export` 与面板上的直接安装）。
+   * If not cleared: `hasBuild` stays true and the panel's export/install would pick up the
+   * package built from the previous source (the fingerprint stops `plugin_publish install`, but
+   * not `export` or a direct install from the panel).
    */
   if (overwritten) {
     for (const target of [distDir(id), reportPath(id)]) {
       try {
         fs.rmSync(target, { recursive: true, force: true })
       } catch {
-        // 删不掉不阻断重建：指纹/报告校验还会兜住（最多多一次「先重新验收」）
+        // Not deleting it does not block the rebuild: fingerprint/report checks still catch it (at worst one extra "verify again first")
       }
     }
   }

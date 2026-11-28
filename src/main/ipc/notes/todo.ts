@@ -24,13 +24,14 @@ import {
 } from '../../database/mapper/notes/todo-dependencies'
 
 /**
- * 待办事项 + 任务依赖关系 IPC 处理器表（资料库的第 1 个域）。
+ * Todo items + task dependency IPC handler map (the library's first domain).
  *
- * 通道名一律 `notes:<channel>`；由 `src/main/system/notes.ts` 在启动时挂上，
- * 退出时一并摘除。
+ * All channel names are `notes:<channel>`; they are mounted at startup by
+ * `src/main/system/notes.ts` and removed on exit.
  *
- * 迁移说明：原 `src/main/ipc/todo.ts` 的 14 个扁平通道（`todo-items-*` / `task-deps-*`）
- * 逐个改名，参数与返回类型不变，只去掉 ipcMain 的 `_event` 形参。
+ * Migration note: the 14 flat channels (`todo-items-*` / `task-deps-*`) of the old
+ * `src/main/ipc/todo.ts` were renamed one by one, with parameters and return types unchanged and
+ * only ipcMain's `_event` parameter dropped.
  */
 export const todoIpcHandlers: IpcHandlerMap = {
   'notes:todo-items-get-by-id': async (id: number) => {
@@ -62,8 +63,8 @@ export const todoIpcHandlers: IpcHandlerMap = {
 
   'notes:todo-items-get-by-completed-status': async (status: number | boolean) => {
     try {
-      // 修复：此前错接成 getTodoItemsByPriority（按优先级查询），语义损坏；
-      // 兼容布尔（true=已完成=2 / false=未完成=0）与数字两种口径
+      // Fix: this was previously wired to getTodoItemsByPriority (a priority query), corrupting the
+      // semantics; accepts both booleans (true=completed=2 / false=incomplete=0) and numbers
       const normalized = typeof status === 'boolean' ? (status ? 2 : 0) : status
       if (![0, 1, 2].includes(normalized)) {
         throw new Error(mainMessages().error.invalidStatus)
@@ -113,7 +114,8 @@ export const todoIpcHandlers: IpcHandlerMap = {
 
   'notes:todo-items-update': async (id: number, updates: Partial<Omit<TodoItemRow, 'id'>>) => {
     try {
-      // 状态枚举校验（修复：此前可写任意整数,前端只认 0/1/2；null 同样拒绝）
+      // Status enum validation (fix: any integer used to be writable while the frontend only
+      // accepts 0/1/2; null is rejected too)
       if (updates.status !== undefined && ![0, 1, 2].includes(updates.status ?? -1)) {
         throw new Error(mainMessages().error.invalidStatus)
       }
@@ -127,7 +129,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
   'notes:todo-items-delete': async (id: number) => {
     try {
       const result = await deleteTodoItem(id)
-      // 同时清理该任务的所有依赖关系
+      // Also clean up all dependency relations of this task
       deleteAllDependenciesForTask(id).catch((err) =>
         logger.error('Failed to delete dependencies for todo:', err)
       )
@@ -141,7 +143,7 @@ export const todoIpcHandlers: IpcHandlerMap = {
     }
   },
 
-  // --- 任务依赖关系 ---
+  // --- Task dependencies ---
   'notes:task-deps-add': async (taskId: number, dependsOnTaskId: number) => {
     try {
       return await addDependency(taskId, dependsOnTaskId)

@@ -1,9 +1,10 @@
 import { getMainLanguage } from './index'
 
 /**
- * `list_subagent_models` 工具文案（模型路由清单）。
+ * Texts for the `list_subagent_models` tool (model route list).
  *
- * 中文是源语言，英文树用 `typeof` 约束键一致。供应商名/模型名属于配置数据，不翻译。
+ * Chinese is the source language and the English tree is checked with `typeof` for key parity.
+ * Provider and model names are configuration data and are not translated.
  */
 export const zhCNModelRoutesTexts = {
   header: '## 可用的模型路由（{{count}}）',
@@ -33,7 +34,7 @@ export const enUSModelRoutesTexts: typeof zhCNModelRoutesTexts = {
   failed: 'Failed to read model routes: {{message}}'
 }
 
-/** 按当前界面语言取模型路由文案 */
+/** Return the model route texts for the current UI language */
 export function getModelRoutesTexts(): typeof zhCNModelRoutesTexts {
   return getMainLanguage() === 'en-US' ? enUSModelRoutesTexts : zhCNModelRoutesTexts
 }

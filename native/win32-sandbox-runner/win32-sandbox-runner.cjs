@@ -1,43 +1,45 @@
 #!/usr/bin/env node
 /**
- * RytenBench 沙箱服务 —— Windows 受限令牌 runner（**自研实现**，不依赖任何第三方沙箱包）。
+ * RytenBench sandbox service — Windows restricted-token runner (**custom implementation**, no third-party sandbox package).
  *
- * 它被主进程当作「argv 前缀」spawn：
+ * The main process spawns it as an "argv prefix":
  *
  *   [electron/node, win32-sandbox-runner.cjs,
- *    '--workspace', <工作区>, '--temp', <私有临时目录根>,
+ *    '--workspace', <workspace>, '--temp', <private temp dir root>,
  *    '--mode', <read-only|workspace-write|cleanup>, ['--revoke-workspace'],
- *    '--', <真正要跑的命令...>]
+ *    '--', <actual command to run...>]
  *
- * 机制（全部是用户态 Win32：不需要管理员、不新建账户、不装任何外部工具）：
- *  1. 打开当前进程令牌 → 取出登录 SID（S-1-5-5-x-y，进程初始化必需）；
- *  2. 由工作区路径**确定性派生**一个能力 SID（`S-1-4-a-b`），私有临时目录再派生第二个；
- *  3. 给工作区/临时目录的 DACL 合并一条「该 SID 的写 ACE」（写 + 删除 + 删除子项，
- *     刻意不含 WRITE_DAC/WRITE_OWNER——被沙箱化的进程不能改 DACL 或夺取所有权自救）；
- *  4. `CreateRestrictedToken(WRITE_RESTRICTED)`：restricting 列表 = [登录 SID, Everyone]
- *     （workspace-write 时再加两个能力 SID）。Windows 对写类访问做**两遍检查**：
- *     普通 SID 与 restricting SID 都通过才放行 ⇒ restricting 列表里没有的 SID 拿不到
- *     任何写权限，这就是「只能写工作区」的落地方式；
- *  5. `CreateProcessAsUserW` 以受限令牌 spawn，**runner 自己 `CreatePipe` 建匿名管道**做 stdio
- *     （Node 的管道是 overlapped 的，受限子进程同步写会 `ERROR_INVALID_PARAMETER`），
- *     `PeekNamedPipe` + `ReadFile` 泵回 runner 的 stdout；子进程放进 kill-on-close 的
- *     Job Object（runner 被杀 → 整棵子树被清理）；子进程**共享 runner 的控制台**并用
- *     `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏窗口（**不传 CREATE_NO_WINDOW**：受限令牌下
- *     控制台隔离会让子进程以 0xC0000142 死在 DLL 初始化阶段，见常量处的实测记录）；
- *  6. 子进程退出后撤销临时 ACE、删除私有临时目录，并镜像子进程退出码。
+ * Mechanism (all user-mode Win32: no administrator, no new accounts, no external tools):
+ *  1. Open the current process token → extract the logon SID (S-1-5-5-x-y, required for process initialization);
+ *  2. **Deterministically derive** a capability SID (`S-1-4-a-b`) from the workspace path, and a second one from the private temp dir;
+ *  3. Merge a "write ACE for that SID" into the workspace/temp dir DACL (write + delete + delete children,
+ *     deliberately excluding WRITE_DAC/WRITE_OWNER — a sandboxed process must not be able to change the DACL or take ownership to escape);
+ *  4. `CreateRestrictedToken(WRITE_RESTRICTED)`: restricting list = [logon SID, Everyone]
+ *     (plus the two capability SIDs for workspace-write). Windows performs a **two-pass check** on write-type access:
+ *     access is granted only if both the normal SID and the restricting SIDs pass ⇒ SIDs absent from the
+ *     restricting list get no write permission, which is how "can only write the workspace" is enforced;
+ *  5. `CreateProcessAsUserW` spawns with the restricted token; **the runner itself `CreatePipe`s anonymous pipes** for stdio
+ *     (Node's pipes are overlapped, so a restricted child writing synchronously gets `ERROR_INVALID_PARAMETER`),
+ *     `PeekNamedPipe` + `ReadFile` pump back to the runner's stdout; the child goes into a kill-on-close
+ *     Job Object (runner killed → the whole subtree is cleaned up); the child **shares the runner's console** and hides the window with
+ *     `STARTF_USESHOWWINDOW + SW_HIDE` (**no CREATE_NO_WINDOW**: under a restricted token that console
+ *     isolation makes the child die during DLL initialization with 0xC0000142; see the measured record at the constant);
+ *  6. After the child exits, revoke the temporary ACE, delete the private temp dir, and mirror the child's exit code.
  *
- * 失败契约：runner 侧任何失败都往 stderr 打 `ryten-sandbox-run: <detail>` 并以 127 退出
- * ——**绝不会在没有受限令牌的情况下 spawn 子进程**（故障关闭）。
+ * Failure contract: any runner-side failure prints `ryten-sandbox-run: <detail>` to stderr and exits with 127
+ * —**never spawns a child without a restricted token** (fail closed).
  *
- * 已知边界（由上层写进文档，不假装是绝对边界）：
- *  - restricting 列表必须保留 Everyone（早期 DLL 初始化与 CNG 依赖它），因此 DACL 里
- *    显式授予 Everyone 写权限的对象仍可写；NTFS 硬链接也能把已授权文件别名到工作区外；
- *  - 只在带 ACL 的卷上有效（exFAT / 网络盘上没有 ACL）——这种工作区由上层判定为不可用；
- *  - 子进程与 runner **共享控制台**：受限令牌下做不了控制台隔离（`CREATE_NO_WINDOW` /
- *    `CREATE_NEW_CONSOLE` 的子进程会在 DLL 初始化阶段以 0xC0000142 死亡），窗口用
- *    `STARTF_USESHOWWINDOW + SW_HIDE` 隐藏；stdio 走 runner 自己建的管道，不受影响。
- *  - 本文件是 plain CJS（不经过打包器）：它是被独立进程加载的脚本，需要 koffi 能在
- *    应用根下解析到，并运行在 Electron 的 node 模式（ELECTRON_RUN_AS_NODE=1）。
+ * Known limits (documented by the upper layer; not pretended to be an absolute boundary):
+ *  - the restricting list must keep Everyone (early DLL initialization and CNG depend on it), so objects whose
+ *    DACL explicitly grants Everyone write access remain writable; NTFS hard links can also alias an authorized
+ *    file outside the workspace;
+ *  - only effective on volumes that have ACLs (exFAT / network drives have none) — such workspaces are
+ *    deemed unusable by the upper layer;
+ *  - the child and the runner **share a console**: console isolation is impossible under a restricted token
+ *    (`CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE` children die during DLL initialization with 0xC0000142); the
+ *    window is hidden with `STARTF_USESHOWWINDOW + SW_HIDE`; stdio uses pipes created by the runner and is unaffected.
+ *  - this file is plain CJS (not processed by a bundler): it is a script loaded by a separate process, so koffi must
+ *    be resolvable under the app root, and it runs in Electron's node mode (ELECTRON_RUN_AS_NODE=1).
  */
 'use strict'
 
@@ -45,42 +47,45 @@ const { createHash } = require('node:crypto')
 const { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } = require('node:fs')
 const { join } = require('node:path')
 
-/** runner 失败签名（主进程按它区分「沙箱坏了」与「命令失败了」） */
+/** Runner failure signature (the main process uses it to distinguish "the sandbox is broken" from "the command failed") */
 const RUNNER_SIGNATURE = 'ryten-sandbox-run'
-/** runner 失败退出码（刻意与任何命令退出码区分开） */
+/** Runner failure exit code (deliberately distinct from any command exit code) */
 const RUNNER_FAILURE_EXIT = 127
-/** 子进程在 loader/控制台初始化阶段就死掉（只做诊断提示，不改退出码语义） */
+/** Child died during loader/console initialization (diagnostic hint only; does not change exit-code semantics) */
 const STATUS_DLL_INIT_FAILED = 0xc0000142
 
-/* ────────────────────────── Win32 常量 ────────────────────────── */
+/* ────────────────────────── Win32 constants ────────────────────────── */
 
 const PROCESS_QUERY_INFORMATION = 0x0400
 const TOKEN_ASSIGN_PRIMARY = 0x0001
 const TOKEN_DUPLICATE = 0x0002
 const TOKEN_QUERY = 0x0008
 const TOKEN_ADJUST_DEFAULT = 0x0080
-/** CreateRestrictedToken 标志 */
+/** CreateRestrictedToken flags */
 const DISABLE_MAX_PRIVILEGE = 0x1
 const LUA_TOKEN = 0x4
 const WRITE_RESTRICTED = 0x8
-/** CreateProcessAsUserW 标志 */
+/** CreateProcessAsUserW flags */
 const CREATE_UNICODE_ENVIRONMENT = 0x00000400
-/** AttachConsole(ATTACH_PARENT_PROCESS)：挂到父进程的控制台上 */
+/** AttachConsole(ATTACH_PARENT_PROCESS): attach to the parent process's console */
 const ATTACH_PARENT_PROCESS = 0xffffffff
 /**
- * STARTUPINFO.dwFlags：让 wShowWindow 生效。
+ * STARTUPINFO.dwFlags: makes wShowWindow effective.
  *
- * **刻意不传 `CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE`**：受限令牌下这两种「控制台隔离」
- * 会让子进程在 DLL 初始化阶段直接死掉（`STATUS_DLL_INIT_FAILED` = 0xC0000142，stderr 全空）。
- * 2026-09-27 在 GitHub Actions（windows-latest，控制台/桌面环境与开发机不同）实测复现：
- * 打包产物自检的两条「工作区内写入」都是 exit=0xC0000142，而 cleanup（不起子进程）正常，
- * 说明坏的是「受限子进程起不来」而不是 runner 本身。参考实现（dsh-sandbox-windows-acl）
- * 的已知边界写得同样直白：CREATE_NO_WINDOW / CREATE_NEW_CONSOLE 子进程在 DLL 初始化期死亡，
- * 子进程共享宿主控制台，基于管道的 stdio 重定向不受影响。
+ * **Deliberately no `CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE`**: under a restricted token these
+ * two forms of "console isolation" make the child die outright during DLL initialization
+ * (`STATUS_DLL_INIT_FAILED` = 0xC0000142, stderr completely empty).
+ * Reproduced on 2026-09-27 in GitHub Actions (windows-latest, whose console/desktop environment
+ * differs from the dev machine): both "write inside workspace" checks in the packaged-artifact
+ * self-check ended with exit=0xC0000142, while cleanup (which starts no child) was fine, showing
+ * that what broke was "the restricted child won't start", not the runner itself. The known limits
+ * are just as explicit: CREATE_NO_WINDOW / CREATE_NEW_CONSOLE children die during DLL
+ * initialization, the child shares the host console, and pipe-based stdio redirection is unaffected.
  *
- * 共享控制台 + `wShowWindow = SW_HIDE` 才是正解：控制台照常存在（子进程能起来），
- * 但窗口不显示（GUI 宿主下不会闪黑框）。这也是本文件第 5 步 `SetConsoleCtrlHandler(null, 1)`
- * 「子进程在同一控制台里自己处理 Ctrl+C」所假设的形态。
+ * Sharing the console + `wShowWindow = SW_HIDE` is the correct fix: the console still exists (so
+ * the child starts) but its window is not shown (no black frame flashing under a GUI host). This is
+ * also the shape assumed by `SetConsoleCtrlHandler(null, 1)` in step 5 of this file, where
+ * "the child handles Ctrl+C itself in the same console".
  */
 const STARTF_USESHOWWINDOW = 0x00000100
 const SW_HIDE = 0
@@ -97,12 +102,12 @@ const WAIT_FAILED = 0xffffffff
 /** Job Object */
 const JobObjectExtendedLimitInformation = 9
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-/** 标准句柄 */
+/** Standard handles */
 const STD_INPUT_HANDLE = -10
 const STD_OUTPUT_HANDLE = -11
 const STD_ERROR_HANDLE = -12
 const STARTF_USESTDHANDLES = 0x00000100
-/** 安全信息 / 对象类型 / 访问模式 */
+/** Security info / object type / access mode */
 const DACL_SECURITY_INFORMATION = 0x00000004
 const SE_FILE_OBJECT = 1
 const GRANT_ACCESS = 1
@@ -112,43 +117,44 @@ const TRUSTEE_IS_SID = 0
 const TRUSTEE_IS_UNKNOWN = 0
 const NO_MULTIPLE_TRUSTEE = 0
 const ERROR_SUCCESS = 0
-/** 令牌信息类 */
+/** Token information class */
 const TokenGroups = 2
 const TokenDefaultDacl = 6
 /** SID */
 const SECURITY_MAX_SID_SIZE = 68
 const SE_GROUP_LOGON_ID = 0xc0000000
 const WinWorldSid = 1
-/** 访问掩码：写 + 删除 + 删除子项；刻意排除 WRITE_DAC/WRITE_OWNER 与标准权限位 */
+/** Access mask: write + delete + delete child; deliberately excludes WRITE_DAC/WRITE_OWNER and standard rights bits */
 const STANDARD_RIGHTS_WRITE = 0x00020000
 const FILE_GENERIC_WRITE = 0x00120116
 const DELETE = 0x00010000
 const FILE_DELETE_CHILD = 0x00000040
 const GRANT_MASK = (FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD) & ~STANDARD_RIGHTS_WRITE
 const FILE_ALL_ACCESS = 0x1f01ff
-/** x64 结构体尺寸（自检用） */
+/** x64 struct sizes (for self-check) */
 const STARTUPINFOW_SIZE = 104
 const PROCESS_INFORMATION_SIZE = 24
 const JOBOBJECT_EXTENDED_LIMIT_INFORMATION_SIZE = 144
 const EXPLICIT_ACCESS_W_SIZE = 48
 
-/* ────────────────────────── 失败 ────────────────────────── */
+/* ────────────────────────── Failure ────────────────────────── */
 
 class RunnerFailure extends Error {}
 
-/** runner 侧失败：打签名行并以 127 退出（绝不静默不受限地跑） */
+/** Runner-side failure: print the signature line and exit with 127 (never run unrestricted silently) */
 function fail(detail) {
   process.stderr.write(`${RUNNER_SIGNATURE}: ${detail}\n`)
   throw new RunnerFailure(detail)
 }
 
-/* ────────────────────────── koffi 绑定 ────────────────────────── */
+/* ────────────────────────── koffi bindings ────────────────────────── */
 
 /**
- * 加载 koffi（FFI 只是「调 Win32 API 的手」，沙箱逻辑全在本文件里）。
+ * Load koffi (FFI is just the "hand" that calls the Win32 APIs; all sandbox logic lives in this file).
  *
- * 解析路径要覆盖三种运行形态：开发态（仓库根 node_modules）、打包态（app.asar 内，
- * Electron 的 node 模式会把它映射到 app.asar.unpacked）以及工装态（显式给 RYTEN_APP_ROOT）。
+ * Path resolution must cover three run modes: development (repo root node_modules), packaged
+ * (inside app.asar, which Electron's node mode maps to app.asar.unpacked), and tooling mode
+ * (RYTEN_APP_ROOT is given explicitly).
  */
 function loadKoffi() {
   const candidates = [
@@ -160,13 +166,13 @@ function loadKoffi() {
     try {
       return require(require.resolve('koffi', { paths: [base] }))
     } catch {
-      // 试下一个候选根
+      // try the next candidate root
     }
   }
   fail('koffi is not resolvable (set RYTEN_APP_ROOT to the application root)')
 }
 
-/** 建一次绑定表（进程级复用） */
+/** Build the bindings table once (reused process-wide) */
 function createBindings() {
   const koffi = loadKoffi()
   const kernel32 = koffi.load('kernel32.dll')
@@ -273,7 +279,7 @@ function createBindings() {
     GetNamedSecurityInfoW: advapi32.func(
       'uint32_t __stdcall GetNamedSecurityInfoW(const char16_t *, int, uint32_t, _Out_ void **, _Out_ void **, _Out_ void **, _Out_ void **, _Out_ void **)'
     ),
-    // ACL 遍历（幂等检查用）：刻意不用 koffi.view 读整块 ACL 内存（在 Electron 下会崩，见 readBytes）
+    // ACL traversal (for the idempotence check): deliberately avoids reading whole ACL memory with koffi.view (it crashes under Electron; see readBytes)
     GetAclInformation: advapi32.func(
       'int __stdcall GetAclInformation(void *, _Out_ void *, uint32_t, int)'
     ),
@@ -289,7 +295,7 @@ function createBindings() {
     )
   }
 
-  // 结构体布局自检：布局错了会以极难排查的方式失败，这里直接故障关闭
+  // Struct layout self-check: a wrong layout fails in extremely hard-to-diagnose ways; fail closed right here
   const sizes = [
     ['STARTUPINFOW', koffi.sizeof(STARTUPINFOW), STARTUPINFOW_SIZE],
     ['PROCESS_INFORMATION', koffi.sizeof(PROCESS_INFORMATION), PROCESS_INFORMATION_SIZE]
@@ -301,16 +307,17 @@ function createBindings() {
   return { koffi, kernel, user, advapi, STARTUPINFOW, PROCESS_INFORMATION }
 }
 
-/* ────────────────────────── SID / 内存小工具 ────────────────────────── */
+/* ────────────────────────── SID / memory helpers ────────────────────────── */
 
 /**
- * 逐字节读一段原生内存（SID / ACE 内嵌 SID 用）。
+ * Read a chunk of native memory byte by byte (for SIDs / SIDs embedded in ACEs).
  *
- * **为什么不用 `koffi.view`**：koffi 3.3.1 的 `view()` 在 Electron（实测 44.1.1 / Node 24.19）
- * 里会直接 `FATAL ERROR: Error::New napi_get_last_error_info` 崩掉整个进程——而 `decode`、
- * `address`、`encode`、以及所有 Win32 调用在该运行时下都正常。这个崩溃是原生 abort、
- * try/catch 拦不住，因此本文件**禁止使用 `koffi.view`**（工装里有一条静态断言盯着）。
- * SID 最长 68 字节，逐字节 decode 的开销可以忽略。
+ * **Why not `koffi.view`**: koffi 3.3.1's `view()` under Electron (measured 44.1.1 / Node 24.19)
+ * crashes the whole process with `FATAL ERROR: Error::New napi_get_last_error_info` — while
+ * `decode`, `address`, `encode`, and all Win32 calls work fine in that runtime. That crash is a
+ * native abort that try/catch cannot intercept, so this file **forbids `koffi.view`** (a static
+ * assertion in the tooling watches for it). A SID is at most 68 bytes, so the per-byte decode
+ * overhead is negligible.
  */
 function readBytes(koffi, ptr, offset, count) {
   const bytes = Buffer.allocUnsafe(count)
@@ -320,26 +327,27 @@ function readBytes(koffi, ptr, offset, count) {
   return bytes
 }
 
-/** 取指针指向的 SID 的字节（SID = 1 字节修订 + 1 字节子权威数 + 6 字节权威 + N×4 字节子权威） */
+/** Bytes of the SID pointed to by the pointer (SID = 1-byte revision + 1-byte sub-authority count + 6-byte authority + N×4-byte sub-authorities) */
 function sidBytes(koffi, sidPtr) {
   const count = koffi.decode(sidPtr, 1, 'uint8_t')
   if (count > 15) fail(`implausible SID sub-authority count ${count}`)
   return readBytes(koffi, sidPtr, 0, 8 + count * 4)
 }
 
-/** 抛 Win32 错误（带 API 名、错误码与上下文） */
+/** Throw a Win32 error (with API name, error code, and context) */
 function throwWin32(kernel, api, code, context) {
   fail(`${api} failed (Win32 ${code}) ${context}`)
 }
 
-/* ────────────────────────── 能力 SID 派生 ────────────────────────── */
+/* ────────────────────────── Capability SID derivation ────────────────────────── */
 
 /**
- * 由路径确定性派生一个能力 SID：`S-1-4-a-b`。
+ * Deterministically derive a capability SID from a path: `S-1-4-a-b`.
  *
- * 为什么确定性：工作区 ACE 是「每台机器每个工作区只物化一次」的复用缓存（第二次起命中
- * 精确 ACE 就跳过，不必对整个目录树重新传播）。能力 SID 字符串本身不是秘密，它的权力
- * 完全来自「哪些 DACL 上有它的 ACE」与「哪些令牌带它」。
+ * Why deterministic: the workspace ACE is a reusable cache materialized "once per machine per
+ * workspace" (from the second time on, an exact-ACE hit skips repropagating the whole directory
+ * tree). The capability SID string itself is not a secret; its power comes entirely from "which
+ * DACLs have an ACE for it" and "which tokens carry it".
  */
 function capabilitySid(path, salt) {
   const digest = createHash('sha256').update(`${salt}\u0000${path.toLowerCase()}`).digest()
@@ -348,17 +356,17 @@ function capabilitySid(path, salt) {
   return `S-1-4-${a}-${b}`
 }
 
-/** 工作区写身份（跨会话复用） */
+/** Workspace write identity (reused across sessions) */
 function workspaceWriteSid(workspace) {
   return capabilitySid(realpathSync.native(workspace), 'ryten-workspace-write')
 }
 
-/** 私有临时目录写身份（每次运行随机目录 → 随机身份） */
+/** Private temp dir write identity (random dir per run → random identity) */
 function tempWriteSid(tempDir) {
   return capabilitySid(tempDir, 'ryten-temp-write')
 }
 
-/** SID 字符串 → SID 指针（调用方负责 LocalFree） */
+/** SID string → SID pointer (caller is responsible for LocalFree) */
 function sidFromString(bindings, sidString) {
   const slot = [null]
   if (bindings.advapi.ConvertStringSidToSidW(sidString, slot) === 0) {
@@ -368,9 +376,9 @@ function sidFromString(bindings, sidString) {
   return slot[0]
 }
 
-/* ────────────────────────── 令牌 ────────────────────────── */
+/* ────────────────────────── Token ────────────────────────── */
 
-/** 打开当前进程令牌（CreateRestrictedToken 需要这几个权限） */
+/** Open the current process token (CreateRestrictedToken needs these permissions) */
 function openCurrentProcessToken(bindings) {
   const { kernel, advapi } = bindings
   const processHandle = kernel.OpenProcess(PROCESS_QUERY_INFORMATION, 0, process.pid)
@@ -390,11 +398,11 @@ function openCurrentProcessToken(bindings) {
   return tokenSlot[0]
 }
 
-/** 取出登录 SID（S-1-5-5-x-y）：没有它，很多进程初始化路径会直接死掉（0xC0000142） */
+/** Extract the logon SID (S-1-5-5-x-y): without it, many process initialization paths die outright (0xC0000142) */
 function findLogonSid(bindings, token) {
   const { koffi, kernel, advapi } = bindings
   const needed = [0]
-  advapi.GetTokenInformation(token, TokenGroups, null, 0, needed) // 预期以 ERROR_INSUFFICIENT_BUFFER 失败
+  advapi.GetTokenInformation(token, TokenGroups, null, 0, needed) // expected to fail with ERROR_INSUFFICIENT_BUFFER
   if (needed[0] < 8) {
     throwWin32(kernel, 'GetTokenInformation', kernel.GetLastError(), 'TokenGroups size query')
   }
@@ -403,14 +411,14 @@ function findLogonSid(bindings, token) {
     throwWin32(kernel, 'GetTokenInformation', kernel.GetLastError(), 'TokenGroups')
   }
   const count = groups.readUInt32LE(0)
-  // TOKEN_GROUPS：DWORD GroupCount，随后 SID_AND_ATTRIBUTES[count]（x64 每项 16 字节：
-  // PSID 8 字节 + DWORD 属性 + 4 字节填充），首项偏移 8
+  // TOKEN_GROUPS: DWORD GroupCount, followed by SID_AND_ATTRIBUTES[count] (16 bytes per entry on
+  // x64: 8-byte PSID + DWORD attributes + 4 bytes padding), first entry at offset 8
   for (let index = 0; index < count; index++) {
     const offset = 8 + index * 16
     const sidPtr = koffi.decode(groups, offset, 'void *')
     const attributes = groups.readUInt32LE(offset + 8)
     if (sidPtr === null) continue
-    // >>> 0：JS 位运算是有符号 32 位，而 SE_GROUP_LOGON_ID 的最高位是 1
+    // >>> 0: JS bitwise ops are signed 32-bit, while SE_GROUP_LOGON_ID has its top bit set
     if ((attributes & SE_GROUP_LOGON_ID) >>> 0 !== SE_GROUP_LOGON_ID >>> 0) continue
     const length = advapi.GetLengthSid(sidPtr)
     if (length === 0) throwWin32(kernel, 'GetLengthSid', kernel.GetLastError(), `group ${index}`)
@@ -423,7 +431,7 @@ function findLogonSid(bindings, token) {
   fail(`no logon SID among ${count} token groups`)
 }
 
-/** 创建一个众所周知的 SID（Everyone） */
+/** Create a well-known SID (Everyone) */
 function makeWellKnownSid(bindings, type) {
   const { kernel, advapi } = bindings
   const sid = Buffer.alloc(SECURITY_MAX_SID_SIZE)
@@ -438,11 +446,11 @@ function makeWellKnownSid(bindings, type) {
 }
 
 /**
- * 造受限令牌：restricting 列表 = [登录 SID, Everyone]（+ workspace-write 的两个能力 SID）。
+ * Create the restricted token: restricting list = [logon SID, Everyone] (+ the two capability SIDs for workspace-write).
  *
- * 保留 Everyone 与登录 SID 是**必需**的：没有它们，被沙箱化的进程在早期 DLL 初始化与
- * CNG 上会崩（实测 0xC0000142 / pwsh 0xE0434352）。这也正是「Everyone 的既有授权仍可写」
- * 这一已知边界的来源。
+ * Keeping Everyone and the logon SID is **mandatory**: without them the sandboxed process crashes
+ * during early DLL initialization and in CNG (measured 0xC0000142 / pwsh 0xE0434352). That is also
+ * the origin of the known limit "existing grants to Everyone remain writable".
  */
 function createRestrictedToken(bindings, currentToken, logonSid, writeSids, everyoneSid, mode) {
   const { koffi, kernel, advapi } = bindings
@@ -451,7 +459,7 @@ function createRestrictedToken(bindings, currentToken, logonSid, writeSids, ever
   }
   const sids =
     mode === 'read-only' ? [logonSid, everyoneSid] : [logonSid, everyoneSid, ...writeSids]
-  // SID_AND_ATTRIBUTES[count]：x64 每项 16 字节（SID 指针 + 属性 0 + 填充）
+  // SID_AND_ATTRIBUTES[count]: 16 bytes per entry on x64 (SID pointer + attributes 0 + padding)
   const list = Buffer.alloc(16 * sids.length)
   sids.forEach((sid, index) => {
     list.writeBigUInt64LE(koffi.address(sid), 16 * index)
@@ -461,9 +469,9 @@ function createRestrictedToken(bindings, currentToken, logonSid, writeSids, ever
     currentToken,
     DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
     0,
-    null, // 不禁用任何 SID
+    null, // disable no SIDs
     0,
-    null, // 不删除任何权限
+    null, // remove no privileges
     sids.length,
     list,
     tokenSlot
@@ -483,13 +491,15 @@ function createRestrictedToken(bindings, currentToken, logonSid, writeSids, ever
 }
 
 /**
- * 把一条「该 SID 的完全访问 ACE」并进令牌的默认 DACL。
+ * Merge a "full access ACE for that SID" into the token's default DACL.
  *
- * 受限令牌会原样继承用户的默认 DACL，而默认 DACL 里没有 restricting SID：被沙箱化的进程
- * 新建对象（匿名管道、临时文件）时，写访问的第二遍检查会失败（ERROR_ACCESS_DENIED，Node
- * 表现为 spawn EPERM），于是「子进程再起子进程」全线崩。并入一条命名 restricting SID 的
- * ACE 后，新对象自身的 DACL 能过第二遍检查，而「能不能创建这个对象」仍由父目录 DACL 把关
- * （工作区之外照样创建不了）。
+ * A restricted token inherits the user's default DACL verbatim, and that default DACL contains no
+ * restricting SID: when the sandboxed process creates new objects (anonymous pipes, temp files),
+ * the second pass of the write-access check fails (ERROR_ACCESS_DENIED, which Node surfaces as
+ * spawn EPERM), so "a child process starting another child" breaks across the board. After merging
+ * an ACE that names the restricting SID, the new object's own DACL passes the second check, while
+ * "can this object be created at all" is still governed by the parent directory's DACL (creating
+ * outside the workspace remains impossible).
  */
 function setTokenDefaultDaclGrant(bindings, token, sidPtr) {
   const { kernel, advapi } = bindings
@@ -522,9 +532,9 @@ function setTokenDefaultDaclGrant(bindings, token, sidPtr) {
   if (ok === 0) throwWin32(kernel, 'SetTokenInformation', code, 'TokenDefaultDacl')
 }
 
-/* ────────────────────────── ACL 授权 / 撤销 ────────────────────────── */
+/* ────────────────────────── ACL grant / revoke ────────────────────────── */
 
-/** 打包一条 EXPLICIT_ACCESS_W（48 字节 x64；permissions 在 REVOKE 时为 0） */
+/** Pack one EXPLICIT_ACCESS_W (48 bytes on x64; permissions are 0 for REVOKE) */
 function explicitAccess(bindings, sidPtr, mode, permissions) {
   const entry = Buffer.alloc(EXPLICIT_ACCESS_W_SIZE)
   entry.writeUInt32LE(permissions, 0) // grfAccessPermissions
@@ -533,11 +543,11 @@ function explicitAccess(bindings, sidPtr, mode, permissions) {
   entry.writeUInt32LE(NO_MULTIPLE_TRUSTEE, 24) // Trustee.MultipleTrusteeOperation
   entry.writeUInt32LE(TRUSTEE_IS_SID, 28) // Trustee.TrusteeForm
   entry.writeUInt32LE(TRUSTEE_IS_UNKNOWN, 32) // Trustee.TrusteeType
-  entry.writeBigUInt64LE(bindings.koffi.address(sidPtr), 40) // Trustee.ptstrName = 能力 SID
+  entry.writeBigUInt64LE(bindings.koffi.address(sidPtr), 40) // Trustee.ptstrName = capability SID
   return entry
 }
 
-/** 一个受保护路径的锁文件：<系统临时目录>/ryten-acl-locks/<sha256(路径)>.lock */
+/** Lock file for one protected path: <system temp>/ryten-acl-locks/<sha256(path)>.lock */
 function lockFilePath(bindings, path) {
   const { kernel } = bindings
   const buffer = Buffer.alloc(1024 * 2)
@@ -549,11 +559,12 @@ function lockFilePath(bindings, path) {
 }
 
 /**
- * 在「每路径独占锁」下执行一次 DACL 读-改-写。
+ * Perform one DACL read-modify-write under a "per-path exclusive lock".
  *
- * 为什么需要：授权是「读当前 DACL → 合并 → 写回」，两个并发沙箱（比如两个子代理同时跑
- * 命令）会互相覆盖对方的 ACE。锁用 LockFileEx（不是「文件存在与否」），且不共享删除位
- * ——可被删除的锁文件会让两个进程同时「持有」同一把锁。
+ * Why needed: granting is "read current DACL → merge → write back", and two concurrent sandboxes
+ * (e.g. two subagents running commands at the same time) would overwrite each other's ACEs. The
+ * lock uses LockFileEx (not "does the file exist"), and does not share the delete bit — a deletable
+ * lock file would let two processes "hold" the same lock simultaneously.
  */
 function withPathLock(bindings, path, action) {
   const { kernel } = bindings
@@ -571,7 +582,7 @@ function withPathLock(bindings, path, action) {
   if (handle === null) {
     fail(`CreateFileW failed for lock ${lockPath} (Win32 ${kernel.GetLastError()})`)
   }
-  const overlapped = Buffer.alloc(32) // OVERLAPPED 全零：偏移 0、hEvent NULL
+  const overlapped = Buffer.alloc(32) // OVERLAPPED all zero: offset 0, hEvent NULL
   if (kernel.LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped) === 0) {
     const code = kernel.GetLastError()
     kernel.CloseHandle(handle)
@@ -585,7 +596,7 @@ function withPathLock(bindings, path, action) {
   }
 }
 
-/** 读目录当前的显式 DACL（描述符必须在合并消费完 DACL 之后再释放） */
+/** Read the directory's current explicit DACL (the descriptor must be released only after the merge has consumed the DACL) */
 function readCurrentDacl(bindings, path) {
   const { kernel, advapi } = bindings
   const owner = [null]
@@ -607,7 +618,7 @@ function readCurrentDacl(bindings, path) {
   return { oldAcl: dacl[0], descriptor: descriptor[0] }
 }
 
-/** 合并并落盘：把一条 EXPLICIT_ACCESS_W 并进 oldAcl，再 SetNamedSecurityInfoW */
+/** Merge and persist: fold one EXPLICIT_ACCESS_W into oldAcl, then SetNamedSecurityInfoW */
 function mergeAndApply(bindings, path, entry, oldAcl, descriptor, label) {
   const { kernel, advapi } = bindings
   const mergedSlot = [null]
@@ -621,7 +632,7 @@ function mergeAndApply(bindings, path, entry, oldAcl, descriptor, label) {
     if (descriptor !== null) kernel.LocalFree(descriptor)
     throwWin32(kernel, 'SetEntriesInAclW', kernel.GetLastError(), `${label}(${path}) null ACL`)
   }
-  if (descriptor !== null) kernel.LocalFree(descriptor) // 描述符块（含 oldAcl）此后失效
+  if (descriptor !== null) kernel.LocalFree(descriptor) // the descriptor block (including oldAcl) is invalid from here on
   const applyResult = advapi.SetNamedSecurityInfoW(
     path,
     SE_FILE_OBJECT,
@@ -638,18 +649,20 @@ function mergeAndApply(bindings, path, entry, oldAcl, descriptor, label) {
 }
 
 /**
- * 目录当前 DACL 是否已带完全相同的授权 ACE（有则跳过写回）：命中即省掉整棵树的重新传播。
+ * Whether the directory's current DACL already carries an identical grant ACE (skip the write-back
+ * if so): a hit skips repropagating the whole tree.
  *
- * 实现刻意**只用 Win32 的 ACL 接口 + `koffi.decode`**（`GetAclInformation` 取 ACE 数量、
- * `GetAce` 逐条取 ACE 指针），不用 `koffi.view` 去读整块 ACL 内存：
- * ACE 里的 SID 是**内嵌**的（不是指针），只能按偏移逐字节读出来比较；而 `koffi.view`
- * 在 Electron 下会崩（见 readBytes 的注释）。
+ * The implementation deliberately **uses only the Win32 ACL interfaces + `koffi.decode`**
+ * (`GetAclInformation` for the ACE count, `GetAce` for each ACE pointer), not `koffi.view` to read
+ * the whole ACL memory: SIDs inside ACEs are **inline** (not pointers), so they can only be read
+ * byte by byte by offset for comparison; and `koffi.view` crashes under Electron (see the readBytes
+ * comment).
  */
 function hasExactGrant(bindings, oldAcl, sidPtr) {
   const { koffi, advapi, kernel } = bindings
   const info = Buffer.alloc(12) // ACL_SIZE_INFORMATION { AceCount; AclBytesInUse; AclBytesFree; }
   if (advapi.GetAclInformation(oldAcl, info, info.length, 2) === 0) {
-    // 读不出 ACL 结构：退回合并路径（那条路有完整的错误处理）
+    // Can't read the ACL structure: fall back to the merge path (which has full error handling)
     return false
   }
   const aceCount = info.readUInt32LE(0)
@@ -672,7 +685,7 @@ function hasExactGrant(bindings, oldAcl, sidPtr) {
   return false
 }
 
-/** 给目录合并一条写授权 ACE（幂等） */
+/** Merge one write-grant ACE into the directory (idempotent) */
 function grantWrite(bindings, path, sidPtr) {
   withPathLock(bindings, path, () => {
     const { oldAcl, descriptor } = readCurrentDacl(bindings, path)
@@ -691,7 +704,7 @@ function grantWrite(bindings, path, sidPtr) {
   })
 }
 
-/** 撤销该 SID 在该目录上的所有 ACE（其它条目保留） */
+/** Revoke all ACEs for that SID on the directory (other entries are preserved) */
 function revokeWrite(bindings, path, sidPtr) {
   withPathLock(bindings, path, () => {
     const { oldAcl, descriptor } = readCurrentDacl(bindings, path)
@@ -710,7 +723,7 @@ function revokeWrite(bindings, path, sidPtr) {
   })
 }
 
-/** SECURITY_ATTRIBUTES（x64 24 字节）：bInheritHandle=1 让管道写端可被子进程继承 */
+/** SECURITY_ATTRIBUTES (24 bytes on x64): bInheritHandle=1 lets the child inherit the pipe write end */
 function inheritableAttributes() {
   const sa = Buffer.alloc(24)
   sa.writeUInt32LE(24, 0) // nLength
@@ -719,12 +732,13 @@ function inheritableAttributes() {
 }
 
 /**
- * 给受限子进程建两条**自己的**匿名管道（stdout / stderr）。
+ * Create two **dedicated** anonymous pipes (stdout / stderr) for the restricted child.
  *
- * 为什么不直接把 runner 的 std 句柄传下去：Node/libuv 的管道是 overlapped 的，
- * 子进程对它做同步 WriteFile 会以 ERROR_INVALID_PARAMETER 失败；控制台句柄则会被
- * 受限令牌的写检查挡住。自己 CreatePipe 出来的是普通匿名管道，子进程同步写没问题，
- * runner 再把内容泵到自己的 stdout（Node 侧异步写 overlapped 句柄是没问题的）。
+ * Why not pass the runner's own std handles down: Node/libuv pipes are overlapped, so a child
+ * doing a synchronous WriteFile on one fails with ERROR_INVALID_PARAMETER; console handles, on the
+ * other hand, are blocked by the restricted token's write check. Self-created pipes via CreatePipe
+ * are ordinary anonymous pipes, so synchronous writes from the child are fine, and the runner then
+ * pumps the content to its own stdout (async writes from Node to overlapped handles are fine).
  */
 function createStdioPipes(bindings) {
   const { kernel } = bindings
@@ -740,7 +754,7 @@ function createStdioPipes(bindings) {
   return { stdout: make(), stderr: make() }
 }
 
-/** 从管道读一次可用数据（Peek 到有数据才 Read，避免阻塞在空管道上） */
+/** Read one batch of available data from a pipe (Peek first, Read only when data exists, avoiding blocking on an empty pipe) */
 function drainPipeOnce(bindings, readHandle, sink) {
   const { kernel } = bindings
   const available = [0]
@@ -756,7 +770,7 @@ function drainPipeOnce(bindings, readHandle, sink) {
   return { closed: false, moved: bytesRead[0] }
 }
 
-/** 把两条管道泵到 runner 自己的 stdout/stderr，直到两条都关闭 */
+/** Pump both pipes to the runner's own stdout/stderr until both are closed */
 async function pumpPipes(bindings, pipes) {
   let stdoutOpen = true
   let stderrOpen = true
@@ -776,14 +790,14 @@ async function pumpPipes(bindings, pipes) {
       stderrOpen = !result.closed
       moved += result.moved
     }
-    // 没有数据可读时让出事件循环（子进程可能还在跑）
+    // Nothing to read: yield the event loop (the child may still be running)
     if (moved === 0 && (stdoutOpen || stderrOpen)) {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
   }
 }
 
-/** 关掉管道两端（子进程侧先关：读端才能看到 EOF） */
+/** Close both ends of the pipes (the child side first: only then does the read end see EOF) */
 function closePipes(bindings, pipes) {
   const { kernel } = bindings
   for (const pipe of [pipes.stdout, pipes.stderr]) {
@@ -792,16 +806,16 @@ function closePipes(bindings, pipes) {
   }
 }
 
-/* ────────────────────────── 受限 spawn ────────────────────────── */
+/* ────────────────────────── Restricted spawn ────────────────────────── */
 
-/** Windows 命令行参数引用规则（含空格/引号时加引号并转义反斜杠） */
+/** Windows command-line argument quoting rules (add quotes and escape backslashes when spaces/quotes are present) */
 function quoteArg(value) {
   const text = String(value)
   if (text.length > 0 && !/[\s"]/.test(text)) return text
   return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`
 }
 
-/** 建 kill-on-close 的 Job Object（runner 消失 → 子树一起消失） */
+/** Create a kill-on-close Job Object (runner disappears → the subtree disappears with it) */
 function createKillOnCloseJob(bindings) {
   const { kernel } = bindings
   const job = kernel.CreateJobObjectW(null, null)
@@ -819,19 +833,23 @@ function createKillOnCloseJob(bindings) {
 }
 
 /**
- * 让 runner 自己拥有一个**隐藏的**控制台。
+ * Make the runner itself own a **hidden** console.
  *
- * 为什么必须做（2026-09-28 用户实测 + 本机复现）：runner 是以 `process.execPath`
- * （**electron.exe，GUI 子系统**）起的，GUI 进程**没有控制台**；而受限子进程是 `cmd.exe`
- * （控制台子系统），又刻意不带 `CREATE_NO_WINDOW`（受限令牌下那样会 0xC0000142 死掉，见常量说明）——
- * 于是 Windows 会给**每一个**受限子进程新建一个控制台：Windows 11 把新控制台交给「默认终端」
- * （Windows Terminal），桌面上就闪一个 cmd/PowerShell 窗口。`STARTUPINFO.wShowWindow = SW_HIDE`
- * 管不住「新建控制台」这件事，`ShowWindow(GetConsoleWindow())` 在 WT 托管下也够不着那个窗口
- * （拿到的是伪窗口句柄）——**唯一稳的办法是根本不让系统去新建**：
- * runner 自己先占一个控制台，子进程「共享控制台」就不会再建。
+ * Why it's mandatory (user-measured 2026-09-28 + reproduced locally): the runner is started via
+ * `process.execPath` (**electron.exe, GUI subsystem**), and GUI processes **have no console**; the
+ * restricted child is `cmd.exe` (console subsystem) and deliberately does not carry
+ * `CREATE_NO_WINDOW` (under a restricted token that dies with 0xC0000142; see the constant docs) —
+ * so Windows creates a new console for **every** restricted child: Windows 11 hands new consoles to
+ * the "default terminal" (Windows Terminal), flashing a cmd/PowerShell window on the desktop.
+ * `STARTUPINFO.wShowWindow = SW_HIDE` cannot stop "a new console being created", and
+ * `ShowWindow(GetConsoleWindow())` cannot reach that window under WT management either (it gets a
+ * pseudo window handle) — **the only reliable fix is to prevent the system from creating one at
+ * all**: if the runner occupies a console itself, children that "share the console" stop creating
+ * new ones.
  *
- * 顺序：先 `AttachConsole(ATTACH_PARENT_PROCESS)`（被终端直接跑时，父进程本来就有控制台），
- * 失败再 `AllocConsole()` 自己造一个。两种情况下都把窗口 `SW_HIDE` 掉。
+ * Order: first `AttachConsole(ATTACH_PARENT_PROCESS)` (when run directly from a terminal, the parent
+ * already has a console), and on failure `AllocConsole()` to make one. In both cases the window is
+ * set to `SW_HIDE`.
  */
 function ensureConsole(bindings) {
   const { kernel, user } = bindings
@@ -846,19 +864,21 @@ function ensureConsole(bindings) {
     const hwnd = kernel.GetConsoleWindow()
     if (hwnd) user.ShowWindow(hwnd, SW_HIDE)
   } catch {
-    // 控制台只是为了「不弹窗」：拿不到也不能影响命令本身
+    // The console exists only to avoid pop-up windows: failing to get one must not affect the command itself
   }
 }
 
 /**
- * 以受限令牌 spawn 子进程，stdio 继承 runner 自己的（父进程看到的仍是普通管道）。
- * 子进程被放进 Job Object：runner 一旦消失（被杀/崩溃），Job 句柄关闭 → 整棵子树被杀。
+ * Spawn the child with the restricted token; stdio inherits the runner's own (the parent process
+ * still sees ordinary pipes). The child goes into a Job Object: once the runner disappears
+ * (killed/crashed), the Job handle closes → the whole subtree is killed.
  */
 function spawnConfined(bindings, token, { command, args, cwd }) {
   const { kernel, advapi } = bindings
   const pipes = createStdioPipes(bindings)
-  // koffi 用「普通 JS 对象 ↔ C 结构体」映射：声明里带 _Inout_/_Out_ 的参数会把结构体
-  // 拷进去、执行后把字段写回同一个对象（struct 类型本身不是构造函数）。
+  // koffi maps a "plain JS object ↔ C struct": parameters declared with _Inout_/_Out_ copy the
+  // struct in and, after the call, write the fields back to the same object (struct types are not
+  // constructors).
   const startupInfo = {
     cb: STARTUPINFOW_SIZE,
     lpReserved: null,
@@ -882,9 +902,9 @@ function spawnConfined(bindings, token, { command, args, cwd }) {
     commandLine,
     null,
     null,
-    1, // bInheritHandles：让子进程拿到我们建的管道写端
-    CREATE_UNICODE_ENVIRONMENT, // 刻意不带 CREATE_NO_WINDOW / CREATE_NEW_CONSOLE（见常量注释）
-    null, // 环境块继承：TMP/TEMP 已由 runner 改写
+    1, // bInheritHandles: let the child receive the pipe write ends we created
+    CREATE_UNICODE_ENVIRONMENT, // deliberately no CREATE_NO_WINDOW / CREATE_NEW_CONSOLE (see the constant comment)
+    null, // environment block inherited: TMP/TEMP were already rewritten by the runner
     cwd,
     startupInfo,
     processInfo
@@ -895,7 +915,7 @@ function spawnConfined(bindings, token, { command, args, cwd }) {
     throwWin32(kernel, 'CreateProcessAsUserW', code, command)
   }
   if (!processInfo.hProcess) fail('CreateProcessAsUserW returned no process handle')
-  // 写端已经交给子进程：runner 侧立刻关掉，读端才能看到 EOF
+  // The write end has been handed to the child: the runner closes its side immediately so the read end can see EOF
   kernel.CloseHandle(pipes.stdout.write)
   pipes.stdout.write = null
   kernel.CloseHandle(pipes.stderr.write)
@@ -915,7 +935,7 @@ function spawnConfined(bindings, token, { command, args, cwd }) {
   return { process: processInfo.hProcess, job, pipes, pid: processInfo.dwProcessId }
 }
 
-/** 等子进程退出并取退出码 */
+/** Wait for the child to exit and fetch the exit code */
 function waitForExit(bindings, handle) {
   const { kernel } = bindings
   const status = kernel.WaitForSingleObject(handle, INFINITE)
@@ -929,7 +949,7 @@ function waitForExit(bindings, handle) {
   return code[0]
 }
 
-/* ────────────────────────── 命令行解析 ────────────────────────── */
+/* ────────────────────────── Command-line parsing ────────────────────────── */
 
 function parseArgs(raw) {
   let workspace
@@ -973,7 +993,7 @@ function requireDirectory(label, path) {
   if (!stat.isDirectory()) fail(`${label} is not a directory: ${path}`)
 }
 
-/** 私有临时目录必须位于工作区之外（否则「临时目录可写」就等于给工作区开口子） */
+/** The private temp dir must live outside the workspace (otherwise "the temp dir is writable" would open a hole into the workspace) */
 function assertTempOutsideWorkspace(workspace, temp) {
   const canonicalWorkspace = realpathSync.native(workspace).toLowerCase()
   const canonicalTemp = realpathSync.native(temp).toLowerCase()
@@ -982,7 +1002,7 @@ function assertTempOutsideWorkspace(workspace, temp) {
   }
 }
 
-/* ────────────────────────── 主流程 ────────────────────────── */
+/* ────────────────────────── Main flow ────────────────────────── */
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2))
@@ -991,11 +1011,12 @@ async function main() {
 
   const bindings = createBindings()
   const { kernel } = bindings
-  // 先给自己弄一个（隐藏的）控制台：受限子进程是「共享控制台」创建的，runner 要是没有控制台，
-  // Windows 会给每个子进程新建一个 —— 桌面上就是一闪而过的黑窗口（见 ensureConsole 的说明）。
+  // Give ourselves a (hidden) console first: restricted children are created "sharing the console",
+  // and if the runner had none, Windows would create a new one for each child — a black window
+  // flashing on the desktop (see the ensureConsole comment).
   ensureConsole(bindings)
 
-  // cleanup 模式：只撤销工作区上我们的 ACE（卸载/清理入口），不起任何进程
+  // cleanup mode: only revoke our ACE on the workspace (the uninstall/cleanup entry point); start no processes
   if (parsed.mode === 'cleanup') {
     const sidPtr = sidFromString(bindings, workspaceWriteSid(parsed.workspace))
     try {
@@ -1009,8 +1030,8 @@ async function main() {
   assertTempOutsideWorkspace(parsed.workspace, parsed.temp)
   if (parsed.argv.length === 0) fail('missing command after --')
 
-  // runner 忽略 Ctrl+C：受限子进程（同一控制台）继续自己处理，runner 必须活到
-  // 撤销临时 ACE、清理临时目录、镜像退出码为止
+  // The runner ignores Ctrl+C: the restricted child (same console) keeps handling it itself, and the
+  // runner must live until it has revoked the temporary ACE, cleaned the temp dir, and mirrored the exit code
   if (kernel.SetConsoleCtrlHandler(null, 1) === 0) {
     fail(`SetConsoleCtrlHandler failed (Win32 ${kernel.GetLastError()})`)
   }
@@ -1027,7 +1048,7 @@ async function main() {
   try {
     if (parsed.mode === 'workspace-write') {
       workspaceSidPtr = sidFromString(bindings, workspaceWriteSid(parsed.workspace))
-      // 私有临时目录：随机路径 → 随机能力 SID，别的会话写不进来
+      // Private temp dir: random path → random capability SID; other sessions cannot write into it
       privateTempDir = mkdtempSync(join(parsed.temp, 'ryten-sandbox-'))
       tempSidPtr = sidFromString(bindings, tempWriteSid(privateTempDir))
       grantWrite(bindings, parsed.workspace, workspaceSidPtr)
@@ -1043,24 +1064,31 @@ async function main() {
       parsed.mode
     )
     /**
-     * 默认 DACL：workspace-write 并「能力 SID + Everyone」两条，read-only 并 Everyone。
+     * Default DACL: for workspace-write merge two entries ("capability SID + Everyone"), for
+     * read-only merge Everyone.
      *
-     * 为什么不能只并那条能力 SID：受限令牌只原样继承用户的默认 DACL，而它**不含任何
-     * restricting SID**。被沙箱化的进程在启动期新建对象（控制台、段、事件、管道、临时文件）时，
-     * 写类访问要过两遍检查，第二遍只能靠对象自身 DACL 里的 restricting SID：
-     *   - 本地实测（临时把这段整个去掉）：控制台子进程立刻以 0xC0000142 死在 DLL 初始化阶段；
-     *   - CI 实测（GitHub windows-latest，只并能力 SID）：`workspace-write` 的控制台子进程同样
-     *     0xC0000142，而 `read-only`（默认 DACL 并的是 Everyone）正常 —— 说明启动期那个对象
-     *     还会被**别的组件**（控制台宿主等）访问，随机能力 SID 只有我们自己带得动。
-     * 所以两条都并：能力 SID 让自有对象按最小授权走，Everyone 让宿主侧组件也过得去。
-     * 代价（如实记在 README 的已知边界里）：子进程**新建**对象的 DACL 会含 Everyone；
-     * 能不能新建仍由父目录 DACL 把关，越界创建照样被拒。
+     * Why not merge only the capability SID: a restricted token inherits the user's default DACL
+     * verbatim, and that DACL **contains no restricting SID**. When the sandboxed process creates
+     * objects during startup (console, sections, events, pipes, temp files), write-type access must
+     * pass a two-pass check, and the second pass can only succeed via a restricting SID in the
+     * object's own DACL:
+     *   - measured locally (temporarily removing this whole block): the console child dies
+     *     immediately with 0xC0000142 during DLL initialization;
+     *   - measured on CI (GitHub windows-latest, merging only the capability SID): the
+     *     `workspace-write` console child likewise gets 0xC0000142, while `read-only` (whose default
+     *     DACL merges Everyone) works — showing that the startup object is also accessed by
+     *     **other components** (the console host, etc.), and only we carry the random capability SID.
+     * So both are merged: the capability SID keeps our own objects at least privilege, and Everyone
+     * lets host-side components through too.
+     * Cost (recorded honestly among the known limits): DACLs of objects **newly created** by the
+     * child contain Everyone; whether creation is possible is still governed by the parent
+     * directory's DACL, so out-of-bounds creation is still denied.
      */
     setTokenDefaultDaclGrant(bindings, restrictedToken, workspaceSidPtr ?? everyoneSid)
     if (workspaceSidPtr !== null) setTokenDefaultDaclGrant(bindings, restrictedToken, everyoneSid)
 
     if (privateTempDir !== null) {
-      // 子进程的 TMP/TEMP 指向已授权的私有临时目录（只改 runner 自己的环境，子进程继承）
+      // The child's TMP/TEMP point at the authorized private temp dir (only the runner's own environment is changed; the child inherits it)
       if (kernel.SetEnvironmentVariableW('TMP', privateTempDir) === 0) {
         fail(`SetEnvironmentVariableW TMP failed (Win32 ${kernel.GetLastError()})`)
       }
@@ -1076,11 +1104,12 @@ async function main() {
     })
     let exitCode
     try {
-      // 先泵输出（子进程写完 → 关闭写端 → 读端 EOF），再取退出码
+      // Pump output first (child finishes writing → closes the write end → read end EOF), then fetch the exit code
       await pumpPipes(bindings, child.pipes)
       exitCode = waitForExit(bindings, child.process)
-      // 信息性提示（刻意不带 `ryten-sandbox-run:` 失败签名，避免被上层判成「后端坏了」）：
-      // 子进程在 DLL/控制台初始化阶段就死掉时，0xC0000142 这个退出码对上层完全不可解释。
+      // Informational hint (deliberately without the `ryten-sandbox-run:` failure signature, to avoid
+      // the upper layer judging it as a "backend failure"): when the child dies during DLL/console
+      // initialization, the exit code 0xC0000142 is completely unexplainable to the upper layer.
       if (exitCode === STATUS_DLL_INIT_FAILED) {
         process.stderr.write(
           `[ryten-sandbox] child exited with STATUS_DLL_INIT_FAILED (0xC0000142) before running\n`
@@ -1093,7 +1122,7 @@ async function main() {
     }
     return exitCode
   } finally {
-    // 清理必须尽力而为：绝不能掩盖子进程的退出码
+    // Cleanup must be best-effort: it must never mask the child's exit code
     if (workspaceSidPtr !== null && parsed.revokeWorkspace) {
       try {
         revokeWrite(bindings, parsed.workspace, workspaceSidPtr)
@@ -1115,8 +1144,8 @@ async function main() {
         process.stderr.write(`${RUNNER_SIGNATURE}: cleanup: ${describeError(error)}\n`)
       }
     }
-    // 只有 Win32 分配的 SID（ConvertStringSidToSidW）才 LocalFree；
-    // 登录 SID / Everyone 是我们自己 Buffer 里的字节，不能 LocalFree
+    // Only SIDs allocated by Win32 (ConvertStringSidToSidW) may be LocalFree'd; the logon SID /
+    // Everyone are bytes in our own Buffers and must not be LocalFree'd
     for (const sid of [workspaceSidPtr, tempSidPtr]) {
       if (sid !== null) kernel.LocalFree(sid)
     }

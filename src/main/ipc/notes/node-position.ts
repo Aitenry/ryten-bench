@@ -8,10 +8,11 @@ import {
 } from '../../database/mapper/notes/node-position'
 
 /**
- * 图谱/看板节点坐标 IPC 处理器表（notes 插件的第 4 个域）。
+ * Graph/board node position IPC handler map (the notes plugin's fourth domain).
  *
- * 通道名一律 `notes:<channel>`；迁移说明：原 `src/main/ipc/node-position.ts` 的 4 个
- * 扁平通道（`node-position-*` / `node-positions-*`）逐个改名，参数与返回类型不变。
+ * All channel names are `notes:<channel>`; migration note: the 4 flat channels (`node-position-*` /
+ * `node-positions-*`) of the old `src/main/ipc/node-position.ts` were renamed one by one, with
+ * unchanged parameters and return types.
  */
 export const nodePositionIpcHandlers: IpcHandlerMap = {
   'notes:node-positions-get-all': async () => {

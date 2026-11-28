@@ -128,9 +128,9 @@ import {
 import { activateChatTopic } from '../../services/harness/chat/activation'
 
 /**
- * 主进程 → 渲染层的事件通道（只有发送方、没有 ipcMain 处理器）。
+ * Main process → renderer event channel (send-only; no ipcMain handler).
  *
- * 通道名以 `harness:` 开头，渲染层经 preload 的系统桥直接订阅——不需要再登记白名单。
+ * Channel names use the `harness:` prefix; the renderer subscribes via the preload system bridge, so no whitelist registration is needed.
  */
 export const HARNESS_EVENTS = {
   streamChunk: 'harness:harness-stream-chunk',
@@ -139,54 +139,54 @@ export const HARNESS_EVENTS = {
   queueUpdated: 'harness:harness-queue-updated',
   queueSteered: 'harness:harness-queue-steered',
   goalUpdated: 'harness:harness-goal-updated',
-  /** 计划模式开关变更（输入框的计划模式徽标实时刷新） */
+  /** Plan mode toggle changed (the plan-mode badge in the input box refreshes live) */
   planUpdated: 'harness:harness-plan-updated',
   teamModeUpdated: 'harness:harness-team-mode-updated',
   jobsUpdated: 'harness:harness-jobs-updated',
   agentsUpdated: 'harness:harness-agents-updated',
-  /** 子代理会话事件增量（打开会话视图时只推给正在查看该子代理的窗口） */
+  /** Sub-agent session event delta (only pushed to windows currently viewing that sub-agent) */
   agentConversationUpdated: 'harness:harness-agent-conversation-updated',
-  /** 共享任务板变更（主智能体 / 子代理协作的 team/task 投影，整板快照） */
+  /** Shared task board changed (team/task projection of main-agent / sub-agent collaboration; whole-board snapshot) */
   teamUpdated: 'harness:harness-team-updated',
   questionAsked: 'harness:harness-question-asked',
   approvalAsked: 'harness:harness-approval-asked',
-  /** 某条会话「是否正挂着等用户确认」（侧栏黄点）：提问 / 审批挂起时 true，结算时 false */
+  /** Whether a topic is currently waiting on the user (sidebar yellow dot): true while a question / approval is pending, false once settled */
   topicPending: 'harness:harness-topic-pending',
   permissionUpdated: 'harness:harness-permission-updated',
   todosUpdated: 'harness:harness-todos-updated',
   /**
-   * 生成中本轮累计用量（每次模型调用结束推一条）。
+   * Cumulative usage for the current turn while generating (one event after each model call).
    *
-   * 只用于输入框底栏的「本轮 N 次调用 · X tok」实时数字；权威账本仍是流结束后
-   * 落库的 harness_dialogue_usage（渲染层在一轮结束时切回它）。
+   * Only feeds the live "this turn: N calls · X tok" number in the input footer; the authoritative ledger is still
+   * the harness_dialogue_usage row written when the stream ends (the renderer switches back to it at turn end).
    */
   turnUsage: 'harness:harness-turn-usage'
 } as const
 
 /**
- * 轮次执行只需要 sender（存活校验、safeSend、渲染进程失效监听），因此按最小接口收窄类型：
- * 用户轮与队列接续轮共用同一条 `HarnessSenderEvent` 管线。
+ * Turn execution only needs a sender (liveness check, safeSend, renderer-invalidated watch), so the type is narrowed to the minimal interface:
+ * user turns and queue-continuation turns share the same `HarnessSenderEvent` pipeline.
  *
- * 注：`registerIpc` 只把参数透传给处理器（不传 IpcMainInvokeEvent），所以 sender 由
- * `primarySender()` 解析——本应用只有一个真正运行界面的主窗口（加载窗口不跑 harness），
- * 取第一个存活窗口与原 `event.sender` 等价。
+ * Note: `registerIpc` only passes the arguments through to the handler (no IpcMainInvokeEvent), so the sender is resolved by
+ * `primarySender()` — the app has a single window that actually runs the UI (the loading window does not run the harness), so
+ * taking the first live window is equivalent to the original `event.sender`.
  */
 interface HarnessSenderEvent {
   sender: Electron.WebContents
 }
 
-/** 目标渲染帧：第一个存活窗口（与 notes 图谱通道「广播给所有存活窗口」同一取舍） */
+/** Target renderer frame: the first live window (same trade-off as the notes graph channel broadcasting to all live windows) */
 function primarySender(): Electron.WebContents | null {
   const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
   return win ? win.webContents : null
 }
 
 /**
- * 无窗口时的最小 sender：定时任务在应用退到后台、没有可见窗口时仍要能起一轮。
+ * Minimal sender when no window exists: a scheduled task must still be able to start a turn while the app is in the background with no visible window.
  *
- * 流事件没有接收方（send 是空操作），但轮次本身照常执行并把消息落库；窗口重新打开后
- * 从历史里就能看到这轮对话。只实现 runHarnessTurn 用到的最小面：id / isDestroyed /
- * send / on / once（事件注册都是空操作）。
+ * There is no receiver for stream events (send is a no-op), but the turn still runs and persists messages; once a window is reopened,
+ * the conversation can be seen in history. Only the minimal surface used by runHarnessTurn is implemented: id / isDestroyed /
+ * send / on / once (event registration is a no-op).
  */
 function headlessSender(): Electron.WebContents {
   const sender: Record<string, unknown> = {}
@@ -200,10 +200,10 @@ function headlessSender(): Electron.WebContents {
 }
 
 /**
- * 解析定时任务的目标：固定会话（可能是对话/工作/插件模式下任一会话）或「每次新建会话」。
+ * Resolve a scheduled task target: a fixed topic (any topic in chat/work/plugin mode) or "new topic per run".
  *
- * 跨模式运行必须带本轮的**工作区上下文**：文件工具、记忆作用域、子代理都要用目标会话的
- * 目录，而不是「当前界面停在哪个工作区」。
+ * Cross-mode runs must carry this turn's **workspace context**: file tools, memory scope and sub-agents must use the target topic's
+ * directory, not whichever workspace the UI currently sits on.
  */
 async function resolveScheduledTarget(task: ScheduledTask): Promise<{
   topicId: number
@@ -223,7 +223,7 @@ async function resolveScheduledTarget(task: ScheduledTask): Promise<{
     const workspace = workspaceId ? await getWorkspaceById(workspaceId) : null
     return { topicId: task.topicId, workspaceContext: { workspaceId, workspacePath: workspace?.path } }
   }
-  // 新会话型任务：每轮触发新建一条会话；工作区/记忆作用域由任务上存的目标决定
+  // New-topic task: each run creates a fresh topic; workspace/memory scope comes from the target stored on the task
   if (!task.targetWorkspaceId) return null
   const memoryScope = task.targetMemoryScope
   const topicId = await createTopic(
@@ -253,11 +253,11 @@ async function resolveScheduledTarget(task: ScheduledTask): Promise<{
 }
 
 /**
- * 定时任务到点后的执行入口：在目标会话里起一轮无头对话。
+ * Entry point for a due scheduled task: starts a headless turn in the target topic.
  *
- * - 固定会话型：直接在该话题里跑（跨模式同样可以）；
- * - 新会话型：先按任务上的目标模式/工作区新建一条会话，再在该会话里跑；
- * - 同一话题已有回合在跑时不并发（返回 cancelled，由 runner 顺延到下一个周期）。
+ * - Fixed topic: run directly in that topic (cross-mode is fine too);
+ * - New topic: create a topic from the task's target mode/workspace first, then run in it;
+ * - No concurrency when a turn is already running in the same topic (returns cancelled; the runner retries next cycle).
  */
 async function runScheduledTurn(
   task: ScheduledTask,
@@ -286,7 +286,7 @@ async function runScheduledTurn(
       options: {
         topicId,
         workspaceContext,
-        // 任务级选择只作用于这一轮，不写回会话（用户口径：会话选择归输入框管）
+        // Task-level selection applies to this turn only and is not written back to the topic (session selection belongs to the input box)
         agentConfig: task.agentConfig,
         persistAgentConfig: false,
         turnMeta: {
@@ -305,16 +305,16 @@ async function runScheduledTurn(
   }
 }
 
-/** 单轮对话执行参数（用户轮 / 队列接续轮 / 目标自动轮共用 runHarnessTurn 管线） */
+/** Parameters for one chat turn (user turn / queue-continuation turn / goal auto turn all share the runHarnessTurn pipeline) */
 interface RunHarnessTurnParams {
   event: HarnessSenderEvent
   question: string
   /**
-   * 本轮回合 id（`harnessQueue.beginTurn` 的值）。
+   * Turn id for this run (the value from `harnessQueue.beginTurn`).
    *
-   * launchTurn 在为**已存在的话题**起轮时先登记并传进来；新话题（首条消息）由
-   * runHarnessTurn 建完话题后再登记。这个 id 随每个 chunk / done / error 下发，
-   * 渲染端据此丢弃过期回合的事件（同话题两轮串台是「输出错乱」的根因）。
+   * launchTurn registers and passes it in when starting a turn for an **existing topic**; for a new topic (first message)
+   * runHarnessTurn registers it after creating the topic. This id is sent with every chunk / done / error so the
+   * renderer can drop events from stale turns (two overlapping turns in one topic are the root cause of garbled output).
    */
   turnId?: number
   options?: {
@@ -324,40 +324,40 @@ interface RunHarnessTurnParams {
     documents?: { fileName: string; filePath: string }[]
     turnMeta?: TurnMeta
     /**
-     * 「编辑并重发」：这一轮的提问已经存在库里（气泡内就地编辑），直接改写该行内容，
-     * 不再插入新的用户消息行——否则库里会多出一条同内容提问、历史顺序也被挪到末尾。
+     * "Edit and resend": the question for this turn already exists in the DB (edited in place in the bubble), so overwrite that row
+     * instead of inserting a new user message — otherwise the DB gets a duplicate question and history order is moved to the end.
      */
     reuseUserDialogueId?: number
     /**
-     * 前端为这一轮登记的助手消息临时 id（首段）。回合内插话会切分助手输出，主进程为
-     * 每个段落生成新的临时 id，随 steered chunk 下发，前端据此把段落接到对应气泡上。
+     * Frontend temporary id registered for this turn's assistant message (first segment). In-turn interjections split assistant output;
+     * the main process generates a new temporary id per segment and sends it with the steered chunk so the frontend can attach segments to bubbles.
      */
     messageId?: string
     /**
-     * 记忆作用域（`plugin:<插件 id>`）。只在**主进程兜底建话题**时用得上——
-     * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
+     * Memory scope (`plugin:<plugin id>`). Only used when the **main process creates the topic as a fallback** —
+     * normally the renderer calls `harness-topic-create` first (writing the scope into the topic row) and the main process reads it from the topic.
      */
     memoryScope?: string | null
     /**
-     * 本轮运行选择（工具 / 技能 / MCP 工具）：非 null 的维度覆盖会话配置。
-     * 来自输入框下面的选择，或定时任务上存的任务级选择。
+     * Runtime selection for this turn (tools / skills / MCP tools): non-null dimensions override the session config.
+     * Comes from the selection below the input box, or the task-level selection stored on a scheduled task.
      */
     agentConfig?: AgentSelection | null
-    /** 本轮工作区上下文（定时任务跨模式运行时由调用方指定；缺省用当前设置） */
+    /** Workspace context for this turn (set by the caller for cross-mode scheduled runs; defaults to current settings) */
     workspaceContext?: { workspaceId?: number; workspacePath?: string }
-    /** 是否把本轮选择写回会话（用户发送 = true；定时任务/内部轮 = false） */
+    /** Whether to write this turn's selection back to the topic (user send = true; scheduled/internal turns = false) */
     persistAgentConfig?: boolean
   }
 }
 
-/** 落库后的助手消息（一轮一条；插话是纯注入，不切分） */
+/** Assistant message after persistence (one row per turn; interjections are pure injection and do not split it) */
 interface AssistantSegment {
   messageId: string
   dialogueId: number | null
   content: string
 }
 
-/** 流式段落累积器：插话边界处整体换新的一组状态 */
+/** Streaming segment accumulator: a fresh set of state at each interjection boundary */
 interface SegmentAccumulator {
   blocks: {
     type: string
@@ -377,17 +377,17 @@ interface SegmentAccumulator {
   content: string
   reasoning: string
   failed: boolean
-  /** 本段是否已写入早期对话摘要压缩块（压缩卡片只保留在首段，避免插话后重复） */
+  /** Whether this segment already wrote the early-conversation summary block (the summary card stays in the first segment only, avoiding duplication after interjections) */
   compactionSeen: boolean
 }
 
 /**
- * 写入本轮对话用量（harness_dialogue_usage）。
+ * Write dialogue usage for this turn (harness_dialogue_usage).
  *
- * - 只在模型**真的回传了 token 数字**时写：宁可没有行，也不写全 0 的假数据；
- * - token 是整轮累加（工具循环会有多次模型往返），每次调用的原始 usage_metadata
- *   以 JSON 数组存进 usage_metadata 列，保留 reasoning / cached 等各家明细；
- * - 供应商与模型存**快照**：供应商配置之后被删改也不影响这条账目。
+ * - Only write when the model **actually returned token numbers**: no row is better than a fake all-zero row;
+ * - Tokens accumulate over the whole turn (the tool loop makes several model round-trips); the raw usage_metadata of each call
+ *   is stored as a JSON array in the usage_metadata column, keeping per-provider details such as reasoning / cached;
+ * - Provider and model are stored as a **snapshot**: later edits or deletion of the provider config do not affect this accounting row.
  */
 async function persistTurnUsage(params: {
   dialogueId: number
@@ -421,7 +421,7 @@ async function persistTurnUsage(params: {
       dialogue_id: dialogueId,
       provider_id: providerId ?? null,
       provider: providerMark,
-      // 响应里带的模型名优先（可能被用户临时切过模型），否则用当前配置
+      // Prefer the model name returned in the response (the user may have switched models temporarily), else the current config
       model: records.find((r) => r.model)?.model ?? configuredModel,
       input_tokens: totals.inputTokens,
       output_tokens: totals.outputTokens,
@@ -440,15 +440,15 @@ async function persistTurnUsage(params: {
 }
 
 /**
- * 执行一轮完整对话：建模型 → 建话题 → 存用户消息 → 流式 → 存 AI 回复 → 通知前端。
- * 返回 { topicId, cancelled, turnId }（cancelled=true 表示用户点了停止）。
+ * Run one complete conversation: create model → create topic → save user message → stream → save AI reply → notify the frontend.
+ * Returns { topicId, cancelled, turnId } (cancelled=true means the user pressed stop).
  */
 /**
- * 收敛「本轮工作区路径」的信任来源（安全审计 S03）。
+ * Narrow the trusted source of "this turn's workspace path" (security audit S03).
  *
- * 渲染层/调用方可以传 `workspaceContext.workspacePath` 当本轮文件工具的挂载根；
- * 只信任「用户经系统对话框亲手选过」或「已登记工作区行」的目录，其余一律回落到
- * 设置里的活动工作区路径（定时任务等主进程调用方传的本来就是库里的路径，不受影响）。
+ * The renderer/caller may pass `workspaceContext.workspacePath` as the mount root for this turn's file tools;
+ * only directories the user personally picked via a system dialog, or registered workspace rows, are trusted; everything else falls back
+ * to the active workspace path in settings (main-process callers such as scheduled tasks pass DB paths, so they are unaffected).
  */
 async function resolveTrustedWorkspacePath(
   requested: string | undefined,
@@ -473,13 +473,13 @@ async function runHarnessTurn(
 ): Promise<{ topicId: number; cancelled: boolean; turnId: number }> {
   const { event, question, options } = params
 
-  // 用户上传/粘贴的图片与 read_image 共用同一套规范化：进入上下文/落库前先按
-  // 像素与字节预算缩放或重编码（前端气泡里的预览仍是原图，二者允许不同）。
+  // User-uploaded/pasted images share the same normalization as read_image: before entering the context or being persisted they are
+  // scaled or re-encoded to pixel and byte budgets (the bubble preview stays the original; the two may differ).
   if (options?.images?.length) {
     options.images = options.images.map((image) => normalizeImageDataUrl(image).dataUrl)
   }
 
-  // 渲染进程已失效（崩溃/窗口关闭）时跳过本轮：不再创建模型、不保存消息、不向死帧发送
+  // Skip this turn when the renderer is already gone (crash/window closed): no model, no message writes, nothing sent to a dead frame
   if (!isSenderAlive(event.sender)) {
     logger.warn(
       `[Harness] Renderer process is gone (senderId=${event.sender.id}), skipping this turn`
@@ -487,12 +487,12 @@ async function runHarnessTurn(
     return { topicId: options?.topicId ?? 0, cancelled: true, turnId: 0 }
   }
 
-  // 加载主智能体默认配置（electron-store）
+  // Load main agent defaults (electron-store)
   const mainAgentDefaults = settingsStore.get('mainAgent') as MainAgentConfig | undefined
   let harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
   logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
 
-  // 本轮工作区上下文：定时任务可以跨模式/跨工作区运行，由调用方显式指定，缺省用当前设置。
+  // Workspace context for this turn: scheduled tasks may run across modes/workspaces, so the caller specifies it; defaults to current settings.
   const turnWorkspaceId =
     options?.workspaceContext?.workspaceId ?? harnessSettings?.activeWorkspaceId ?? 0
   const turnWorkspacePath = await resolveTrustedWorkspacePath(
@@ -500,10 +500,10 @@ async function runHarnessTurn(
     harnessSettings?.workspacePath
   )
 
-  // 0. 本轮的记忆作用域与「插件模式」。**必须在建话题、建工具之前定下来**：
-  //    插件模式决定工坊那 4 个工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），
-  //    话题上的工具快照与真正挂载的工具集必须是同一个口径。
-  //    作用域以话题上存的为准（重开这条会话 / 重启应用都仍然认），话题还没建时用调用方传来的兜底。
+  // 0. This turn's memory scope and "plugin mode". **Must be fixed before creating the topic and tools**:
+  //    plugin mode decides whether the 4 workshop tools are mounted automatically (see PLUGIN_MODE_TOOL_NAMES in shared/mcp.ts),
+  //    and the tool snapshot on the topic must match the set actually mounted.
+  //    The scope comes from the topic when stored (still honored after reopening the topic or restarting the app); before the topic exists, use the caller's fallback.
   const memoryScope = await resolveTurnMemoryScope(
     options?.topicId,
     options?.memoryScope,
@@ -511,17 +511,17 @@ async function runHarnessTurn(
   )
   const pluginMode = memoryScope.kind === 'plugin'
 
-  // 本轮运行选择（工具 / 技能 / MCP）：请求上带的优先，其次会话级配置。
-  // 技能与 MCP 的默认值都是「一个都不启用」（用户口径：新增时不能默认开启）。
+  // Runtime selection for this turn (tools / skills / MCP): request values win, then session-level config.
+  // Skills and MCP both default to "none enabled" (newly added items must not be enabled by default).
   const requestSelection = normalizeAgentSelection(options?.agentConfig)
   const topicSelection = options?.topicId ? await getTopicAgentSelection(options.topicId) : null
   const turnSelection = mergeAgentSelection(topicSelection, requestSelection)
 
-  // 本轮工具名与实例：用户勾选的（含 MCP 页勾选的 MCP 工具）+ 插件模式自动挂载的模式工具。
-  // 「发布版本」要插件中心会话（未登录时连名字都不追加），所以登录态必须在这里现取：
-  // 用户中途登录/退出后，下一轮的工具集随之变化，不需要重启。
-  // MCP 选择项可能是「服务器分组」（mcp@<命名空间>）：挂载前展开成具体工具名。
-  // 只有被选中的服务器/工具才会注入本轮，默认一个都不挂（见 topic_agent_config 注释）。
+  // Tool names and instances for this turn: user-checked tools (including MCP tools checked on the MCP page) + mode tools auto-mounted in plugin mode.
+  // Release builds need the plugin-center session (without login not even names are appended), so the login state must be read here:
+  // after the user logs in/out mid-session, the next turn's tool set follows without a restart.
+  // MCP selections may be server groups (mcp@<namespace>): expand them into concrete tool names before mounting.
+  // Only selected servers/tools are injected into this turn; nothing is mounted by default (see the topic_agent_config comment).
   const expandedMcpTools = expandMcpServerGroups(
     turnSelection.mcpTools ?? [],
     currentMcpTools().infos.map((info) => info.name)
@@ -541,23 +541,23 @@ async function runHarnessTurn(
     `[Harness] Tools for this turn: pluginMode=${pluginMode} count=${selectedTools.length} [${selectedTools.join(',')}]`
   )
 
-  // 1. 确保话题存在
+  // 1. Ensure the topic exists
   let topicId = options?.topicId
   if (!topicId) {
     const title = question.slice(0, 50)
     const workspaceId = turnWorkspaceId
     try {
-      // 话题上记一份「本轮启用的工具」快照（含 MCP 页勾选的 MCP 工具与模式工具，与真正挂载的口径一致）
+      // Record a "tools enabled for this turn" snapshot on the topic (including MCP tools checked on the MCP page and mode tools, matching what is actually mounted)
       topicId = await createTopic(
         workspaceId,
         title,
         undefined,
         selectedTools.length ? JSON.stringify(selectedTools) : undefined,
-        // 记忆作用域：插件 / 对话会话建话题时就落库（见 memory-scope.ts）
+        // Memory scope: persisted when the plugin / chat topic is created (see memory-scope.ts)
         serializeMemoryScope(memoryScope)
       )
-      // 「对话」模式：这条会话的目录就是本轮的工作目录（渲染层通常已先建好话题并切过，
-      // 这里是兜底路径，保证「没有话题 id 的首次发送」也不会把文件写进根目录）。
+      // "Chat" mode: this topic's directory is the working directory for this turn (the renderer usually created and switched the topic already;
+      // this is the fallback path, ensuring the first send without a topic id does not write files into the root directory).
       if (memoryScope.kind === 'chat' && topicId) {
         try {
           await activateChatTopic(topicId)
@@ -575,7 +575,7 @@ async function runHarnessTurn(
     }
   }
 
-  // 把本轮选择写回会话（用户发送 = 持久化；定时任务/内部轮 = 只作用于本轮）
+  // Write this turn's selection back to the topic (user send = persist; scheduled/internal turns = this turn only)
   if (topicId && requestSelection && options?.persistAgentConfig !== false) {
     try {
       await setTopicAgentSelection(topicId, turnSelection)
@@ -584,11 +584,11 @@ async function runHarnessTurn(
     }
   }
 
-  // 1.5 本轮回合 id：已存在的话题由 launchTurn 先登记并传入（这样「另一个窗口/另一次点击
-  //     抢在起轮前」就能被忙检查挡住）；新话题此时才建好，在这里补登记。
+  // 1.5 Turn id for this run: for an existing topic, launchTurn registers and passes it in (so another window or another click
+  //     racing before the turn starts is blocked by the busy check); a new topic is created here, so register it now.
   const turnId = params.turnId || (topicId ? harnessQueue.beginTurn(topicId) : 0)
 
-  /** 向渲染进程推一条 chunk：统一带上话题与回合 id（渲染端按回合 id 丢弃过期事件） */
+  /** Push one chunk to the renderer: always carries topic and turn ids (the renderer drops stale events by turn id) */
   const sendChunk = (payload: Record<string, unknown>): boolean =>
     safeSend(event.sender, HARNESS_EVENTS.streamChunk, {
       ...payload,
@@ -596,7 +596,7 @@ async function runHarnessTurn(
       __turnId: turnId
     })
 
-  // 对话轮次失败统一收尾：通知前端错误并复位加载态（保证任何阶段失败前端都能停止反应）
+  // Unified failure close-out for a chat turn: notify the frontend of the error and reset the loading state (so the UI can stop for a failure in any phase)
   const failTurn = (error: unknown): { topicId: number; cancelled: boolean; turnId: number } => {
     const errMsg = error instanceof Error ? error.message : String(error)
     logger.error('[Harness] Turn failed:', error)
@@ -605,13 +605,13 @@ async function runHarnessTurn(
     return { topicId, cancelled: false, turnId }
   }
 
-  // 2. 保存用户消息（含图片、文档与目标自动续跑标记）。
-  // 提前到模型创建之前（修复：模型创建失败时直接 return,用户消息不落库,重载后丢失）
-  // 记下返回的行 id：流式结束后随 harness-stream-done 回传，前端删这轮时才找得到用户那一行
+  // 2. Save the user message (including images, documents and the goal auto-continue marker).
+  // Do this before model creation (fix: on model creation failure the old code returned early, so the user message was never persisted and was lost on reload)
+  // Keep the returned row id: it is sent back with harness-stream-done after streaming so the frontend can find the user row when deleting this turn
   let userDialogueId: number | null = null
   try {
     if (options?.reuseUserDialogueId) {
-      // 编辑重发：改写原提问行（保 id、保位置），不再插入新行
+      // Edit and resend: overwrite the original question row (keeping id and position) instead of inserting a new row
       userDialogueId = options.reuseUserDialogueId
       await updateDialogueContent(userDialogueId, question)
     } else {
@@ -647,12 +647,12 @@ async function runHarnessTurn(
       })
     }
   } catch (err) {
-    // 用户消息都没落库就不该继续跑：否则「答了但问题没存」，刷新后整轮消失且用户无感知。
+    // Do not keep running if the user message was not persisted: otherwise the answer exists without the question, and the whole turn vanishes on refresh with no user-visible signal.
     logger.error('Failed to save user message:', err)
     return failTurn(new Error(mainMessages().error.turnPersistFailed))
   }
 
-  // 模型创建可能因供应商不存在、被禁用、模型名称为空等原因失败，需要捕获并通知前端
+  // Model creation can fail because the provider is missing, disabled, the model name is empty, etc.; catch it and notify the frontend
   let model: BaseChatModel
   try {
     model = await getProviderService().createModel(options?.providerId)
@@ -660,14 +660,14 @@ async function runHarnessTurn(
     return failTurn(modelErr)
   }
 
-  // 按模型上下文窗口换算历史上下文字符预算（默认 20,000 token；1 token ≈ 1 字符的保守换算）
-  // 同时取出该模型的「工具调用轮数」上限，注入本轮运行时护栏
+  // Compute the history context character budget from the model's context window (default 20,000 tokens; conservative 1 token ≈ 1 character)
+  // Also read this model's "tool-call rounds" limit and inject it as this turn's runtime guardrail
   let modelDescriptor: SubAgentMainModelDescriptor | undefined
   let contextBudget: number | undefined
   let maxToolRounds: number | undefined
-  /** 原始窗口（token）：压缩压力按真实 token 判定时用，与上面按 1:1 换算的字符预算分开存 */
+  /** Raw window (tokens): used when compaction pressure is judged on real tokens, kept separate from the 1:1 character budget above */
   let contextWindowTokens: number | undefined
-  /** 当前模型档案是否声明支持图片输入：false 时 read_image 在执行期拒绝 */
+  /** Whether the current model profile declares image input support: when false, read_image refuses at execution time */
   let supportsImageInput = false
   try {
     const providerConfig = await getProviderService().getConfig(options?.providerId)
@@ -692,13 +692,13 @@ async function runHarnessTurn(
     )
   }
 
-  // 创建 AbortController 用于取消流式输出
+  // Create an AbortController to cancel streaming output
   const abortController = new AbortController()
   streamAbortControllers.set(event.sender.id, abortController)
 
-  // 渲染进程内存采样（OOM 可观测性）：本轮开始到收尾之间每 5s 采一次，
-  // 崩溃时由 main-window 的 render-process-gone 处理落最后一份快照。
-  // 必须在 try/finally 的每条退出路径上都 stop（含早退），否则采样表会一直挂着。
+  // Renderer memory sampling (OOM observability): sample every 5s from the start to the end of this turn;
+  // on crash, main-window's render-process-gone handler writes the last snapshot.
+  // Must stop on every exit path of the try/finally (including early returns), otherwise the sampler stays registered forever.
   let memSampling = true
   startRendererMemorySampling(`topic=${topicId}`)
   const stopMemSampling = (): void => {
@@ -707,10 +707,10 @@ async function runHarnessTurn(
     stopRendererMemorySampling()
   }
 
-  // 渲染进程失效跟踪：崩溃/窗口关闭时「渲染帧」先于「WebContents 对象」销毁，
-  // 此时 send 不抛异常（Electron 内部静默打印 "Error sending from webFrameMain ..."），
-  // isDestroyed() 也为 false——必须靠 render-process-gone / destroyed 事件主动中止流，
-  // 否则流式循环会持续向死帧发送 chunk，错误刷屏且白烧 token。
+  // Renderer invalidation tracking: on crash/window close the render frame is destroyed before the WebContents object,
+  // so send does not throw (Electron silently logs "Error sending from webFrameMain ...") and isDestroyed() is still false —
+  // the stream must be aborted via the render-process-gone / destroyed events,
+  // otherwise the streaming loop keeps sending chunks to a dead frame, spamming errors and burning tokens for nothing.
   let senderDead = false
   const onSenderGone = (): void => {
     if (senderDead) return
@@ -723,13 +723,13 @@ async function runHarnessTurn(
   event.sender.on('render-process-gone', onSenderGone)
   event.sender.once('destroyed', onSenderGone)
 
-  // 2.5. 历史对话上下文由 HarnessService 内部从数据库加载（超长自动压缩）
+  // 2.5. HarnessService loads history context internally from the database (auto-compacting when too long)
 
-  // 2.6. 主进程自行发起的轮次：流首下发标记 chunk，前端据此挂载用户消息 + 助手占位并
-  // 启动本轮流监听（普通用户轮由前端在发送时自行挂载）。
-  //  - goalRound：目标自动续跑轮；
-  //  - queueTurn：排队消息在上轮结束后被自动接续发出的轮次（用户没有当场点发送，
-  //    前端没有本地占位，缺了这条标记就会「消息消失了但什么都没发生」）。
+  // 2.6. Turns initiated by the main process itself: a marker chunk is sent first so the frontend mounts the user message + assistant placeholder and
+  // starts listening to this turn's stream (normal user turns are mounted by the frontend on send).
+  //  - goalRound: a goal auto-continue turn;
+  //  - queueTurn: a turn continued automatically after the previous one ended (the user did not press send,
+  //    so the frontend has no local placeholder; without this marker it looks like the message disappeared but nothing happened).
   if (options?.turnMeta?.source === 'goal-round' && options.turnMeta.goalRound != null) {
     sendChunk({
       goalRound: {
@@ -749,7 +749,7 @@ async function runHarnessTurn(
       }
     })
   }
-  // 定时任务轮：流首标记（用户没有点发送，前端据此挂用户气泡 + 助手占位）
+  // Scheduled turn: stream-start marker (the user did not press send; the frontend uses it to mount the user bubble + assistant placeholder)
   if (options?.turnMeta?.source === 'schedule') {
     sendChunk({
       scheduleTurn: {
@@ -760,7 +760,7 @@ async function runHarnessTurn(
     })
   }
 
-  // 技能：只启用会话级选择里的技能（默认不启用）
+  // Skills: enable only the session-level selection (none by default)
   const effectiveSkills = turnSelection.skills ?? []
 
   let harnessService: HarnessService
@@ -782,48 +782,48 @@ async function runHarnessTurn(
       supportsImageInput
     )
   } catch (err) {
-    // HarnessService 初始化（含子智能体定义加载）失败：清理本轮资源并通知前端，
-    // 避免前端停留在「正在生成…」无任何反应
+    // HarnessService initialization (including sub-agent definition loading) failed: clean up this turn's resources and notify the frontend,
+    // so the UI does not sit at "generating..." with no reaction
     logger.error('[Harness] Failed to initialize HarnessService:', err)
     streamAbortControllers.delete(event.sender.id)
     event.sender.removeListener('render-process-gone', onSenderGone)
     event.sender.removeListener('destroyed', onSenderGone)
     return failTurn(err)
   }
-  // 本轮模型真实用量（usage_metadata）：流结束时由 HarnessService 回调进来，助手消息落库后写入用量表
+  // Real model usage for this turn (usage_metadata): reported by HarnessService when the stream ends; written to the usage table after the assistant message is persisted
   let usageRecords: ModelUsageRecord[] = []
 
-  // ── 助手消息累积器（一轮 = 一条助手行）────────────────────────────────
-  // 段落表按「可多段」的形态保留（落库、回传 messageId → dialogueId 都按段走），
-  // 但当前**只会有 0/1 段**：回合内插话是纯注入（见下方 drainInjections），不切分助手输出，
-  // 所以一轮问答始终落一条助手消息，与旧行为等价。留结构是为了以后真需要切段时不必改协议。
+  // ── Assistant message accumulator (one turn = one assistant row) ─────────────────────────────────
+  // The segment list keeps a multi-segment shape (persistence and messageId → dialogueId mapping are per segment),
+  // but currently **only 0/1 segments** exist: in-turn interjections are pure injection (see drainInjections below) and do not split assistant output,
+  // so one Q&A turn always persists one assistant message, equivalent to the old behavior. The structure stays so real segmentation later needs no protocol change.
   const segments: AssistantSegment[] = []
-  /** 本轮助手消息的前端临时 id（前端在 startMessageStream 时已建好占位并下发） */
+  /** Frontend temporary id of this turn's assistant message (the frontend created the placeholder in startMessageStream and sent it) */
   const segmentMessageId = options?.messageId ?? `seg_${Date.now()}`
-  /** 累积器（保留结构以便后续扩展多段能力） */
+  /** Accumulator (structure kept for future multi-segment support) */
   const newAccumulator = (): SegmentAccumulator => ({
     blocks: [],
     content: '',
     reasoning: '',
     failed: false,
-    /** 是否已写入早期对话摘要压缩块（避免重复插入压缩卡片） */
+    /** Whether the early-conversation summary block was already written (avoids inserting the summary card twice) */
     compactionSeen: false
   })
   const acc = newAccumulator()
 
   /**
-   * 本轮「最终答复」边界（协议层真源；判定见 service/answer-boundary.ts）。
+   * This turn's "final answer" boundary (authoritative in the protocol layer; see TurnFinal detection in service/answer-boundary.ts).
    *
-   * 内容推进它、**撤回**也由它表达：`markAnswer` 每次都用累积块重算，
-   * 结果从「有答复」变成「没答复」时下发一条显式 `answer: false` 的撤回 chunk
-   * ——否则渲染端已经把那段内容摆到折叠外了，主进程悄悄改主意它无从得知。
-   * 空内容 chunk 不表态（`undefined`），不会误清渲染端的标记。
+   * Content advances it and **retraction** is expressed by it: `markAnswer` recomputes from the accumulated blocks every time;
+   * when the result flips from "has answer" to "no answer", an explicit `answer: false` retraction chunk is sent
+   * — otherwise the renderer already rendered that content outside the collapsed area and would never learn the main process changed its mind.
+   * Empty-content chunks do not vote (`undefined`), so the renderer's marker is not cleared by accident.
    */
   let answerBlocks = 0
   let answerHas = false
   const markAnswer = (): void => {
     const next = answerTrailingCount(acc.blocks)
-    // 从「有答复」变回「没答复」：显式撤回，否则渲染端已经把那段内容摆到折叠外了
+    // Flip from "has answer" back to "no answer": explicit retraction, otherwise the renderer already rendered that content outside the collapsed area
     if (next === 0 && answerHas) {
       sendChunk({ answer: false })
     }
@@ -831,14 +831,14 @@ async function runHarnessTurn(
     answerHas = next > 0
   }
 
-  /** 本轮终局标记（随 harness-stream-done 下发；渲染端据此知道「这就是最后一轮」） */
+  /** Final marker for this turn (sent with harness-stream-done; the renderer uses it to know this is the last turn) */
   let goalRoundWillContinue: boolean | null = null
   let goalRoundClosed: boolean | null = null
 
-  /** 本轮助手输出落库失败的原因（非 null 时本轮不能算「已结算」） */
+  /** Reason the assistant output failed to persist (non-null means this turn cannot be considered settled) */
   let assistantPersistError: unknown = null
 
-  /** 把本轮助手输出落库并登记 */
+  /** Persist and register this turn's assistant output */
   const flushSegment = async (): Promise<void> => {
     let dialogueId: number | null = null
     if (!acc.failed) {
@@ -850,8 +850,8 @@ async function runHarnessTurn(
           blocks: JSON.stringify(acc.blocks)
         })
       } catch (err) {
-        // 落库失败不能只记日志：前端拿不到库内行 id、刷新后整轮答复消失，
-        // 必须把本轮标记为未结算并在收尾时向用户报到（见 turnFinal.settled 与 streamError）。
+        // Persistence failure cannot be only logged: the frontend would lack the DB row id and the whole reply would vanish on refresh,
+        // so mark this turn as unsettled and report it to the user during close-out (see turnFinal.settled and streamError).
         assistantPersistError = err
         logger.error('[Harness] Failed to save AI message:', err)
       }
@@ -866,22 +866,22 @@ async function runHarnessTurn(
       topicId,
       signal: abortController.signal,
       contextBudget,
-      // 原始窗口（token）：压缩压力优先按上一轮真实 token ÷ 窗口 ≥ 79% 判定，
-      // 字符预算只做兜底（见 runtime/harness/context-pressure.ts）
+      // Raw window (tokens): compaction pressure is judged first from last turn's real tokens ÷ window ≥ 79%,
+      // with the character budget only as fallback (see runtime/harness/context-pressure.ts)
       contextWindow: contextWindowTokens,
-      // 摘要压缩开始：立即推送「压缩中」过渡 chunk（不落库，结果由流尾 historyCompacted 携带，
-      // 渲染进程收到结果块后原地替换过渡块，形成「压缩中 → 压缩结果」的转变）
+      // Summary compaction starts: immediately push a "compacting" transition chunk (not persisted; the result rides on historyCompacted at stream end,
+      // and the renderer replaces the transition block in place when the result arrives, forming a "compacting → compacted" transition)
       onCompactionStart: () => {
         sendChunk({ historyCompacting: true })
       },
-      // 摘要压缩模型请求自动重试：推送「正在重试（第 N/2 次）」过渡 chunk（不落库），
-      // 压缩模型失败与正文模型同款恢复——重试耗尽后经 ModelRecoveryModal 换模型在原位置继续压缩
+      // Auto-retry of the summary compaction model request: push a "retrying (N/2)" transition chunk (not persisted);
+      // compaction model failures recover the same way as the main model — after retries are exhausted, ModelRecoveryModal switches models and continues compacting in place
       onCompactionRetry: (attempt, retries) => {
         sendChunk({ retrying: { attempt, retries } })
       },
-      // 回合内插话（steering）：**纯注入**——把文字并进模型上下文，不落库、不产生对话内容。
-      // 调用点有两个（见 runtime/agent.ts）：模型节点调用前（主路径，长回答途中插话也能生效）、
-      // 工具节点执行前。本轮结束时仍未取走的条目由 releaseHolds 放回队列，不静默丢内容。
+      // In-turn interjection (steering): **pure injection** — merge the text into the model context; it is not persisted and creates no dialogue content.
+      // Two call sites (see runtime/agent.ts): before the model node call (main path, so mid-answer interjections also take effect) and
+      // before tool node execution. Entries not consumed by the end of the turn are returned to the queue by releaseHolds, never silently dropped.
       drainInjections: async (): Promise<AgentInjection[] | null> => {
         const items = harnessQueue.takeInjections(topicId)
         if (items.length === 0) return null
@@ -890,7 +890,7 @@ async function runHarnessTurn(
         )
         return items.map((item) => {
           sendChunk({ steered: { text: item.text } })
-          // 队列已摘除该条：广播给所有窗口（含发起窗口）抹掉队列行
+          // The queue already removed this entry: broadcast to all windows (including the origin) to clear the queue row
           harnessQueue.notifyConsumed(topicId, { item })
           return { text: item.text }
         })
@@ -899,8 +899,8 @@ async function runHarnessTurn(
     (records) => {
       usageRecords = records
     },
-    // 生成中的实时进度：只发「本轮累计」，不落库、不参与结算。拿不到 token 数字的调用
-    // （模型没回传 usage_metadata）不发，免得底栏跳出一条 0 tok 的假消息。
+    // Live progress while generating: only sends this turn's cumulative total, not persisted and not part of settlement. Calls without token numbers
+    // (no usage_metadata returned by the model) are skipped, so the footer does not flash a fake 0-token message.
     (records) => {
       const totals = sumUsage(records)
       if (!totals.hasTokens) return
@@ -917,7 +917,7 @@ async function runHarnessTurn(
 
   try {
     for await (const chunk of stream) {
-      // 渲染进程失效（崩溃/窗口关闭）时立即中止，不再向死帧发送 chunk
+      // Abort immediately when the renderer is gone (crash/window close); no more chunks to a dead frame
       if (!isSenderAlive(event.sender)) {
         senderDead = true
         abortController.abort()
@@ -927,7 +927,7 @@ async function runHarnessTurn(
         logger.info('[Harness] Stream cancelled by user')
         break
       }
-      // 部分输出后流失败：转发错误事件给前端，并标记跳过落库
+      // Stream failed after partial output: forward the error event to the frontend and mark to skip persistence
       if (chunk.streamError) {
         acc.failed = true
         logger.error(
@@ -940,7 +940,7 @@ async function runHarnessTurn(
           turnId
         })
       }
-      // 本轮热记忆注入：置于消息块最顶部（首个 chunk 到达，仅累积一次，随 blocks 持久化）
+      // Hot-memory injection for this turn: placed at the very top of the message blocks (arrives with the first chunk, accumulated once, persisted with blocks)
       if (chunk.memoryInjected) {
         const exists = acc.blocks.some((b) => b.type === 'memoryInjected')
         if (!exists) {
@@ -950,8 +950,8 @@ async function runHarnessTurn(
           })
         }
       }
-      // 本轮早期对话摘要压缩：紧随注入记忆块（正文流开始前到达，仅累积一次）。
-      // 压缩卡片只落在首段：插话切段后新段落不再重复插入（重复的 historyCompacted 直接忽略）
+      // Early-conversation summary compaction for this turn: right after the injected memory block (arrives before the main stream starts, accumulated once).
+      // The summary card lands in the first segment only: after an interjection splits segments, new segments do not re-insert it (duplicate historyCompacted is ignored)
       if (chunk.historyCompacted) {
         if (!acc.compactionSeen) {
           acc.compactionSeen = true
@@ -963,10 +963,10 @@ async function runHarnessTurn(
       }
       if (chunk.reasoning_content) {
         const rc = String(chunk.reasoning_content)
-        // 兼容 provider 可能下发完整文本而非增量：新内容是已有内容的前缀时仅取新增后缀。
-        // 不再做 endsWith 去重（修复）：主进程增量已按形态去重，此处收到的是真实增量，
-        // 「增量恰好等于已累积尾部」往往是模型真实重复输出，误判会丢真实内容，
-        // 且落库结果与渲染端显示不一致。
+        // Handle providers that send the full text instead of a delta: when the new content is a prefix of the existing content, take only the added suffix.
+        // No more endsWith de-duplication (fix): main-process deltas are already de-duplicated by shape, so what arrives here is a real delta;
+        // a delta that happens to equal the accumulated tail is usually genuine model repetition, and a false positive would drop real content,
+        // making the persisted result differ from what the renderer displayed.
         if (acc.reasoning && rc.startsWith(acc.reasoning) && rc.length > acc.reasoning.length) {
           const delta = rc.slice(acc.reasoning.length)
           const lastBlock = acc.blocks[acc.blocks.length - 1]
@@ -985,14 +985,14 @@ async function runHarnessTurn(
             acc.blocks.push({ type: 'reasoning', reasoning: rc })
           }
         }
-        // 答复边界随内容推进（内容到达即重算，不再等「整轮结束」这个渲染端猜出来的时刻）；
-        // answer=false 表示模型已经动手干活，渲染端据此把标记撤回
+        // The answer boundary advances with content (recomputed as content arrives, no longer waiting for the renderer-guessed turn end);
+        // answer=false means the model has started doing work, so the renderer retracts the marker
         if (chunk.answer !== false) markAnswer()
       }
       if (chunk.content) {
         const c = String(chunk.content)
-        // 同 reasoning 分支：只做 startsWith 后缀切片（完整形态防御），不做 endsWith 去重；
-        // 累积形态下新建文本块时同样只存增量，避免与渲染端（存后缀）出现双重计数
+        // Same as the reasoning branch: only startsWith suffix slicing (full-form defense), no endsWith de-duplication;
+        // when creating a new text block in accumulated form, also store only the delta to avoid double counting against the renderer (which stores the suffix)
         if (acc.content && c.startsWith(acc.content) && c.length > acc.content.length) {
           const delta = c.slice(acc.content.length)
           acc.content = c
@@ -1015,10 +1015,10 @@ async function runHarnessTurn(
       }
       if (chunk.tool) {
         if (chunk.tool.name === 'task') {
-          // task 工具已由 service.ts 转换为 subAgent 事件下发，此处跳过
+          // The task tool is converted to subAgent events by service.ts and sent there, so skip it here
         } else {
-          // 优先按 callId 精确匹配同一次调用；preparing 阶段没有 id 时按名称回退；
-          // ID 来自不同来源可能不一致，同名未完成时也按名称回退
+          // Prefer an exact callId match for the same call; fall back to name when the preparing phase has no id;
+          // ids from different sources may disagree, so also fall back to name when an unfinished block has the same name
           const matchesTool = (t: ToolCallDetail): boolean => {
             if (chunk.tool!.id) {
               if (t.id === chunk.tool!.id) return true
@@ -1030,7 +1030,7 @@ async function runHarnessTurn(
             return t.name === chunk.tool!.name || t.name === ''
           }
           if (chunk.tool.status === 'completed') {
-            // 匹配同一次调用的未完成工具块并更新
+            // Match and update the unfinished tool block for the same call
             for (let i = acc.blocks.length - 1; i >= 0; i--) {
               const b = acc.blocks[i]
               if (
@@ -1047,8 +1047,8 @@ async function runHarnessTurn(
               }
             }
           } else if (chunk.tool.status === 'preparing') {
-            // 模型开始构建工具参数；后续进度 chunk 仅用于保活，已存在则跳过。
-            // 若同一次调用已处于 executing/completed（事件乱序），也跳过，避免重复块。
+            // The model started building tool arguments; later progress chunks are only keep-alive and are skipped once the block exists.
+            // Skip too if the same call is already executing/completed (out-of-order events), avoiding duplicate blocks.
             const exists = acc.blocks.some(
               (b) => b.type === 'tool' && matchesTool(b.tool as ToolCallDetail)
             )
@@ -1065,7 +1065,7 @@ async function runHarnessTurn(
               })
             }
           } else {
-            // executing：优先合并到同一次调用的 preparing 块
+            // executing: prefer merging into the preparing block of the same call
             let merged = false
             for (let i = acc.blocks.length - 1; i >= 0; i--) {
               const b = acc.blocks[i]
@@ -1078,9 +1078,9 @@ async function runHarnessTurn(
                 break
               }
             }
-            // 防御：部分 provider 首个工具块不携带工具名（以占位名 'tool' 登记）——
-            // 未按名称匹配到 preparing 块时，并入最近的占位块并改名为真实工具名，
-            // 避免「tool · 生成中…」幽灵块与真实工具块并存（与渲染端 applyChunkToMessages 一致）
+            // Defense: some providers send the first tool block without a tool name (registered under the placeholder name 'tool') —
+            // when no preparing block matches by name, merge into the nearest placeholder block and rename it to the real tool name,
+            // avoiding a ghost 'tool · generating…' block next to the real tool block (consistent with the renderer's applyChunkToMessages)
             if (!merged) {
               for (let i = acc.blocks.length - 1; i >= 0; i--) {
                 const b = acc.blocks[i]
@@ -1108,26 +1108,26 @@ async function runHarnessTurn(
             }
           }
         }
-        // 工具卡落下即打断「答复尾巴」：边界退回最后一段非工具内容（通常是 null）
+        // A tool card breaks the "answer tail": the boundary falls back to the last non-tool content (usually null)
         markAnswer()
       }
       if (chunk.subAgent) {
         const sa = chunk.subAgent
-        // 注意：不把子智能体输出拼入 acc.content（主消息 content）。
-        // 子智能体详情已持久化在 blocks 的 subAgent 块（含 children），
-        // 历史重载按 blocks 渲染即可；若再拼入 content，会导致：
-        // ① 复制消息/上下文注入时子智能体全文重复出现在主智能体发言中；
-        // ② 主模型下一轮看到重复文本，进一步放大复述行为。
-        // 子智能体块匹配逻辑见下：
+        // Note: do not append sub-agent output to acc.content (the main message content).
+        // Sub-agent details are already persisted in the subAgent block (including children),
+        // so reloading history renders from blocks; appending to content as well would cause:
+        // (1) on message copy / context injection, the full sub-agent text appears twice in the main agent's speech;
+        // (2) the main model sees the duplicated text next turn, further amplifying repetition.
+        // Sub-agent block matching logic is below:
 
-        // 匹配智能体累积块：优先 causeId，回退 name
+        // Match agent accumulator blocks: prefer causeId, fall back to name
         const matchesSa = (b: (typeof acc.blocks)[number]): boolean => {
           if (b.type !== 'subAgent' || !b.subAgent) return false
           if (sa.causeId && b.subAgent.causeId) return b.subAgent.causeId === sa.causeId
           return b.subAgent.name === sa.name
         }
 
-        // 查找或创建同名智能体累积块
+        // Find or create an agent accumulator block with the same name
         let saBlock = acc.blocks.find(matchesSa)
         if (!saBlock) {
           saBlock = {
@@ -1148,7 +1148,7 @@ async function runHarnessTurn(
           saBlock.subAgent!.taskDescription =
             saBlock.subAgent!.taskDescription || sa.taskDescription
         } else if (sa.status === 'dispatched') {
-          // 后台派发轻量事件：块定格在「已派发」（名称+简述+会话 id），无子块/内容
+          // Lightweight background dispatch event: the block settles at "dispatched" (name + summary + session id), with no child blocks/content
           saBlock.subAgent!.status = 'dispatched'
           saBlock.subAgent!.taskDescription =
             saBlock.subAgent!.taskDescription || sa.taskDescription
@@ -1182,8 +1182,8 @@ async function runHarnessTurn(
           }
 
           if (sa.tool) {
-            // 优先按 callId 精确匹配同一次调用；preparing 阶段没有 id 时按名称回退；
-            // ID 来自不同来源可能不一致，同名未完成时也按名称回退
+            // Prefer an exact callId match for the same call; fall back to name when the preparing phase has no id;
+            // ids from different sources may disagree, so also fall back to name when an unfinished block has the same name
             const matchesTool = (t: ToolCallDetail): boolean => {
               if (sa.tool!.id) {
                 if (t.id === sa.tool!.id) return true
@@ -1238,7 +1238,7 @@ async function runHarnessTurn(
                   break
                 }
               }
-              // 防御：占位名 'tool' 兜底（同上方主代理累积块逻辑）
+              // Defense: 'tool' placeholder name fallback (same as the main-agent accumulator logic above)
               if (!merged) {
                 for (let i = saBlock.children.length - 1; i >= 0; i--) {
                   const c = saBlock.children[i]
@@ -1271,12 +1271,12 @@ async function runHarnessTurn(
             }
           }
         }
-        // 派遣子代理同样打断答复尾巴（子代理块不是答复内容）
+        // Dispatching a sub-agent also breaks the answer tail (sub-agent blocks are not answer content)
         markAnswer()
       }
-      // 发送失败（渲染帧已失效）时中止流，避免持续向死帧发送。
-      // 统一走 safeSend（修复：裸 send 在帧失效窗口期不抛异常、try/catch 是死代码，
-      // 且违反项目「主进程推送统一走 safeSend」约定）
+      // Abort the stream when sending fails (the render frame is gone), avoiding repeated sends to a dead frame.
+      // Always go through safeSend (fix: a bare send does not throw during the frame-invalidated window, the try/catch was dead code,
+      // and it violated the project convention that main-process pushes go through safeSend)
       if (!sendChunk({ ...chunk })) {
         logger.warn('[Harness] Failed to send stream chunk (renderer disposed)')
         senderDead = true
@@ -1289,30 +1289,30 @@ async function runHarnessTurn(
       logger.error('Error in harness stream:', error)
       const errMsg = error instanceof Error ? error.message : String(error)
       safeSend(event.sender, HARNESS_EVENTS.streamError, { error: errMsg, topicId, turnId })
-      // 流异常中断时不保存不完整的 AI 回复，直接跳到清理
+      // On abnormal stream interruption do not save an incomplete AI reply; jump straight to cleanup
       streamAbortControllers.delete(event.sender.id)
       stopMemSampling()
       safeSend(event.sender, HARNESS_EVENTS.streamDone, { topicId, turnId })
       return { topicId, cancelled: false, turnId }
     }
   } finally {
-    // 流结束（正常/取消/异常/渲染进程失效）后移除失效跟踪监听
+    // Remove the invalidation watch after the stream ends (normal/cancelled/errored/renderer gone)
     event.sender.removeListener('render-process-gone', onSenderGone)
     event.sender.removeListener('destroyed', onSenderGone)
     stopMemSampling()
   }
 
-  // 3.9 本轮答复边界的终值：流已经停止追加（含被停止/出错/渲染帧失效的路径），
-  //     此刻重算一次即可给出定论。边界从「有」变回「无」时这里会补发一条撤回 chunk。
+  // 3.9 Final value of this turn's answer boundary: the stream has stopped appending (including stopped/errored/invalid-frame paths),
+  //     so one recompute here gives the verdict. When the boundary flips from "has" to "none", a retraction chunk is sent here.
   markAnswer()
 
-  // 4. 保存本轮各段 AI 回复（流执行失败时逐段跳过：截断的不完整回复不应落库为完整消息）。
-  //    落库后把新对话行 id 回传前端：流式期间的消息用的是临时 id，只有拿到库里的行 id，
-  //    前端才能把用量行（按 dialogue_id 关联）当场贴到这条消息上，不必重新加载会话。
-  //    无插话时这里恰好只有一段，与旧行为完全一致。
+  // 4. Save this turn's AI reply segments (skip per segment on stream failure: a truncated reply should not be persisted as a complete message).
+  //    Send the new dialogue row id back to the frontend after persisting: messages during streaming use temporary ids, and only with the DB row id
+  //    can the frontend attach the usage row (linked by dialogue_id) to this message on the spot without reloading the topic.
+  //    Without interjections there is exactly one segment here, fully consistent with the old behavior.
   await flushSegment()
   if (assistantPersistError) {
-    // 答复已经流式展示给用户了，这里补一条明确的错误：刷新后这一轮可能消失
+    // The reply was already streamed to the user, so add an explicit error here: this turn may disappear after a refresh
     safeSend(event.sender, HARNESS_EVENTS.streamError, {
       error: mainMessages().error.assistantPersistFailed,
       topicId,
@@ -1322,8 +1322,8 @@ async function runHarnessTurn(
   const lastPersisted = [...segments].reverse().find((seg) => seg.dialogueId != null)
   const assistantDialogueId = lastPersisted?.dialogueId ?? null
   if (assistantDialogueId != null) {
-    // 真实用量落库（模型没回传 usage_metadata 时直接跳过，不写全 0 的假数据）。
-    // 一条用量行关联一段：多段时挂在最后一段上（整轮 token 是累加的，无法按段切分）
+    // Persist real usage (skipped when the model returned no usage_metadata; no fake all-zero data).
+    // One usage row links to one segment: with multiple segments it hangs on the last one (turn tokens accumulate and cannot be split per segment)
     await persistTurnUsage({
       dialogueId: assistantDialogueId,
       topicId,
@@ -1332,27 +1332,27 @@ async function runHarnessTurn(
     })
   }
 
-  // 4.5 收尾任务清单：本轮结束后不会再有人接手这份清单时，把仍停在 in_progress 的项结为 completed。
+  // 4.5 Close out the task list: when no one will take this list over after the turn ends, mark items still in_progress as completed.
   //
-  // 为什么需要这条兜底：清单是模型自己写的，而它的收尾书写并不可靠——2026-09-18 实例：
-  // 六项工作全部做完、回答也交付了，最后一次 write_todos 仍留一项 in_progress，卡片于是
-  // 永远停在「5/6 已完成 · 1 进行中」。2026-09-23 用户再报同一现象（「明明任务已经完成了，
-  // 页面还是显示有最后一个任务没有完成」），根因是这里此前**整轮跳过**目标自动续跑轮：
-  // 目标在末轮 complete 后再也没有下一轮去收尾，那一项就永远转圈。
+  // Why this fallback exists: the list is written by the model and its close-out writing is unreliable — 2026-09-18 instance:
+  // all six items were done and the answer delivered, but the last write_todos still left one item in_progress, so the card sat
+  // forever at '5/6 completed · 1 in progress'. 2026-09-23 the user reported the same symptom again (the task is clearly done but
+  // the page still shows one task incomplete); the root cause was that this code **skipped goal auto-continue turns entirely**:
+  // after the goal completed in its final turn there was no next turn to close out, so that item kept spinning forever.
   //
-  // 判定规则（见 runtime/todo-closeout.ts 的 decideCloseOutOnTurnEnd）只有一条：
-  // 「本轮结束后还会不会有下一轮接手」——会（目标 active + 已武装且未达轮次上限）就不动，
-  // 不会就收尾。因此用户停止、流失败、目标完成/阻塞/被 disarm/达轮次上限这几条路径同样收尾：
-  // 那时什么都没在跑，留着「进行中」是假状态（应用重开后前端还会从 store 把它读回来）。
-  // 「还会不会续跑」一律问 goalStore.willContinue（与驱动器派发门槛同一处真源，避免漂移）。
+  // The decision rule (see decideCloseOutOnTurnEnd in runtime/todo-closeout.ts) is single:
+  // "will another turn take over after this one ends?" — if yes (goal active + armed and under the round limit), leave it;
+  // if no, close out. So user stop, stream failure, goal completed/blocked/disarmed/round limit also close out:
+  // nothing is running then, and leaving in-progress is a false state (the frontend would read it back from the store after restart).
+  // "Will it continue?" always asks goalStore.willContinue (same source of truth as the driver dispatch gate, avoiding drift).
   try {
     const decision = await decideCloseOutOnTurnEnd({
       isGoalRound: options?.turnMeta?.source === 'goal-round',
       goalWillContinue: () => goalStore.willContinue(topicId),
       hasPendingQuestion: () => questionService.getPending(topicId) != null
     })
-    // 终局标记的两个事实顺手记下（与收尾判定同一处真源，不额外查库）：
-    // 渲染端据此知道「这是不是最后一轮、目标有没有收口」，不必再从别处推
+    // Record the two final-marker facts along the way (same source of truth as the close-out decision, no extra DB reads):
+    // the renderer learns from them whether this is the last turn and whether the goal wrapped up, with no inference elsewhere
     if (options?.turnMeta?.source === 'goal-round') {
       goalRoundWillContinue = await goalStore.willContinue(topicId)
       goalRoundClosed = (await goalStore.load(topicId))?.phase === 'complete'
@@ -1368,17 +1368,17 @@ async function runHarnessTurn(
       logger.info(`[Harness] Not closing out todo list this turn (${decision.reason})`)
     }
   } catch (err) {
-    // 收尾只是兜底：判定或广播失败不能影响落库与前端收尾通知
+    // Close-out is only a fallback: decision or broadcast failures must not affect persistence or the frontend close-out notification
     logger.warn('[Harness] Failed to close out todo list:', err)
   }
 
   /**
-   * 本轮终局标记（协议层权威结论，见 service/answer-boundary.ts 的 TurnFinal）。
+   * Final marker for this turn (authoritative protocol conclusion; see TurnFinal in service/answer-boundary.ts).
    *
-   * 以前这些事实只写进日志：渲染端要判断「这一轮的答复在哪、是不是最后一轮」，
-   * 只能拿自己的 loading 状态猜——而 loading 的翻转在目标续跑里被驱动器压掉了
-   * （goal-driver 是 `while (await driveOnce())`，上一轮的 done 与下一轮的 goalRound
-   * 几乎同 tick 落地）。现在结论随 done 事件一起下发。
+   * These facts used to go only to logs: to know where this turn's answer is and whether it is the last turn, the renderer
+   * had to guess from its own loading state — while loading flips are suppressed in goal continuation
+   * (goal-driver is `while (await driveOnce())`, so the previous turn's done and the next turn's goalRound land on almost the same tick).
+   * Now the conclusion is sent with the done event.
    */
   const turnFinal: TurnFinal = {
     settled: !abortController.signal.aborted && !acc.failed && assistantPersistError === null,
@@ -1395,28 +1395,28 @@ async function runHarnessTurn(
       `, answer=${turnFinal.answerBlocks} blocks (from ${turnFinal.answerFrom}), blocks=${acc.blocks.length}`
   )
 
-  // 5. 清理并通知渲染进程流式输出已完成
+  // 5. Clean up and notify the renderer that streaming output is complete
   streamAbortControllers.delete(event.sender.id)
   safeSend(event.sender, HARNESS_EVENTS.streamDone, {
     topicId,
-    // 本轮回合 id：渲染端据此丢弃「不属于当前回合」的过期收尾事件
+    // Turn id for this run: the renderer drops stale close-out events that belong to another turn
     turnId,
-    // 本轮两条对话行的库内 id：前端据此把临时 id 换成真 id（删除这一轮、关联用量都要用）
+    // DB ids of this turn's two dialogue rows: the frontend swaps temporary ids for real ones (needed for deleting the turn and linking usage)
     userDialogueId: userDialogueId ?? undefined,
     assistantDialogueId: assistantDialogueId ?? undefined,
-    // 助手段落表：无插话时只有一段（等价于旧的单条 assistantDialogueId）；
-    // 有插话时一段一条，前端按 messageId 把库内行 id 贴回对应的助手气泡
+    // Assistant segment list: one segment without interjections (equivalent to the old single assistantDialogueId);
+    // with interjections, one per segment, and the frontend attaches DB row ids back to the matching assistant bubbles by messageId
     segments: segments.map((seg) => ({
       messageId: seg.messageId,
       dialogueId: seg.dialogueId ?? undefined
     })),
-    // 终局标记（含最终答复边界）：渲染端只读不猜
+    // Final marker (including the final answer boundary): the renderer reads it instead of guessing
     turnFinal
   })
   return { topicId, cancelled: abortController.signal.aborted, turnId }
 }
 
-/** 广播插话队列当前状态（所有窗口；前端按 topicId 过滤） */
+/** Broadcast the current state of the interjection queue (all windows; the frontend filters by topicId) */
 function broadcastQueue(topicId: number): void {
   const queue = harnessQueue.view(topicId)
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1426,23 +1426,23 @@ function broadcastQueue(topicId: number): void {
 }
 
 /**
- * 这条会话此刻是不是挂着「等用户确认」的东西（提问 / 沙箱审批）。
+ * Whether this topic currently has something waiting for user confirmation (question / sandbox approval).
  *
- * 两个服务各持一张挂起表（提问在 questionService，审批在 permissionGate），
- * 侧栏只关心「这条会话还要不要人管」，所以取并集；哪一端结算都重新算一次，
- * 另一端还挂着时仍算 true（同一轮里可能先问一句、再要一次授权）。
+ * The two services each keep a pending table (questions in questionService, approvals in permissionGate);
+ * the sidebar only cares whether the topic still needs a human, so take the union; settling one side recomputes,
+ * and it stays true while the other side is still pending (one turn may ask a question first, then request an approval).
  */
 function isTopicAwaitingUser(topicId: number): boolean {
   return questionService.getPending(topicId) != null || permissionGate.getPending(topicId) != null
 }
 
 /**
- * 广播「这条会话还要不要用户确认」——侧栏据此把行首的**进行中**换成**黄色呼吸点**
- * （用户口径 2026-11-23「当需要用户继续确认操作时，这个图标需要变成黄色的点在呼吸」）。
+ * Broadcast whether this topic still needs user confirmation — the sidebar uses it to switch the row indicator from **in progress** to a **breathing yellow dot**
+ * (user requirement 2026-11-23: when the operation needs the user to confirm again, this icon should become a yellow breathing dot).
  *
- * 发送时机：提问 / 审批**挂起时**发一次、**结算时**（允许 / 拒绝 / 中止）再发一次，
- * 两端都按 `isTopicAwaitingUser` 现算，所以同一话题连续两次挂起、先结算一端另一端还挂着
- * 这类情形都不会报错状态；重复的同值事件由渲染层去重（Set 里有没有它本来就幂等）。
+ * Send timing: once when a question/approval **becomes pending**, once when **settled** (allow / deny / abort).
+ * Both sides compute live from `isTopicAwaitingUser`, so two pending items in one topic, or one settled while the other is still pending,
+ * never produce a wrong state; duplicate same-value events are de-duplicated by the renderer (a Set lookup is idempotent anyway).
  */
 function broadcastTopicPending(topicId: number): void {
   if (!Number.isFinite(topicId) || topicId <= 0) return
@@ -1453,10 +1453,10 @@ function broadcastTopicPending(topicId: number): void {
   }
 }
 
-/** sender.id → 该渲染帧当前在跑的话题（「停止」时据此丢弃待注入缓冲） */
+/** sender.id → the topic that this renderer frame is currently running (used on stop to drop the pending injection buffer) */
 const senderTopic = new Map<number, number>()
 
-/** 回合内插话的对外载荷（队列条目 + 落库行 id） */
+/** Public payload of an in-turn interjection (queue entry + DB row id) */
 interface StartStreamOptions {
   topicId?: number
   providerId?: number
@@ -1466,27 +1466,27 @@ interface StartStreamOptions {
   reuseUserDialogueId?: number
   messageId?: string
   /**
-   * 记忆作用域（`plugin:<插件 id>`）。只在**主进程兜底建话题**时用得上——
-   * 常规路径是渲染层先 `harness-topic-create`（把作用域写进话题行），主进程按话题读。
+   * Memory scope (`plugin:<plugin id>`). Only used when the **main process creates the topic as a fallback** —
+   * normally the renderer calls `harness-topic-create` first (writing the scope into the topic row) and the main process reads it from the topic.
    */
   memoryScope?: string | null
   /**
-   * 本轮运行选择（工具 / 技能 / MCP 工具）：非 null 的维度覆盖会话配置。
-   * 来自输入框下面的选择，或定时任务上存的任务级选择。
+   * Runtime selection for this turn (tools / skills / MCP tools): non-null dimensions override the session config.
+   * Comes from the selection below the input box, or the task-level selection stored on a scheduled task.
    */
   agentConfig?: AgentSelection | null
-  /** 本轮工作区上下文（定时任务跨模式运行时由调用方指定；缺省用当前设置） */
+  /** Workspace context for this turn (set by the caller for cross-mode scheduled runs; defaults to current settings) */
   workspaceContext?: { workspaceId?: number; workspacePath?: string }
-  /** 是否把本轮选择写回会话（用户发送 = true；定时任务/内部轮 = false） */
+  /** Whether to write this turn's selection back to the topic (user send = true; scheduled/internal turns = false) */
   persistAgentConfig?: boolean
 }
 
 /**
- * 本轮会话的记忆作用域：以**话题上存的**为准（`harness_topic.memory_scope`），
- * 话题还没建（本轮刚创建、或读不到）时用调用方传来的兜底；都没有 = 工作区记忆。
+ * Memory scope for this turn: the **topic-stored** value wins (`harness_topic.memory_scope`);
+ * when the topic does not exist yet (just created this turn or unreadable), use the caller's fallback; if neither, workspace memory.
  *
- * 为什么以话题为准：插件行「＋」开出来的会话带 `plugin:<id>`，重开这个会话（甚至重启应用）后
- * 仍然要用那份插件自己的记忆，不能依赖渲染层记得住（用户口径 2026-09-28）。
+ * Why the topic wins: a topic opened from the plugin row "+" carries `plugin:<id>`, and after reopening it (or even restarting the app)
+ * that plugin's memory must still be used, not something the renderer happens to remember (user requirement 2026-09-28).
  */
 async function resolveTurnMemoryScope(
   topicId: number | undefined,
@@ -1508,7 +1508,7 @@ async function resolveTurnMemoryScope(
   return parseMemoryScope(fallback, workspaceId)
 }
 
-/** 一轮对话的结局（turnId 用于把收尾事件对回它所属的回合） */
+/** Outcome of one chat turn (turnId maps close-out events back to their turn) */
 interface TurnOutcome {
   topicId: number
   cancelled: boolean
@@ -1516,11 +1516,11 @@ interface TurnOutcome {
 }
 
 /**
- * 启动一轮对话并跟踪其生命周期（退 Application 前会等待它落库）。
+ * Start one chat turn and track its lifecycle (waits for persistence before quitting the app).
  *
- * 三个入口共用它：用户发送（harness-start-stream）、排队接续（drainPendingQueue）、
- * 目标自动续跑（goalRoundDriver）。回合登记（beginTurn / endTurn）也收在这一个地方，
- * 任何入口起的轮次都会让 `isTurnActive` 为真——这样「生成中再发一条」不会被当成空闲。
+ * Shared by three entry points: user send (harness-start-stream), queue continuation (drainPendingQueue),
+ * goal auto-continue (goalRoundDriver). Turn registration (beginTurn / endTurn) also lives here, so
+ * any turn started from any entry point makes `isTurnActive` true — a second send while generating is not treated as idle.
  */
 function launchTurn(
   event: HarnessSenderEvent,
@@ -1529,7 +1529,7 @@ function launchTurn(
   trackTurn: (p: Promise<TurnOutcome>) => Promise<TurnOutcome>
 ): Promise<TurnOutcome> {
   const requestedTopicId = options?.topicId
-  // 已存在的话题：先登记本轮回合 id 再起轮（渲染进程的忙检查据此判断「有没有回合在跑」）
+  // Existing topic: register this turn's id before starting (the renderer's busy check uses it to decide whether a turn is running)
   const turnId = requestedTopicId != null ? harnessQueue.beginTurn(requestedTopicId) : 0
   if (requestedTopicId != null) senderTopic.set(event.sender.id, requestedTopicId)
 
@@ -1540,15 +1540,15 @@ function launchTurn(
       return result
     })
     .finally(() => {
-      // 新话题（首条消息）的 id 由 runHarnessTurn 建出来后带回，收尾统一按它登记
+      // The new topic (first message) id comes back from runHarnessTurn; close-out registers under it
       const settledTopicId = outcome?.topicId ?? requestedTopicId ?? 0
       if (settledTopicId > 0) {
         harnessQueue.endTurn(settledTopicId, outcome?.turnId ?? turnId)
-        // 本轮点了插话却没等到注入边界的条目放回队列（见 releaseHolds 的说明）：
-        // 它们既不落库也不进对话流，必须让用户还看得见，否则等于内容凭空消失
+        // Entries interjected this turn that never reached an injection boundary go back to the queue (see releaseHolds):
+        // they were neither persisted nor added to the dialogue, so the user must still see them; otherwise the content silently vanishes
         harnessQueue.releaseHolds(settledTopicId)
       }
-      // 只在本帧没有别的在跑话题时删掉映射（同帧切话题同时开两轮的情况很罕见，保守处理）
+      // Remove the mapping only when this frame has no other running topic (two turns starting at once on frame switch is rare; be conservative)
       if (requestedTopicId != null && senderTopic.get(event.sender.id) === requestedTopicId) {
         senderTopic.delete(event.sender.id)
       }
@@ -1556,13 +1556,13 @@ function launchTurn(
 }
 
 /**
- * 回合结束后的队列处置：把排队中的消息**逐条**当作新一轮接续发出（FIFO），直到队列空。
+ * Queue handling after a turn ends: send queued messages **one by one** as new turns (FIFO) until the queue is empty.
  *
- * 以前的实现只接一条（接续轮自己的收尾不会再次触发这里），队列里第二条起永远发不出去。
- * 现在整段循环交给 turn-drain（纯函数、有单测），这里只负责把「起一轮 + 目标续跑」接上去。
+ * The old implementation continued only one message (the continuation turn's own close-out never re-triggered this), so the second queued message onwards never went out.
+ * Now the whole loop is delegated to turn-drain (pure function, unit-tested); this only wires up "start a turn + goal continuation".
  *
- * 终止条件：队列空 / 目标驱动器在跑（不抢跑）/ 用户中止了某一轮（剩下的留在队列里，
- * 由用户下一次发送再决定）/ 起轮失败（记日志，不再无限重试）。
+ * Termination: queue empty / goal driver running (do not preempt) / user aborted some turn (the rest stay queued,
+ * decided on the user's next send) / turn start failed (logged, no infinite retry).
  */
 async function drainPendingQueue(
   event: HarnessSenderEvent,
@@ -1586,19 +1586,19 @@ async function drainPendingQueue(
         {
           ...options,
           topicId,
-          // 接续轮不继承「编辑重发」目标行与旧消息 id
+          // Continuation turns do not inherit the "edit and resend" target row or old message ids
           reuseUserDialogueId: undefined,
           messageId: undefined,
           images: item.images,
           documents: item.documents,
-          // 标记来源：runHarnessTurn 据此在流首下发 queueTurn 标记，
-          // 渲染进程才知道「这一轮是排队消息接续出来的」并挂上用户气泡
+          // Marker source: runHarnessTurn sends the queueTurn marker at stream start based on it,
+          // so the renderer knows this turn continued from a queued message and mounts the user bubble
           turnMeta: { source: 'queue', queueItemId: item.id }
         },
         trackTurn
       )
       if (!outcome.cancelled) {
-        // 目标续跑：接续轮结束后同样交给驱动器，跑完再继续下一条排队消息
+        // Goal continuation: after the continuation turn ends, hand control to the driver; then continue with the next queued message
         await goalRoundDriver.maybeDrive(topicId, (p) =>
           launchTurn(
             event,
@@ -1619,31 +1619,31 @@ async function drainPendingQueue(
 }
 
 /**
- * 对话发送 / 流式输出 / 目录选择 / 技能列表 IPC：收成 `harness:*` 处理器表，
- * 连同助手依赖的全局订阅（onChange / onAsk / 会话事件流）一起装配。
+ * Chat send / streaming output / directory selection / skill list IPC: grouped into a `harness:*` handler table,
+ * assembled together with the global subscriptions the assistant depends on (onChange / onAsk / conversation event stream).
  *
- * - 通道名一律 `harness:<原扁平名>`，由 `registerIpcHandlers` 挂到 ipcMain；
- * - 原先的 `ipcMain.on`（start-stream / cancel-stream / agent-watch）改成普通 invoke 通道，
- *   preload 的 send 同步改 invoke（同资料库的 graph-build-start）；
- * - 全局订阅登记在 `EffectScope` 里，退出时按 LIFO 回滚。
+ * - Channel names are all `harness:<original flat name>` and registered on ipcMain by `registerIpcHandlers`;
+ * - The former `ipcMain.on` channels (start-stream / cancel-stream / agent-watch) became normal invoke channels,
+ *   and preload's send switched to invoke (same as the library's graph-build-start);
+ * - Global subscriptions are registered in an `EffectScope` and rolled back LIFO on exit.
  */
 export function registerHarnessIpc(scope: EffectScope): () => void {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：`harness:` 前缀只在这里出现 */
+  /** Receive channel: the `harness:` prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
 
-  // 权限闸门接线：档位来源（electron-store）+ 工作区根目录 + 界面语言文案
+  // Permission gate wiring: tier source (electron-store) + workspace root + UI-language text
   wirePermissionGate()
-  // 队列是纯状态机（不依赖 electron，便于 tests/ 直接跑断言），日志出口在这里注入
+  // The queue is a pure state machine (no electron dependency, so tests/ can assert directly); the log sink is injected here
   setHarnessQueueLogger(logger)
-  // 沙箱层不 import electron（要能在任意 node 环境跑：工装 / 容器验证），日志由这里注入
+  // The sandbox layer does not import electron (it must run in any node environment: fixtures / container verification); logs are injected here
   setSandboxLogger(logger)
 
-  // 沙箱服务接线：把自带资产（Windows runner / Linux Landlock 启动器）的真实路径注入。
-  // 两条候选：开发态在仓库 resources/sandbox 下；打包态由 electron-builder 的
-  // extraResources 复制到 process.resourcesPath/sandbox（asar 里不能直接 spawn 脚本）。
+  // Sandbox service wiring: inject the real paths of the bundled assets (Windows runner / Linux Landlock launcher).
+  // Two candidates: under resources/sandbox in the repo during development; in packaged builds electron-builder's
+  // extraResources copies them to process.resourcesPath/sandbox (scripts cannot be spawned directly from the asar).
   const sandboxRoots = { devRoot: app.getAppPath(), resourcesPath: process.resourcesPath }
   const archDir =
     process.arch === 'x64'
@@ -1670,10 +1670,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     `[Sandbox] Wiring complete backend=${sandboxStatus.backend ?? 'unavailable'} enforcement=${sandboxStatus.enforcement ?? '-'} ${sandboxStatus.reason ?? ''}`
   )
 
-  // 沙箱拦截到的危险 / 越界操作 → 广播到所有窗口，由审批弹窗问用户「允许一次 / 拒绝」
+  // Dangerous / out-of-bounds operations caught by the sandbox → broadcast to all windows; the approval modal asks the user to allow once / deny
   scope.effect(() => {
     permissionGate.onApprovalAsked = (pending: ApprovalRequestView) => {
-      // 只广播可序列化视图（无 resolve / signal，纯 JSON）
+      // Only broadcast serializable views (no resolve / signal, pure JSON)
       const payload = {
         topicId: pending.topicId,
         requestId: pending.requestId,
@@ -1687,30 +1687,30 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.approvalAsked, payload)
       }
-      // 挂起的同一刻告诉侧栏「这条会话在等人」：行首由进行中换成黄色呼吸点
+      // At the moment of pending, tell the sidebar the topic is waiting: row indicator switches from in progress to the breathing yellow dot
       broadcastTopicPending(pending.topicId)
       logger.info(
         `[Permission] Pending approval requestId=${pending.requestId} tool=${pending.toolName} reason=${pending.reasonCode}`
       )
     }
-    // 结算（允许 / 拒绝 / 中止）→ 撤回那个黄点，回到进行中
+    // Settled (allow / deny / abort) → retract the yellow dot and return to in progress
     permissionGate.onResolved = broadcastTopicPending
     return () => {
-      // 退出装配即不再有人应答：挂起审批全部按拒绝结算（故障关闭）
+      // Once teardown starts no one can answer: settle all pending approvals as denied (fail closed)
       permissionGate.onApprovalAsked = undefined
       permissionGate.onResolved = undefined
       permissionGate.abortAll()
     }
   })
 
-  // 队列变更 → 广播到所有窗口（输入框上方的插话队列实时刷新）
+  // Queue changed → broadcast to all windows (the interjection queue above the input box refreshes live)
   scope.effect(() => {
     harnessQueue.onChanged = ({ topicId }) => broadcastQueue(topicId)
     return () => {
       harnessQueue.onChanged = null
     }
   })
-  // 插话已并入当前回合（纯注入）→ 广播给所有窗口：前端抹掉队列行 + 给一句瞬时反馈
+  // Interjection merged into the current turn (pure injection) → broadcast to all windows: the frontend clears the queue row and shows a brief confirmation
   scope.effect(() => {
     harnessQueue.onConsumed = (eventPayload) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -1741,7 +1741,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         persistAgentConfig?: boolean
       }
     ) => {
-      // 加载主智能体默认配置（electron-store）
+      // Load main agent defaults (electron-store)
       const mainAgentDefaults = settingsStore.get('mainAgent') as MainAgentConfig | undefined
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
       logger.info(`[Harness] Creating model with providerId: ${options?.providerId ?? 'default'}`)
@@ -1758,8 +1758,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         : null
       const syncSelection = mergeAgentSelection(syncTopicSelection, syncRequestSelection)
 
-      // 这条同步路径也要认话题的记忆作用域（插件会话 → 那份插件自己的记忆），
-      // 并据此决定插件模式的模式工具是否自动挂载（见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES）
+      // This synchronous path must also honor the topic's memory scope (plugin topic → that plugin's own memory)
+      // and decide from it whether plugin-mode mode tools are auto-mounted (see PLUGIN_MODE_TOOL_NAMES in shared/mcp.ts)
       const syncMemoryScope = await resolveTurnMemoryScope(
         options?.topicId,
         undefined,
@@ -1787,11 +1787,11 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
 
       const model = await getProviderService().createModel(options?.providerId)
 
-      // 技能：只启用会话级选择里的技能（默认不启用）
+      // Skills: enable only the session-level selection (none by default)
       const effectiveSkills = syncSelection.skills ?? []
 
-      // 该模型的「工具调用轮数」上限（取不到则用工程默认值，由 HarnessService 兜底）；
-      // 同时记录 provider/model 描述符，供后台子代理持久化与冷恢复回到同一模型
+      // This model's "tool-call rounds" limit (fall back to the project default, with HarnessService as the last resort);
+      // also record the provider/model descriptor so background sub-agents can persist and cold-resume on the same model
       let maxToolRounds: number | undefined
       let syncModelDescriptor: SubAgentMainModelDescriptor | undefined
       let syncSupportsImageInput = false
@@ -1836,15 +1836,15 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   handle(
     'harness-start-stream',
     (question: string, options?: StartStreamOptions): { started: boolean; queued?: boolean } => {
-      // 原 ipcMain.on('harness-start-stream') 的 event.sender：新契约不透传事件对象
+      // The event.sender of the former ipcMain.on('harness-start-stream'): the new contract does not pass the event object
       const sender = primarySender()
       if (!sender) return { started: false }
       const event: HarnessSenderEvent = { sender }
-      // 同一话题已有回合在跑：绝不并发起第二轮。
+      // A turn is already running in this topic: never start a second one concurrently.
       //
-      // 并发会让两轮的 chunk 都带着同一个 __topicId 进同一个助手气泡（「输出错乱」），
-      // 所以这里把这次发送收进队列，由当前回合结束后的 drainPendingQueue 接续。
-      // 返回 queued=true，渲染进程据此撤掉自己刚挂的乐观气泡（那条消息不会丢，在队列里）。
+      // Concurrency would put both turns' chunks into the same assistant bubble under the same __topicId (garbled output),
+      // so this send is enqueued and continued by drainPendingQueue when the current turn ends.
+      // Returns queued=true; the renderer then removes the optimistic bubble it just mounted (the message is not lost, it is queued).
       const requestedTopicId = options?.topicId
       if (requestedTopicId != null && harnessQueue.isTurnActive(requestedTopicId)) {
         logger.info(
@@ -1858,10 +1858,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         })
         return { started: false, queued: true }
       }
-      // 跟踪进行中的流：应用退出时统一中止并等待数据保存完成。
-      // 用户轮次完成后触发目标轮次驱动器（自动续跑轮由驱动器内部递归调度）
-      // 每个轮次（含目标驱动器派发的自动轮）都登记进 activeHarnessStreams，
-      // 退出时 lifecycle 才能拦截并等待落库（修复：此前只跟踪首轮，自动轮运行中退出会丢回复）
+      // Track running streams: abort all of them uniformly on app quit and wait for data to be saved.
+      // After a user turn completes, trigger the goal-round driver (auto-continue turns are scheduled recursively inside the driver)
+      // Every turn (including auto turns dispatched by the goal driver) is registered in activeHarnessStreams,
+      // so lifecycle can intercept and wait for persistence on quit (fix: previously only the first turn was tracked, so quitting during an auto turn lost the reply)
       const trackTurn = (p: Promise<TurnOutcome>): Promise<TurnOutcome> => {
         activeHarnessStreams.add(p)
         p.finally(() => activeHarnessStreams.delete(p))
@@ -1871,8 +1871,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         .then(async ({ topicId, cancelled }) => {
           if (options?.turnMeta?.source === 'goal-round') return
           if (cancelled) {
-            // 用户停止本轮：disarm 目标并跳过自动续跑调度（修复：此前 cancelled 被丢弃，
-            // 停止后立即白烧一轮自动轮；目标保持 active，用户要求「继续」时经 resume 重新武装）
+            // The user stopped this turn: disarm the goal and skip auto-continue scheduling (fix: previously cancelled was dropped,
+            // so a wasted auto turn ran immediately after stop; the goal stays active and is re-armed via resume when the user asks to continue)
             logger.info(
               '[Harness] Turn cancelled by user, goal disarmed, skipping automatic continuation'
             )
@@ -1887,7 +1887,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
               trackTurn
             )
           )
-          // 目标续跑全部结束后再处置队列：排队中的消息逐条作为新一轮发出
+          // Handle the queue only after all goal continuation ends: send queued messages one by one as new turns
           await drainPendingQueue(event, topicId, options, trackTurn)
         })
         .catch((err) => logger.error('[Harness] Error executing turn:', err))
@@ -1898,10 +1898,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   )
 
   /**
-   * 生成中发消息：当前话题有回合在跑 → 收进插话队列；没有在跑 → 交给渲染进程走正常发送。
+   * Send while generating: if the current topic has a running turn → enqueue as an interjection; otherwise let the renderer send normally.
    *
-   * 这里**故意不再自己起轮**（旧实现会起一轮，而渲染进程拿到 queued=false 后也会起一轮，
-   * 同一句话于是跑成两个回合、库里出现两条用户行）。主进程只裁决「排队还是没排队」。
+   * This **deliberately does not start a turn itself** (the old implementation started one and the renderer also started one when it got queued=false,
+   * so one message ran as two turns and two user rows appeared in the DB). The main process only decides queued or not.
    */
   handle(
     'harness-queue-enqueue',
@@ -1915,7 +1915,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       if (!Number.isInteger(topicId) || topicId <= 0 || !text.trim()) {
         return { queued: false }
       }
-      // 原 event.sender.id（队列按发送帧记账）：新契约用主窗口的 webContents
+      // Former event.sender.id (the queue is accounted per sending frame): the new contract uses the main window's webContents
       const sender = primarySender()
       if (!sender) return { queued: false }
       if (!harnessQueue.isTurnActive(topicId)) return { queued: false }
@@ -1924,35 +1924,35 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  /** 队列查询（窗口/话题重新挂载时拉取当前队列） */
+  /** Queue query (fetch the current queue when a window/topic remounts) */
   handle('harness-queue-list', (topicId: number) => harnessQueue.view(topicId))
 
   /**
-   * 话题当前回合状态（渲染端发送前问一句）。
+   * Current turn state of a topic (the renderer asks before sending).
    *
-   * 主进程是「有没有回合在跑」的唯一真源：渲染端自己的 loading 状态在「主进程自行接续
-   * 排队消息」「目标自动续跑」这类轮次上会滞后，据此判断就会并发起第二个回合。
+   * The main process is the single source of truth for whether a turn is running: the renderer's own loading state lags for turns such as
+   * main-process continuation of a queued message or goal auto-continue, so using it would start a second turn concurrently.
    */
   handle('harness-turn-state', (topicId: number) => ({
     active: Number.isInteger(topicId) && harnessQueue.isTurnActive(topicId),
     turnId: Number.isInteger(topicId) ? harnessQueue.currentTurnId(topicId) : null
   }))
 
-  /** 删除一条排队消息 */
+  /** Delete a queued message */
   handle('harness-queue-remove', (payload: { topicId: number; itemId: string }) => {
     return harnessQueue.remove(payload.topicId, payload.itemId)
   })
 
-  /** 改写一条排队消息的文本 */
+  /** Rewrite the text of a queued message */
   handle('harness-queue-update', (payload: { topicId: number; itemId: string; text: string }) => {
     if (!payload.text.trim()) return false
     return harnessQueue.update(payload.topicId, payload.itemId, payload.text)
   })
 
   /**
-   * 「立即插话」：把这条排队消息并入**正在运行**的回合。
-   * 这里只把它移入待注入缓冲并落库、下发回执；真正的注入发生在下一个工具节点边界
-   *（见 runtime/agent.ts createInterjectionHandler）。
+   * "Interject now": merge this queued message into the **running** turn.
+   * This only moves it into the pending-injection buffer, persists it and sends an ack; the actual injection happens at the next tool node boundary
+   * (see createInterjectionHandler in runtime/agent.ts).
    */
   handle(
     'harness-queue-steer',
@@ -1960,8 +1960,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       const { topicId, itemId } = payload
       const item = harnessQueue.steer(topicId, itemId)
       if (!item) return { accepted: false }
-      // 纯注入：条目进入待注入缓冲，下一个工具节点边界会被并进模型上下文，
-      // 不落库、不产生对话内容；本轮没等到边界的条目由 releaseHolds 放回队列。
+      // Pure injection: the entry enters the pending-injection buffer and is merged into the model context at the next tool node boundary;
+      // it is not persisted and creates no dialogue content; entries that never reach a boundary this turn are returned to the queue by releaseHolds.
       logger.info(
         `[HarnessQueue] Queued message accepted for topic ${topicId} (waiting for injection at the next tool node boundary): ${item.text.slice(0, 40)}`
       )
@@ -1969,17 +1969,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  // 目标查询（渲染进程加载目标状态）
+  // Goal queries (the renderer loads goal state)
   handle('harness-goal-get', async (topicId: number) => {
     return await goalStore.load(topicId)
   })
 
   /**
-   * 目标写入（输入框 / 目标弹窗的人工入口）。
+   * Goal writes (manual entry points: input box / goal modal).
    *
-   * 创建、编辑、暂停、恢复、完成、清除全部走同一份 GoalStore（与目标工具共用状态机、
-   * 单目标语义与 CAS），只是 authority 不走工具层——界面上的操作本身就是「人类直接请求」。
-   * 失败不抛错，返回 `{ ok:false, error }` 由渲染层按本语言展示（与工坊动作同一套约定）。
+   * Create, edit, pause, resume, complete and clear all go through the same GoalStore (shared state machine, single-goal semantics and CAS with the goal tools);
+   * only the authority differs — UI actions are themselves direct human requests and do not go through the tool layer.
+   * Failures do not throw; they return `{ ok:false, error }` for the renderer to display in its own language (same convention as workshop actions).
    */
   handle(
     'harness-goal-create',
@@ -2025,8 +2025,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   handle('harness-goal-clear', async (topicId: number) => {
     try {
       await goalStore.delete(topicId)
-      // GoalStore.delete 只清缓存与数据库行（话题删除时也走它）：界面上的目标条
-      // 靠广播收回，所以这里补一条 null 目标，避免清理后横幅还挂在输入框上方。
+      // GoalStore.delete only clears the cache and DB row (topic deletion uses it too): the UI goal bar is retracted by broadcast,
+      // so add a null goal here to keep the banner from lingering above the input box after cleanup.
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed())
           safeSend(win.webContents, HARNESS_EVENTS.goalUpdated, { topicId, goal: null })
@@ -2038,7 +2038,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 计划模式：读取（顺带回填内存缓存）/ 切换（持久化 + 广播）
+  // Plan mode: read (backfilling the in-memory cache) / toggle (persist + broadcast)
   handle('harness-plan-get', async (topicId: number) => {
     const active = await planModeStore.ensure(topicId)
     return { topicId, active }
@@ -2049,7 +2049,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return { topicId: payload.topicId, active }
   })
 
-  // 计划模式变更 → 广播到所有窗口（输入框徽标实时刷新）
+  // Plan mode changed → broadcast to all windows (input badge refreshes live)
   scope.effect(() => {
     planModeStore.onChange = (topicId, active) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2062,7 +2062,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // Agent Teams 模式（opt-in，按话题）：读取（顺带回填内存缓存）/ 切换（持久化 + 广播）
+  // Agent Teams mode (opt-in, per topic): read (backfilling the in-memory cache) / toggle (persist + broadcast)
   handle('harness-team-mode-get', async (topicId: number) => {
     const enabled = await teamModeStore.ensure(topicId)
     return { topicId, enabled }
@@ -2072,7 +2072,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     teamModeStore.setEnabled(payload.topicId, payload.enabled)
   )
 
-  // 团队模式变更 → 广播到所有窗口（侧栏菜单勾选/顶部栏提示实时刷新）
+  // Team mode changed → broadcast to all windows (sidebar menu checkbox / top bar hint refreshes live)
   scope.effect(() => {
     teamModeStore.onChange = (view) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2084,7 +2084,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 目标变更 → 广播到所有窗口（GoalBar 实时刷新）
+  // Goal changed → broadcast to all windows (GoalBar refreshes live)
   scope.effect(() => {
     goalStore.onChange = (topicId, goal) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2097,7 +2097,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 后台任务变更 → 广播到所有窗口（任务状态实时刷新）
+  // Background task changed → broadcast to all windows (task status refreshes live)
   scope.effect(() => {
     jobsRegistry.onChange = (topicId, jobs) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2110,18 +2110,18 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 顶部栏「后台任务」入口：列表 / 手动停止 / 输出快照（peek 不消费模型的游标）
+  // Top bar background-tasks entry: list / manual stop / output snapshot (peek does not consume the model cursor)
   handle('harness-jobs-list', (topicId: number) => jobsRegistry.list(topicId))
   handle('harness-job-kill', (topicId: number, jobId: string) => {
     const result = jobsRegistry.kill(jobId, topicId)
-    // undefined 经 IPC 结构化克隆后语义不明确，统一成 null（渲染层按 null 判空）
+    // undefined is ambiguous after IPC structured cloning, so normalize to null (the renderer checks for null)
     return { outcome: result.outcome, job: result.job ?? null }
   })
   handle('harness-job-output-peek', (topicId: number, jobId: string) =>
     jobsRegistry.peek(jobId, topicId)
   )
 
-  // 后台子代理会话变更 → 广播（顶部栏代理列表实时刷新）
+  // Background sub-agent session changed → broadcast (top bar agent list refreshes live)
   scope.effect(() => {
     subagentSessions.onChange = (topicId, rows) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2135,8 +2135,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
   handle('harness-agents-list', (topicId: number) => subagentSessions.list(topicId))
 
-  // 共享任务板（Agent Teams / 超级智能体）：整板快照推送 + 按话题拉取。
-  // 板子很小（单话题上限 200 条），整板替换比增量协议简单可靠，渲染层按 revision 去旧。
+  // Shared task board (Agent Teams / super agent): whole-board snapshot push + per-topic fetch.
+  // The board is small (max 200 items per topic), so whole-board replacement is simpler and more reliable than a delta protocol; the renderer drops old revisions.
   scope.effect(() => {
     teamStore.onChange = (snapshot) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2148,13 +2148,13 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       teamStore.onChange = undefined
     }
   })
-  // 任务板读取：先懒加载持久化快照（重启后第一次打开协作面板/调用工具时恢复）
+  // Task board read: lazily load the persisted snapshot first (restores the first time the collaboration panel is opened or the tool is called after a restart)
   handle('harness-team-tasks', async (topicId: number) => {
     await teamStore.ensureLoaded(topicId)
     return teamStore.snapshot(topicId)
   })
 
-  // Agent Teams 最近活动（任务事件日志；追加写，面板 footer 展示最近一条）
+  // Agent Teams recent activity (task event log; append-only, the panel footer shows the latest entry)
   handle('harness-team-events', async (topicId: number, limit = 20) => {
     const rows = await listTeamTaskEvents(topicId, limit)
     return rows.map((row) => ({
@@ -2169,8 +2169,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }))
   })
 
-  // 子代理会话视图（2026-11-26）：watch 即返回快照；此后把事件增量按 40ms 合批推送，
-  // 轮次结束（turn_end）立即 flush，保证「进行中 → 已完成/失败」状态翻转及时可见。
+  // Sub-agent conversation view (2026-11-26): watch returns a snapshot immediately; afterwards event deltas are batched at 40ms and pushed,
+  // and flushed immediately on turn_end so the in-progress → completed/failed flip is visible promptly.
   const AGENT_CONVERSATION_FLUSH_MS = 40
   const conversationWatchSet = new Set<string>()
   const conversationBuffers = new Map<string, SubagentConversationEvent[]>()
@@ -2205,7 +2205,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         conversationBuffers.set(key, buffer)
       }
       buffer.push(event)
-      // 轮次结束是状态翻转，必须尽快送达；其余 token 级事件按 40ms 合批
+      // Turn end is a state flip and must be delivered as soon as possible; other token-level events are batched at 40ms
       if (event.kind === 'turn_end') {
         flushAgentConversation(topicId, agentId)
         return
@@ -2230,17 +2230,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     (topicId: number, agentId: string) =>
       subagentSessions.readConversation(agentId, topicId) ?? null
   )
-  /** 会话视图向前翻页：取 beforeSeq 之前最近一页完整轮次（滚动到顶部时调用） */
+  /** Page back in the conversation view: fetch the nearest complete turn before beforeSeq (called when scrolled to the top) */
   handle(
     'harness-agent-conversation-older',
     (topicId: number, agentId: string, beforeSeq: number, maxTurns?: number) =>
       subagentSessions.readOlderConversation(agentId, topicId, beforeSeq, maxTurns) ?? null
   )
   /**
-   * 打开/关闭子代理会话视图：
-   * - watch=true：登记关注并**直接返回快照**（渲染层先订阅事件再 invoke，快照之前的
-   *   增量事件会按 seq 丢弃，不存在丢失窗口）；
-   * - watch=false：取消关注并丢弃未发送的缓冲（离开会话视图后不再产生 IPC）。
+   * Open/close the sub-agent conversation view:
+   * - watch=true: register interest and **return a snapshot directly** (the renderer subscribes before invoking, so deltas
+   *   before the snapshot are dropped by seq and no window of loss exists);
+   * - watch=false: unsubscribe and drop unsent buffers (no more IPC after leaving the conversation view).
    */
   handle('harness-agent-conversation-watch', (topicId: number, agentId: string, watch: boolean) => {
     const key = conversationKey(topicId, agentId)
@@ -2256,8 +2256,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return null
   })
 
-  // 清理联动：话题删除 / 切换账号时，主进程不能给已不存在的会话继续保留 watch 状态
-  // 与合批定时器（此前只在渲染层主动 unwatch 时清理，刷新/删话题会留下悬挂项）。
+  // Cleanup linkage: on topic delete / account switch the main process must not keep watch state
+  // and batching timers for sessions that no longer exist (previously only cleaned on renderer unwatch, so refresh/topic delete left dangling entries).
   scope.effect(() => {
     const clearTopicWatches = (topicId: number): void => {
       const prefix = `${topicId}:`
@@ -2286,10 +2286,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 从会话视图向子代理投递一条消息（人工续聊）。
+   * Deliver a message from the conversation view to a sub-agent (manual follow-up).
    *
-   * 复用主代理 `send_message` 同一个 registry.send：空闲立即开新一轮、运行中进 FIFO
-   * 收件箱；投递本身返回回执，不等待子代理回复（新轮的事件走 conversation 通道）。
+   * Reuses the main agent's `send_message` registry.send: starts a new turn immediately when idle, enters the FIFO
+   * inbox when running; delivery returns an ack without waiting for the sub-agent's reply (new-turn events go through the conversation channel).
    */
   handle(
     'harness-agent-prompt',
@@ -2303,7 +2303,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       const text = typeof payload?.message === 'string' ? payload.message.trim() : ''
       if (!text) return { ok: false, error: 'empty message' }
       try {
-        // inactive 会话会在这里冷恢复（重建 runtime）后继续；失败返回可读错误
+        // An inactive session is cold-restored here (runtime recreated) and continues; failures return a readable error
         const { messageId } = await subagentSessions.send(agentId, topicId, text)
         return { ok: true, messageId }
       } catch (err) {
@@ -2311,18 +2311,18 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       }
     }
   )
-  /** 停止该子代理当前这一轮（keepInbox：已排队但未开始的消息保留，可继续续聊） */
+  /** Stop this sub-agent's current turn (keepInbox: messages queued but not started are kept so the conversation can continue) */
   handle('harness-agent-interrupt', (topicId: number, agentId: string) =>
     subagentSessions.interrupt(agentId, topicId)
   )
 
   /**
-   * 「存入记忆」：不再由渲染层把正文截断后直接塞进热记忆，改为起一个后台记忆整理
-   * 子代理——它读这一轮问答，自己判断哪些是可复用事实、该落到哪一层（热记忆 /
-   * 项目文档 / 长期记忆空间），再用 mnemon_* 工具写入。
+   * "Save to memory": instead of the renderer truncating the text and stuffing it into hot memory, this starts a background memory-curation
+   * sub-agent — it reads this turn's Q&A, decides which facts are reusable and which layer they belong to (hot memory /
+   * project docs / long-term memory space), then writes them with the mnemon_* tools.
    *
-   * 进度与结果复用顶部栏后台代理入口（subagentSessions 变更会广播 harness-agents-updated），
-   * 这里只负责补齐上下文（该轮提问 + 模型护栏）并把任务交出去，不等它跑完。
+   * Progress and results reuse the top bar background-agent entry (subagentSessions changes broadcast harness-agents-updated);
+   * this only completes the context (this turn's question + model guardrails) and hands the task off without waiting for it.
    */
   handle(
     'harness-memory-agent-start',
@@ -2334,8 +2334,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }): Promise<StartMemoryAgentResult> => {
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
 
-      // 该轮提问：按对话行 id 往前找最近一条用户消息，给整理代理补全上下文
-      // （拿不到就只整理回答，不影响主流程）
+      // This turn's question: walk back from the dialogue row id to the latest user message to complete the curator agent's context
+      // (if unavailable, curate the answer only; the main flow is unaffected)
       let question: string | undefined
       try {
         const rows = await getDialoguesByTopicId(payload.topicId)
@@ -2355,7 +2355,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         )
       }
 
-      // 与主轮次同源的工具调用轮数护栏（取不到则由 startMemoryAgent 用默认值兜底）
+      // Same tool-call round guardrail as the main turn (fall back to defaults in startMemoryAgent when unavailable)
       let maxToolRounds: number | undefined
       try {
         maxToolRounds = (await getProviderService().getConfig(undefined)).max_tool_rounds
@@ -2366,7 +2366,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         )
       }
 
-      // 「存入记忆」也要落进**这条会话自己的**记忆作用域（插件会话 → 那份插件的记忆）
+      // "Save to memory" must also land in **this topic's own** memory scope (plugin topic → that plugin's memory)
       const memoryAgentScope = await resolveTurnMemoryScope(
         payload.topicId,
         undefined,
@@ -2380,7 +2380,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         workspaceId: harnessSettings?.activeWorkspaceId ?? 0,
         memoryPath: harnessSettings?.memoryPath || undefined,
         memoryScope: serializeMemoryScope(memoryAgentScope),
-        // 优先用那条回复自己的供应商（前端从用量行带过来），拿不到再走默认供应商
+        // Prefer the provider of that reply itself (carried from the usage row by the frontend), falling back to the default provider
         providerId: payload.providerId,
         maxToolRounds
       })
@@ -2391,14 +2391,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  // 后台子代理会话的实时内容走「会话事件流」通道（subagent-conversation），
-  // 旧的纯文本输出 watch/节流链路已删除（无消费者，且与会话事件流重复）。
+  // Real-time content of background sub-agent sessions goes through the conversation event stream channel (subagent-conversation);
+  // the old plain-text output watch/throttle pipeline was removed (no consumers and duplicate of the conversation event stream).
 
-  // 提问系统：新提问 → 广播到所有窗口（前端弹窗）；回答/查询走 handle
+  // Question system: new question → broadcast to all windows (frontend modal); answer/query go through the handler
   scope.effect(() => {
     questionService.onAsk = (pending) => {
-      // 只发送可序列化视图（topicId/requestId/questions 均为纯 JSON），
-      // 严禁把含 resolve/reject/signal 的记录直接送过 IPC（Electron 会抛序列化错误）
+      // Only send serializable views (topicId/requestId/questions are all plain JSON);
+      // never send records containing resolve/reject/signal over IPC (Electron throws serialization errors)
       const payload = {
         topicId: pending.topicId,
         requestId: pending.requestId,
@@ -2407,10 +2407,10 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) safeSend(win.webContents, HARNESS_EVENTS.questionAsked, payload)
       }
-      // 挂起的同一刻告诉侧栏「这条会话在等人」：行首由进行中换成黄色呼吸点
+      // At the moment of pending, tell the sidebar the topic is waiting: row indicator switches from in progress to the breathing yellow dot
       broadcastTopicPending(pending.topicId)
     }
-    // 结算（用户回答 / 本轮中止）→ 撤回那个黄点，回到进行中
+    // Settled (user answered / turn aborted) → retract the yellow dot and return to in progress
     questionService.onResolved = broadcastTopicPending
     return () => {
       questionService.onAsk = undefined
@@ -2427,15 +2427,15 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return questionService.getPending(topicId)
   })
   /**
-   * 用户取消回答：**不中止本轮**，按 cancelled 结算后模型继续执行。
-   * （旧行为是「取消=中止本轮」，用户 2026-11-27 明确要求取消不能终止任务。）
+   * User cancels the answer: **does not abort this turn**; settle as cancelled and let the model keep running.
+   * (The old behavior was cancel = abort this turn; the user explicitly required on 2026-11-27 that cancel must not terminate the task.)
    */
   handle('harness-question-cancel', (requestId: string) => {
     return questionService.cancel(requestId)
   })
 
-  // ── 沙箱审批（危险 / 越界操作被拦下后等用户决定）─────────────────────────
-  // 与提问不同：审批只影响「这一次调用」，没有「总是允许」——持久策略由档位负责。
+  // ── Sandbox approval (waiting for the user after a dangerous / out-of-bounds operation was blocked) ─────────
+  // Unlike questions, approval affects only this one call and has no always-allow — persistent policy is handled by the tier.
   handle('harness-approval-decide', (requestId: string, decision: string) => {
     const allowed = permissionGate.decide(
       requestId,
@@ -2446,17 +2446,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     )
     return allowed
   })
-  // 切话题 / 重新加载时拉一次当前挂起的审批（弹窗可能是在别的界面挂起的）
+  // Fetch the currently pending approvals on topic switch / reload (the modal may have been opened from another view)
   handle('harness-approval-get', (topicId: number) => permissionGate.getPending(topicId))
 
-  // ── 权限档位（输入框左下角选择器 + 设置页「新会话默认」）───────────────────
+  // ── Permission tiers (input box bottom-left picker + settings new-session default) ───────────────────
   handle('harness-permission-get', (topicId?: number) => permissionStateFor(topicId ?? null))
-  // 沙箱后端状态（设置页与诊断用）：拿不到后端时命令会被拒绝执行，界面必须能说出来
+  // Sandbox backend status (for settings and diagnostics): commands are rejected when no backend is available, so the UI must surface it
   handle('harness-sandbox-status', () => {
     const status = sandboxService.status()
     return { ...status, ...sandboxService.describe() }
   })
-  // 撤销工作区上的常驻 ACE（卸载/清理入口；仅 Windows 后端有意义）
+  // Revoke the persistent ACE on a workspace (uninstall/cleanup entry; only meaningful for the Windows backend)
   handle('harness-sandbox-cleanup', (workspacePath: string) => {
     if (!workspacePath) return false
     return sandboxService.cleanupWorkspace({
@@ -2472,7 +2472,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         logger.warn(`[Permission] Rejected invalid permission mode: ${String(mode)}`)
         return permissionStateFor(payload?.topicId ?? null)
       }
-      // scope='default' 改「之后新建话题的默认值」；否则改当前话题（DSH 的两层语义）
+      // scope='default' changes the default for topics created from now on; otherwise the current topic is changed
       if (payload?.scope === 'default') {
         setDefaultPermissionMode(mode)
       } else if (typeof payload.topicId === 'number' && payload.topicId > 0) {
@@ -2491,7 +2491,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  // 取消流式输出（同时中止挂起的提问）
+  // Cancel streaming output (also aborts pending questions)
   handle('harness-cancel-stream', () => {
     const sender = primarySender()
     if (!sender) return
@@ -2500,17 +2500,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       controller.abort()
       streamAbortControllers.delete(sender.id)
     }
-    // 用户点了停止：只中止当前回合的注入缓冲；**排队中的插话保留**——
-    // 那些是用户明确写下、还没被处理的消息（停止后由回合收尾路径作为新一轮接续发出）。
+    // The user pressed stop: abort only the current turn's injection buffer; **queued interjections are kept** —
+    // those are messages the user explicitly wrote and that were not processed yet (after stop, the turn close-out continues them as new turns).
     const topicId = senderTopic.get(sender.id)
     if (topicId != null) {
       harnessQueue.dropInjections(topicId)
       broadcastQueue(topicId)
     }
-    // 挂起的提问 / 审批：**只撤回这条会话自己的**。
-    // 此前无差别 abortAll()：在 B 会话点「停止生成」会把 A 会话挂着的提问/审批一起按拒绝结算
-    // （用户口径 2026-09-28「会被其他的会话占用……应该是按会话进行隔离」）。
-    // 认不出话题（理论上不该发生）时才退回全撤，宁可多撤也别让调用永远挂着。
+    // Pending questions / approvals: **retract only this topic's own**.
+    // Previously abortAll() was unconditional: pressing stop generating in topic B settled topic A's pending questions/approvals as denied
+    // (user requirement 2026-09-28: they get occupied by other topics... it should be isolated per topic).
+    // Only when the topic cannot be identified (should not happen) fall back to aborting everything — better over-abort than a call hanging forever.
     if (topicId != null) {
       questionService.abortTopic(topicId)
       permissionGate.abortTopic(topicId)
@@ -2520,7 +2520,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 对话计划清单（write_todos）变更 → 广播到渲染进程（输入框上方的进行中任务卡片）
+  // Dialogue plan list (write_todos) changed → broadcast to the renderer (in-progress task card above the input box)
   scope.effect(() => {
     todoStore.onChange = (topicId, todos) => {
       for (const win of BrowserWindow.getAllWindows()) {
@@ -2533,11 +2533,11 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 读取当前话题的计划清单：卡片每次重新挂载（切页 / 切话题）都要主动拉一次，
-  // 只靠写入选 broadcast 的话，切走再回来卡片会一直是空的直到模型下次写清单
+  // Read the current topic's plan list: the card actively fetches it every time it remounts (page/topic switch);
+  // relying on write broadcasts alone would leave the card empty after switching away and back until the model writes the list again
   handle('harness-todos-get', async (topicId: number) => todoStore.get(topicId))
 
-  // 选择记忆（Memory）存储目录
+  // Choose the memory storage directory
   handle('harness-select-memory-directory', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
@@ -2547,7 +2547,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return result.filePaths[0]
   })
 
-  // 选择技能（Skills）存储目录
+  // Choose the skills storage directory
   handle('harness-select-skills-directory', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
@@ -2557,7 +2557,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return result.filePaths[0]
   })
 
-  // 选择 AI 工作区目录（FilesystemBackend 挂载根目录）
+  // Choose the AI workspace directory (FilesystemBackend mount root)
   handle('harness-select-workspace', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
@@ -2565,19 +2565,19 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const picked = result.filePaths[0]
-    // 登记「用户亲手选过」：workspace-create / system-settings-update 只接受这类目录，
-    // 渲染层注入后无法凭空指定任意盘符当工作区根（安全审计 S03）。
+    // Register personally picked by the user: workspace-create / system-settings-update accept only such directories,
+    // so the renderer cannot inject an arbitrary drive as the workspace root (security audit S03).
     rememberSelectedRoot(picked)
     return picked
   })
 
-  // ── 工具清单（设置 →「智能体」页的工具下拉）───────────────────────────────
-  // 清单每次请求现取（本地工具 + 各插件当前贡献），因此插件启停立刻反映到设置页；
-  // label/description 是**界面元数据**，按当前界面语言覆盖后下发。
-  // ── 侧栏检索：当前工作区的「会话标题 + 消息正文」混合搜索（只读） ─────────
-  // 侧栏搜索此前只在渲染层过滤已加载的会话标题；正文搜索只有模型工具能用。
-  // 这里给用户侧一个只读入口：标题命中 + 正文命中（带关键词片段）一次返回，
-  // 按工作区隔离，与 session_search 工具同一套数据（mapper.searchDialogues）。
+  // ── Tool list (settings → Agent page tool dropdown) ─────────────────────────────
+  // The list is fetched on every request (local tools + current contributions from each plugin), so enabling/disabling a plugin shows up immediately in settings;
+  // label/description are **UI metadata**, overwritten to the current UI language before sending.
+  // ── Sidebar search: hybrid topic title + message body search of the current workspace (read-only) ─────────
+  // Sidebar search previously filtered only loaded topic titles in the renderer; body search was only available to model tools.
+  // This gives the user side a read-only entry point: title hits + body hits (with keyword snippets) returned together,
+  // isolated per workspace, on the same data as the session_search tool (mapper.searchDialogues).
   handle(
     'harness-search-workspace',
     async (payload: { query?: unknown; workspaceId?: unknown; limit?: unknown }) => {
@@ -2626,7 +2626,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   )
 
-  // ── 会话级运行选择（输入框下面的工具/技能/MCP 选择）──────────────────
+  // ── Session-level runtime selection (tools/skills/MCP pickers below the input box) ──────────────────
   handle('harness-topic-agent-selection-get', async (payload: { topicId: number }) => {
     const topicId = Number(payload?.topicId)
     if (!Number.isFinite(topicId) || topicId <= 0) return null
@@ -2665,9 +2665,9 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     })
   })
 
-  // ── 工具结果按需读取（内置工具的结果不再随流下发/落库）─────────────────────
-  // 聊天里的工具卡片只带元信息；用户点开时才按 (topicId, callId) 取完整结果。
-  // 未命中（详情未保存 / 已被清理）返回 null，前端显示「详情不可用」而不是空白。
+  // ── On-demand tool result reads (built-in tool results are no longer streamed/persisted with the turn) ─────────────────────
+  // Tool cards in chat carry only metadata; full results are fetched by (topicId, callId) when the user expands them.
+  // A miss (details never saved / already cleaned up) returns null and the UI shows details unavailable instead of a blank.
   handle('harness-tool-output-get', (topicId: number, callId: string) => {
     try {
       return getToolOutputStore()?.read(topicId, callId) ?? null
@@ -2677,13 +2677,13 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     }
   })
 
-  // 按虚拟路径读取文本文件（工具卡片「打开文件」用）：
-  // 与 workspace-read-file 的区别是这里按挂载解析（工作区 + 记忆目录），
-  // 边界仍是「必须落在某个已挂载根目录内」。
+  // Read a text file by virtual path (for the tool card open-file action):
+  // unlike workspace-read-file, this resolves by mount (workspace + memory directory),
+  // and the boundary remains: the path must be inside some mounted root directory.
   //
-  // 第二个参数是**当前会话的记忆作用域**（`plugin:<id>`，渲染层从作用域 store 带过来）：
-  // 记忆挂载根是作用域目录（`<memoryPath>/plugin-<id>/`），跟 Runtime 的 /memories/ 同一口径——
-  // 不按作用域解析的话，插件会话里点开 `/memories/...` 会去找工作区那份（找不到）。
+  // The second parameter is **the current topic's memory scope** (`plugin:<id>`, supplied by the renderer from the scope store):
+  // the memory mount root is the scope directory (`<memoryPath>/plugin-<id>/`), the same convention as the Runtime's /memories/ —
+  // without scope resolution, opening `/memories/...` in a plugin topic would look in the workspace copy (and find nothing).
   handle('harness-vfs-read', (virtualPath: string, scope?: string | null) => {
     try {
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
@@ -2706,14 +2706,14 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 技能根目录可用性检查：不存在 / 不是目录 / 无权限时抛错，让渲染层显示
-   * 「读取失败」而不是「没发现任何技能」——后者会让人误以为目录是空的。
+   * Skill root usability check: throw when missing / not a directory / unreadable, so the renderer shows
+   * failed to read instead of no skills found — the latter makes people think the directory is empty.
    *
-   * 例外：目录**不存在**（ENOENT）按「空技能目录」处理，不抛错。典型场景是
-   * 打包版默认路径落在安装目录（如 `D:\Program Files\RytenBench\data\skills`），
-   * 应用被移动/卸载或安装目录只读后该目录消失，设置页会在「智能体」页报
-   * `ENOENT: no such file or directory, stat …`，把用户挡在页面外；
-   * 这里改成空列表，用户仍可在设置里改到可用目录。
+   * Exception: a **missing** directory (ENOENT) is treated as an empty skill directory and does not throw. Typical case:
+   * the packaged default path lands in the install directory (e.g. `D:\Program Files\RytenBench\data\skills`),
+   * and the directory disappears after the app is moved/uninstalled or the install directory becomes read-only; the settings page then reports
+   * `ENOENT: no such file or directory, stat …` on the Agent page and blocks the user out of the page;
+   * this now returns an empty list, and the user can still change to a usable directory in settings.
    */
   const assertSkillsRootReadable = (skillsPath: string): void => {
     try {
@@ -2730,13 +2730,13 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   }
 
   /**
-   * 技能目录扫描（主进程）：只确认 SKILL.md 是可读的**普通文件**，不读文件内容。
+   * Skill directory scan (main process): only confirms SKILL.md is a readable **regular file**; does not read its content.
    *
-   * 两个边界要挡：
-   * - `SKILL.md` 是同名目录：`accessSync(R_OK)` 对目录也成功，但后续 `readFileSync` 必然
-   *   EISDIR，技能会「永远打不开」；
-   * - `SKILL.md` 是符号链接：读写都会穿透到 skills 根之外，等于绕过了「只操作扫描结果」
-   *   这道路径守卫。这里用 `lstat` 拒绝链接、用 `stat` 确认是普通文件。
+   * Two boundaries to block:
+   * - `SKILL.md` is a directory with the same name: `accessSync(R_OK)` succeeds for directories too, but a later `readFileSync` will
+   *   fail with EISDIR, so the skill would never open;
+   * - `SKILL.md` is a symlink: reads and writes go through to outside the skills root, bypassing the only-operate-on-scan-results
+   *   path guard. Here `lstat` rejects links and `stat` confirms a regular file.
    */
   const isRegularSkillFile = (skillsPath: string, dirName: string): boolean => {
     try {
@@ -2752,7 +2752,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     try {
       return fs
         .readdirSync(skillsPath, { withFileTypes: true })
-        // withFileTypes 基于 lstat：目录符号链接本身不会命中 isDirectory（不一致支持）
+        // withFileTypes is based on lstat: a directory symlink itself will not match isDirectory (inconsistent support)
         .filter((entry) => entry.isDirectory())
         .filter((entry) => isRegularSkillFile(skillsPath, entry.name))
         .map((entry) => entry.name)
@@ -2763,13 +2763,13 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   }
 
   /**
-   * 解码 SKILL.md：只接受 UTF-8。
+   * Decode SKILL.md: UTF-8 only.
    *
-   * - UTF-8 BOM（EF BB BF）：剥掉，编辑/保存统一按「无 BOM 的 UTF-8」写回，避免首字符
-   *   变隐形 U+FEFF 后 frontmatter 匹配失败（列表标题退化成目录名、预览把 frontmatter
-   *   当正文显示）；
-   * - UTF-16 / 非法 UTF-8：`toString('utf8')` 会产生 U+FFFD，写回等于把原文替换字符永久
-   *   覆盖。这里直接返回 null，由调用方报「读不到 / 不支持的编码」，绝不静默损坏。
+   * - UTF-8 BOM (EF BB BF): stripped; editing/saving always writes back as UTF-8 without BOM, avoiding the first character
+   *   becoming an invisible U+FEFF that breaks frontmatter matching (the list title degrades to the directory name, the preview shows frontmatter
+   *   as body text);
+   * - UTF-16 / invalid UTF-8: `toString('utf8')` produces U+FFFD, and writing it back would permanently replace the original characters
+   *   with replacement characters. Return null here and let the caller report unreadable / unsupported encoding — never corrupt silently.
    */
   const decodeSkillText = (buffer: Buffer): string | null => {
     if (buffer.length >= 2) {
@@ -2785,11 +2785,11 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     return text.includes('\uFFFD') ? null : text
   }
 
-  /** frontmatter 剥离（get-skill 预览用；与 skills-core 的正文口径一致） */
+  /** frontmatter stripping (for get-skill preview; consistent with skills-core's body convention) */
   const stripSkillFrontmatter = (raw: string): string =>
     raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n)?/, '')
 
-  /** 读单个技能的元信息（front matter 的 name / description） */
+  /** Read a single skill's metadata (front matter name / description) */
   const readSkillMeta = (
     skillsPath: string,
     dirName: string
@@ -2806,27 +2806,27 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
         if (d) description = d[1].trim()
       }
     } catch {
-      // 读不到就当默认名
+      // Fall back to a default name when unreadable
     }
     return { id: dirName, name, description }
   }
 
-  // 列出技能目录中的所有技能（技能页 / 技能选择器用；小数据量）
+  // List all skills in the skills directory (for the skills page / picker; small data volume)
   handle('harness-list-skills', async () => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath) return []
-    // 目录本身不可读时抛错（而不是返回空列表，让界面提示「没有技能」）
+    // Throw when the directory itself is unreadable (rather than returning an empty list and showing no skills)
     assertSkillsRootReadable(skillsPath)
     return listSkillDirNames(skillsPath).map((dirName) => readSkillMeta(skillsPath, dirName))
   })
 
   /**
-   * 读取单个技能（技能页卡片点开查看 / 编辑）。
+   * Read a single skill (open a card in the skills page for viewing / editing).
    *
-   * 只接受目录扫描结果里的 id：既挡住 `../` 之类的路径穿越，也不会把目录外任意文件
-   * 读给渲染层。返回两份正文：
-   * - `content`：剥掉 frontmatter 的正文，给 Markdown 预览；
-   * - `raw`：SKILL.md 原文（含 frontmatter，UTF-8 BOM 已剥离），给「编辑」保存回去。
+   * Accepts only ids from directory scan results: this blocks path traversal such as `../` and prevents reading arbitrary files
+   * outside the directory to the renderer. Returns two bodies:
+   * - `content`: body with frontmatter stripped, for the Markdown preview;
+   * - `raw`: original SKILL.md (with frontmatter, UTF-8 BOM stripped), for saving back from edit.
    */
   handle('harness-get-skill', async (skillId: string) => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
@@ -2846,17 +2846,17 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 保存技能原文（技能页「编辑」）。写入的是完整 SKILL.md，因此 frontmatter 里的
-   * name / description 也可以一起改；保存后渲染层重新拉列表，卡片标题会跟着更新。
+   * Save the original skill text (skills page edit). The complete SKILL.md is written, so name / description
+   * in the frontmatter can be changed too; after saving the renderer refetches the list and card titles update accordingly.
    *
-   * 写入走「临时文件 + rename」：`writeFileSync` 直接写会先截断目标，中途出错会留下
-   * 半截 SKILL.md；rename 在同一目录内是原子替换。改完后统一是 UTF-8（无 BOM）。
+   * Writes use temp file + rename: `writeFileSync` truncates the target first, and an error midway would leave a
+   * half-written SKILL.md; rename is atomic within the same directory. The result is always UTF-8 (no BOM).
    */
   handle('harness-save-skill', async (skillId: string, content: string) => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
     if (!skillsPath || typeof skillId !== 'string' || !skillId) return false
     if (typeof content !== 'string' || content.trim().length === 0) return false
-    // 含替换字符说明上游用错编码解码过，写回会永久损坏原文：拒绝并留给用户重开
+    // A replacement character means the content was decoded with the wrong encoding earlier; writing it back would permanently corrupt it: reject and let the user reopen
     if (content.includes('\uFFFD')) {
       logger.warn(`[Skills] Refusing to save skill "${skillId}": content contains U+FFFD`)
       return false
@@ -2872,7 +2872,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       try {
         fs.rmSync(temp, { force: true })
       } catch {
-        // 清理失败不影响返回值
+        // Cleanup failures do not affect the return value
       }
       logger.error('[Skills] Failed to save skill content:', error)
       return false
@@ -2880,8 +2880,8 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 删除技能目录（技能页「删除」）。只删扫描结果里存在的技能目录，绝不接受任意路径。
-   * 删除前由渲染层弹二次确认；这里只做最后一道收口。
+   * Delete a skill directory (skills page delete). Only deletes skill directories that exist in scan results; never accepts arbitrary paths.
+   * The renderer asks for a second confirmation before deleting; this is only the final gate.
    */
   handle('harness-delete-skill', async (skillId: string) => {
     const skillsPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.skillsPath
@@ -2897,11 +2897,11 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
   /**
-   * 技能启用/停用：判定在主进程完成。
+   * Skill enable/disable: decided in the main process.
    *
-   * 「全部启用」在配置里用 `enabledSkills: undefined` 表示；停用某个技能时必须展开成完整清单，
-   * 而完整技能目录只有主进程知道——放在渲染层会依赖「前端刚好拉到了全部技能」，
-   * 目录一多或分页实现变化就会漏。
+   * Enable all is represented by `enabledSkills: undefined` in the config; disabling one skill requires expanding it into a full list,
+   * and only the main process knows the complete skill directory — doing it in the renderer would rely on the frontend having loaded all skills,
+   * which breaks when there are many directories or pagination changes.
    */
   handle('harness-set-skill-enabled', async (skillId: string, enabled: boolean) => {
     const harness = (settingsStore.get('harness') as HarnessSettings | undefined) ?? {}
@@ -2909,7 +2909,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
     const current = harness.enabledSkills
     let next: string[] | undefined
     if (enabled) {
-      // 没有清单 = 全部启用，无需写
+      // No list = all enabled, nothing to write
       next = current ? (current.includes(skillId) ? current : [...current, skillId]) : undefined
     } else {
       const base = current ?? (skillsPath ? listSkillDirNames(skillsPath) : [])
@@ -2920,7 +2920,7 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
   })
 
 
-/** 定时任务页面提交的目标配置（固定会话 或 每次新建会话） */
+/** Target config submitted by the scheduled task page (fixed topic or new topic per run) */
 interface ScheduleTargetPayload {
   topicId?: number | null
   targetMode?: unknown
@@ -2929,9 +2929,9 @@ interface ScheduleTargetPayload {
 }
 
 /**
- * 校验并解析任务目标：固定会话型从话题反查工作区；新会话型要求模式与工作区匹配。
+ * Validate and resolve the task target: fixed-topic tasks resolve the workspace from the topic; new-topic tasks require mode and workspace to match.
  *
- * 返回 null = 参数不合法（handler 统一回 invalid-input）。
+ * Returns null for invalid input (the handler replies invalid-input).
  */
 async function resolveScheduleTargetPayload(
   payload: ScheduleTargetPayload
@@ -2962,7 +2962,7 @@ async function resolveScheduleTargetPayload(
       targetMemoryScope: null
     }
   }
-  // 新会话型：模式与工作区必须匹配，插件模式还必须带 plugin:<id> 作用域
+  // New-topic type: mode and workspace must match; plugin mode must also carry a plugin:<id> scope
   const workspaceId =
     typeof payload.targetWorkspaceId === 'number' &&
     Number.isFinite(payload.targetWorkspaceId) &&
@@ -2989,9 +2989,9 @@ async function resolveScheduleTargetPayload(
   }
 }
 
-  // ── 定时任务管理（侧边栏 →「定时任务」页）─────────────────────────────
-  // 列表 / 新建 / 完整编辑 / 暂停恢复删除 / 执行记录。
-  // 模型工具 `schedule_*` 与页面共用同一个存储后端。
+  // ── Scheduled task management (sidebar → Scheduled tasks page) ─────────────
+  // List / create / full edit / pause-resume-delete / execution records.
+  // The `schedule_*` model tools and the page share the same storage backend.
   handle('harness-schedule-list', async () => {
     if (!isScheduleStoreConfigured()) return []
     try {
@@ -3002,7 +3002,7 @@ async function resolveScheduleTargetPayload(
     }
   })
 
-  /** 页面新建任务：目标（固定会话/新会话）+ 标题 + 提示词 + 规则 + 任务级选择 */
+  /** Create from the page: target (fixed/new topic) + title + prompt + rule + task-level selection */
   handle(
     'harness-schedule-create',
     async (
@@ -3042,7 +3042,7 @@ async function resolveScheduleTargetPayload(
     }
   )
 
-  /** 页面完整编辑：标题 / 提示词 / 规则 / 启用态（规则变化时重算下次触发） */
+  /** Full edit from the page: title / prompt / rule / enabled state (recompute the next trigger when the rule changes) */
   handle(
     'harness-schedule-update-full',
     async (
@@ -3124,7 +3124,7 @@ async function resolveScheduleTargetPayload(
     }
   )
 
-  /** 执行记录（永久保存，倒序分页） */
+  /** Execution records (kept forever, reverse-chronological pages) */
   handle(
     'harness-schedule-runs',
     async (payload: { id: string; limit?: number; offset?: number }) => {
@@ -3173,7 +3173,7 @@ async function resolveScheduleTargetPayload(
     }
   )
 
-  // ── 联网搜索设置（设置 →「联网搜索」页） ─────────────────────────────
+  // ── Web search settings (settings → Web search page) ─────────────────────────
   handle('harness-search-settings-get', async () => {
     try {
       return await getSearchSettingsView()
@@ -3240,7 +3240,7 @@ async function resolveScheduleTargetPayload(
     }
   })
 
-  // 定时任务执行入口：runner 只负责「到点叫一下」，真正起轮仍走 runHarnessTurn 管线
+  // Scheduled task execution entry: the runner only signals when due; actually starting the turn still goes through runHarnessTurn
   scheduleRunner.configureQuestionBuilder((task) =>
     mainFormat(getScheduleToolTexts().question, { title: task.title, prompt: task.prompt })
   )

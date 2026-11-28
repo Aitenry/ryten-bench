@@ -9,19 +9,25 @@ import { ThemeContext, type ThemeContextType } from './ThemeContextCore'
 const { defaultAlgorithm, darkAlgorithm } = theme
 
 /**
- * 主按钮（`type="primary"`）改用**中性反色**，不再使用 antd 默认的亮蓝实心块。
+ * Primary buttons (`type="primary"`) switch to a **neutral inverted** style instead of antd's
+ * default bright-blue solid block.
  *
- * 用户 2026-11-27 口径（附「批准并开始执行」按钮截图）：「移除项目里面所有使用这个样式的
- * 按钮，不要这种样式太丑了」。按钮样式是全项目共用的，所以改在 ConfigProvider 的 Button
- * 组件 token 上——所有 `type="primary"`（含 Modal 默认 OK、确认框、发送按钮）一次生效，
- * 不逐个组件改、也不会漏掉新加的按钮。
+ * User directive of 2026-11-27 (with a screenshot of the "Approve and start execution" button):
+ * "Remove every button in the project that uses this style; it's too ugly." Button styling is
+ * shared across the whole project, so it is changed on the ConfigProvider Button component token:
+ * every `type="primary"` (including the Modal default OK, confirmation dialogs, and the send
+ * button) takes effect at once, without editing components one by one and without missing newly
+ * added buttons.
  *
- * 取值：
- * - 暗色：浅底深字（`#f2f2f2` / `#141414`），悬停更亮、按下稍暗；
- * - 亮色：深底白字（`#1f1f1f` / `#ffffff`），悬停更黑、按下稍浅。
+ * Values:
+ * - dark: light background, dark text (`#f2f2f2` / `#141414`); hover is brighter, pressed is
+ *   dimmer;
+ * - light: dark background, white text (`#1f1f1f` / `#ffffff`); hover is darker, pressed is
+ *   lighter.
  *
- * 另外把 `primaryShadow` 置空：antd 默认给主按钮一层主色投影，在深色界面上是一圈蓝光，
- * 与中性按钮冲突。`danger` 主按钮仍走错误色，不受这里影响（危险操作保留红色语义）。
+ * `primaryShadow` is also cleared: antd gives primary buttons a primary-colored shadow by default,
+ * which shows up as a blue glow on dark surfaces and clashes with the neutral button. `danger`
+ * primary buttons still use the error color and are unaffected (destructive actions stay red).
  */
 const NEUTRAL_PRIMARY_BUTTON_DARK = {
   colorPrimary: '#f2f2f2',
@@ -38,8 +44,8 @@ const NEUTRAL_PRIMARY_BUTTON_LIGHT = {
 } as const
 
 /**
- * 根据当前时间（小时）判断应该使用亮色还是暗色主题。
- * 6:00 ~ 18:00 为白天 → 亮色，其余时间为夜间 → 暗色。
+ * Pick light or dark theme based on the current hour.
+ * 6:00–18:00 is daytime → light; the rest of the day is night → dark.
  */
 const getTimeBasedTheme = (): 'light' | 'dark' => {
   const hour = new Date().getHours()
@@ -51,7 +57,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [themeMode, setThemeModeState] = useState<ThemeMode>('auto')
   const [effectiveTheme, setEffectiveTheme] = useState<'light' | 'dark'>(getTimeBasedTheme())
 
-  // 挂载时从系统设置加载主题偏好（异步，不阻塞首屏渲染）
+  // Load the theme preference from system settings on mount (async, doesn't block first paint)
   useEffect(() => {
     const loadTheme = async (): Promise<void> => {
       try {
@@ -61,13 +67,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setThemeModeState(mode)
         setEffectiveTheme(mode === 'auto' ? getTimeBasedTheme() : mode)
       } catch {
-        // 加载失败时使用默认值
+        // Fall back to the defaults when loading fails
       }
     }
     loadTheme()
   }, [])
 
-  // 自动模式：每分钟根据时间更新一次有效主题
+  // Auto mode: refresh the effective theme once per minute based on the time
   useEffect(() => {
     if (themeMode !== 'auto') return
     setEffectiveTheme(getTimeBasedTheme())
@@ -77,7 +83,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearInterval(interval)
   }, [themeMode])
 
-  // 同步 Tailwind v4 的 dark 类名到 document 根元素
+  // Sync Tailwind v4's dark class onto the document root element
   const isDark = effectiveTheme === 'dark'
   useEffect(() => {
     if (isDark) {
@@ -88,12 +94,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [isDark])
 
   /**
-   * 切换主题：一次性提交 React 状态（整棵树一起换），落库异步做、不阻塞界面。
+   * Switch theme: commit React state in one go (the whole tree switches together); persistence is
+   * done asynchronously and does not block the UI.
    *
-   * 标题栏右侧的系统按钮条（Window Controls Overlay）由 ShellTitleBar 在
-   * useLayoutEffect 里、**绘制之前**把新配色发给主进程——和界面同一帧换色。
-   * 不要再提前改外壳 CSS 变量或推迟 React 提交：那会把界面拆成「外壳先变、内容后变」，
-   * 中间几百毫秒里是半套主题，反而更难看（用户 2026-11-19「越改越不行了」）。
+   * The system button strip on the right of the title bar (Window Controls Overlay) is sent the new
+   * colors by ShellTitleBar in useLayoutEffect, **before paint**—so it recolors in the same frame
+   * as the UI. Do not change shell CSS variables earlier or delay the React commit: that splits the
+   * UI into "shell changes first, content later", leaving half a theme for a few hundred
+   * milliseconds, which looks even worse (user 2026-11-19: "it's getting worse the more you edit").
    */
   const setThemeMode = useCallback(async (mode: ThemeMode): Promise<void> => {
     const next = mode === 'auto' ? getTimeBasedTheme() : mode
@@ -102,7 +110,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       await window.api.systemSettings.update({ theme: mode })
     } catch {
-      // 静默处理
+      // Handle silently
     }
   }, [])
 
@@ -115,7 +123,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [themeMode, effectiveTheme, setThemeMode]
   )
 
-  /** antd 主题配置：算法 + 主按钮的中性样式（见上方常量注释） */
+  /**
+   * antd theme config: algorithms + neutral primary button styles (see the comments above)
+   */
   const themeConfig = useMemo(
     () => ({
       algorithm: isDark ? darkAlgorithm : defaultAlgorithm,
@@ -130,12 +140,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   )
 
   /**
-   * 全局弹窗垂直居中（用户 2026-11-23：「页面所有的弹出框没有居中」）。
+   * Center all dialogs vertically (user 2026-11-23: "none of the popups on the page are centered").
    *
-   * antd 默认 `top: 100px`：窗口越高弹窗越贴上半区，设置弹窗这类高弹窗底部还会被
-   * 窗口裁掉一截。`centered` 走 wrap 的 inline-block + 垂直居中对齐，位置只跟窗口
-   * 高度有关；改在 ConfigProvider 一处，所有 `Modal`（含 `Modal.useModal()` 的
-   * confirm）一起生效——逐个组件补 `centered` 一定会漏，漏掉的那个就还原样贴顶。
+   * antd defaults to `top: 100px`: the taller the window, the closer dialogs hug the top half, and
+   * tall dialogs such as the settings modal get their bottom clipped by the window. `centered` uses
+   * the wrap's inline-block + vertical centering, so the position depends only on window height.
+   * Set once on ConfigProvider so every `Modal` (including confirm from `Modal.useModal()`)
+   * follows. Adding `centered` per component is bound to miss one, and that one sticks to the top.
    */
   return (
     <ThemeContext.Provider value={contextValue}>

@@ -48,29 +48,32 @@ import { readReport, verifyDraft, type VerifyOptions } from './verify'
 import { releaseWorkshopDir } from './dir-release'
 
 /**
- * 工坊门面：AI 工具（`main/tools/workshop.ts`）与设置页（`main/ipc/workshop.ts`）
- * 都只调这里，不直接碰 build/verify/install 的细节。
+ * Workshop facade: the AI tools (`main/tools/workshop.ts`) and the settings page
+ * (`main/ipc/workshop.ts`) only call in here and never touch build/verify/install details
+ * directly.
  *
- * 这一层负责**把宿主状态拼进草稿视图**（是否已构建、是否已安装、最近验收结论）——
- * 面板与模型都需要「这个草稿现在是什么状态」这一个答案。
+ * This layer is responsible for **folding host state into the draft view** (built or not,
+ * installed or not, latest verification verdict) — both the panel and the model need one answer
+ * to "what state is this draft in now".
  */
 
 export interface WorkshopServiceState {
-  /** 工坊接线是否就绪（AI 助手插件装载着） */
+  /** Whether the workshop is wired up (the AI assistant plugin is loaded) */
   ready: boolean
   /**
-   * 是否已配置**插件存放路径**（首次启动已按安装目录预置，用户清空后为 false）。
-   * 未配置时草稿列表为空、新建会被拒，界面据此引导用户去选文件夹。
+   * Whether the **plugin storage path** is configured (preset from the install directory on
+   * first launch; false after the user clears it). When unconfigured the draft list is empty and
+   * creation is rejected, and the UI prompts the user to pick a folder from it.
    */
   configured: boolean
-  /** 用户配置的插件存放路径（未配置时为空字符串） */
+  /** User-configured plugin storage path (empty string when unconfigured) */
   pluginsPath: string
-  /** 工坊内部根目录（会话产物/报告/导出；**不在界面上展示**） */
+  /** Workshop internal root directory (session artifacts/reports/exports; **not shown in the UI**) */
   root: string
   drafts: number
 }
 
-/** 工坊当前状态（面板与工具失败提示） */
+/** Current workshop state (used by the panel and in tool failure messages) */
 export function workshopState(): WorkshopServiceState {
   const host = workshopHostOrNull()
   return {
@@ -82,13 +85,13 @@ export function workshopState(): WorkshopServiceState {
   }
 }
 
-/** 每条草稿的摘要（含宿主侧的安装/启用/最近验收状态） */
+/** Summary of each draft (including host-side installed/enabled/latest verification state) */
 export function listDraftSummaries(): WorkshopDraftSummary[] {
   const host = workshopHostOrNull()
   return listDraftIds().map((id) => summarize(id, host))
 }
 
-/** 单条摘要 */
+/** Summary of a single draft */
 export function draftSummary(id: string): WorkshopDraftSummary {
   return summarize(id, workshopHostOrNull())
 }
@@ -112,16 +115,19 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
     }
   }
   /**
-   * 展示名：工坊草稿的 `workshop.json` 标题优先；没有（例如从插件中心下载的源码包）
-   * 就用 `plugin.json` 的 `name`；两者都没有才退回 id。
+   * Display name: the draft's `workshop.json` title takes priority; when it is absent (e.g. a
+   * source package downloaded from the plugin center) use the `plugin.json` `name`; only when
+   * both are missing fall back to the id.
    *
-   * 之前只看 `workshop.json`，从插件中心安装的源码在侧栏会显示成 `personal-ledger`
-   * 这种 id（用户 2026-11-23：「安装源码的内容，显示的为什么是 id，而不是名称」）。
+   * Previously only `workshop.json` was consulted, so source installed from the plugin center
+   * showed up in the sidebar as an id like `personal-ledger` (user report 2026-11-23: "when I
+   * install source code, why does it show the id instead of the name").
    *
-   * 2026-11-25 再修：早期版本用 `patchDraftMeta(id, {})` 写文件时会补一份
-   * `title: <id>` 的 workshop.json（见 store.ts 的 defaultMeta），于是这里优先取到的
-   * 恰好是 id，清单里的名称反而永远用不上。**标题与 id 相同视为「没有标题」**，
-   * 继续回退到清单名称；插件工作区名也跟着 `draftSummary().title` 一起恢复成名称。
+   * Fixed again on 2026-11-25: early versions writing a file via `patchDraftMeta(id, {})` added a
+   * workshop.json with `title: <id>` (see `defaultMeta` in store.ts), so the priority read here
+   * picked up exactly the id and the manifest name was never used. **A title equal to the id
+   * counts as "no title"**, so it keeps falling back to the manifest name; the plugin workspace
+   * name also follows `draftSummary().title` back to the name.
    */
   const manifestName =
     typeof manifest?.name === 'string' && manifest.name.trim() !== '' ? manifest.name.trim() : ''
@@ -154,7 +160,7 @@ function summarize(id: string, host: WorkshopHost | null): WorkshopDraftSummary 
   }
 }
 
-/** 草稿详情（文件树 + 清单 + 目录） */
+/** Draft detail (file tree + manifest + directory) */
 export function draftDetail(id: string): WorkshopDraftDetail {
   const summary = draftSummary(id)
   return {
@@ -165,7 +171,7 @@ export function draftDetail(id: string): WorkshopDraftDetail {
   }
 }
 
-/** 新建草稿（宿主模块白名单在生成时注入 WORKSHOP.md） */
+/** Create a new draft (the host module allowlist is injected into WORKSHOP.md at generation time) */
 export function createDraftFromTemplate(opts: CreateDraftOptions): ReturnType<typeof createDraft> {
   const host = workshopHostOrNull()
   if (!hasPluginsRoot()) {
@@ -180,12 +186,12 @@ export function createDraftFromTemplate(opts: CreateDraftOptions): ReturnType<ty
   })
 }
 
-/** 读草稿文件 */
+/** Read a draft file */
 export function readFile(id: string, rel: string): string {
   return readDraftFile(id, rel)
 }
 
-/** 写草稿文件 */
+/** Write a draft file */
 export function writeFile(
   id: string,
   rel: string,
@@ -195,21 +201,24 @@ export function writeFile(
   return writeDraftFile(id, rel, content)
 }
 
-/** 删草稿文件 */
+/** Delete a draft file */
 export function removeFile(id: string, rel: string): void {
   deleteDraftFile(id, rel)
 }
 
 /**
- * 重命名插件（改的是**展示名**）。
+ * Rename a plugin (this changes the **display name**).
  *
- * 两处一起改：草稿元数据 `workshop.json` 的 `title`（工坊列表与侧栏显示的是它）与清单
- * `plugin.json` 的 `name`（应用里「插件管理」/菜单显示的是它）——只改一处会出现
- * 「侧栏叫新名字、装进应用还是旧名字」。
+ * Two places are changed together: the draft metadata `workshop.json` `title` (shown in the
+ * workshop list and sidebar) and the manifest `plugin.json` `name` (shown in the app's plugin
+ * management/menu) — changing only one leaves "the sidebar shows the new name while the installed
+ * app still shows the old one".
  *
- * **不动目录名与 id**：id 同时是目录名、`plugin.json.id` 与 IPC 命名空间 `plugin:<id>:*`，
- * 改它等于换一个插件（那是「新建一个 + 删掉旧的」，不是重命名）。
- * 改完产物比源码旧（要进行里生效需重新构建/安装），这是既有的 `staleBuild` 口径。
+ * **The directory name and id are not touched**: the id is simultaneously the directory name,
+ * `plugin.json.id` and the IPC namespace `plugin:<id>:*`, so changing it means a different plugin
+ * (that is "create a new one + delete the old one", not a rename). After the rename the build
+ * output is older than the source (a rebuild/install is needed for it to take effect), which is
+ * the existing `staleBuild` notion.
  */
 export function renameDraft(id: string, title: string): WorkshopDraftSummary {
   if (!draftExists(id)) throw new Error(`草稿 '${id}' 不存在`)
@@ -221,17 +230,18 @@ export function renameDraft(id: string, title: string): WorkshopDraftSummary {
   patchDraftMeta(id, { title: clean })
   const manifest = readDraftManifest(id)
   if (manifest && typeof manifest === 'object') {
-    // 清单是生成出来的 JSON：整体重写（保持 2 空格缩进，与模板生成的一致）
+    // The manifest is generated JSON: rewrite it wholesale (keep 2-space indentation, matching template generation)
     writeDraftFile(id, 'plugin.json', JSON.stringify({ ...manifest, name: clean }, null, 2) + '\n')
   }
   return draftSummary(id)
 }
 
 /**
- * 删整份草稿（含产物与报告）。
+ * Delete a whole draft (including build output and report).
  *
- * 只删 `<插件存放路径>/<id>/` 这一个子目录 + 它的产物与报告；
- * **插件存放路径本身永远不动**（那是用户在设置里选的文件夹，里面可能还有别的东西）。
+ * Only the single subdirectory `<plugin storage path>/<id>/` plus its build output and report are
+ * deleted; **the plugin storage path itself is never touched** (it is the folder the user picked
+ * in settings, which may contain other things).
  */
 export function removeDraft(id: string): { removedDir: boolean } {
   const result = removeDraftDir(id)
@@ -239,25 +249,27 @@ export function removeDraft(id: string): { removedDir: boolean } {
     try {
       fs.rmSync(target, { recursive: true, force: true })
     } catch {
-      // 不存在就算了
+      // Never mind if it does not exist
     }
   }
   return result
 }
 
 /**
- * 配置**插件存放路径**（用户在设置里选的文件夹）。
+ * Configure the **plugin storage path** (the folder the user picked in settings).
  *
- * 四件事，顺序有意义：① 校验目录（存在、是目录、不在工坊内部目录里）；
- * ② **把旧路径里的插件源码迁到新路径**（用户主动改存储地址 = 数据跟着走，
- * 见 `storage/migration.ts`；同名文件保留目标那份、旧文件另存 `*.migrated-*`）；
- * ③ 落进设置（由宿主注入的 `setPluginsRoot` 持久化）；④ 把旧版草稿搬过来
- * （早期版本把源码放在 `<userData>/plugin-workshop/drafts/`，配置之后自然迁移，用户不用管）。
+ * Four things, in a meaningful order: 1) validate the directory (exists, is a directory, and is
+ * not inside the workshop's own directory); 2) **migrate plugin sources from the old path to the
+ * new one** (changing the storage location moves the data with it, see `storage/migration.ts`;
+ * for same-named entries the target copy wins and the old file is saved as `*.migrated-*`);
+ * 3) write it into settings (persisted by the host-injected `setPluginsRoot`); 4) move legacy
+ * drafts over (early versions kept source under `<userData>/plugin-workshop/drafts/`; after
+ * configuration they migrate automatically, so the user does not need to care).
  */
 export function adoptPluginsRoot(dir: string): {
   dir: string
   moved: string[]
-  /** 改地址前的插件根（供调用方把旧插件工作区行改到新根下） */
+  /** Plugin root before the location change (so the caller can move old plugin workspace rows under the new root) */
   previousDir?: string
 } {
   const host = workshopHost()
@@ -273,13 +285,15 @@ export function adoptPluginsRoot(dir: string): {
     throw new Error(`插件存放路径必须是文件夹：${target}`)
   }
 
-  // 先迁移旧路径的数据：迁移失败就抛错，设置保持旧值（不会出现「设置换了、源码没搬」）
+  // Migrate the old path's data first: if migration fails, throw and keep the settings at the old
+  // value (there is never a "settings moved but source did not")
   const previous = pluginsRootPath()
   const changed = Boolean(previous) && !isSamePath(previous, target)
   /**
-   * 迁移会 rename 旧路径下的插件目录：如果其中某个目录正被工作区监听（插件模式
-   * 打开着它的源码），Windows 上会 EPERM。迁移期间先放掉监听；活动工作区路径会由
-   * 调用方随后 remap 并触发一次 workspace-changed，监听自然跟着新根恢复。
+   * Migration renames plugin directories under the old path: if one of them is being watched by a
+   * workspace (plugin mode has its source open), Windows fails with EPERM. Drop the watch during
+   * migration; the caller then remaps the active workspace path and triggers a workspace-changed,
+   * so watching resumes naturally under the new root.
    */
   const release = changed ? releaseWorkshopDir(previous) : null
   let migrated: string[] = []
@@ -300,11 +314,13 @@ export function adoptPluginsRoot(dir: string): {
 }
 
 /**
- * 旧版草稿目录里的草稿搬到新的插件存放路径（同名子目录已存在就跳过，绝不覆盖）。
+ * Move drafts from the legacy drafts directory to the new plugin storage path (skip when a
+ * same-named subdirectory already exists — never overwrite).
  *
- * 除了 `adoptPluginsRoot`，启动装配时也会调一次：现在 `pluginsPath` 由安装目录自动预置，
- * 老用户不会再经过「第一次手动选路径」这一步，但 `userData/plugin-workshop/drafts/`
- * 里的历史草稿仍要跟着进新默认路径。
+ * Besides `adoptPluginsRoot` it is also called once during startup wiring: `pluginsPath` is now
+ * preset automatically from the install directory, so existing users no longer go through a
+ * "first manual path selection" step, but historical drafts under
+ * `userData/plugin-workshop/drafts/` still need to follow into the new default path.
  */
 export function migrateLegacyDrafts(target: string): string[] {
   const legacy = legacyDraftsRoot()
@@ -320,38 +336,42 @@ export function migrateLegacyDrafts(target: string): string[] {
       fs.renameSync(from, to)
       moved.push(entry.name)
     } catch {
-      // 跨盘搬迁失败就跳过（用户自己拷过去即可，不影响其余草稿）
+      // Skip when migrating across volumes fails (the user can copy it over; other drafts are unaffected)
     }
   }
   return moved
 }
 
-/** 构建（不抛错：诊断在返回值里） */
+/** Build (does not throw; diagnostics are in the return value) */
 export async function build(id: string, opts: BuildDraftOptions = {}): Promise<WorkshopBuildInfo> {
   const result = await buildDraft(id, opts)
   return result.info
 }
 
-/** 验收（构建 + 检查电池） */
+/** Verify (build + check battery) */
 export async function verify(id: string, opts: VerifyOptions = {}): Promise<WorkshopReport> {
   return await verifyDraft(id, opts)
 }
 
-/** 最近一次验收报告（没有则 null） */
+/** Latest verification report (null when there is none) */
 export function lastReport(id: string): WorkshopReport | null {
   return readReport(id)
 }
 
 /**
- * 发布闸门：**当前源码**是否有一份通过的验收报告 + 一份与之对应的产物。
+ * Publish gate: does **the current source** have a passing verification report plus a build
+ * output that corresponds to it?
  *
- * 三份证据必须同时对上当前源码，缺一不可：
- * - 验收报告 `ok`（致命项全过）；
- * - 报告里的 `sourceHash` = 当前源码指纹（验收后改过源码就得重验——只重新构建不算）；
- * - 产物记录的 `sourceHash` = 当前源码指纹（构建之后改过源码，产物就是旧的）。
+ * Three pieces of evidence must all match the current source; none may be missing:
+ * - the verification report is `ok` (all fatal checks passed);
+ * - the report's `sourceHash` = current source fingerprint (editing source after verification
+ *   requires re-verification — rebuilding alone does not count);
+ * - the build output's recorded `sourceHash` = current source fingerprint (editing source after
+ *   the build means the output is stale).
  *
- * 用指纹而不是 mtime 的原因见 `fingerprint.ts`：旧口径在构建回写 `workshop.json`
- * 之后必然判「过期」，导致 `plugin_publish install` 永远拒绝安装（2026-11-23 事故）。
+ * The reason for using fingerprints instead of mtime is in `fingerprint.ts`: the old approach
+ * necessarily judged the build stale after the build wrote back `workshop.json`, which made
+ * `plugin_publish install` always refuse to install (2026-11-23 incident).
  */
 export function publishGate(id: string): WorkshopPublishGate {
   const report = readReport(id)
@@ -395,7 +415,8 @@ export function publishGate(id: string): WorkshopPublishGate {
       detail: `拒绝安装：读不到当前草稿源码（${(err as Error).message}）。先确认插件存放路径与草稿目录还在。`
     }
   }
-  // 旧版本（或手工造的）报告没有源码指纹：无法证明它代表当前源码，宁可多验一次
+  // Old (or hand-made) reports have no source fingerprint: they cannot prove they represent the
+  // current source, so verify once more
   if (typeof report.sourceHash !== 'string' || report.sourceHash === '') {
     return {
       ready: false,
@@ -427,42 +448,42 @@ export function publishGate(id: string): WorkshopPublishGate {
   return { ready: true, detail: '' }
 }
 
-/** 发布（安装 + 启用 + 安装后渲染层复验；复验失败会自动回滚并抛错） */
+/** Publish (install + enable + post-install renderer re-check; a failed re-check rolls back automatically and throws) */
 export async function publish(id: string): Promise<WorkshopPublishResult> {
   return await publishDraft(id)
 }
 
-/** 停用（保留目录与数据） */
+/** Disable (keeps directory and data) */
 export function disable(id: string): void {
   disableDraft(id)
 }
 
-/** 启用一个已装好的插件（启用后自动做渲染层复验；失败会自动停用并抛错） */
+/** Enable an installed plugin (runs the renderer re-check automatically; on failure it disables the plugin and throws) */
 export function enable(id: string): ReturnType<typeof enableDraft> {
   return enableDraft(id)
 }
 
-/** 卸载（删插件代码，数据保留） */
+/** Uninstall (delete plugin code, keep data) */
 export function unpublish(id: string): void {
   unpublishDraft(id)
 }
 
-/** 导出 zip */
+/** Export zip */
 export function exportZip(id: string): ReturnType<typeof exportDraft> {
   return exportDraft(id)
 }
 
-/** 草稿是否已过期（产物落后于源码） */
+/** Whether the draft is stale (build output behind the source) */
 export function buildStale(id: string): boolean {
   return isBuildStale(id)
 }
 
-/** 草稿元数据（工具里显示模板与 css 模式） */
+/** Draft metadata (the tools show template and css mode) */
 export function metaOf(id: string): WorkshopDraftMeta | null {
   return readDraftMeta(id)
 }
 
-/** 草稿目录（面板「打开目录」） */
+/** Draft directory (panel's "open directory") */
 export function dirOf(id: string): string {
   return draftDir(id)
 }

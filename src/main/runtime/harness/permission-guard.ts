@@ -3,35 +3,37 @@ import { permissionGate } from './permission-gate'
 import { recordToolFacts } from './tool-result-facts'
 
 /**
- * 权限闸门的 **AI 工具适配层**：把闸门套在每个工具外面。
+ * **AI tool adapter layer** for the permission gate: wraps every tool with the gate.
  *
- * 为什么在「工具组装处」包而不是在图执行处拦：工具实例会被三个地方拿去跑——
- * 主代理图、子代理子图（task）、工作流脚本里的子代理；只要在 Runtime 组装工具时统一
- * 包一层，这三条路径与「以后新增的调用方」都自动受控，不必逐个改执行流程。
- * 代价是每次调用多一层函数，可忽略。
+ * Why wrap at "tool assembly" instead of intercepting at graph execution: tool instances are
+ * run from three places — the main agent graph, subagent subgraphs (task), and subagents inside
+ * workflow scripts; wrapping once when the Runtime assembles tools covers all three paths and
+ * any future callers, without changing each execution flow. The cost is one extra function
+ * layer per call, which is negligible.
  *
- * 本文件与闸门分开的原因：这里依赖自研 AI 层的工具契约（src/main/ai/tools.ts），
- * 而 permission-gate.ts 要能直接被 node 加载做离线回归（见 permission.ts 头部注释）。
+ * Why this file is separate from the gate: it depends on the self-developed AI layer's tool
+ * contract (src/main/ai/tools.ts), while permission-gate.ts must be loadable by plain node for
+ * offline regression (see the header comment in permission.ts).
  */
 
-/** 包装上下文（Runtime 组装工具时给出；topicId 是审批事件归属的兜底值） */
+/** Wrapping context (provided when the Runtime assembles tools; topicId is the fallback for approval event routing) */
 export interface GuardContext {
   topicId: number
-  /** 工作区根目录（execute 的 cwd；命令越界判定用它） */
+  /** Workspace root (cwd of execute; used for command out-of-bounds checks) */
   workspaceRoot?: string
 }
 
-/** 权限面参数：不是工具的业务参数，交给真正的工具前必须摘掉 */
+/** Permission-plane arguments: not the tool's business arguments, must be stripped before reaching the real tool */
 const PERMISSION_ARGS = new Set(['sandbox_permissions', 'justification'])
 
-/** 从工具运行配置里取本次调用的 toolCallId（agent.ts 注入 `configurable.toolCallId`） */
+/** Reads the toolCallId of this call from the tool runtime config (agent.ts injects `configurable.toolCallId`) */
 function callIdOf(config: unknown): string | undefined {
   const cfg = config as { configurable?: Record<string, unknown> } | undefined
   const id = cfg?.configurable?.toolCallId
   return typeof id === 'string' ? id : undefined
 }
 
-/** 从运行配置里取话题 id（图执行时注入；子代理图不带，回落到组装期的 topicId） */
+/** Reads the topic id from the runtime config (injected during graph execution; subagent graphs omit it, falling back to the assembly-time topicId) */
 function topicIdOf(config: unknown, fallback: number): number {
   const cfg = config as { configurable?: Record<string, unknown> } | undefined
   const id = cfg?.configurable?.topicId
@@ -39,17 +41,18 @@ function topicIdOf(config: unknown, fallback: number): number {
 }
 
 /**
- * 包装单个工具：先过闸门，再交给原工具。
+ * Wraps a single tool: pass the gate first, then hand over to the original tool.
  *
- * - 放行 → 摘掉权限面参数后调用原工具（其余参数、config、取消信号原样透传）；
- * - 拦截 → 返回拦截文本（模型读到的就是它），并把一句话登记到工具卡片的事实表，
- *   让用户在聊天里直接看到「被拦了什么、为什么」。
+ * - Allowed → strip permission-plane arguments and call the original tool (other arguments,
+ *   config, and cancellation signal pass through unchanged);
+ * - Blocked → return the interception text (that is what the model reads) and record a one-line
+ *   message in the tool card's fact table, so users can see "what was blocked and why".
  */
 export function guardTool(
   target: StructuredToolInterface,
   ctx: GuardContext
 ): StructuredToolInterface {
-  // 定义类工具（name/description/schema 齐备）才需要包；纯字符串工具原样返回
+  // Only definition-style tools (with name/description/schema) need wrapping; plain string tools are returned as-is
   const schema = (target as { schema?: unknown }).schema
   if (!schema) return target
 
@@ -72,8 +75,9 @@ export function guardTool(
 
       const cleanArgs: Record<string, unknown> = { ...(args ?? {}) }
       for (const key of PERMISSION_ARGS) delete cleanArgs[key]
-      // 把「本次实际生效的档位」交给工具：执行层据此选隔离强度（升权重试后会更宽）。
-      // 不加的话 execute 只能回落到话题档位——一次注入 bug 就等于把沙箱关掉。
+      // Pass the "mode actually in effect for this call" to the tool: the execution layer picks
+      // the isolation strength from it (wider after an escalation retry). Without this, execute
+      // would fall back to the topic mode — one injection bug could effectively disable the sandbox.
       const inner = {
         ...(config as Record<string, unknown> | undefined),
         configurable: {
@@ -88,16 +92,16 @@ export function guardTool(
       name: target.name,
       description: target.description,
       schema: schema as never,
-      // 并行安全分类器必须随包装一起传下去：否则闸门一包，所有工具都退化成独占，
-      // 并行工具调用的能力会被静默关掉。
+      // The concurrency-safety classifier must be passed through with the wrapper: otherwise,
+      // once gated, every tool degrades to exclusive and parallel tool calls are silently disabled.
       isConcurrencySafe: target.isConcurrencySafe as ((args: unknown) => boolean) | undefined,
-      // 超时预算同样随包装下传（否则闸门一包，所有工具都变成无截止）
+      // The timeout budget is passed down with the wrapper too (otherwise every gated tool has no deadline)
       timeoutMs: target.timeoutMs
     }
   ) as unknown as StructuredToolInterface
 }
 
-/** 批量包装（工具集组装处使用；空数组原样返回） */
+/** Batch wrapping (used at tool-set assembly; an empty array is returned as-is) */
 export function guardTools(
   tools: StructuredToolInterface[],
   ctx: GuardContext

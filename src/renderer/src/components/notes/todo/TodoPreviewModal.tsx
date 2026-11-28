@@ -25,7 +25,7 @@ const PRIORITY_COLORS: Record<number, string> = {
   7: '#722ed1'
 }
 
-/** 状态 → 词条键 / 配色（词条键在组件内 t() 求值，模块级常量表不调 hook） */
+/** Status → i18n key / color (the key is resolved by t() in the component; a module-level table calls no hooks) */
 type TodoStatusKey =
   'notes.status.pending' | 'notes.status.doing' | 'notes.status.done' | 'common.state.unknown'
 
@@ -63,7 +63,7 @@ const TodoPreviewModal: React.FC<TodoPreviewModalProps> = ({ open, todo, onClose
 
   return (
     <Modal title={todo.title} open={open} onCancel={onClose} width={520} centered footer={null}>
-      {/* 正文内容（Markdown 源文本预览） */}
+      {/* Body content (raw Markdown source preview) */}
       {todo.content && (
         <div
           style={{

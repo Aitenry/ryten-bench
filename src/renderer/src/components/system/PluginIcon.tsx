@@ -4,17 +4,21 @@ import { RiPuzzleLine } from '@remixicon/react'
 import { declaredIconGlyph } from '@renderer/plugin-host/declared-icons'
 
 /**
- * 插件**品牌图标**（插件仓库卡片与插件详情页共用）。
+ * Plugin **brand icon** (shared by plugin repository cards and the plugin detail page).
  *
- * 图标来源按清单口径分两种（见 `shared/plugin/types.ts` 的 `PluginManifest.icon`）：
- * - `menu.icon` / 内置插件的 `icon`：**remixicon 名字**（如 `RiTiktokFill`）——
- *   名字 → 组件的解析在 `plugin-host/declared-icons.tsx`（首帧白名单 + 品牌补充表），
- *   所以这里直接用同一枚图标，卡片和侧栏菜单看起来是同一个插件；
- * - 外部插件的 `icon`：`plugin://<id>/icon.svg` 或 `data:` URI —— 直接当图片渲染，
- *   `plugin://` 协议只服务已安装的插件（未安装的可发现条目拿不到文件）。
+ * The icon source has two forms depending on the manifest (see `PluginManifest.icon` in
+ * `shared/plugin/types.ts`):
+ * - `menu.icon` / built-in plugins' `icon`: a **remixicon name** (e.g. `RiTiktokFill`) —
+ *   name -> component resolution lives in `plugin-host/declared-icons.tsx` (first-frame allowlist
+ *   + brand supplement table), so the same glyph is used here and the card and the sidebar menu
+ *   show the same plugin;
+ * - external plugins' `icon`: `plugin://<id>/icon.svg` or a `data:` URI — rendered directly as an
+ *   image; the `plugin://` protocol only serves installed plugins (discoverable entries that are
+ *   not installed get no file).
  *
- * 两样都没有（或名字解析不到）时退回「按 id 散列的品牌色渐变 + 拼图」：
- * 同一插件每次都是同一种颜色，列表里仍能互相区分。
+ * When neither is available (or the name does not resolve), fall back to a "brand-color gradient
+ * hashed from the id + puzzle piece": the same plugin always gets the same color, so entries stay
+ * distinguishable in a list.
  */
 const ICON_COLORS = [
   ['#2dd4bf', '#0d9488'],
@@ -31,20 +35,23 @@ function colorFor(id: string): [string, string] {
   return ICON_COLORS[hash % ICON_COLORS.length] as [string, string]
 }
 
-/** `icon` 字段是图片地址（而不是 remixicon 名）时才按图片渲染；CSP 只放行 data:/blob:/plugin: */
+/**
+ * Render as an image only when the `icon` field is an image URL (rather than a remixicon name);
+ * CSP only allows data:/blob:/plugin:
+ */
 function imageUrlOf(icon: string | undefined): string | undefined {
   if (!icon) return undefined
   return /^(?:data:|blob:|plugin:)/i.test(icon) ? icon : undefined
 }
 
 export interface PluginIconProps {
-  /** 插件 id：品牌色按它散列，保证同一插件颜色稳定 */
+  /** Plugin id: the brand color is hashed from it so the same plugin keeps a stable color */
   id: string
-  /** 清单的 `icon` 字段：remixicon 名，或 `plugin://<id>/icon.svg` / `data:` URI */
+  /** Manifest `icon` field: a remixicon name, or `plugin://<id>/icon.svg` / a `data:` URI */
   icon?: string
-  /** 清单的 `menu.icon`：没写 `icon` 时用它，与侧栏菜单同一枚 */
+  /** Manifest `menu.icon`: used when `icon` is absent, the same one as in the sidebar menu */
   menuIcon?: string
-  /** 图标边长（px），默认 42（仓库卡片）；详情页头图用 54 */
+  /** Icon edge length (px), default 42 (repository card); the detail page header uses 54 */
   size?: number
 }
 
@@ -53,7 +60,8 @@ const PluginIcon: React.FC<PluginIconProps> = ({ id, icon, menuIcon, size = 42 }
   const url = imageUrlOf(icon)
   const [broken, setBroken] = useState(false)
 
-  // 换了插件/图标地址就重新给图片一次机会（列表升级后图标可能从占位变成真图）
+  // Give the image another chance whenever the plugin/icon URL changes (after an upgrade an icon
+  // may turn from a placeholder into a real image)
   useEffect(() => setBroken(false), [url])
 
   const [from, to] = colorFor(id)

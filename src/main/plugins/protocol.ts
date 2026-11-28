@@ -9,18 +9,21 @@ import { hostUiBridgeSource, parseHostUiKey } from './host-ui-bridge'
 import { resolvePluginRequest } from './protocol-routing'
 
 /**
- * plugin:// 自定义协议：服务插件的静态文件（renderer.js/main 附属资源/图标）
- * 以及**渲染层宿主 UI 桥**（`plugin://host/ui.js?m=<key>`）。
- * 安全约束：
- * - 文件服务仅限「已发现且已启用」的插件目录；
- * - 路径解析后必须落在插件根目录内（防目录穿越）；
- * - 按扩展名提供正确 MIME（renderer.js 以 text/javascript 供 fetch+blob import）。
+ * plugin:// custom protocol: serves a plugin's static files (renderer.js / main auxiliary
+ * resources / icons) and the **renderer host UI bridge** (`plugin://host/ui.js?m=<key>`).
+ * Security constraints:
+ * - file serving is limited to "discovered and enabled" plugin directories;
+ * - after resolution the path must fall inside the plugin root (traversal guard);
+ * - serve the correct MIME per extension (renderer.js is served as text/javascript for
+ *   fetch+blob import).
  *
- * 状态码契约（消费方按此判定，别改成「读不到就 500」）：缺失文件 = **404**。
- * 可选资源（`plugin.css` / 图标）靠它走「没有就静默跳过」；只有真实读取故障才是 5xx。
+ * Status code contract (consumers decide on it; do not change it to "500 when unreadable"):
+ * missing file = **404**. Optional resources (`plugin.css` / icons) rely on it to "silently skip
+ * when absent"; only a real read failure is a 5xx.
  *
- * 判定逻辑全在纯函数 `./protocol-routing.ts`（离线工装 `test/verify-plugin-protocol-404.mjs`
- * 直接跑它）；本文件只负责「按判定取文件 / 生成宿主 UI 桥 ESM」。
+ * All decision logic lives in the pure function `./protocol-routing.ts` (offline tooling
+ * `test/verify-plugin-protocol-404.mjs` runs it directly); this file only handles "fetch the file
+ * per the decision / generate the host UI bridge ESM".
  */
 
 const MIME: Record<string, string> = {
@@ -38,7 +41,7 @@ const MIME: Record<string, string> = {
   '.map': 'application/json'
 }
 
-/** 必须在 app ready 之前调用（standard+secure 使 fetch/import 可用） */
+/** Must be called before app ready (standard+secure makes fetch/import work) */
 export function registerPluginScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
@@ -55,13 +58,16 @@ export function registerPluginScheme(): void {
 }
 
 /**
- * 该绝对路径是否是**可服务的文件**（目录 / 不存在的路径都算「没有这个文件」）。
+ * Whether this absolute path is a **servable file** (a directory or a nonexistent path counts as
+ * "no such file").
  *
- * 为什么必须自己判而不是交给 `net.fetch`（2026-09-26 用户实测）：`net.fetch('file:///…')`
- * 取不到文件时是**抛异常**（`Error: net::ERR_FILE_NOT_FOUND`），不是返回 404 响应。于是
- * 缺失文件会掉进下面的 catch 被当成「读取失败 500 + warn」——可选资源（`plugin.css` / 图标）
- * 本来就允许不存在，每次装载插件都在主日志里留一条带堆栈的假报错；
- * 消费方（`plugin-host/plugin-css.ts`）的 `res.ok` 判断也永远走不到，只能被自己的 catch 兜住。
+ * Why it must be checked here instead of leaving it to `net.fetch` (measured by the user on
+ * 2026-09-26): `net.fetch('file:///…')` **throws** when the file cannot be fetched
+ * (`Error: net::ERR_FILE_NOT_FOUND`) instead of returning a 404 response. Missing files would then
+ * fall into the catch below and be treated as "read failed 500 + warn" - optional resources
+ * (`plugin.css` / icons) are allowed to be absent, so every plugin load left a fake error with a
+ * stack in the main log, and the consumer's (`plugin-host/plugin-css.ts`) `res.ok` check could
+ * never be reached, so only its own catch could absorb it.
  */
 function isServableFile(abs: string): boolean {
   try {
@@ -71,7 +77,7 @@ function isServableFile(abs: string): boolean {
   }
 }
 
-/** app ready 之后注册协议处理器 */
+/** Register the protocol handler after app ready */
 export function registerPluginProtocolHandler(): void {
   protocol.handle('plugin', async (request) => {
     const decision = resolvePluginRequest({
@@ -79,16 +85,18 @@ export function registerPluginProtocolHandler(): void {
       bridgeKey: parseHostUiKey(pluginQuery(request.url)),
       deps: {
         pluginDir: (id) => findExternalPlugin(id)?.dir ?? null,
-        // 停用状态不可访问任何文件。用 isEnabledPlugin（而不是「覆写非真即假」）：
-        // 内置插件铺包后默认启用，用错默认值会让它们连自己的 renderer.mjs 都取不到（403）。
+        // A disabled plugin cannot access any file. Use isEnabledPlugin (rather than "override is
+        // just truthy or not"): built-in plugin packages default to enabled after staging, and a
+        // wrong default would make them unable to fetch even their own renderer.mjs (403).
         isEnabled: (id) => isEnabledPlugin(id),
         exists: isServableFile
       }
     })
 
     if (decision.kind === 'bridge') {
-      // 宿主 UI 桥：`plugin://host/ui.js?m=<key>` 由宿主生成 ESM（不是磁盘文件）。
-      // 内容取决于**当前注册的宿主模块表**，所以必须由主进程现算。
+      // Host UI bridge: `plugin://host/ui.js?m=<key>` is generated as ESM by the host (not a file on disk).
+      // The content depends on the **currently registered host module table**, so it must be
+      // computed on the fly by the main process.
       return new Response(hostUiBridgeSource(decision.key), {
         status: 200,
         headers: { 'content-type': 'text/javascript' }
@@ -96,8 +104,9 @@ export function registerPluginProtocolHandler(): void {
     }
 
     if (decision.kind === 'error') {
-      // 诊断日志只在真正值得查的分支留声：目录穿越照旧 warn（安全事件），
-      // 缺失文件（可选资源）降级到 debug——它每次装包都会发生，不该刷主日志。
+      // Diagnostic logs speak only on the branches really worth checking: path traversal still
+      // warns (security event), missing files (optional resources) drop to debug - it happens on
+      // every package install and should not flood the main log.
       if (decision.reason === 'forbidden') {
         logger.warn(`[Plugins] plugin:// path traversal blocked: ${request.url}`)
       } else if (decision.reason === 'not-a-file') {
@@ -117,7 +126,7 @@ export function registerPluginProtocolHandler(): void {
   })
 }
 
-/** 从 `plugin://…` URL 取 query 部分；URL 非法时返回空串（路由会按 400 处理） */
+/** Get the query part from a `plugin://…` URL; return an empty string when the URL is invalid (routing treats it as 400) */
 function pluginQuery(url: string): string {
   try {
     return new URL(url).search
@@ -126,7 +135,7 @@ function pluginQuery(url: string): string {
   }
 }
 
-/** 错误响应正文：只描述原因，不回显绝对路径（避免把磁盘结构暴露给渲染层） */
+/** Error response body: describes only the reason, never echoes an absolute path (avoid exposing the disk structure to the renderer) */
 function decisionText(reason: string): string {
   switch (reason) {
     case 'bad-url':

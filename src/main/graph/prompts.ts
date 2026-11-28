@@ -1,9 +1,9 @@
 /**
- * 知识图谱 LLM Prompt 模板集中管理（含 few-shot 示例确保输出格式稳定）
- * 输出校验由 Zod + StructuredOutputParser 在 parse 阶段完成
+ * Centralized knowledge graph LLM prompt templates (with few-shot examples to keep output format stable)
+ * Output validation is handled by Zod + StructuredOutputParser during the parse stage
  */
 
-/** 实体消歧合并 Prompt */
+/** Entity disambiguation and merging prompt */
 export const ENTITY_MERGING_PROMPT = `You are a knowledge graph entity disambiguation assistant. Below is a list of entities extracted from multiple text segments. Analyze them and merge entities that refer to the same real-world thing.
 
 Entity type definitions (type must be exactly one of the following 20 values; inventing new types is forbidden):
@@ -60,7 +60,7 @@ Return a JSON object in the following format:
 
 Return only the JSON object (output the object directly; do not wrap it in a code block):`
 
-/** Gleaning（遗漏实体补充抽取）Prompt */
+/** Gleaning (supplementary extraction of missed entities) prompt */
 export const ENTITY_GLEANING_PROMPT = `You previously extracted entities from the text below. Review it carefully once more and find the entities you may have missed the first time.
 Return only entities that were not extracted last time; do not repeat entities that have already been extracted.
 
@@ -93,7 +93,7 @@ Text:
 
 Return only a JSON array, where each entity has the fields name, type, description, and confidence, in the same format as the first extraction:`
 
-/** 统一实体+关系抽取 Prompt（一次调用同时输出实体和关系） */
+/** Unified entity + relation extraction prompt (outputs both entities and relations in one call) */
 export const ENTITY_RELATION_EXTRACTION_PROMPT = `You are a knowledge graph construction assistant. Extract all meaningful named entities, key concepts, and the relations between entities from the text below in a single pass.
 
 Entity type definitions (type must be exactly one of the following 20 values; inventing new types is forbidden):
@@ -181,7 +181,7 @@ Text:
 
 Return only the JSON object (output the object directly; do not wrap it in a code block):`
 
-/** 增量跨块关系补全 Prompt（按 chunk 顺序推进，每次只比较当前 chunk 实体与已处理的前序实体） */
+/** Incremental cross-chunk relation completion prompt (advances chunk by chunk, each time comparing only the current chunk's entities against already-processed preceding entities) */
 export const INCREMENTAL_CROSS_CHUNK_PROMPT = `You are a knowledge graph relation completion assistant. Group A entities appear in earlier sections of the document, and group B entities appear in the current section. Find the relations that may exist between group A and group B (A-B pairs and pairs within B are both allowed, but do not repeat relations within A — those have already been extracted).
 
 Document title:

@@ -2,11 +2,10 @@ import { visit } from 'unist-util-visit'
 import type { Root } from 'mdast'
 
 /* ════════════════════════════════════════════════════════════
-   KaTeX 预览桥接：remark-math 产生的 math/inlineMath 节点在
-   mdast-util-to-hast 中没有对应 handler（会退化为纯文本），
-   这里先转成 raw HTML（<span class="math math-inline"> /
-   <div class="math math-display">），经 rehype-raw 解析后由
-   rehype-katex 渲染
+   KaTeX preview bridge: math/inlineMath nodes produced by remark-math have
+   no matching handler in mdast-util-to-hast (they degrade to plain text),
+   so convert them to raw HTML first (<span class="math math-inline"> /
+   <div class="math math-display">); rehype-raw parses it and rehype-katex renders it
    ════════════════════════════════════════════════════════════ */
 
 function escapeHtml(s: string): string {

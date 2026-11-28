@@ -6,17 +6,19 @@ import type { JobOutputView, JobSnapshot } from '../../../../shared/harness/type
 import { harnessApi } from '../../api/harness'
 
 /**
- * 顶部栏「后台任务」的数据源（execute run_in_background=true 的任务）。
+ * Data source for the top bar's "background jobs" (jobs executed with run_in_background=true).
  *
- * 职责收在一处，顶部栏按钮（计数）与内联托盘（列表/停止/输出）共用：
- * - 按 topicId 拉列表并订阅 `harness-jobs-updated`；
- * - 只保留命令类任务（`kind !== 'subagent'`）——后台子代理有独立入口；
- * - 手动停止走 `harness-job-kill`，成功后由主进程广播回列表；
- * - peek 输出快照不消费模型的 `job_output` 游标。
+ * Responsibilities are collected in one place, shared by the top bar button (count) and the
+ * inline tray (list / stop / output):
+ * - fetch the list by topicId and subscribe to `harness-jobs-updated`;
+ * - keep only command jobs (`kind !== 'subagent'`) — background subagents have their own entry;
+ * - manual stop goes through `harness-job-kill`; on success the main process broadcasts the list;
+ * - peeking at output snapshots does not consume the model's `job_output` cursor.
  *
- * 为什么需要版本号：切话题/打开托盘时会主动拉一次列表，而广播随时可能先到。
- * 一个晚到的列表快照可能把广播刚加进来的任务覆盖掉，所以每次广播都递增版本，
- * 拉取结果只有在版本没变时才落地。
+ * Why a version number: switching topics or opening the tray triggers a manual list fetch, while a
+ * broadcast can arrive at any time. A late list snapshot could overwrite a job the broadcast just
+ * added, so every broadcast bumps the version, and a fetch result only lands if the version is
+ * unchanged.
  */
 export interface UseBackgroundJobsResult {
   jobs: JobSnapshot[]
@@ -25,7 +27,7 @@ export interface UseBackgroundJobsResult {
   peekOutput: (jobId: string) => Promise<JobOutputView>
 }
 
-/** 命令类任务（后台子代理不在这里重复展示） */
+/** Command jobs (background subagents are not displayed again here) */
 const isCommandJob = (job: JobSnapshot): boolean => job.kind !== 'subagent'
 
 export function useBackgroundJobs(currentTopicId: number | null): UseBackgroundJobsResult {
@@ -35,7 +37,7 @@ export function useBackgroundJobs(currentTopicId: number | null): UseBackgroundJ
   const [jobs, setJobs] = useState<JobSnapshot[]>([])
   const topicRef = useRef(currentTopicId)
   topicRef.current = currentTopicId
-  /** 广播/切话题版本：晚到的 fetch 结果不能覆盖更新的广播 */
+  /** Broadcast/topic-switch version: a late fetch result must not override a newer broadcast */
   const versionRef = useRef(0)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -50,11 +52,12 @@ export function useBackgroundJobs(currentTopicId: number | null): UseBackgroundJ
       if (topicRef.current !== currentTopicId) return
       setJobs((rows ?? []).filter(isCommandJob))
     } catch {
-      /* 忽略：列表刷新失败不打扰对话，后台任务本身仍在主进程里跑 */
+      /* Ignore: a failed list refresh must not disturb the conversation; the job keeps running
+       * in the main process */
     }
   }, [api, currentTopicId])
 
-  // 拉列表 + 订阅变更广播（开始 / 停止中 / 结算都会推）
+  // Fetch the list + subscribe to change broadcasts (start / stopping / settlement all push)
   useEffect(() => {
     versionRef.current += 1
     setJobs([])
@@ -87,7 +90,8 @@ export function useBackgroundJobs(currentTopicId: number | null): UseBackgroundJ
         )
         return false
       } finally {
-        // 广播会更新列表；这里再拉一次，兜底「广播丢了」的极端情况
+        // The broadcast updates the list; fetch once more here as a fallback for the rare
+        // "broadcast lost" case
         void refresh()
       }
     },

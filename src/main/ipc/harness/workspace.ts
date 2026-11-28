@@ -16,10 +16,11 @@ import {
 } from '../../workspace/file-history'
 
 /**
- * 校验渲染端传入的路径必须位于 AI 工作区目录内（防任意路径读写）。
- * 渲染进程存在被注入/被导航到远程页面的风险（preload 暴露了完整 API），
- * 文件类 IPC 入口必须自守边界：非绝对路径、越界路径一律拒绝。
- * 返回规范化后的绝对路径。
+ * Validate that a renderer-supplied path is inside the AI workspace directory (prevents
+ * arbitrary path reads/writes). The renderer process risks being injected or navigated to a
+ * remote page (preload exposes the full API), so file IPC entry points must guard their own
+ * boundary: non-absolute paths and out-of-bounds paths are rejected.
+ * Returns the normalized absolute path.
  */
 function assertInsideWorkspace(inputPath: string): string {
   const m = mainMessages().error
@@ -36,8 +37,9 @@ function assertInsideWorkspace(inputPath: string): string {
   if (target !== normalizedRoot && !target.startsWith(normalizedRoot + sep)) {
     throw new Error(m.pathOutsideWorkspace)
   }
-  // 符号链接逃逸（安全审计 S06）：字符串前缀比较拦不住「工作区内的链接指向根外」。
-  // 目标不存在（新建文件）时按最近已存在祖先的 realpath 比较。
+  // Symlink escape (security audit S06): string prefix comparison can't stop "a link inside the
+  // workspace pointing outside the root". When the target doesn't exist (new file), compare
+  // against the realpath of the nearest existing ancestor.
   if (!isReallyInsideRoot(target, normalizedRoot)) {
     throw new Error(m.pathOutsideWorkspace)
   }
@@ -45,17 +47,19 @@ function assertInsideWorkspace(inputPath: string): string {
 }
 
 /**
- * 工作区文件浏览 + 文件改动审查 IPC（AI 工作区目录的文件操作，harness 插件的第 4 个域）。
+ * Workspace file browsing + file change review IPC (file operations in the AI workspace
+ * directory, the 4th domain of the harness plugin).
  *
- * 通道名一律 `harness:<原扁平名>`（原 `src/main/ipc/workspace.ts` 的 9 个扁平通道
- * 逐个改名）。归属依据：这些工作区文件通道只被 harness 的渲染层组件使用
- * （WorkspacePanel / FileExplorer / FileDiffView 的改动复核与文件浏览器，经插件自己的
- * `renderer/api.ts` 的 `harnessApi.workspace.*` 调用），是 AI 改动复核能力；
- * 因此它从 core 组移出，停用「AI 助手」后这些通道一并消失。
+ * Channel names are always `harness:<original flat name>` (the 9 flat channels of the former
+ * `src/main/ipc/workspace.ts` were renamed one by one). Ownership rationale: these workspace
+ * file channels are used only by the harness renderer components (change review and file
+ * browser of WorkspacePanel / FileExplorer / FileDiffView, called through the plugin's own
+ * `renderer/api.ts` `harnessApi.workspace.*`), and they are AI change-review capability; so
+ * they move out of the core group, and disabling the "AI assistant" removes these channels too.
  */
 export function workspaceIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：本插件的命名空间前缀只在这里出现 */
+  /** Channel receiver: the plugin's namespace prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
@@ -92,16 +96,17 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 用户在工作区里保存文件（编辑器 Ctrl+S）。
+   * User saves a file in the workspace (editor Ctrl+S).
    *
-   * 用户自己的保存不产生待审查改动（待审查只针对模型的改动）；
-   * 但如果这次保存是「差异审查」的结果，走 workspace-apply-review。
+   * The user's own saves don't create pending-review changes (pending review only targets model
+   * changes); but if this save is the result of a "diff review", it goes through
+   * workspace-apply-review.
    */
   handle('workspace-save-file', async (filePath: string, content: string) => {
     try {
       const safePath = assertInsideWorkspace(filePath)
       await fs.promises.writeFile(safePath, content, 'utf-8')
-      // 自我写入标记：文件监听不要把它当成「外部改动」
+      // Self-write marker: the file watcher must not treat it as an "external change"
       markPathWritten(safePath)
       return true
     } catch (error) {
@@ -110,9 +115,9 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // --- 文件改动史（可追溯 / 可回溯） ---
+  // --- File change history (traceable / revertible) ---
 
-  /** 当前工作区所有待审查的改动（资源管理器徽标 + 页签角标用） */
+  /** All pending-review changes in the current workspace (used by explorer badges + tab corner badges) */
   handle('workspace-changes-pending', async () => {
     try {
       syncWorkspaceWatcher()
@@ -125,7 +130,7 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  /** 单个文件的改动历史（倒序，最新在前） */
+  /** Change history of a single file (reverse chronological, newest first) */
   handle('workspace-changes-file', async (filePath: string) => {
     try {
       const safePath = assertInsideWorkspace(filePath)
@@ -136,7 +141,7 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  /** 某次改动的前后正文（差异视图的数据源） */
+  /** Before/after content of one change (data source for the diff view) */
   handle('workspace-change-content', async (id: number) => {
     try {
       return await readFileChangeContent(id)
@@ -146,7 +151,7 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  /** 审查：保留（清除待审查标记，磁盘内容不动） */
+  /** Review: keep (clears the pending-review marker, disk content untouched) */
   handle('workspace-change-keep', async (ids: number[]) => {
     try {
       return await keepFileChanges(Array.isArray(ids) ? ids : [])
@@ -156,7 +161,7 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  /** 审查：撤销到某次改动之前（把改动前快照写回磁盘） */
+  /** Review: revert to before one change (writes the pre-change snapshot back to disk) */
   handle('workspace-change-revert', async (id: number) => {
     try {
       return await revertFileChange(id)
@@ -167,11 +172,12 @@ export function workspaceIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 落盘「差异审查结果」：把用户在差异视图里取舍后的内容写回文件，
-   * 并把该文件所有待审查改动标记为已保留。
+   * Persist the "diff review result": write the content the user selected in the diff view back
+   * to the file, and mark all pending-review changes of that file as kept.
    *
-   * 若审查结果与模型写入的最终内容不同（用户逐处取舍过），额外记一条
-   * `review` 改动，让「这次到底留下了什么」也有据可查。
+   * If the review result differs from the model's final written content (the user made per-hunk
+   * choices), an extra `review` change is recorded so there is a trace of "what was actually
+   * left this time".
    */
   handle('workspace-apply-review', async (filePath: string, content: string) => {
     try {

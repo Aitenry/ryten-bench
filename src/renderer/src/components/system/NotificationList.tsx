@@ -11,20 +11,23 @@ import { useTranslation } from '@renderer/i18n'
 import type { NotificationItem } from '@renderer/types/notification'
 
 /**
- * 通知列表（外壳）。
+ * Notification list (shell).
  *
- * 通知的**载体**属外壳，**形状**属产生它的插件：core 只按字段名读取通用字段
- * （title/description）+ 已知的进度字段（phaseLabel/overallProgress/completed，
- * 缺失即不渲染对应片段）。插件停用后不会再产生新通知，历史通知仍能正常渲染。
+ * The **container** of notifications belongs to the shell, their **shape** to the plugin that
+ * produces them: core reads only generic fields by name (title/description) plus known progress
+ * fields (phaseLabel/overallProgress/completed; a missing field means that fragment is not
+ * rendered). A disabled plugin no longer produces new notifications, but past ones still render
+ * fine.
  *
- * 视觉：一张 340 宽的小卡片——顶部「消息 + 未读数 + 全部已读」，下面是行式条目
- * （类型图标 / 标题 / 描述 / 时间 / 进度条），空态给图标与说明，不再是光秃秃一行字。
+ * Visual: a small 340-wide card — header with "messages + unread count + mark all read", below it
+ * row entries (type icon / title / description / time / progress bar); the empty state shows an
+ * icon and an explanation instead of a bare line of text.
  */
 interface NotificationListProps {
   onClose: () => void
 }
 
-/** 进度类通知的展示字段（插件扩展字段，缺省时该片段不渲染） */
+/** Display fields of progress notifications (plugin extension fields; the fragment is not rendered when absent) */
 interface ProgressNotificationFields {
   phaseLabel?: string
   overallProgress?: number
@@ -39,7 +42,7 @@ const SMALL_TAG_STYLE: React.CSSProperties = {
   borderRadius: 6
 }
 
-/** 通知时间：1 分钟内「刚刚」，1 小时内 N 分钟前，24 小时内 N 小时前，再早显示月/日 */
+/** Notification time: "just now" within a minute, N minutes ago within an hour, N hours ago within 24 hours, otherwise month/day */
 
 const NotificationList: React.FC<NotificationListProps> = ({ onClose }) => {
   const { token } = theme.useToken()
@@ -47,7 +50,7 @@ const NotificationList: React.FC<NotificationListProps> = ({ onClose }) => {
   const { t } = useTranslation()
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
-  /** 通知时间：1 分钟内「刚刚」，1 小时内 N 分钟前，24 小时内 N 小时前，再早显示月/日 */
+  /** Notification time: "just now" within a minute, N minutes ago within an hour, N hours ago within 24 hours, otherwise month/day */
   const formatTime = useCallback(
     (timestamp: number): string => {
       const diffMinutes = Math.floor((Date.now() - timestamp) / 60_000)
@@ -105,7 +108,7 @@ const NotificationList: React.FC<NotificationListProps> = ({ onClose }) => {
 
   return (
     <div style={{ width: '100%' }}>
-      {/* 头部：标题 + 未读数 + 全部已读 */}
+      {/* Header: title + unread count + mark all read */}
       <div
         style={{
           display: 'flex',

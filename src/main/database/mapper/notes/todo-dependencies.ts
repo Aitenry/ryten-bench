@@ -4,16 +4,16 @@ import { withOrm } from '../../orm'
 import { task_dependencies, todo_items } from '../../schema'
 import type { TodoItemRow } from './todo'
 
-/** 待办依赖关系行（字段由 schema 推导） */
+/** Todo dependency row (fields inferred from schema) */
 export type TaskDependencyRow = typeof task_dependencies.$inferSelect
 
-/** 带依赖关系的任务信息 */
+/** Task info with dependencies */
 export interface TaskWithDependencies extends TodoItemRow {
-  dependencies: number[] // 该任务依赖的前置任务 ID 列表
-  dependents: number[] // 依赖该任务的后置任务 ID 列表
+  dependencies: number[] // IDs of prerequisite tasks this task depends on
+  dependents: number[] // IDs of tasks that depend on this task
 }
 
-// --- 添加依赖关系 ---
+// --- Add a dependency ---
 async function addDependency(taskId: number, dependsOnTaskId: number): Promise<number> {
   return withOrm('addDependency', async (db) => {
     const rows = await db
@@ -26,7 +26,7 @@ async function addDependency(taskId: number, dependsOnTaskId: number): Promise<n
   })
 }
 
-// --- 删除依赖关系 ---
+// --- Delete a dependency ---
 async function deleteDependency(taskId: number, dependsOnTaskId: number): Promise<boolean> {
   return withOrm('deleteDependency', async (db) => {
     const deleted = await db
@@ -45,7 +45,7 @@ async function deleteDependency(taskId: number, dependsOnTaskId: number): Promis
   })
 }
 
-// --- 删除某个任务的所有依赖（作为前置或后置） ---
+// --- Delete all dependencies of a task (as either prerequisite or dependent) ---
 async function deleteAllDependenciesForTask(taskId: number): Promise<number> {
   return withOrm('deleteAllDependenciesForTask', async (db) => {
     const deleted = await db
@@ -59,14 +59,14 @@ async function deleteAllDependenciesForTask(taskId: number): Promise<number> {
   })
 }
 
-// --- 获取某个任务的直接前置依赖 ---
+// --- Get the direct prerequisites of a task ---
 async function getDirectDependencies(taskId: number): Promise<TaskDependencyRow[]> {
   return withOrm('getDirectDependencies', async (db) => {
     return db.select().from(task_dependencies).where(eq(task_dependencies.task_id, taskId))
   })
 }
 
-// --- 获取某个任务的后置依赖（哪些任务依赖它） ---
+// --- Get the dependents of a task (tasks that depend on it) ---
 async function getDependents(taskId: number): Promise<TaskDependencyRow[]> {
   return withOrm('getDependents', async (db) => {
     return db
@@ -76,10 +76,10 @@ async function getDependents(taskId: number): Promise<TaskDependencyRow[]> {
   })
 }
 
-// --- 获取所有依赖关系 ---
+// --- Get all dependencies ---
 async function getAllDependencies(): Promise<TaskDependencyRow[]> {
   return withOrm('getAllDependencies', async (db) => {
-    // INNER JOIN 仅用于滤掉任务已删除的悬空依赖（待办已改为全局数据，不再按工作区过滤）
+    // INNER JOIN only filters out dangling dependencies whose task has been deleted (todos are now global data and no longer filtered by workspace)
     return db
       .select({ ...getTableColumns(task_dependencies) })
       .from(task_dependencies)
@@ -88,7 +88,7 @@ async function getAllDependencies(): Promise<TaskDependencyRow[]> {
   })
 }
 
-// --- 获取所有任务及其依赖关系（用于甘特图） ---
+// --- Get all tasks with their dependencies (for the Gantt chart) ---
 async function getAllTasksWithDependencies(): Promise<TaskWithDependencies[]> {
   return withOrm('getAllTasksWithDependencies', async (db) => {
     const tasks = await db

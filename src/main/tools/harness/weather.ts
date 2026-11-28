@@ -12,15 +12,21 @@ import {
 } from '../../shared/weather-utils'
 
 // ============================================================================
-// Weather Tool — 天气查询
+// Weather Tool — weather lookup
 //
-// 2026-11 改造（用户反馈「天气查询也不好用」）：
-// - 从 openmeteo SDK 改为直接请求 JSON：日出/日落是字符串，SDK 的数值数组取不到；
-//   JSON 里的 time 已经是**地点本地时间**，不再用系统时区拼日期（跨时区地点不再错一天）；
-// - 新增逐小时预报（回答「今天下午会下雨吗」）、紫外线、日出日落、阵风、降水量/概率；
-// - 地点可省略：默认用启动时缓存的本机 IP 位置；也支持直接给经纬度；
-// - 地理编码有多个同名地点时不再盲选第一个：结果列出候选，模型可用 location_index 重查；
-// - 请求加超时/重试，失败返回可读文案而不是把异常抛给模型。
+// 2026-11 rework (user feedback: "the weather lookup is not great either"):
+// - Switched from the openmeteo SDK to direct JSON requests: sunrise/sunset are strings and the
+//   SDK's numeric arrays cannot represent them; `time` in the JSON is already **location local
+//   time**, so dates are no longer assembled from the system time zone (cross-timezone places no
+//   longer land a day off);
+// - Added hourly forecasts (to answer "will it rain this afternoon?"), UV index, sunrise/sunset,
+//   wind gusts, and precipitation amount/probability;
+// - Location is optional: defaults to the local IP location cached at startup; explicit
+//   latitude/longitude is also supported;
+// - When geocoding returns several places with the same name, no longer blindly picks the first:
+//   the result lists the candidates and the model can re-query with location_index;
+// - Requests have a timeout and one retry; failures return readable text instead of throwing the
+//   exception at the model.
 // ============================================================================
 
 const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
@@ -155,7 +161,7 @@ interface WeatherParams {
 }
 
 // ============================================================================
-// 请求与格式化小工具
+// Request and formatting helpers
 // ============================================================================
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -217,7 +223,7 @@ function at<T>(arr: T[] | undefined, index: number): T | null {
 }
 
 // ============================================================================
-// 地点解析
+// Location resolution
 // ============================================================================
 
 function validCoordinate(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
@@ -291,7 +297,8 @@ async function resolveLocation(
     return { ok: true, lat: geo.lat, lon: geo.lon, label, candidates: results }
   }
 
-  // 没给地点/坐标：用启动时缓存的 IP 位置（底栏天气用的同一份数据）
+  // No location/coordinates given: use the IP location cached at startup (the same data the
+  // status-bar weather uses)
   const ip = settingsStore.get('ip') as CachedIp | undefined
   const coords = validCoordinate(ip?.lat, ip?.lon)
   if (!coords) return { ok: false, message: tw.locationRequired }
@@ -309,7 +316,7 @@ async function resolveLocation(
 }
 
 // ============================================================================
-// 响应渲染
+// Response rendering
 // ============================================================================
 
 function renderCurrent(current: CurrentBlock, tw: ReturnType<typeof getWeatherTexts>): string[] {
@@ -357,8 +364,9 @@ function renderCurrent(current: CurrentBlock, tw: ReturnType<typeof getWeatherTe
 }
 
 /**
- * 逐日预报：日期/周几用 API 返回的本地日期字符串，不再用系统时区拼；
- * 日出日落/紫外线来自 daily 变量，逐条拆成多行避免一行过长。
+ * Daily forecast: dates/weekdays use the local date strings returned by the API, not assembled
+ * from the system time zone; sunrise/sunset and UV come from the daily variables and are split
+ * across separate lines so no line gets too long.
  */
 function renderDaily(
   daily: DailyBlock | undefined,
@@ -491,7 +499,7 @@ function renderCandidates(
 }
 
 // ============================================================================
-// 主流程
+// Main flow
 // ============================================================================
 
 async function fetchWeather(params: WeatherParams): Promise<string> {
@@ -558,7 +566,8 @@ async function fetchWeather(params: WeatherParams): Promise<string> {
   }
 
   if (includeDaily) {
-    // daily 只显示用户要的天数；hourly_date 落在更远日期时由逐小时段单独覆盖
+    // daily shows only the requested number of days; when hourly_date falls on a farther date
+    // that day is covered by the hourly section alone
     parts.push(...renderDaily(daily, forecastDays, today, tw))
     parts.push('')
   }
@@ -599,7 +608,8 @@ async function fetchWeather(params: WeatherParams): Promise<string> {
 export function buildGetWeatherTool(): StructuredToolInterface {
   return tool(async (params) => fetchWeather(params as WeatherParams), {
     name: 'get_weather',
-    // 天气是纯读网络调用；加超时避免上游无响应时把整轮挂死
+    // Weather is a pure read-only network call; the timeout keeps an unresponsive upstream from
+    // hanging the whole turn
     isConcurrencySafe: () => true,
     timeoutMs: 30_000,
     description:

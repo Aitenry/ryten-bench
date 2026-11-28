@@ -1,26 +1,28 @@
 /**
- * 历史回放中的用户图片投影（纯函数，可离线测试）。
+ * Projection of user images during history replay (pure functions, testable offline).
  *
- * 背景：用户贴的图片以整段 data URL 存在 `harness_dialogue.blocks` 里。早期回放只还原
- * 文本，图片从第二轮起就"消失"；而直接全量回放又会让长会话的每一轮请求都携带所有
- * base64。这里给出最小可行的投影规则（对应 DSH 的请求期图像投影，附件存储与 offload
- * 尚未落地，见 docs/dsh-capability-gap-2026-11.md）：
+ * Background: images the user pasted are stored as full data URLs in `harness_dialogue.blocks`.
+ * Early replay restored only text, so images "disappeared" from the second round on; replaying
+ * everything would make every round of a long conversation carry all the base64 data. The minimal
+ * workable projection rules are:
  *
- * - 只回放最近 {@link MAX_REPLAYED_IMAGES} 张图片，且 base64 总量不超过
- *   {@link MAX_REPLAYED_IMAGE_CHARS}；
- * - 超出预算的图片退化成一句说明（模型知道"这里原本有图"，可以请用户重新附上）；
- * - 历史字符预算里一张图按 {@link IMAGE_BUDGET_CHARS} 估算，而不是按 base64 真实长度
- *   （否则一张图就会把整个历史预算吃光；真实 token 以 provider 回传的 usage 为准）。
+ * - Replay only the most recent {@link MAX_REPLAYED_IMAGES} images, with the total base64 size no
+ *   more than {@link MAX_REPLAYED_IMAGE_CHARS};
+ * - Images over budget degrade to a one-line explanation (the model knows "there was an image here"
+ *   and can ask the user to re-attach it);
+ * - In the history character budget, an image counts as {@link IMAGE_BUDGET_CHARS} rather than its
+ *   real base64 length (otherwise a single image would eat the whole history budget; real tokens
+ *   come from the usage reported by the provider).
  */
 import type { MessageContentComplex } from '../../ai/messages'
 
-/** 回放图片的预算 */
+/** Budget for replayed images */
 export const MAX_REPLAYED_IMAGES = 6
 export const MAX_REPLAYED_IMAGE_CHARS = 12 * 1024 * 1024
-/** 历史预算里一张图的字符估算（约 1.2k token） */
+/** Character estimate for one image in the history budget (about 1.2k tokens) */
 export const IMAGE_BUDGET_CHARS = 1200
 
-/** 投影所需的最小对话字段（与 HistoryDialogue 结构兼容，避免依赖数据库类型） */
+/** Minimal dialogue fields needed for the projection (compatible with HistoryDialogue, avoiding a dependency on database types) */
 export interface ReplayDialogue {
   id: number
   role: string
@@ -34,7 +36,7 @@ interface UserDialogueBlock {
   [key: string]: unknown
 }
 
-/** 解析用户行的 blocks；空/坏数据返回 null（按无 blocks 处理） */
+/** Parse a user row's blocks; empty/bad data returns null (treated as having no blocks) */
 export function userBlocksOf(d: Pick<ReplayDialogue, 'blocks'>): UserDialogueBlock[] | null {
   if (!d.blocks) return null
   try {
@@ -45,7 +47,7 @@ export function userBlocksOf(d: Pick<ReplayDialogue, 'blocks'>): UserDialogueBlo
   }
 }
 
-/** 用户行里声明的图片（保持原始顺序） */
+/** Images declared in a user row (original order preserved) */
 function imagesOf(blocks: UserDialogueBlock[] | null): string[] {
   if (!blocks) return []
   const urls: string[] = []
@@ -55,7 +57,7 @@ function imagesOf(blocks: UserDialogueBlock[] | null): string[] {
   return urls
 }
 
-/** 单条对话计入历史预算的字符数（图片按估算值，其余按真实长度） */
+/** Character count one dialogue contributes to the history budget (images use the estimate, everything else its real length) */
 export function dialogueBudgetChars(d: ReplayDialogue): number {
   if (!d.blocks) return d.content.length
   const blocks = userBlocksOf(d)
@@ -66,7 +68,8 @@ export function dialogueBudgetChars(d: ReplayDialogue): number {
       chars += IMAGE_BUDGET_CHARS
       continue
     }
-    // 助手行的工具结果图像同样以 base64 存在 blocks 里：按估算值计，不按真实长度
+    // Tool-result images on assistant rows are also stored as base64 in blocks: count them at the
+    // estimate, not at their real length
     if (block?.type === 'tool' && block.tool && typeof block.tool === 'object') {
       const tool = block.tool as { images?: unknown }
       if (Array.isArray(tool.images) && tool.images.length > 0) {
@@ -84,8 +87,9 @@ export function dialogueBudgetChars(d: ReplayDialogue): number {
 }
 
 /**
- * 规划本次回放允许带图的用户行：从新到旧累加，直到数量或字节预算用尽。
- * 返回这些行的 id 集合；集合外的行只回放文本。
+ * Plan which user rows may carry images in this replay: accumulate from newest to oldest until the
+ * count or byte budget runs out. Returns the set of these row ids; rows outside the set replay text
+ * only.
  */
 export function planReplayImages(selected: ReplayDialogue[]): Set<number> {
   const allowed = new Set<number>()
@@ -113,7 +117,7 @@ export function planReplayImages(selected: ReplayDialogue[]): Set<number> {
   return allowed
 }
 
-/** 构造用户消息内容：文本 + 可回放的图片块；超出预算的图片退化为一句说明 */
+/** Build user message content: text + replayable image blocks; images over budget degrade to a one-line explanation */
 export function userMessageContent(
   d: ReplayDialogue,
   allowImages: boolean
@@ -131,28 +135,32 @@ export function userMessageContent(
 }
 
 /**
- * 历史回放里「工具结果图像」的预算（read_image 等媒体工具）。
+ * Budget for "tool result images" in history replay (media tools such as read_image).
  *
- * 与用户贴图分开计：工具图像通常只服务当前任务，回放太多既贵又没意义；只保留最近
- * {@link MAX_REPLAYED_TOOL_IMAGES} 张。被观测清理（observation mask）替换掉的旧工具
- * 结果不再回放图像——调用方通过 maskedToolKeys（`<dialogueId>:<toolIndex>`）排除。
+ * Counted separately from user-pasted images: tool images usually only serve the current task, and
+ * replaying too many is both expensive and pointless; only the most recent
+ * {@link MAX_REPLAYED_TOOL_IMAGES} are kept. Old tool results replaced by the observation mask no
+ * longer replay their images — the caller excludes them through maskedToolKeys
+ * (`<dialogueId>:<toolIndex>`).
  */
 export const MAX_REPLAYED_TOOL_IMAGES = 4
 export const MAX_REPLAYED_TOOL_IMAGE_CHARS = 8 * 1024 * 1024
 
-/** 一张待回放的工具结果图像 */
+/** A tool result image waiting to be replayed */
 export interface ReplayedToolImage {
   dataUrl: string
   path: string
-  /** 产生这张图的工具名（回放文案用） */
+  /** Name of the tool that produced this image (used by the replay copy) */
   tool: string
 }
 
 /**
- * 规划每条助手消息要回放的工具结果图像（按消息 id 分组，组内保持原始顺序）。
+ * Plan the tool result images to replay for each assistant message (grouped by message id, keeping
+ * the original order within a group).
  *
- * 从新到旧分配预算，保证保留的总是最近出现的那几张；超出预算的图像直接丢弃
- * （模型看到的对应工具结果文本里仍有路径，可以重新 read_image）。
+ * Budget is allocated from newest to oldest, so the images kept are always the most recent ones;
+ * images over budget are dropped (the corresponding tool result text the model sees still contains
+ * the path, so it can read_image again).
  */
 export function planReplayToolImages(
   selected: ReplayDialogue[],

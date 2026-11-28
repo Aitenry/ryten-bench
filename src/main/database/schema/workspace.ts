@@ -1,25 +1,26 @@
 import { index, pgTable, serial, text, timestamp, unique } from 'drizzle-orm/pg-core'
 
 /**
- * 工作区种类：
- * - `user`：用户在「工作」模式下自己选目录建的工作区（默认，老数据一律按它算）；
- * - `plugin`：插件会话的工作目录（= 插件源码目录，见 harness 的 main/workshop/workspace.ts）；
- * - `chat`：**「对话」模式**的工作目录（应用自己按系统初始化的目录，见 main/chat/workspace.ts）。
+ * Workspace kinds:
+ * - `user`: workspace created by the user picking their own directory in "Work" mode (default; legacy rows all count as this);
+ * - `plugin`: working directory of a plugin session (= the plugin source directory, see main/workshop/workspace.ts);
+ * - `chat`: working directory of **"Chat" mode** (a directory the app initializes itself, see main/chat/workspace.ts).
  *
- * 为什么要显式记一列，而不是像原来那样靠「路径是不是插件根的直接子目录」现算：
- * 侧栏要把后两种都从「工作」列表里滤掉，判据必须是行自己的属性——否则插件根一改配置、
- * 或者用户恰好把工作区选在插件根下面，同一条记录就会被两个列表都说成是自己那一类。
+ * Why record this explicitly instead of deriving it at runtime from "is the path a direct child of
+ * the plugin root": the sidebar must filter the latter two out of the "Work" list, so the criterion
+ * must be a property of the row itself — otherwise, once the plugin root config changes, or the user
+ * happens to pick a workspace under the plugin root, the same row would be claimed as its own by both lists.
  */
 export type WorkspaceKind = 'user' | 'plugin' | 'chat'
 
-/** 工作区表：harness_topic / agent_config 通过 workspace_id 外键挂在其下并被级联删除 */
+/** Workspace table: harness_topic / agent_config hang under it via the workspace_id foreign key and are cascade-deleted */
 export const workspace = pgTable(
   'workspace',
   {
     id: serial().primaryKey().notNull(),
     name: text().notNull(),
     path: text().notNull(),
-    /** 工作区种类（见 WorkspaceKind）；建表默认 'user'，老数据不必回填 */
+    /** Workspace kind (see WorkspaceKind); table default is 'user', legacy rows need no backfill */
     kind: text().$type<WorkspaceKind>().default('user'),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
     updated_at: timestamp({ mode: 'string' }).defaultNow()

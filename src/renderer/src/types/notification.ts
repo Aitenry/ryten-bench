@@ -1,17 +1,20 @@
 /**
- * 通知中心的**通用**通知类型（core 服务，插件可消费）。
+ * **Generic** notification type for the notification center (core service, consumable by plugins).
  *
- * 归属边界：通知的「载体」属于外壳（铃铛列表在 `NotificationList`），
- * 而「通知的具体形状」属于产生它的插件（例如图谱构建进度属于 notes）。
- * 因此 core 只声明最小通用契约：能定位、能分类、能点击、能显示标题与描述。
+ * Ownership boundary: the "carrier" of notifications belongs to the shell (the bell list lives in
+ * `NotificationList`), while the "concrete shape" of a notification belongs to the plugin that
+ * produces it (for example, graph build progress belongs to notes). Core therefore declares only
+ * the minimal generic contract: locatable, classifiable, clickable, and able to show a title and
+ * description.
  *
- * 插件侧在自己的模块里扩展它（notes 的 `providers/build-progress.ts` 定义
- * `BuildProgressNotification`），扩展字段以可选形式存在于本类型上，
- * 列表按字段名读取——core 因此不需要 import 任何插件的通知类型。
+ * Plugins extend it in their own modules (notes defines `BuildProgressNotification` in
+ * `providers/build-progress.ts`), and the extension fields exist on this type as optional fields;
+ * the list reads them by field name — so core never needs to import any plugin's notification type.
  */
 export interface NotificationItem {
   id: string
-  /** 通知类别（当前只有 'build_progress'；未来插件新增类别只需在这里放宽为字符串） */
+  /** Notification category (currently only 'build_progress'; future plugin categories just widen
+   * this to a string) */
   type: string
   title: string
   description: string
@@ -20,9 +23,10 @@ export interface NotificationItem {
   read: boolean
   onClick?: () => void
 
-  /** 插件扩展字段（如构建进度的 wikiId / overallProgress / completed），core 按需读取 */
+  /** Plugin extension fields (e.g. wikiId / overallProgress / completed for build progress), read
+   * by core as needed */
   [key: string]: unknown
 }
 
-/** 通知基础字段（插件扩展自己的通知类型时 `extends` 它） */
+/** Base notification fields (plugins `extends` this when extending their own notification type) */
 export type BaseNotification = NotificationItem

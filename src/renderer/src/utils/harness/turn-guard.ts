@@ -1,15 +1,20 @@
 /**
- * 流事件的「回合守卫」。
+ * Turn guard for stream events.
  *
- * 背景：流事件（chunk / done / error）只带话题 id 时，同一话题上的两轮流事件会被同一个
- * 监听器照单全收——上一轮的迟到事件、或极端情况下并发的另一轮，都会写进当前气泡，
- * 表现就是「输出错乱」「还在跑却突然收尾」。
+ * Background: when stream events (chunk / done / error) carry only a topic id, two
+ * rounds of stream events on the same topic are all accepted by the same listener —
+ * late events from the previous round, or in extreme cases a concurrent other round,
+ * get written into the current bubble, showing up as "garbled output" or "ending
+ * abruptly while still running".
  *
- * 用法：一次流监听建一个守卫，把它拿到的每个事件的回合 id 传进去；
- * 返回 false 的事件直接丢弃。
- *  - 建的时候就知道回合 id（主进程发起的轮次，标记 chunk 里带着它）：只收这一轮；
- *  - 建的时候不知道（本地发送，id 由主进程分配）：锁在**第一条到达的事件**上；
- *  - 事件没带回合 id（老版本主进程）：一律放行，退回按话题处理。
+ * Usage: create one guard per stream listener and pass in the turn id of every event
+ * it receives; events for which it returns false are dropped.
+ *  - Turn id known at creation time (rounds initiated by the main process; the marker
+ *    chunk carries it): accept only that round;
+ *  - Unknown at creation time (local send, id assigned by the main process): lock onto
+ *    the **first event that arrives**;
+ *  - Event carries no turn id (older main process): always allow, fall back to
+ *    per-topic handling.
  */
 
 export type TurnGuard = (eventTurnId?: number | null) => boolean

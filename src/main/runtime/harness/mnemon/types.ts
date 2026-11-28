@@ -1,13 +1,12 @@
 /**
- * Mnemon 记忆机制 — 类型契约
+ * Mnemon memory mechanism — type contracts
  *
- * 移植自 deepseek-harness 的 dsh-mnemon 插件（@omdsh-dev/dsh-mnemon，MIT），
- * 三层记忆模型：
- *   1. Runtime Memory   — 每轮注入的紧凑热记忆（memories.json 事实源 + Markdown 投影）
- *   2. Project Documents — 完整 Markdown 项目知识（index.json + active/archived 冷热分层）
- *   3. Memory Spaces    — 长期记忆空间（PGlite Store + 四类关系 + 按需召回）
+ * Three-layer memory model:
+ *   1. Runtime Memory   — compact hot memory injected every turn (memories.json source of truth + Markdown projections)
+ *   2. Project Documents — complete Markdown project knowledge (index.json + active/archived hot/cold tiers)
+ *   3. Memory Spaces    — long-term memory spaces (PGlite Store + four relation types + on-demand recall)
  *
- * 类型命名与 dsh-mnemon 的公开契约保持一致，便于对照。
+ * Type names follow the public contract for easy cross-referencing.
  */
 
 // ============================================================================
@@ -15,14 +14,14 @@
 // ============================================================================
 
 export const RUNTIME_MEMORY_VERSION = 1
-/** Markdown 投影条目分隔符（保留字符） */
+/** Markdown projection entry delimiter (reserved character) */
 export const RUNTIME_ENTRY_DELIMITER = '\n§\n'
-/** 容量上限：memory 10 KiB / user 4 KiB（按投影正文 UTF-8 字节） */
+/** Capacity limits: memory 10 KiB / user 4 KiB (by UTF-8 bytes of projected body text) */
 export const RUNTIME_MEMORY_LIMITS = {
   memory: 10 * 1024,
   user: 4 * 1024
 } as const
-/** 单条内容上限 */
+/** Per-entry content limit */
 export const RUNTIME_ENTRY_MAX_BYTES = 8 * 1024
 
 export type RuntimeMemoryTarget = keyof typeof RUNTIME_MEMORY_LIMITS
@@ -90,9 +89,9 @@ export type RuntimeMemoryMutationResult =
 // ============================================================================
 
 export const DOCUMENTS_VERSION = 1
-/** active 总量上限 10 MiB */
+/** active total limit 10 MiB */
 export const DOCUMENTS_ACTIVE_LIMIT_BYTES = 10 * 1024 * 1024
-/** 单份正文上限 2 MiB */
+/** Per-document body limit 2 MiB */
 export const DOCUMENT_MAX_BYTES = 2 * 1024 * 1024
 
 export type DocumentStatus = 'active' | 'archived'
@@ -163,10 +162,10 @@ export interface DocumentMutationResult {
 }
 
 // ============================================================================
-// Memory Spaces（长期记忆）
+// Memory Spaces (long-term memory)
 // ============================================================================
 
-/** 洞察类别（与 Mnemon 一致） */
+/** Insight categories */
 export const MNEMON_CATEGORIES = [
   'preference',
   'decision',
@@ -177,15 +176,15 @@ export const MNEMON_CATEGORIES = [
 ] as const
 export type MnemonCategory = (typeof MNEMON_CATEGORIES)[number]
 
-/** 洞察来源 */
+/** Insight source */
 export const MNEMON_SOURCES = ['user', 'agent', 'external'] as const
 export type MnemonSource = (typeof MNEMON_SOURCES)[number]
 
-/** 四类关系 */
+/** Four relation types */
 export const MNEMON_EDGE_TYPES = ['temporal', 'semantic', 'causal', 'entity'] as const
 export type MnemonEdgeType = (typeof MNEMON_EDGE_TYPES)[number]
 
-/** 召回意图 */
+/** Recall intent */
 export const MNEMON_INTENTS = ['WHY', 'WHEN', 'ENTITY', 'GENERAL'] as const
 export type MnemonIntent = (typeof MNEMON_INTENTS)[number]
 
@@ -233,7 +232,7 @@ export interface MemoryBody {
   name: string
   description: string
   active: boolean
-  /** 空间用途（结构化角色；archive=热记忆溢出归档目标），不依赖名称判定 */
+  /** Space purpose (structured role; archive=target for hot-memory overflow archiving); does not depend on the name */
   role?: 'archive'
   dbPath: string
   createdAt: string

@@ -4,12 +4,15 @@ import { HARNESS_TOOL_CONTRIBUTION } from '@host/main/plugins/tool-contract'
 import type { MainPluginContext } from './context'
 
 /**
- * 给 AI 助手贡献一个工具（harness.tool 贡献点）。
+ * Contributes a tool to the AI assistant (the harness.tool contribution point).
  *
- * 要点：
- * - 贡献随插件停用一并摘除：助手**下一轮**组装工具集时就看不到它了；
- * - 用户还要在 设置 → 智能体 → 工具 里勾选本工具才会真正挂给模型；
- * - build() 是延迟调用的（插件没装载就不会被调到），可以放心读插件自己的数据。
+ * Key points:
+ * - The contribution is removed together with the plugin: the assistant no longer sees it
+ *   the **next turn**, when it assembles its tool set;
+ * - The user must also tick this tool under Settings → Agent → Tools before it is actually
+ *   attached to the model;
+ * - build() is called lazily (it is never invoked while the plugin is unloaded), so it is
+ *   safe to read the plugin's own data.
  */
 export function install(ctx: MainPluginContext): void {
   ctx.contribute(HARNESS_TOOL_CONTRIBUTION, {

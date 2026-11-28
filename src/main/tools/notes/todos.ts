@@ -1,11 +1,14 @@
-// 待办域处理器（统一由 manage_materials 工具调度）。
+// Todo domain handlers (dispatched uniformly by the manage_materials tool).
 //
-// 2026-11 资料整理改造：
-// - 列表过滤改在内存里做（旧实现按 status 查库会漏掉 status 为 NULL 的历史行，
-//   且 page=1 时忽略 pageSize 返回全量）；支持 category / 关键字 / 是否含已完成；
-// - 新增 todo.get：列表只给摘要，看正文/时间戳用 get，避免一次列全部正文；
-// - 新增 todo.bulk_update：一次改多项的状态/优先级/截止日/分类；
-// - 优先级口径与界面一致：0=P0（最高）… 7=P7（最低），不再把 1 当最高。
+// 2026-11 materials organization rework:
+// - List filtering is now done in memory (the old implementation queried the DB by status, missing
+//   historical rows whose status is NULL, and ignored pageSize when page=1, returning everything);
+//   supports category / keyword / include-completed;
+// - New todo.get: the list only shows summaries, use get for the body/timestamps so all bodies are
+//   not listed at once;
+// - New todo.bulk_update: update status/priority/due date/category for several items at once;
+// - Priority scale matches the UI: 0=P0 (highest) … 7=P7 (lowest); 1 is no longer treated as the
+//   highest.
 import { mainFormat, mainPlural } from '../../i18n'
 import { getTodoToolTexts } from '../../i18n/tool-results-todos'
 
@@ -35,7 +38,7 @@ function validDueDate(due: string): boolean {
 }
 
 // ============================================================================
-// 查询
+// Queries
 // ============================================================================
 
 export async function listTodosHandler(params: {
@@ -146,7 +149,7 @@ export async function getTodoHandler(params: { todoId: number }): Promise<string
 }
 
 // ============================================================================
-// 写操作
+// Write operations
 // ============================================================================
 
 export async function addTodoHandler(params: {

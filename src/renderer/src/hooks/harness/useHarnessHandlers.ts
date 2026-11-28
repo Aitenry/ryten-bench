@@ -27,18 +27,22 @@ import { isChatScope } from '../../../../shared/harness/memory-scope'
 import { useTopicRunStatus } from './useTopicRunStatus'
 
 const TOPICS_PAGE_SIZE = 20
-const MESSAGES_PAGE_SIZE = 20 // 10对消息
+const MESSAGES_PAGE_SIZE = 20 // 10 message pairs
 
-// ── 流式 chunk 合批参数（渲染进程 OOM 修复）────────────────────────────
-// 见 startStreamListener：高频 chunk 先排队、按自适应间隔合并为一次 React commit；
-// 单条正文越长，每次 markdown 全量渲染越贵，间隔随文本长度线性放大，上限见 MAX。
-const CHUNK_FLUSH_BASE_INTERVAL_MS = 33 // 常规刷新间隔（≤~30 commit/s）
-const CHUNK_FLUSH_MAX_INTERVAL_MS = 300 // 超长文本自适应上限
-const CHUNK_FLUSH_INTERVAL_PER_CHAR_MS = 1 / 2000 // 每 2k 字符 +1ms 间隔
+// ── Streaming chunk batching parameters (renderer OOM fix) ──────────────
+// See startStreamListener below: high-frequency chunks are queued, then coalesced into one
+// React commit per adaptive interval. The longer the message text, the more expensive each
+// full markdown render, so the interval grows linearly with text length (capped at MAX below).
+const CHUNK_FLUSH_BASE_INTERVAL_MS = 33 // regular flush interval (<= ~30 commits/s)
+const CHUNK_FLUSH_MAX_INTERVAL_MS = 300 // adaptive cap for very long text
+const CHUNK_FLUSH_INTERVAL_PER_CHAR_MS = 1 / 2000 // +1ms interval per 2k characters
 
 const INPUT_HISTORY_STORAGE_KEY = 'rytenbench.harness.inputHistory'
 const INPUT_HISTORY_MAX = 100
-/** 全局输入历史缓存（localStorage 持久化，模块级单例，避免每次渲染解析存储） */
+/**
+ * Global input history cache (localStorage-backed module singleton, so storage is not
+ * re-parsed on every render).
+ */
 let inputHistoryCache: string[] | null = null
 const loadInputHistory = (): string[] => {
   if (inputHistoryCache) return inputHistoryCache
@@ -54,7 +58,7 @@ const loadInputHistory = (): string[] => {
   return inputHistoryCache
 }
 
-/** 每个话题的会话缓存状态 */
+/** Session cache state for each topic */
 interface SessionState {
   messages: Message[]
   inputValue: string
@@ -70,7 +74,7 @@ export interface UseHarnessHandlersReturn {
   copiedId: string | null
   currentTopicId: number | null
   topics: HarnessTopicRow[]
-  /** topics 所属工作区 id（null = 尚未加载过） */
+  /** Workspace id the topics belong to (null = not loaded yet) */
   topicsWorkspaceId: number | null
   sidebarOpen: boolean
   setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -82,21 +86,24 @@ export interface UseHarnessHandlersReturn {
   isLoading: boolean
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   textareaRef: React.RefObject<HTMLDivElement | null>
-  /** 全局输入历史（↑/↓ 键切换浏览，handleSend 记录，localStorage 持久化，上限 100 条） */
+  /** Global input history (browse with Up/Down, recorded by handleSend, persisted in localStorage, max 100) */
   inputHistoryRef: { current: string[] }
   currentSessionIdRef: React.RefObject<string | null>
   currentTopicIdRef: React.RefObject<number | null>
-  /** 当前会话是否已归档（只读：输入框隐藏、发送被拒） */
+  /** Whether the current session is archived (read-only: input hidden, sending rejected) */
   currentTopicArchived: boolean
   loadingTopicIds: Set<number>
   /**
-   * 正挂着提问 / 审批、等用户确认的会话（侧栏行首的黄色呼吸点）。
-   * 与 loadingTopicIds 取并存的含义：进行中的会话挂起等确认时，黄点优先。
+   * Sessions currently blocked on a question / approval waiting for user confirmation (yellow
+   * pulsing dot at the start of the sidebar row). It coexists with loadingTopicIds: when an
+   * in-flight session suspends for confirmation, the yellow dot takes precedence.
    */
   awaitingTopicIds: Set<number>
   /**
-   * 刚自然跑完、还没被用户点开过的会话（侧栏行首的绿色呼吸点）。
-   * 跑完时正显示在对话窗口里的那条不进这个集合（完成即自动移除）；点开即熄灭，不落盘。
+   * Sessions that just finished naturally and have not been opened by the user yet (green
+   * pulsing dot at the start of the sidebar row). The one displayed in the chat window when it
+   * finishes is excluded (removed on completion); opening a session clears its dot, and the
+   * state is never persisted.
    */
   completedTopicIds: Set<number>
   selectedProvider: LlmProviderConfig | null
@@ -108,20 +115,20 @@ export interface UseHarnessHandlersReturn {
       value: number
       label: string
       providerType: string
-      /** 当前模型的推理等级（null = 未设置） */
+      /** Reasoning effort of the current model (null = not set) */
       reasoningEffort: string | null
-      /** 该模型档案声明的可选档位（空数组 = 档案未收录） */
+      /** Selectable effort levels declared by this model profile (empty array = not covered) */
       effortLevels: string[]
-      /** 当前协议是否真的会下发档位参数（未适配时界面提示「仅记录」） */
+      /** Whether the current protocol actually sends the effort parameter (UI notes "record only" when unsupported) */
       effortControllable: boolean
     }[]
   }[]
-  /** 话题分页 */
+  /** Topic pagination */
   topicsHasMore: boolean
   topicsLoading: boolean
-  /** 整表刷新中（非滚动分页） */
+  /** Full-table refresh in progress (not scroll pagination) */
   topicsRefreshing: boolean
-  /** 消息分页（当前话题） */
+  /** Message pagination (current topic) */
   messagesHasMore: boolean
   messagesLoadingMore: boolean
   handleSelectTopic: (
@@ -131,46 +138,58 @@ export interface UseHarnessHandlersReturn {
   handleDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   handleCopy: (text: string, id: string) => Promise<void>
   handleSend: () => Promise<void>
-  /** 目标 Enter：以目标正文发起一轮 LLM（复用正常发送管线） */
+  /** Goal Enter: start an LLM turn from the goal text (reuses the normal send pipeline) */
   handleStartGoal: (objective: string) => Promise<void>
   handleNewHarness: () => void
-  /** 每次「外部请求聚焦输入框」自增（见 harness-focus-input 监听）：输入框据此把光标放进去 */
+  /** Incremented on every external "focus the input" request (see the harness-focus-input listener); the input uses it to place the caret */
   focusInputToken: number
   handleDeleteMessagePair: (msgIndex: number) => Promise<void>
-  /** 进入**气泡内**编辑（孤立提问） */
+  /** Enter **in-bubble** editing for an orphan question */
   handleStartEditMessage: (msgIndex: number) => void
-  /** 气泡内回车提交：就地替换该提问并重发（不新增用户气泡） */
+  /** Submit in-bubble with Enter: replace the question in place and resend (no extra user bubble) */
   handleSubmitEditMessage: (msgIndex: number, content: string) => Promise<void>
-  /** 取消气泡内编辑（Esc） */
+  /** Cancel in-bubble editing (Esc) */
   handleCancelEditMessage: () => void
-  /** 正在气泡内编辑的提问 id（用于把它渲染成可编辑态） */
+  /** Id of the question being edited in its bubble (used to render it in editable mode) */
   editingMessageId: string | null
-  /** 分支：把当前话题里到 upToIndex 为止的消息复制到新话题，并把列表与视图都切过去 */
+  /** Branch: copy the messages up to upToIndex in the current topic into a new topic, then switch both the list and the view */
   handleBranchConversation: (upToIndex: number) => Promise<void>
   handleKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void
   handleStop: () => void
   handleLoadMoreTopics: () => Promise<void>
   handleLoadMoreMessages: () => Promise<void>
   refreshTopics: () => Promise<void>
-  /** 生成中的插话队列（当前话题） */
+  /** Steering queue while generating (current topic) */
   queuedMessages: QueuedMessageView[]
-  /** 刚并入当前回合的插话正文（瞬时反馈，2.6s 后自动消失） */
+  /** Steering text just merged into the current turn (transient feedback, disappears after 2.6s) */
   steeredNotice: string | null
-  /** 删除一条排队消息 */
+  /** Delete one queued message */
   handleRemoveQueued: (itemId: string) => Promise<void>
-  /** 改写一条排队消息的文本 */
+  /** Rewrite the text of a queued message */
   handleUpdateQueued: (itemId: string, text: string) => Promise<void>
-  /** 立即插话：把这条排队消息注入正在运行的回合 */
+  /** Steer now: inject this queued message into the running turn */
   handleSteerQueued: (itemId: string) => Promise<void>
   /**
-   * 当前会话的「本轮运行选择」（工具 / 技能 / MCP，输入框下面选）。
-   * 用户发送时随 startMessageStream 下发，主进程写回会话；null = 用默认。
+   * The current session's "run selection" for this turn (tools / skills / MCP, picked below the
+   * input). Sent with startMessageStream on send and written back to the session by the main
+   * process; null = use defaults.
    */
   agentSelection: AgentSelectionView | null
   setAgentSelection: React.Dispatch<React.SetStateAction<AgentSelectionView | null>>
   /**
-   * 会话检索命中项要定位的对话行 id（侧栏搜索 → 打开会话后滚到那条消息并高亮）。
-   * HarnessMessageArea 消费后调用 `clearPendingJumpDialogueId` 清空，避免下次切话题重复定位。
+   * **Draft value** for team collaboration in a blank session (no topic yet).
+   *
+   * Team collaboration is a topic-level switch (`harness_topic.team_mode`), while "new session"
+   * starts blank and only calls `createTopic` on the first message (see `handleNewHarness` and
+   * `startTurn`). So a toggle flipped in a blank session is recorded here first and persisted with
+   * the INSERT when the topic is created; once a topic exists, the UI reads the topic's own value.
+   */
+  pendingTeamMode: boolean
+  setPendingTeamMode: React.Dispatch<React.SetStateAction<boolean>>
+  /**
+   * Dialogue row id to jump to for a session-search hit (sidebar search → open the session and
+   * scroll to that message with a highlight). HarnessMessageArea clears it via
+   * `clearPendingJumpDialogueId` after consuming it, so switching topics again does not re-jump.
    */
   pendingJumpDialogueId: number | null
   setPendingJumpDialogueId: React.Dispatch<React.SetStateAction<number | null>>
@@ -178,12 +197,13 @@ export interface UseHarnessHandlersReturn {
 }
 
 /**
- * 取消息在库里的对话行 id。
+ * Resolve a message's dialogue row id in the database.
  *
- * 流式期间的消息用的是临时 id（用户消息 `Date.now().toString()`、助手消息 `时间戳_话题_随机`），
- * 它们**不是** harness_dialogue 的行 id——拿去删除/关联用量都会命中不存在的行。
- * 所以：优先用主进程回传的 dialogueId；否则只接受「自增小整数」形态的 id
- *（时间戳约 1.7e12，一律视为临时 id）。
+ * Messages during streaming use temporary ids (user messages `Date.now().toString()`, assistant
+ * messages `timestamp_topic_random`); they are **not** harness_dialogue row ids, so deleting or
+ * linking usage with them would hit nonexistent rows. Therefore: prefer the dialogueId returned
+ * by the main process; otherwise accept only ids shaped like a small auto-increment integer
+ * (timestamps are around 1.7e12 and are always treated as temporary ids).
  */
 function resolveDialogueId(message: Message | undefined): number | null {
   if (!message) return null
@@ -193,11 +213,13 @@ function resolveDialogueId(message: Message | undefined): number | null {
 }
 
 /**
- * 用户插话（steering）**不改动对话流**：插话是纯注入——主进程把它并进正在运行的回合，
- * 既不落库也不切分助手消息（用户明确要求「不要形成新的对话内容和入库」）。
+ * User steering **does not alter the conversation flow**: it is a pure injection — the main
+ * process merges it into the running turn without persisting it or splitting the assistant
+ * message (there is an explicit requirement not to create new conversation content or DB rows).
  *
- * 因此在渲染端插话 chunk 只作为回执被过滤掉：它带的是提示文本而不是内容/推理/工具，
- * 逐条应用只会平白触发一次无用更新。（「已插话」的瞬时反馈由队列条负责。）
+ * So on the renderer side steering chunks are only receipts and get filtered out: they carry
+ * notice text rather than content / reasoning / tool data, and applying them one by one would
+ * only trigger useless updates. (The "steered" transient feedback is handled by the queue bar.)
  */
 function isSteerChunk(chunk: StreamChunk): boolean {
   return Boolean(chunk.steered)
@@ -209,38 +231,49 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   /**
-   * 「请把焦点放进输入框」的计数器（见下面的 harness-focus-input 监听）。
-   * 输入框据此聚焦——不改内容，只是让用户点完 ＋ 就能直接打字。
+   * Counter for "put the focus in the input" requests (see the harness-focus-input listener
+   * below). The input focuses based on it — content is untouched, so the user can type right
+   * after clicking +.
    */
   const [focusInputToken, setFocusInputToken] = useState(0)
-  // 会话级运行选择（工具/技能/MCP）：由输入框下面那排选择器维护，随发送下发
+  // Session-level run selection (tools/skills/MCP): maintained by the selector row below the input and sent with each message
   const [agentSelection, setAgentSelection] = useState<AgentSelectionView | null>(null)
   /**
-   * 下一条**新话题**要用的记忆作用域（插件行「＋」带过来的 `plugin:<id>`、
-   * 「对话」模式带过来的 `chat`）。
+   * Team collaboration draft value in a blank session (see `UseHarnessHandlersReturn.pendingTeamMode`).
+   * Only meaningful while there is no topic: it is written into `team_mode` when the first
+   * message creates the topic, then discarded.
+   */
+  const [pendingTeamMode, setPendingTeamMode] = useState(false)
+  /**
+   * Memory scope for the next **new topic** (`plugin:<id>` passed in from a plugin row's "+",
+   * `chat` passed in from "chat" mode).
    *
-   * 用户口径 2026-09-28：「插件里面的记忆应该是独立的，现在是直接使用工作里面之前选中的记忆上下文，
-   * 会导致有问题」——所以插件会话开话题时把 `plugin:<id>` 写进 `harness_topic.memory_scope`，
-   * 之后（含重启后再打开这个会话）主进程都按话题上存的作用域走（见 main/memory-scope.ts）；
-   * 「对话」模式同理写 `chat`（该模式没有工作区，记忆也不该挂到某个工作区上）。
+   * Per the user's requirement on 2026-09-28, plugin memory must be independent: previously a
+   * plugin conversation used the memory context selected in the workspace, which caused problems.
+   * So when a plugin session creates a topic it writes `plugin:<id>` into
+   * `harness_topic.memory_scope`, and afterwards (including after a restart) the main process
+   * follows the scope stored on the topic (see main/memory-scope.ts); "chat" mode likewise writes
+   * `chat` (that mode has no workspace, and its memory should not hang off a workspace).
    *
-   * 三种取值各有含义，别混：
-   * - `undefined` = **没人在等**：用当前话题自己存的作用域（往已有会话里发第二条消息走这条）；
-   * - `null` = 显式要**工作区**那套（普通「新建会话」清掉上一条挂起值时就写它）；
-   * - 字符串 = 这条新话题要用 `plugin:<id>` / `chat`。
+   * The three values mean different things — do not mix them up:
+   * - `undefined` = **nobody is waiting**: use the scope stored on the current topic (the path for
+   *   sending a second message into an existing session);
+   * - `null` = explicitly want the **workspace** scope (written by a plain "new session" when
+   *   clearing a previous pending value);
+   * - string = this new topic wants `plugin:<id>` / `chat`.
    *
-   * 只有在「还没有话题」的这一小段时间里需要它，话题一建就清掉。
+   * Only needed during the short window with no topic; it is cleared once the topic is created.
    */
   const pendingMemoryScopeRef = useRef<string | null | undefined>(undefined)
   const [availableTools, setAvailableTools] = useState<HarnessToolInfo[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLDivElement>(null)
-  /** 全局输入历史（↑/↓ 键切换浏览，handleSend 记录，localStorage 持久化，上限 100 条） */
+  /** Global input history (browse with Up/Down, recorded by handleSend, persisted in localStorage, max 100) */
   const inputHistoryRef = useRef<string[]>(loadInputHistory())
   const currentSessionIdRef = useRef<string | null>(null)
 
-  /** 当前活跃的工作区 ID */
+  /** Id of the currently active workspace */
   const activeWorkspaceIdRef = useRef<number>(0)
   const getActiveWorkspaceId = useCallback(async (): Promise<number> => {
     try {
@@ -254,21 +287,22 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   /**
-   * 建完一条「对话」模式的话题后，让界面跟上**新的活动工作目录**。
+   * After creating a topic in "chat" mode, make the UI follow the **new active working directory**.
    *
-   * 主进程在 `harness-topic-create` 里已经把活动工作区切到 `<userData>/chat/<话题 id>/`
-   * （见 ipc/harness-topic.ts），但那是主进程的设置；渲染层这边的工作区路径（资源管理器根、
-   * 工具卡片 → 真实路径的映射）与侧栏活动态都靠这个事件重读。少了它，第一条消息写出来的
-   * 文件在面板里会按**上一个**目录去打开（点开报「文件不存在」）。
+   * The main process already switched the active workspace to `<userData>/chat/<topic id>/` in
+   * `harness-topic-create` (see ipc/harness-topic.ts), but that is the main process's setting; the
+   * renderer's workspace path (explorer root, tool card → real path mapping) and the sidebar
+   * active state re-read it from this event. Without it, files written by the first message would
+   * open in the panel against the **previous** directory (reporting "file not found").
    */
   const notifyChatTopicActivated = useCallback((workspaceId: number): void => {
     if (!workspaceId) return
     window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId } }))
   }, [])
 
-  /** 当前活跃的智能体 causeId 集合：用于把智能体事件路由到正确块 */
+  /** Active agent causeId sets: routes agent events to the correct block */
   const activeSubAgentCauseIdsRef = useRef<Map<number, Set<string>>>(new Map())
-  /** 取（或创建）某话题的「运行中子代理 causeId 集合」（chunk 合并 task 子代理块时用） */
+  /** Get (or create) a topic's set of running subagent causeIds (used when merging task subagent blocks from chunks) */
   const activeCauseIdsFor = useCallback((topicId: number): Set<string> => {
     let activeCauseIds = activeSubAgentCauseIdsRef.current.get(topicId)
     if (!activeCauseIds) {
@@ -280,19 +314,21 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [currentTopicId, setCurrentTopicId] = useState<number | null>(null)
   const currentTopicIdRef = useRef<number | null>(null)
   /**
-   * 当前会话是不是**已归档**（只读）：打开后输入框隐藏、发送被拒（用户 2026-11-25
-   * 「归档内容只能查看，不能对话」）。状态给页面渲染用，ref 给回调里判断用（避免闭包拿旧值）。
+   * Whether the current session is **archived** (read-only): the input is hidden and sending is
+   * rejected once opened (user requirement, 2026-11-25: archived content is view-only). The state
+   * feeds rendering; the ref feeds callbacks (avoiding stale closure values).
    */
   const [currentTopicArchived, setCurrentTopicArchived] = useState(false)
   const currentTopicArchivedRef = useRef(false)
-  /** 同时写状态与 ref：两者必须一起变 */
+  /** Write both state and ref together: they must always change in sync */
   const markTopicArchived = useCallback((archived: boolean): void => {
     currentTopicArchivedRef.current = archived
     setCurrentTopicArchived(archived)
   }, [])
   /**
-   * 侧栏改归档状态时（归档 / 取消归档）通知这边：**改的正是当前会话**就同步只读态。
-   * 否则会出现「刚取消归档、输入框还不回来」或者「归档了当前会话、却还能接着发」。
+   * The sidebar notifies this hook when the archive state changes (archive / unarchive): if the
+   * change targets the current session, sync the read-only state. Otherwise the input would not
+   * come back after unarchiving, or an archived session could still keep sending.
    */
   useEffect(() => {
     const onArchiveChanged = (e: Event): void => {
@@ -304,31 +340,34 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     return () => window.removeEventListener('harness-topic-archive-changed', onArchiveChanged)
   }, [markTopicArchived])
   /**
-   * 对话页（`/harness`）此刻是不是显示在主内容区。
+   * Whether the chat page (`/harness`) is currently shown in the main content area.
    *
-   * 绿点的判定要用「这条会话此刻是否就摆在用户眼前」而不是只看 currentTopicId：
-   * 人切到资料库 / 插件仓库时，对话窗口并不在屏幕上，那条会话跑完了仍该提醒。
-   * 完成事件到达时才读（见下面的 conversationVisibleRef），所以这里用 ref 存最新值。
+   * The green dot must depend on "is this session on screen right now", not just
+   * currentTopicId: when the user switches to the library / plugin store, the chat window is not
+   * on screen, so a finished session should still notify. It is read when a completion event
+   * arrives (see conversationVisibleRef below), hence the ref holds the latest value.
    */
   const location = useLocation()
   const conversationVisible =
     location.pathname === '/harness' || location.pathname.startsWith('/harness/')
   const conversationVisibleRef = useRef(conversationVisible)
   conversationVisibleRef.current = conversationVisible
-  /** messages React 状态实际属于哪个话题——用于检测 handleSelectTopic 异步间隙中的跨话题污染 */
+  /** Which topic the messages React state actually belongs to — detects cross-topic pollution during handleSelectTopic's async gap */
   const messagesBelongToTopicRef = useRef<number | null>(null)
-  // 用 ref 持有最新消息快照（修复：handleDeleteMessagePair 此前依赖 [messages],流式期间
-  // 每个 chunk 重建回调,作为 onDelete 传给全部消息组件击穿 React.memo → 每 chunk 全量重渲染历史消息）。
-  // 声明在靠前位置：主进程发起轮次的挂载（mountExternalTurn）也要读它兜底会话缓存。
+  // Hold the latest message snapshot in a ref (fix: handleDeleteMessagePair used to depend on
+  // [messages]; during streaming each chunk rebuilt the callback, breaking React.memo for every
+  // message component via onDelete → full re-render of the history on every chunk).
+  // Declared early: mounting main-process-initiated turns (mountExternalTurn) also reads it as a
+  // fallback for the session cache.
   const messagesSnapshotRef = useRef<Message[]>([])
   messagesSnapshotRef.current = messages
   const [topics, setTopics] = useState<HarnessTopicRow[]>([])
-  /** 会话检索命中后的待定位消息（dialogueId）：MessageArea 滚到位后清空 */
+  /** Message to jump to after a session-search hit (dialogueId); MessageArea clears it once scrolled into place */
   const [pendingJumpDialogueId, setPendingJumpDialogueId] = useState<number | null>(null)
   const clearPendingJumpDialogueId = useCallback((): void => {
     setPendingJumpDialogueId(null)
   }, [])
-  /** topics 当前属于哪个工作区（切换工作区时用于避免把旧列表挂到新工作区下） */
+  /** Which workspace the topics currently belong to (keeps an old list from being attached to a new workspace when switching) */
   const [topicsWorkspaceId, setTopicsWorkspaceId] = useState<number | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [providers, setProviders] = useState<LlmProviderConfig[]>([])
@@ -337,64 +376,72 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   const [isLoading, setIsLoading] = useState(false)
   const [loadingTopicIds, setLoadingTopicIds] = useState<Set<number>>(new Set())
   /**
-   * 侧栏行首指示器的另外两端：等待用户确认（黄）/ 刚完成（绿）。
-   * 「进行中」不在这里（见 loadingTopicIds），三者的切换规则集中在 useTopicRunStatus。
+   * The other two ends of the sidebar row indicator: waiting for user confirmation (yellow) /
+   * just completed (green). "In progress" is not here (see loadingTopicIds); the transition rules
+   * for all three live in useTopicRunStatus.
    *
-   * `isTopicActive` 用来实现「当前这个会话窗口跑完不亮绿点」（用户口径 2026-11-23
-   * 「如果当前是这个会话窗口，任务完成后自动移除」）：完成事件到达时按 ref 现取
-   * 「当前话题 + 对话页是否显示着」，人正看着结果出来就不再用绿点提醒；
-   * 人跑到资料库 / 插件仓库等别的页面时，对话窗口并不在眼前，绿点照常提醒。
+   * `isTopicActive` implements "do not light the green dot when the current chat window
+   * finishes" (user requirement, 2026-11-23: remove it automatically if this is the current
+   * session window). When a completion event arrives it reads "current topic + is the chat page
+   * visible" from refs, so a result the user is already watching needs no green dot; if the user
+   * is on another page such as the library / plugin store, the chat window is not in sight and
+   * the green dot still shows.
    */
   const { awaitingTopicIds, completedTopicIds, beginTopicTurn, acknowledgeTopic, forgetTopic } =
     useTopicRunStatus({
       isTopicActive: (topicId) =>
         currentTopicIdRef.current === topicId && conversationVisibleRef.current
     })
-  /** 正在气泡内编辑的提问 id（气泡变成可编辑态用） */
+  /** Id of the question being edited in its bubble (used to render the bubble in editable mode) */
   const [editingOrphanId, setEditingOrphanId] = useState<string | null>(null)
 
-  // ── 生成中的插话队列（主进程为单一真源，这里只保存当前话题的镜像）──
+  // ── Steering queue while generating (main process is the single source of truth; only a mirror of the current topic is kept here) ──
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessageView[]>([])
-  /** 刚刚被并进当前回合的插话正文（只做 2.6s 瞬时反馈，不落库、不进对话流） */
+  /** Steering text just merged into the current turn (2.6s transient feedback only; not persisted, not added to the conversation flow) */
   const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
   const steeredNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** topicId → 该话题当前流式中的助手段落 id（插话切段时用它定位要定稿的那条）。
-   *  按话题分桶：多话题可能同时有流在跑，共用一个 ref 会切错气泡。 */
+  /** topicId → id of the assistant segment currently streaming for that topic (steering splits
+   *  segments, and this locates the one to finalize). Bucketed by topic: several topics may
+   *  stream at once, and a shared ref would finalize the wrong bubble. */
   const assistantIdByTopicRef = useRef<Map<number, string>>(new Map())
 
-  // ── 分页状态 ──
+  // ── Pagination state ──
   const [topicsPage, setTopicsPage] = useState(0)
   const [topicsHasMore, setTopicsHasMore] = useState(true)
   const [topicsLoading, setTopicsLoading] = useState(false)
-  /** 「整表刷新」进行中（区别于滚动分页加载更多，避免切换工作区时底部闪现分页 spinner） */
+  /** "Full-table refresh" in progress (distinct from scroll pagination, so the bottom paging spinner does not flash when switching workspaces) */
   const [topicsRefreshing, setTopicsRefreshing] = useState(false)
   const [messagesPage, setMessagesPage] = useState(0)
   const [messagesHasMore, setMessagesHasMore] = useState(true)
   const [messagesLoadingMore, setMessagesLoadingMore] = useState(false)
   /**
-   * 会话列表刷新用的序号：只有**最后发起**的那次请求能把结果写回 `topics`。
+   * Sequence number for session-list refreshes: only the **last initiated** request may write its
+   * result back to `topics`.
    *
-   * 启动恢复 / 快速连点工作区时会有多个「换工作区」几乎同时发生（每次都要重拉列表），
-   * 它们的 IPC 往返顺序没有任何保证：先发的那次后回来，就会把 `topicsWorkspaceId` 写回
-   * **上一个**工作区。侧栏随后按「活动工作区」渲染时，那个工作区的会话列表永远等不到数据，
-   * 一直停在加载骨架（用户 2026-11-22 截图里插件行下面那 5 行就是它）。
+   * On startup restore / rapid workspace clicks, several "switch workspace" flows run almost
+   * simultaneously (each refetches the list) and their IPC round-trip order is not guaranteed:
+   * an earlier request can return last and write `topicsWorkspaceId` back to the **previous**
+   * workspace. The sidebar then renders by "active workspace" and waits forever for that
+   * workspace's list, stuck on the loading skeleton (the 5 grey rows under the plugin row in the
+   * user's 2026-11-22 screenshot).
    */
   const topicsRefreshSeqRef = useRef(0)
 
-  // ── 多会话支持 ──
+  // ── Multi-session support ──
   const sessionsRef = useRef<Map<number, SessionState>>(new Map())
-  /** 每个 topicId 的加载状态 */
+  /** Loading state per topicId */
   const isLoadingMapRef = useRef<Map<number, boolean>>(new Map())
-  /** 每个 topicId 的 stream chunk 清理函数 */
+  /** Stream chunk cleanup function per topicId */
   const chunkCleanupsRef = useRef<Map<number, () => void>>(new Map())
-  /** 每个 topicId 的 stream done 清理函数 */
+  /** Stream done cleanup function per topicId */
   const doneCleanupsRef = useRef<Map<number, () => void>>(new Map())
-  /** 每个 topicId 的 stream error 清理函数 */
+  /** Stream error cleanup function per topicId */
   const errorCleanupsRef = useRef<Map<number, () => void>>(new Map())
 
-  // ── 插话队列同步 ──
-  // 主进程是队列的单一真源：这里订阅广播 + 切话题时主动拉一次，本地不做乐观增删，
-  // 避免「入队时前端先加一遍、广播回来再加一遍」的双份队列。
+  // ── Steering queue sync ──
+  // The main process is the single source of truth for the queue: subscribe to broadcasts here
+  // and fetch once when switching topics. No optimistic local add/remove, which would duplicate
+  // queue rows (added locally on enqueue, then added again when the broadcast arrives).
   const applyQueue = useCallback((topicId: number, queue: QueuedMessageView[]): void => {
     if (currentTopicIdRef.current !== topicId) return
     setQueuedMessages(queue)
@@ -404,8 +451,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     const api = harnessApi.harness
     const offUpdated = api.onQueueUpdated(({ topicId, queue }) => applyQueue(topicId, queue))
     const offSteered = api.onQueueSteered(({ topicId, itemId, text }) => {
-      // 插话是纯注入：不产生对话流气泡，这里只把队列镜像里的那一行去掉 +
-      // 给一句瞬时反馈（「已插话」）说明它真的被并进了当前回合
+      // Steering is a pure injection: no conversation-flow bubble is produced. Here we only drop
+      // that row from the queue mirror and show a transient "steered" notice proving it was
+      // merged into the current turn
       if (currentTopicIdRef.current !== topicId) return
       setQueuedMessages((prev) => prev.filter((item) => item.id !== itemId))
       setSteeredNotice(text)
@@ -419,7 +467,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
   }, [applyQueue])
 
-  /** 切话题后拉取该话题的队列（广播只覆盖「变更」，不覆盖「切换」） */
+  /** Fetch the topic's queue after switching (broadcasts cover changes, not switches) */
   useEffect(() => {
     if (currentTopicId == null) {
       setQueuedMessages([])
@@ -431,13 +479,13 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       .catch(console.error)
   }, [currentTopicId, applyQueue])
 
-  /** 同步 isLoadingMapRef 到 loadingTopicIds 状态 */
+  /** Sync isLoadingMapRef into the loadingTopicIds state */
   const syncLoadingTopics = useCallback((): void => {
     setLoadingTopicIds(new Set(isLoadingMapRef.current.keys()))
   }, [])
 
-  // 欢迎语打字机：见 components/WelcomeIntro.tsx（高频/无限循环动画不放在这里，
-  // 否则整个聊天视图会被每秒重渲染 ~25 次）
+  // Welcome typewriter: see components/WelcomeIntro.tsx (high-frequency / infinite animations are
+  // not placed here, otherwise the whole chat view would re-render ~25 times per second)
 
   const selectedProvider = useMemo(
     () => providers.find((p) => p.id === selectedProviderId) ?? null,
@@ -460,7 +508,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         const chatModels = list.filter((p) => !isEmbeddingProvider(p))
         setProviders(chatModels)
 
-        // 模型：优先使用默认 provider
+        // Model: prefer the default provider
         const defaultProvider = await window.api.providers.getDefault()
         if (defaultProvider && !isEmbeddingProvider(defaultProvider)) {
           setSelectedProviderId(defaultProvider.id)
@@ -490,11 +538,12 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         0,
         TOPICS_PAGE_SIZE
       )
-      // 期间又发起过更新的一次刷新的：这份结果已经过期，不能覆盖更新的那一份
-      // （否则 `topicsWorkspaceId` 会被写回旧工作区，侧栏那边就永远等不到活动工作区的列表）
+      // A newer refresh was started meanwhile: this result is stale and must not overwrite it
+      // (otherwise `topicsWorkspaceId` would be written back to the old workspace and the sidebar
+      // would never receive the active workspace's list)
       if (seq !== topicsRefreshSeqRef.current) return
       setTopics(result.items)
-      // 标记这批 topics 属于哪个工作区：切换工作区时旧列表不能挂到新工作区行下面
+      // Tag which workspace these topics belong to: when switching workspaces, the old list must not be attached under the new workspace row
       setTopicsWorkspaceId(workspaceId)
       setTopicsHasMore(result.hasMore)
     } catch (err) {
@@ -532,16 +581,20 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   /**
-   * 工作区切换（含插件行 /「在对话中修改」/「对话」模式）→ 重拉会话列表。
+   * Workspace switch (including plugin rows / "modify in chat" / "chat" mode) → refetch the
+   * session list.
    *
-   * 订阅必须挂在 Provider（常驻、跟着应用走），不能挂在对话页：切工作区的入口几乎都在
-   * `/plugins`（插件仓库 / 插件详情）或常驻侧栏里，人根本不在 `/harness`。此前这条订阅写在
-   * `pages/Harness.tsx` 里，离开对话页就没人接这个事件 ⇒ `topics` 一直停在上一个工作区的那份，
-   * 侧栏里「已展开的活动工作区」永远等不到自己的会话列表，一直卡在骨架屏
-   * （用户 2026-11-22 报的就是这个：插件行下面 5 行灰条不动）。
+   * The subscription must live in the Provider (always mounted with the app), not in the chat
+   * page: almost all workspace-switch entry points are in `/plugins` (plugin store / plugin
+   * detail) or the persistent sidebar, where the user is not on `/harness`. This subscription
+   * used to live in `pages/Harness.tsx`, so leaving the chat page meant nobody handled the event
+   * ⇒ `topics` stayed stuck on the previous workspace, and the "expanded active workspace" in the
+   * sidebar never received its own session list, remaining on the skeleton (this is what the user
+   * reported on 2026-11-22: the 5 grey rows under the plugin row never moved).
    *
-   * `refreshTopics` 自己按**设置里的**活动工作区取数，所以不依赖事件 detail；
-   * 并发/乱序由 `topicsRefreshSeqRef` 兜底。
+   * `refreshTopics` reads the active workspace from the **settings** itself, so it does not
+   * depend on the event detail; concurrency / out-of-order responses are handled by
+   * `topicsRefreshSeqRef`.
    */
   useEffect(() => {
     const onWorkspaceChanged = (): void => {
@@ -551,7 +604,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     return () => window.removeEventListener('workspace-changed', onWorkspaceChanged)
   }, [refreshTopics])
 
-  // 组件卸载时清理所有流监听器
+  // Clean up all stream listeners on unmount
   useEffect(() => {
     const chunkCleanups = chunkCleanupsRef.current
     const doneCleanups = doneCleanupsRef.current
@@ -563,9 +616,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
   }, [])
 
-  // ── 会话缓存管理 ──
+  // ── Session cache management ──
 
-  /** 保存当前对话窗口的状态到缓存 */
+  /** Save the current chat window state to the cache */
   const saveSessionToCache = useCallback((): void => {
     const topicId = currentTopicIdRef.current
     if (topicId == null) return
@@ -577,7 +630,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     })
   }, [messages, inputValue, attachments])
 
-  /** 从缓存恢复会话到当前对话窗口 */
+  /** Restore a session from the cache into the current chat window */
   const restoreSessionFromCache = useCallback((topicId: number): boolean => {
     const cached = sessionsRef.current.get(topicId)
     if (!cached) return false
@@ -588,49 +641,56 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     return true
   }, [])
 
-  // ── 开始流式监听（每个 topic 独立） ──
+  // ── Start stream listeners (independent per topic) ──
 
   /**
-   * @param expectedTurnId 本轮流监听的回合 id（主进程下发）。给了就只处理它的事件；
-   *   不给（本地发起的轮次在注册时还不知道 id）就锁在**第一条到达的 chunk** 的回合上，
-   *   之后属于别的回合的 chunk / done / error 一律丢弃——同话题两轮串台会让输出错乱。
+   * @param expectedTurnId turn id for this listener (sent by the main process). When provided,
+   *   only its events are handled; when omitted (locally initiated turns do not know the id at
+   *   registration time), the listener locks onto the turn of the **first arriving chunk** and
+   *   drops chunks / done / error from other turns — two overlapping turns on one topic would
+   *   scramble the output.
    */
   const startStreamListener = useCallback(
     (topicId: number, aiMessageId: string, expectedTurnId?: number): void => {
-      // 清理旧的监听器
+      // Clean up old listeners
       chunkCleanupsRef.current.get(topicId)?.()
       doneCleanupsRef.current.get(topicId)?.()
       errorCleanupsRef.current.get(topicId)?.()
 
-      /** 回合守卫：丢弃不属于本轮的 chunk / done / error（见 utils/harness/turn-guard） */
+      /** Turn guard: drop chunks / done / error that do not belong to this turn (see utils/harness/turn-guard) */
       const matchesTurn = createTurnGuard(expectedTurnId)
 
-      // 本轮助手消息的前端临时 id：整轮流式都写进这一条气泡
+      // Frontend temporary id for this turn's assistant message: the whole stream goes into this one bubble
       assistantIdByTopicRef.current.set(topicId, aiMessageId)
 
-      // ── 流式 chunk 合批（渲染进程 OOM 修复）──────────────────────────
-      // 此前每条 chunk IPC 到达都立即全量重渲染整条消息：ReactMarkdown 解析 + 语法高亮 +
-      // KaTeX 作用于全文，超长回复下累计 O(L²)，主线程被占满、GC 让位、IPC 事件积压，
-      // 内存峰值持续走高直至渲染进程被 OOM kill。合批把高频 chunk 排队，按间隔合并成
-      // 「一次会话更新 + 一次 React commit」——commit 数从「每条 chunk」降到 ~30/s 以内，
-      // 内容仍按到达顺序逐 chunk 追加（与既有增量/去重约定一致，不丢内容、不改语义）。
+      // ── Streaming chunk batching (renderer OOM fix) ──────────────────
+      // Previously every arriving chunk IPC triggered an immediate full re-render of the whole
+      // message: ReactMarkdown parsing + syntax highlighting + KaTeX over the entire text, which
+      // is O(L²) for a very long reply, saturating the main thread, starving GC and backing up
+      // IPC events until the renderer was OOM-killed. Batching queues high-frequency chunks and
+      // coalesces them into "one session update + one React commit" per interval — commits drop
+      // from one per chunk to ~30/s or less, while content is still appended chunk by chunk in
+      // arrival order (consistent with the existing incremental/dedup contract: nothing lost,
+      // semantics unchanged).
       let pendingChunks: StreamChunk[] = []
       let flushTimer: ReturnType<typeof setTimeout> | null = null
       let flushIntervalMs = CHUNK_FLUSH_BASE_INTERVAL_MS
 
-      /** 排空积压 chunk：按顺序逐 chunk 应用，只做一次会话缓存写入 + 一次 React commit */
+      /** Drain the backlog: apply chunks one by one in order, with a single session-cache write + one React commit */
       const applyPendingChunks = (): void => {
         flushTimer = null
         if (pendingChunks.length === 0) return
         const session = sessionsRef.current.get(topicId)
         if (!session) return
-        // 先合并「累积形态」的同类增量：逐 chunk 应用时每步都要复制整块文本（O(L²)），
-        // 合并后每批只复制一次（O(F×L)）。增量形态的段原样保留，语义不变。
+        // First coalesce same-kind "cumulative" deltas: applying per chunk copies the whole text
+        // at every step (O(L²)); after coalescing each batch copies it once (O(F×L)). Deltas
+        // already in incremental form are kept as-is, so semantics do not change.
         const coalesced = coalesceChunks(pendingChunks)
         pendingChunks = []
         const startedAt = performance.now()
-        // 插话回执（steered）纯过滤：它不改对话流（见 isSteerChunk 的说明），
-        // 助手消息继续按同一条气泡累积——一轮问答始终只有一条助手消息
+        // Steering receipts (steered) are filtered out: they do not change the conversation flow
+        // (see isSteerChunk), and the assistant message keeps accumulating in the same bubble —
+        // a question/answer turn always has exactly one assistant message
         const dataChunks = coalesced.filter((chunk) => !isSteerChunk(chunk))
         let updatedMessages = session.messages
         const targetId = assistantIdByTopicRef.current.get(topicId) ?? aiMessageId
@@ -643,13 +703,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           )
         }
         sessionsRef.current.set(topicId, { ...session, messages: updatedMessages })
-        // 复用 session cache 的结果直接更新 React state
-        // （避免 setMessages(prev => ...) 中 updater 被 StrictMode 双重调用导致重复块）
+        // Update React state directly from the session cache result
+        // (avoids duplicate blocks when StrictMode double-invokes the setMessages(prev => ...)
+        // updater)
         if (currentTopicIdRef.current === topicId) {
           setMessages(updatedMessages)
         }
-        // 自适应间隔：正文越长单次全量渲染越贵，间隔随长度线性放大；本批处理耗时
-        // （工具/智能体密集批次）同样拉大间隔，给主线程与 GC 喘息
+        // Adaptive interval: the longer the text, the more expensive each full render, so the
+        // interval grows linearly with length; the time taken by this batch (tool/agent-heavy
+        // batches) also widens it, giving the main thread and GC room to breathe
         const aiMsg = updatedMessages.find((m) => m.id === targetId)
         const textLen = Math.max(aiMsg?.content?.length ?? 0, aiMsg?.reasoning_content?.length ?? 0)
         const took = performance.now() - startedAt
@@ -661,26 +723,26 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             took * 2
           )
         )
-        // 排空期间到达的新 chunk 已重新入队，立即续排
+        // Chunks that arrived while draining are already re-queued, so reschedule immediately
         scheduleFlush()
       }
 
-      /** 若当前没有待触发的排空定时器则安排一个 */
+      /** Schedule a drain timer if none is pending */
       const scheduleFlush = (): void => {
         if (flushTimer != null || pendingChunks.length === 0) return
         flushTimer = setTimeout(applyPendingChunks, flushIntervalMs)
       }
 
       const chunkCleanup = harnessApi.harness.onStreamChunk((chunk: StreamChunk) => {
-        // topicId 守卫：只处理属于本话题的 chunk（Set 分发机制会使所有 handler 收到所有 chunk）
+        // topicId guard: only handle chunks for this topic (the Set-based dispatch delivers every chunk to every handler)
         if (chunk.__topicId !== topicId) return
-        // 回合守卫：不属于本轮的 chunk（上一轮的迟到事件 / 另一轮并发）直接丢弃
+        // Turn guard: drop chunks outside this turn (late events from the previous turn / concurrent other turns)
         if (!matchesTurn(chunk.__turnId)) return
         if (!sessionsRef.current.get(topicId)) return
         pendingChunks.push(chunk)
         scheduleFlush()
       })
-      // 注销前先落完积压 chunk（done/error/删除话题等路径），避免最后一段内容丢失
+      // Drain the backlog before unregistering (done/error/topic deletion paths) so the last piece of content is not lost
       chunkCleanupsRef.current.set(topicId, () => {
         applyPendingChunks()
         chunkCleanup()
@@ -695,44 +757,46 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           segments,
           turnFinal
         }) => {
-          // 守卫：只处理本 topic 的完成事件（Set 分发可能导致旧 handler 收到其他 topic 的事件）
+          // Guard: only handle completion events for this topic (Set dispatch may deliver other topics' events to old handlers)
           if (doneTopicId !== topicId) return
-          // 回合守卫：别的回合的收尾事件不能拿来收这一轮（否则会把还在跑的轮次提前切断）
+          // Turn guard: another turn's finish event must not close this turn (otherwise a running turn would be cut short)
           if (!matchesTurn(doneTurnId)) return
 
-          // 先落完积压 chunk：done 事件可能与最后一批 chunk 同 tick 到达，
-          // 若不先排空，末尾正文会丢在积压队列里（随后会话缓存被清理）
+          // Drain the backlog first: the done event may arrive in the same tick as the last
+          // chunk batch, and without draining, the trailing text would be lost (the session
+          // cache is cleared right after)
           applyPendingChunks()
 
-          // 清理对应 topic 的加载状态
+          // Clear the loading state for this topic
           isLoadingMapRef.current.delete(doneTopicId)
           syncLoadingTopics()
 
-          // 完成后清除缓存（后续切换回来直接读数据库）
+          // Clear the cache on completion (switching back later reads the database directly)
           sessionsRef.current.delete(doneTopicId)
 
-          // 清理智能体追踪
+          // Clean up agent tracking
           activeSubAgentCauseIdsRef.current.delete(doneTopicId)
-          // 本轮段落指针用完了：清掉，避免下轮误用上一轮的临时 id
+          // This turn's segment pointer is done: clear it so the next turn cannot reuse the stale temporary id
           assistantIdByTopicRef.current.delete(doneTopicId)
 
-          // 清理流监听器（doneCleanup 自身由 startStreamListener L575-576 在下一次同 topic 启动时清理）
+          // Clean up the stream listeners (doneCleanup itself is cleared by startStreamListener L575-576 when the same topic starts again)
           chunkCleanupsRef.current.get(doneTopicId)?.()
           chunkCleanupsRef.current.delete(doneTopicId)
           doneCleanupsRef.current.delete(doneTopicId)
           errorCleanupsRef.current.get(doneTopicId)?.()
           errorCleanupsRef.current.delete(doneTopicId)
 
-          // 刷新话题列表
+          // Refresh the topic list
           refreshTopics().then()
 
-          // 如果是当前显示的话题，更新 UI
+          // If this is the currently displayed topic, update the UI
           if (currentTopicIdRef.current === doneTopicId) {
             setIsLoading(false)
             setMessages((prev) => {
-              // 本轮落库的是两条消息：最后一条流式中的助手消息 + 它前面那条用户消息。
-              // 两条都要挂上库内行 id——删除「这一轮」时按 id 删，只给助手挂会导致
-              // 用户那条留在库里（表现为「只删掉了助手」）
+              // This turn persists two messages: the last streaming assistant message and the
+              // user message before it. Both need their DB row ids — deleting "this turn" works
+              // by id, and attaching only the assistant id would leave the user row in the
+              // database (looking like "only the assistant was deleted")
               let lastLoading = -1
               prev.forEach((msg, i) => {
                 if (msg.loading) lastLoading = i
@@ -744,8 +808,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
                   break
                 }
               }
-              // 插话切段后一段助手消息对应库里一行：按 messageId 精确贴回；
-              // 没有段落表（老路径）时退回「最后一条 loading 挂 assistantDialogueId」
+              // After steering splits segments, each assistant segment maps to one DB row: attach
+              // it precisely by messageId; without a segment table (old path), fall back to
+              // attaching assistantDialogueId to the last loading message
               const segmentIds = new Map(
                 (segments ?? [])
                   .filter((seg) => seg.dialogueId != null)
@@ -753,20 +818,25 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
               )
               return prev.map((msg, i) => {
                 if (msg.loading) {
-                  // 结束兜底移除「正在重试」过渡块（成功路径在首个数据 chunk 时已移除；
-                  // 此处覆盖中止/重试耗尽等未产生数据的收尾）——**先滤再算答复边界**，
-                  // 否则只在渲染端存在的过渡块会把「末尾 N 块」数错位
+                  // As a fallback on finish, remove the "retrying" transitional block (the success
+                  // path already removed it on the first data chunk; this covers aborts / exhausted
+                  // retries where no data arrived) — **filter before computing answer bounds**,
+                  // otherwise renderer-only transitional blocks offset the "last N blocks" count
                   const settledBlocks = msg.blocks.filter((b) => b.type !== 'retrying')
                   return {
                     ...msg,
                     loading: false,
                     /**
-                     * 本轮终局：主进程在 done 事件里给出权威结论（TurnFinal）。
+                     * Final state of this turn: the main process gives the authoritative verdict in
+                     * the done event (TurnFinal).
                      *
-                     * `answerBlocks` 是最终答复的块数（0 = 本轮没有答复），用**数量**而不是
-                     * 下标，因为两侧块数不一致（渲染端合并相邻 reasoning、还有过渡块）；
-                     * 数量对不上本地数组时 answerTailIndices 返回 undefined，退回旧行为，
-                     * 绝不错切。缺 turnFinal（老版本主进程）时同样什么都不改。
+                     * `answerBlocks` is the number of blocks in the final answer (0 = no answer this
+                     * turn). It is a **count** rather than an index because the two sides can have
+                     * different block counts (the renderer merges adjacent reasoning and has
+                     * transitional blocks); when the count does not match the local array,
+                     * answerTailIndices returns undefined and we fall back to the old behaviour —
+                     * never truncating incorrectly. Missing turnFinal (older main process) also
+                     * changes nothing.
                      */
                     answer:
                       turnFinal?.answerBlocks === undefined
@@ -791,20 +861,20 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       )
       doneCleanupsRef.current.set(topicId, doneCleanup)
 
-      // 注册流错误监听：模型不存在 / 被禁用等启动阶段的错误
+      // Register the stream error listener: startup errors such as a missing or disabled model
       const errorCleanup = harnessApi.harness.onStreamError(
         ({ error: errMsg, topicId: errorTopicId, turnId: errorTurnId }) => {
-          // 守卫：只处理本 topic 的错误
+          // Guard: only handle errors for this topic
           if (errorTopicId !== topicId) return
-          // 回合守卫：别的回合的报错不能覆盖这一轮的内容
+          // Turn guard: another turn's error must not overwrite this turn's content
           if (!matchesTurn(errorTurnId)) return
 
-          // 先落完积压 chunk，再整体替换为错误信息，避免与最后一批正文竞态
+          // Drain the backlog first, then replace it with the error message, avoiding a race with the last batch of text
           applyPendingChunks()
 
           console.error(`[Stream] Error for topic ${topicId}: ${errMsg}`)
 
-          // 更新会话缓存中的 AI 消息为错误信息（当前段落可能是插话切段后的续写段）
+          // Replace the cached AI message with the error text (the active segment may be a continuation after a steering split)
           const activeId = assistantIdByTopicRef.current.get(topicId) ?? aiMessageId
           const session = sessionsRef.current.get(topicId)
           if (session) {
@@ -817,7 +887,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             })
           }
 
-          // 如果当前正在显示此 topic，同步更新 React 状态
+          // If this topic is currently displayed, update React state in sync
           if (currentTopicIdRef.current === topicId) {
             setMessages((prev) =>
               prev.map((msg) =>
@@ -832,17 +902,20 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     [activeCauseIdsFor, syncLoadingTopics]
   )
 
-  // ── 主进程自行发起的轮次监听（常驻，不随普通轮的 done 清理）──
+  // ── Listeners for turns initiated by the main process (always mounted; not cleared by a normal turn's done) ──
   //
-  // 两类轮次用户都没有「点发送」这个动作，渲染端没有本地占位：
-  // - goalRound：目标自动续跑轮；
-  // - queueTurn：排队消息在上一轮结束后被自动接续发出的轮次。
-  // 主进程在流首下发标记 chunk，这里据此挂上用户消息 + 助手占位并注册本轮流监听——
-  // 少了这一步，消息在跑而界面上什么都没有（旧版「排队消息没发送」的直接原因）。
+  // Neither kind of turn involves the user clicking "send", so the renderer has no local placeholder:
+  // - goalRound: automatic continuation round for a goal;
+  // - queueTurn: a queued message automatically sent when the previous turn ends.
+  // The main process sends a marker chunk at the start of the stream; on that basis we mount the
+  // user message + assistant placeholder and register this turn's stream listener — without this
+  // step the messages run while the UI shows nothing (the direct cause of the old "queued message
+  // not sent" bug).
   useEffect(() => {
     /**
-     * 挂载一条主进程发起的轮次：用户消息 + 助手占位 + 加载态 + 流监听。
-     * 两种标记共用（区别只在用户消息的展示块与临时 id 前缀）。
+     * Mount a main-process-initiated turn: user message + assistant placeholder + loading state +
+     * stream listener. Shared by both markers (they differ only in the user message's display
+     * blocks and the temporary id prefix).
      */
     const mountExternalTurn = (
       topicId: number,
@@ -860,8 +933,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         loading: true
       }
 
-      // 标记加载状态（停止按钮可用、侧边栏转圈）
-      // 这一轮真的开跑了：清掉上一轮可能残留的绿点 / 黄点
+      // Mark the loading state (stop button enabled, sidebar spinner)
+      // This turn has really started: clear any green / yellow dot left over from the previous turn
       beginTopicTurn(topicId)
       isLoadingMapRef.current.set(topicId, true)
       syncLoadingTopics()
@@ -870,9 +943,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         setMessages((prev) => [...prev, userMessage, initialAiMessage])
       }
 
-      // 更新会话缓存并启动本轮监听（后续 chunk 由本轮监听器处理）
-      // 缓存可能在上一轮 done 时被清掉：当前正显示这个话题时用 React 里的列表兜底，
-      // 否则本轮第一个 chunk 会把界面上的历史消息整片替换掉
+      // Update the session cache and start this turn's listener (later chunks are handled by it)
+      // The cache may have been cleared when the previous turn finished: when this topic is
+      // currently displayed, fall back to the React list; otherwise the first chunk of this turn
+      // would replace the whole visible message history
       const session = sessionsRef.current.get(topicId)
       const base =
         session?.messages ??
@@ -911,8 +985,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
 
       if (chunk.queueTurn) {
         const { text, attachments } = chunk.queueTurn
-        // 排队轮次没有 dataURL（附件正文只在主进程队列里）：这里按文件名列出来即可，
-        // 气泡只负责说明「这条消息是什么」，真正的附件随请求下发
+        // Queued turns have no dataURL (attachment contents live only in the main process queue):
+        // listing file names here is enough — the bubble only explains what the message is, and
+        // the real attachments are sent with the request
         mountExternalTurn(
           topicId,
           {
@@ -928,7 +1003,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         return
       }
 
-      // 定时任务轮：正文就是主进程投递的消息（与落库内容一致），实时气泡与刷新后一致
+      // Scheduled-task turn: the text is the message delivered by the main process (same as what
+      // is persisted), so the live bubble matches the history after refresh
       if (chunk.scheduleTurn) {
         const { text } = chunk.scheduleTurn
         mountExternalTurn(
@@ -955,34 +1031,41 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     setMessages([])
     setCurrentTopicId(null)
     currentTopicIdRef.current = null
-    // 新会话一定不是归档态：清掉只读标记，输入框回来
+    // A new session is never archived: clear the read-only flag so the input returns
     currentTopicArchivedRef.current = false
     setCurrentTopicArchived(false)
     messagesBelongToTopicRef.current = null
     setInputValue('')
     setAttachments([])
     setIsLoading(false)
-    // 切换/新建会话时放弃气泡内编辑状态（那条提问不属于新会话）
+    // A new session resets to "off by default": the draft only served the previous session and is not inherited
+    setPendingTeamMode(false)
+    // Abandon in-bubble editing when switching / creating a session (that question does not belong to the new session)
     setEditingOrphanId(null)
-    // 新会话没有插话队列；当前段落指针也一并复位
+    // A new session has no steering queue; reset the current segment pointer as well
     setQueuedMessages([])
     assistantIdByTopicRef.current.clear()
-    // 普通「新建会话」不带独立记忆作用域（插件行「＋」/「对话」模式会在之后把它放进来，
-    // 见 harness-focus-input）：显式写 null，把上一条挂起值清掉，别让它漏给这一条新会话
+    // A plain "new session" has no independent memory scope (a plugin row's "+" / "chat" mode
+    // sets one afterwards, see harness-focus-input): write null explicitly to clear the previous
+    // pending value so it does not leak into this new session
     pendingMemoryScopeRef.current = null
-    // 记忆作用域同步归零：空会话 = 工作区那套（插件行「＋」是同步紧跟着派发的，会立刻改写回来）
+    // Reset the memory-scope store too: an empty session uses the workspace scope (a plugin row's
+    // "+" is dispatched synchronously right after and overwrites it immediately)
     setMemoryScope(null)
   }, [saveSessionToCache])
 
   /**
-   * 外部请求「开一个（可选带独立记忆作用域的）新会话，并把焦点放进输入框」（`harness-focus-input`）。
+   * External request to "open a new session (optionally with an independent memory scope) and put
+   * the focus in the input" (`harness-focus-input`).
    *
-   * 用途一：侧栏「插件」模式的行上点 ＋ = 针对这份插件开新会话——新会话是空白的
-   * （首个话题在首次发送时才落库），**刻意不预填任何文字**（用户口径 2026-09-28
-   * 「我需要的是不要显示：给插件「个人记账台账」（id: personal-ledger）这个玩意」），
-   * 只把光标送进输入框 + 记住这条会话该用**哪份插件的记忆**。
+   * Use case 1: clicking + on a sidebar row in "plugin" mode opens a new session for that plugin.
+   * The new session is blank (the first topic is persisted on the first send) and **deliberately
+   * pre-fills no text** (per the user's requirement on 2026-09-28, do not display something like
+   * "for plugin 'personal ledger' (id: personal-ledger)"); it only sends the caret into the input
+   * and remembers **which plugin's memory** the session should use.
    *
-   * 用途二：「对话」模式的 ＋ 同名事件带 `scope: 'chat'`——记忆用该模式自己那一套。
+   * Use case 2: the + in "chat" mode fires the same event with `scope: 'chat'` — memory uses that
+   * mode's own scope.
    */
   useEffect(() => {
     const handler = (event: Event): void => {
@@ -991,9 +1074,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       const pluginId = detail?.pluginId
       const scope = detail?.scope === 'chat' ? 'chat' : pluginId ? `plugin:${pluginId}` : null
       pendingMemoryScopeRef.current = scope
-      // 还没有话题的这段时间里，界面（侧栏记忆块 / 设置 → 记忆）也要显示这套记忆
+      // While there is no topic yet, the UI (sidebar memory block / Settings → Memory) must also show this scope
       setMemoryScope(scope)
-      // 切模式自动进入的那条空白会话只带作用域、不抢光标（用户只是在看插件这一侧的内容）
+      // The blank session entered automatically when switching modes only carries the scope and does not steal focus (the user is just browsing the plugin side)
       if (detail?.focus !== false) setFocusInputToken((n) => n + 1)
     }
     window.addEventListener('harness-focus-input', handler)
@@ -1001,59 +1084,64 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   /**
-   * 打开一条会话。
+   * Open a session.
    *
-   * `options.focusDialogueId`：会话检索点「正文命中」时传目标对话行 id。目标可能落在首屏
-   * 20 条之外，这时继续向后翻页（最多 20 页 / 400 条）直到把目标读进列表，交给消息区滚动
-   * 高亮——否则搜索命中了却定位不到，等于链路断在最后一步。
+   * `options.focusDialogueId`: when session search hits "content", pass the target dialogue row
+   * id. The target may fall outside the first 20 loaded rows, so keep paging backwards (up to 20
+   * pages / 400 rows) until it is loaded into the list, then let the message area scroll to and
+   * highlight it — otherwise a search hit cannot be located, breaking the flow at the last step.
    */
   const handleSelectTopic = useCallback(
     async (
       topic: HarnessTopicRow,
       options?: { focusDialogueId?: number }
     ): Promise<void> => {
-      // 不在加载时禁止切换，允许自由切换
+      // Do not block switching while loading; free switching is allowed
 
-      // 用户点开了这条会话 = 刚完成的绿点可以消失了（用户口径 2026-11-23
-      // 「当用户点击这个会话时，这个绿色的点会消失」；黄点不动，见 acknowledgeTopic）
+      // The user opened this session = the just-completed green dot can go away (user requirement,
+      // 2026-11-23: the green dot disappears when the user clicks the session; the yellow dot is
+      // untouched, see acknowledgeTopic)
       acknowledgeTopic(topic.id)
 
-      // 保存当前话题状态到缓存
+      // Save the current topic state to the cache
       saveSessionToCache()
 
-      // 切话题时放弃气泡内编辑状态：那条提问属于上一个话题
+      // Abandon in-bubble editing when switching topics: that question belongs to the previous topic
       setEditingOrphanId(null)
 
-      // 选中的话题自带记忆作用域（存在话题行上，主进程按它走）→ 清掉「下一条新话题」的挂起值
+      // The selected topic carries its own memory scope (stored on the topic row, honoured by the main process) → clear the pending value for "the next new topic"
       pendingMemoryScopeRef.current = undefined
-      // 记忆跟着当前会话走：这条会话是插件会话就显示这份插件的记忆，「对话」模式的会话
-      // 显示该模式自己的那份，否则回工作区
-      // （重开应用后点开会话也认——作用域是话题行上存着的，不靠渲染层记得住）
+      // Memory follows the current session: a plugin session shows that plugin's memory, a "chat"
+      // mode session shows its own scope, otherwise fall back to the workspace
+      // (this also holds after restarting the app — the scope is stored on the topic row and does
+      // not rely on the renderer remembering it)
       setMemoryScope(topic.memory_scope ?? null)
 
       currentTopicIdRef.current = topic.id
       setCurrentTopicId(topic.id)
-      // 归档的会话是只读的：打开只查看历史（输入框隐藏、发送被拒）
+      // Archived sessions are read-only: opening only browses history (input hidden, sending rejected)
       markTopicArchived(Boolean(topic.archived_at))
 
-      // 先尝试从缓存恢复（进行中的会话）。
-      // 但「检索命中要定位」时不走缓存早退：缓存里不一定含目标消息，统一按分页重读，
-      // 由下面的翻页逻辑保证目标行进入列表。
+      // First try restoring from the cache (for sessions still in progress).
+      // But when "a search hit must be located", skip the cache early-return: the cache may not
+      // contain the target message, so reload via pagination uniformly and let the paging logic
+      // below ensure the target row enters the list.
       const restored =
         options?.focusDialogueId == null ? restoreSessionFromCache(topic.id) : false
       if (restored) {
-        // 从缓存恢复，同步 loading 状态
+        // Restored from the cache; sync the loading state
         setIsLoading(isLoadingMapRef.current.get(topic.id) ?? false)
         messagesBelongToTopicRef.current = topic.id
-        // 重置分页状态（修复：此前早退不重置,残留上一话题的 messagesPage/messagesHasMore,
-        // 点「加载更多」会用上一话题的页码对当前话题取数,造成漏页/重叠）
+        // Reset pagination state (fix: the early return used to skip this, leaving the previous
+        // topic's messagesPage/messagesHasMore; "load more" then fetched the current topic with the
+        // old page number, causing missing pages / overlap)
         currentSessionIdRef.current = null
         setMessagesPage(0)
         setMessagesHasMore(true)
         return
       }
 
-      // 缓存未命中：从数据库分页加载第一页
+      // Cache miss: load the first page from the database
       currentSessionIdRef.current = null
       setIsLoading(false)
       setMessagesPage(0)
@@ -1070,7 +1158,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         role: d.role,
         content: d.content,
         blocks: d.blocks ? JSON.parse(d.blocks) : [],
-        // created_at 库列为可空（DEFAULT NOW()），缺失时退回当前时间
+        // The created_at column is nullable (DEFAULT NOW()); fall back to the current time when missing
         timestamp: d.created_at ? new Date(d.created_at).getTime() : Date.now(),
         loading: false
       })
@@ -1086,7 +1174,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         let hasMore = result.hasMore
         const focusId = options?.focusDialogueId
         if (focusId != null && !loadedMessages.some((m) => Number(m.id) === focusId)) {
-          // 目标不在首屏：逐页往回翻（page 0 是最新一页，page+1 更旧），命中即停
+          // Target not on the first screen: page backwards (page 0 is the newest page, page+1 is older) until found
           for (let guard = 0; guard < 20 && hasMore; guard += 1) {
             const older = await harnessApi.harness.getDialoguesByTopicPaginated(
               topic.id,
@@ -1117,12 +1205,14 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   )
 
   /**
-   * 分支：把当前话题里到 upToIndex 为止的消息复制成一个新话题。
+   * Branch: copy the messages up to upToIndex in the current topic into a new topic.
    *
-   * 三件事必须一起做，否则就是「点了没反应」：
-   *  1) 新话题落库（createTopic）并逐条复制消息（addDialogue）；
-   *  2) **刷新话题列表**——侧边栏读的是 topics 状态，绕过它建的话题不会出现在列表里；
-   *  3) **切到新话题**——复用 handleSelectTopic，让它走正常的加载/缓存/分页流程。
+   * Three things must happen together, otherwise it looks like "clicked and nothing happened":
+   *  1) persist the new topic (createTopic) and copy each message (addDialogue);
+   *  2) **refresh the topic list** — the sidebar reads the topics state, and a topic created
+   *     without going through it never appears in the list;
+   *  3) **switch to the new topic** — reuse handleSelectTopic so it goes through the normal
+   *     loading / cache / pagination flow.
    */
   const handleBranchConversation = useCallback(
     async (upToIndex: number): Promise<void> => {
@@ -1138,16 +1228,29 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           title: firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 30)
         })
         const branchScope = getMemoryScope()
+        // A branch continues the same collaborative work: carry the source topic's team
+        // collaboration state over, otherwise a branch from a session with an open task board
+        // would suddenly lose the team_task_* tools and team prompt.
+        const sourceTopicId = currentTopicIdRef.current
+        const branchTeamMode =
+          sourceTopicId != null
+            ? await harnessApi.harness
+                .getTeamMode(sourceTopicId)
+                .then((view) => view.enabled)
+                .catch(() => false)
+            : false
         const newTopicId = await harnessApi.harness.createTopic(
           workspaceId,
           title,
           undefined,
           undefined,
-          // 分支出来的会话跟原会话用**同一套记忆**（否则从插件会话分出来的支会掉回工作记忆）
-          branchScope
+          // The branched session uses the **same memory** as the source (otherwise a branch from a plugin session would fall back to workspace memory)
+          branchScope,
+          branchTeamMode
         )
-        // 「对话」模式的分支是**另一条会话**：它有自己的目录，主进程建话题时已切好，
-        // 这里同步一次活动路径（否则新分支仍在父会话的目录里读写文件）
+        // A "chat" mode branch is **another session**: it has its own directory, already switched
+        // to by the main process when creating the topic. Sync the active path here, otherwise the
+        // new branch would still read/write files in the parent session's directory.
         if (isChatScope(branchScope)) notifyChatTopicActivated(workspaceId)
         for (const item of slice) {
           await harnessApi.harness.addDialogue({
@@ -1157,7 +1260,8 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             blocks: JSON.stringify(item.blocks ?? [])
           })
         }
-        // 先刷新列表（新话题 updated_at 最新，排在第一页首位），再从刷新结果里取出行去切换
+        // Refresh the list first (the new topic has the newest updated_at and sits at the top of
+        // page 0), then take its row from the refreshed result and switch to it
         const result = await harnessApi.harness.getAllTopicsPaginated(
           workspaceId,
           0,
@@ -1200,18 +1304,18 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     async (topicId: number, e?: React.MouseEvent): Promise<void> => {
       e?.stopPropagation()
       try {
-        // 如果删除的是正在流式输出的话题，先取消后端流
+        // If the deleted topic is streaming, cancel the backend stream first
         if (isLoadingMapRef.current.has(topicId)) {
           harnessApi.harness.cancelStream()
         }
 
         await harnessApi.harness.deleteTopic(topicId)
 
-        // 清理该话题的所有缓存和监听器
+        // Clean up all caches and listeners for this topic
         sessionsRef.current.delete(topicId)
         isLoadingMapRef.current.delete(topicId)
         syncLoadingTopics()
-        // 行首的两端标记跟着这条会话一起消失（id 之后可能被数据库复用）
+        // The row-start markers disappear with this session (the id may be reused by the database later)
         forgetTopic(topicId)
         chunkCleanupsRef.current.get(topicId)?.()
         chunkCleanupsRef.current.delete(topicId)
@@ -1223,17 +1327,19 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         assistantIdByTopicRef.current.delete(topicId)
 
         if (currentTopicIdRef.current === topicId) {
-          // 删的是**正在看的**这条：先把指针挪开再清视图。
-          // `handleNewHarness()` 开头会 `saveSessionToCache()`（按 currentTopicIdRef 写缓存），
-          // 指针还指着这条已删会话的话，就会把刚删掉的历史又写回 `sessionsRef`；
-          // 之后任何一次「重新选中这个 id」（旧行、迟到的事件）都会命中缓存、把历史原样放回屏幕
-          // ——用户口径 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」。
+          // Deleting the row that is **currently displayed**: move the pointer away before
+          // clearing the view. `handleNewHarness()` starts with `saveSessionToCache()` (writes by
+          // currentTopicIdRef); if the pointer still targets the deleted session, the deleted
+          // history would be written back into `sessionsRef`, and any later "reselect this id"
+          // (stale row, late event) would hit the cache and put the history back on screen — the
+          // user reported this on 2026-10-26: after deleting the current session, its content was
+          // still shown as the selected history.
           currentTopicIdRef.current = null
           handleNewHarness()
-          // 删掉的若是归档会话：只读标记跟着清掉（新视图是空白会话，输入框要回来）
+          // If an archived session was deleted, clear the read-only flag too (the new view is a blank session and the input must return)
           currentTopicArchivedRef.current = false
           setCurrentTopicArchived(false)
-          // 双保险：清视图过程中若又落了缓存，这里补删一次
+          // Belt and braces: if the cache was written again while clearing the view, delete it once more here
           sessionsRef.current.delete(topicId)
         }
         await refreshTopics()
@@ -1255,13 +1361,13 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         MESSAGES_PAGE_SIZE
       )
       setMessagesPage(nextPage)
-      // 更旧的消息插入到列表头部
+      // Insert older messages at the head of the list
       const olderMessages: Message[] = result.items.map((d) => ({
         id: String(d.id),
         role: d.role,
         content: d.content,
         blocks: d.blocks ? JSON.parse(d.blocks) : [],
-        // created_at 库列为可空（DEFAULT NOW()），缺失时退回当前时间
+        // The created_at column is nullable (DEFAULT NOW()); fall back to the current time when missing
         timestamp: d.created_at ? new Date(d.created_at).getTime() : Date.now(),
         loading: false
       }))
@@ -1285,11 +1391,15 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   /**
-   * 一轮问答的公共管线：乐观上屏 → 确保话题 → 加载态 → 流监听 → 会话缓存 → 发起流。
+   * Shared pipeline for one question/answer turn: optimistic render → ensure topic → loading
+   * state → stream listener → session cache → start stream.
    *
-   * @param userMessage   这一轮的用户消息（正常发送时新建；气泡内编辑时是**就地替换**的那条）
-   * @param attachments   本轮附件（图片 dataURL / 文档路径），用于传给主进程
-   * @param replaceIndex  气泡内编辑：替换消息列表里的第 index 条，**不新增用户气泡**
+   * @param userMessage   this turn's user message (newly created on a normal send; the one being
+   *   **replaced in place** on an in-bubble edit)
+   * @param attachments   this turn's attachments (image dataURLs / document paths), passed to the
+   *   main process
+   * @param replaceIndex  in-bubble edit: replace the message at this index in the list, **without
+   *   adding another user bubble**
    */
   const startTurn = useCallback(
     async (params: {
@@ -1314,7 +1424,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         loading: true
       }
 
-      // 乐观上屏：编辑时原地替换（沿用同一个 id → 同一个气泡，不会多出一条），正常发送时追加
+      // Optimistic render: replace in place when editing (same id → same bubble, so no extra row), otherwise append
       setMessages((prev) => [
         ...(replaceIndex != null
           ? prev.map((m, i) => (i === replaceIndex ? userMessage : m))
@@ -1322,27 +1432,31 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         initialAiMessage
       ])
 
-      // ── 发出后清空输入区 ──────────────────────────────────────────────
-      // 输入框只在 inputValue 变成 '' 时才清编辑器（见 HarnessInput 的同步 effect），
-      // 此前这里没清 → 内容一直留在对话框中（气泡也上屏了，看起来像没发出去）。
-      // 放在 startTurn 而不是 handleSend：三条入口（首次发送 / 生成中入队后接续 / 队列自动
-      // 接续）都要清；气泡内编辑重发（replaceIndex != null）时输入框没内容，不动。
+      // ── Clear the input area after sending ────────────────────────────
+      // The input only clears the editor when inputValue becomes '' (see HarnessInput's sync
+      // effect); this was not cleared before, so content stayed in the box (the bubble appeared,
+      // making it look like it was not sent).
+      // Done in startTurn rather than handleSend: all three entry points (first send / continuation
+      // after enqueueing while generating / automatic queue continuation) need it; on an in-bubble
+      // edit resend (replaceIndex != null) the input is empty, so leave it alone.
       if (replaceIndex == null) {
-        // 竞态防御：发送是异步的，若在这期间用户又打了新内容，不能被这次发送清掉
+        // Race guard: sending is async; if the user typed new content meanwhile, do not clear it
         setInputValue((prev) => (prev.trim() === userMessage.content ? '' : prev))
         setAttachments([])
       }
 
       try {
-        // 如果还没有 topic，先创建（让话题立即出现在侧边栏）
+        // If there is no topic yet, create one first (so the topic appears in the sidebar immediately)
         let topicId = currentTopicIdRef.current
         if (!topicId) {
           const title = userMessage.content.slice(0, 50)
           const workspaceId = await getActiveWorkspaceId()
-          // 记忆作用域：插件行「＋」开出来的会话带 `plugin:<id>`（这份插件自己的记忆），
-          // 「对话」模式的会话带 `chat`，普通会话留空 = 跟工作区走（见 main/memory-scope.ts）。
-          // 取值三种含义见 pendingMemoryScopeRef 的说明；`undefined` 时用**当前话题**存的那一份
-          // （往已有会话里发消息不建话题，这里根本不会走到），兜底仍是工作区。
+          // Memory scope: a session opened from a plugin row's "+" carries `plugin:<id>` (that
+          // plugin's own memory), a "chat" mode session carries `chat`, and a plain session
+          // leaves it empty = follow the workspace (see main/memory-scope.ts).
+          // For the three meanings of the value see pendingMemoryScopeRef; `undefined` means use
+          // the scope stored on the **current topic** (sending into an existing session does not
+          // create a topic, so this path is never reached), and the fallback is still the workspace.
           const memoryScope =
             pendingMemoryScopeRef.current !== undefined
               ? pendingMemoryScopeRef.current
@@ -1352,20 +1466,27 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             title,
             undefined,
             undefined,
-            memoryScope
+            memoryScope,
+            // Team collaboration draft flipped in the blank session: persisted together with the
+            // topic, so switching the UI over shows no "off then on" flicker
+            pendingTeamMode
           )
-          // 作用域已经落进话题行，之后由主进程按话题读；用完就清，避免影响下一条新会话
-          // （界面这一侧的作用域 store 保持不动：话题就是这条会话的作用域，等切会话时再改写）
+          // The scope is now stored on the topic row and read by the main process from there;
+          // clear it after use so it does not affect the next new session (the UI-side scope store
+          // stays untouched: the topic is this session's scope, rewritten when switching sessions)
           pendingMemoryScopeRef.current = undefined
           /**
-           * **先把输入框当前的工具/技能/MCP 选择写进新话题，再切 currentTopicId**。
+           * **Write the input's current tool/skill/MCP selection into the new topic before
+           * switching currentTopicId**.
            *
-           * 为什么顺序这么重要（用户 2026-11-27：「有时候选择会被取消，导致没有注册工具」）：
-           * `setCurrentTopicId` 会让输入框重新按话题读一次会话选择；而主进程要等这轮消息
-           * 真正开跑（startMessageStream 里）才把 `agentConfig` 写回话题。中间这段空窗里
-           * 读到的就是「这个新话题还没有选择」→ 输入框回落到主智能体默认（通常是空）→
-           * 刚勾的工具在界面上被清零、`agentSelection` 也被覆盖成 null；之后随手再勾一项，
-           * 又会用「只剩这一项」的选择覆盖数据库，看起来就是选择被吃掉了。
+           * Why the order matters (user, 2026-11-27: selections were sometimes cancelled, so no
+           * tools got registered): `setCurrentTopicId` makes the input re-read the session
+           * selection for the topic, while the main process only writes `agentConfig` back to the
+           * topic once the turn actually starts (inside startMessageStream). In that window the
+           * input reads "this new topic has no selection yet" → falls back to the main agent
+           * defaults (usually empty) → the just-checked tools are visually cleared and
+           * `agentSelection` is overwritten with null; checking one more item afterwards then
+           * overwrites the database with "only this one item" — the selection appears swallowed.
            */
           if (agentSelection) {
             await harnessApi.harness
@@ -1374,13 +1495,17 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           }
           currentTopicIdRef.current = topicId
           setCurrentTopicId(topicId)
-          // 「对话」模式的会话目录按话题 id 分：主进程建话题时已把活动目录切过去，
-          // 这里广播一次让资源管理器 / 文件路径映射跟上（见 notifyChatTopicActivated）
+          // The draft was already written into team_mode with the topic (the createTopic call
+          // above); just reset it here so it does not leak into the next new session
+          setPendingTeamMode(false)
+          // "Chat" mode session directories are per topic id: the main process already switched
+          // the active directory when creating the topic, so broadcast once here so the explorer /
+          // file path mapping catch up (see notifyChatTopicActivated)
           if (isChatScope(memoryScope)) notifyChatTopicActivated(workspaceId)
           refreshTopics().then()
         }
 
-        // 记录本轮输入到全局输入历史（输入框 ↑/↓ 键切换用，localStorage 持久化，上限 100 条）
+        // Record this turn's input in the global input history (browsed with Up/Down, persisted in localStorage, max 100)
         const sentText = userMessage.content
         const inputHistory = inputHistoryRef.current
         if (inputHistory[inputHistory.length - 1] !== sentText) {
@@ -1391,23 +1516,24 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           try {
             localStorage.setItem(INPUT_HISTORY_STORAGE_KEY, JSON.stringify(inputHistory))
           } catch {
-            // 存储失败不影响发送流程
+            // Storage failure does not affect the send flow
           }
         }
 
         currentSessionIdRef.current = aiMessageId
 
-        // 这一轮开跑：上一轮留下的「刚完成」绿点作废（会话从「等你查看」回到「进行中」）
+        // This turn has started: the previous turn's "just completed" green dot is void (the session goes from "waiting for you" back to "in progress")
         beginTopicTurn(topicId)
 
-        // 标记加载状态
+        // Mark the loading state
         isLoadingMapRef.current.set(topicId, true)
         syncLoadingTopics()
         setIsLoading(true)
 
-        // 缓存当前会话——使用 messagesBelongToTopicRef 防止跨话题污染：
-        // 如果 handleSelectTopic 的异步 DB 加载尚未完成，messages 仍属于旧话题，
-        // 此时应丢弃旧消息，从新对话开始（否则会把 A 的历史混入 B 的会话缓存）
+        // Cache the current session — messagesBelongToTopicRef prevents cross-topic pollution: if
+        // handleSelectTopic's async DB load has not finished, messages still belong to the old
+        // topic, and the old messages must be dropped so the new conversation starts clean
+        // (otherwise A's history would be mixed into B's session cache)
         const sameTopic = messagesBelongToTopicRef.current === topicId
         const base = sameTopic ? messages : ([] as Message[])
         const withUser =
@@ -1423,25 +1549,30 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         })
         messagesBelongToTopicRef.current = topicId
 
-        // 同步 React 状态
+        // Sync React state
         setMessages(currentMessages)
 
-        // 先问主进程「这一轮到底起没起来」，再挂流监听：
-        //  - started=true → 正常挂监听（监听器按第一条 chunk 锁定回合 id）；
-        //  - queued=true  → 上一轮还在跑（极小概率的竞态），这条已被收进队列，
-        //    撤掉刚上屏的乐观气泡，避免出现一条永远转圈的幽灵消息。
-        // 之所以不在 await 之前挂监听：那会在竞态路径上把真正在跑的那一轮的监听覆盖掉。
+        // Ask the main process whether this turn actually started before attaching the stream
+        // listener:
+        //  - started=true → attach normally (the listener locks onto the turn id from the first
+        //    chunk);
+        //  - queued=true  → the previous turn is still running (a very unlikely race), this message
+        //    has been queued, so remove the optimistic bubble and avoid a ghost message that spins
+        //    forever.
+        // The listener is not attached before the await because that would overwrite the listener
+        // of the turn that is actually running on the race path.
         const startResult = await harnessApi.harness.startMessageStream(userMessage.content, {
           images: currentImages.length > 0 ? currentImages : undefined,
           documents: currentDocuments.length > 0 ? currentDocuments : undefined,
           topicId,
           providerId: selectedProviderId ?? undefined,
-          // 输入框下面选的工具/技能/MCP：主进程按它组装本轮，并写回会话配置
+          // Tools/skills/MCP selected below the input: the main process assembles this turn from it and writes it back to the session config
           agentConfig: agentSelection ?? undefined,
-          // 首段助手消息的前端临时 id：插话会切段，主进程按段回传库内行 id
+          // Frontend temporary id of the first assistant segment: steering can split segments, and the main process returns the DB row id per segment
           messageId: aiMessageId,
-          // 编辑重发：让主进程改写这条已存在的用户消息行，而不是插入新行
-          // （否则库里会多出一条同内容提问，历史顺序也被挪到末尾）
+          // Edit-and-resend: have the main process update this existing user message row instead
+          // of inserting a new one (otherwise the database would get a duplicate question and the
+          // history order would shift it to the end)
           reuseUserDialogueId:
             replaceIndex != null ? (resolveDialogueId(userMessage) ?? undefined) : undefined
         })
@@ -1465,7 +1596,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           return
         }
 
-        // 启动流监听（独立于当前对话窗口，持续更新缓存）
+        // Start the stream listener (independent of the visible chat window; keeps updating the cache)
         startStreamListener(topicId, aiMessageId)
       } catch (error) {
         console.error('Error sending message:', error)
@@ -1479,7 +1610,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         }
         setMessages((prev) => prev.map((msg) => (msg.id === aiMessageId ? errorMessage : msg)))
 
-        // 清理加载状态
+        // Clear the loading state
         const topicId = currentTopicIdRef.current
         if (topicId != null) {
           isLoadingMapRef.current.delete(topicId)
@@ -1497,17 +1628,19 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       notifyChatTopicActivated,
       refreshTopics,
       beginTopicTurn,
+      // Team collaboration draft flipped in the blank session: passed to createTopic when creating the topic
+      pendingTeamMode,
       t
     ]
   )
 
-  /** 输入框发送：空闲时直接开一轮；生成中则交给主进程收进插话队列 */
+  /** Input send: start a turn directly when idle; while generating, hand it to the main process for the steering queue */
   const handleSend = useCallback(async (): Promise<void> => {
-    // 归档会话只读：输入框本来就不渲染，这里再兜一道，别的入口（快捷键等）也发不出去
+    // Archived sessions are read-only: the input is not rendered anyway, but this adds another guard so other entry points (shortcuts, etc.) cannot send either
     if (currentTopicArchivedRef.current) return
     if (!inputValue.trim()) return
 
-    // 新一轮问答开始：清空输入框上方的进行中任务卡片（等待模型重新规划）
+    // A new turn begins: clear the in-progress task cards above the input (waiting for the model to re-plan)
     window.dispatchEvent(new CustomEvent('harness-send-started'))
 
     const currentAttachments = [...attachments]
@@ -1525,9 +1658,12 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       timestamp: Date.now()
     }
 
-    // 生成中（本话题有回合在跑）：不打断当前回合，消息进插话队列等用户点「立即插话」
-    // 或等本轮跑完自动接续。**是否在跑一律问主进程**——本地 isLoading 在主进程自行接续
-    // 排队消息 / 目标自动续跑的轮次上会滞后，据此判断会并发起第二个回合（输出错乱的根因）。
+    // While generating (this topic has a turn running): do not interrupt the current turn; the
+    // message enters the steering queue and waits for the user to click "steer now" or for the
+    // turn to finish and auto-continue. **Always ask the main process whether it is running** —
+    // the local isLoading lags for main-process auto-continuations (queued messages / goal
+    // rounds), and judging by it would start a second concurrent turn (the root cause of
+    // scrambled output).
     const topicId = currentTopicIdRef.current
     if (topicId != null) {
       const turnState = await harnessApi.harness.getTurnState(topicId).catch(() => null)
@@ -1544,9 +1680,10 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
             }
           })
           if (queued) {
-            // 已入队（按队列行显示在输入框上方），清空输入区。
-            // 注意：不能直接 setInputValue('') —— 入队是异步的，期间用户可能又打了新内容；
-            // 与本次入队内容一致才清，避免误删新草稿。
+            // Queued (shown as a queue row above the input), so clear the input area.
+            // Note: do not call setInputValue('') directly — enqueueing is async and the user may
+            // have typed new content meanwhile; clear only when it still matches this message, so
+            // a new draft is not deleted.
             setInputValue((prev) => (prev.trim() === userMessage.content ? '' : prev))
             return
           }
@@ -1559,7 +1696,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     await startTurn({ userMessage, attachments: currentAttachments })
   }, [inputValue, attachments, startTurn])
 
-  /** 目标卡片 Enter：保存目标后，以「开始执行目标」发起一轮（后续由 goal driver 自动续跑）。 */
+  /** Goal card Enter: after saving the goal, start a turn with "start executing the goal" (later rounds are auto-continued by the goal driver). */
   const handleStartGoal = useCallback(
     async (objective: string): Promise<void> => {
       const text = objective.trim()
@@ -1579,10 +1716,11 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   )
 
   /**
-   * 动作卡（propose_action）点选：把选项文本作为一条用户消息发出去。
+   * Action card (propose_action) click: send the option text as a user message.
    *
-   * 与手动发送走同一条路径：生成中则入队（不打断当前回合），否则直接开新一轮。
-   * 卡片通过 `harness-propose-action` 窗口事件把文本交到这里。
+   * Goes through the same path as a manual send: queue it while generating (without interrupting
+   * the current turn), otherwise start a new turn. Cards hand the text here via the
+   * `harness-propose-action` window event.
    */
   const handleProposeAction = useCallback(
     async (text: string): Promise<void> => {
@@ -1626,7 +1764,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     return () => window.removeEventListener('harness-propose-action', listener)
   }, [handleProposeAction])
 
-  /** 删除一条排队消息（主进程为真源，删除后靠广播回同步） */
+  /** Delete one queued message (the main process is the source of truth; the broadcast re-syncs) */
   const handleRemoveQueued = useCallback(async (itemId: string): Promise<void> => {
     const topicId = currentTopicIdRef.current
     if (topicId == null) return
@@ -1637,7 +1775,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
   }, [])
 
-  /** 改写一条排队消息的文本 */
+  /** Rewrite the text of a queued message */
   const handleUpdateQueued = useCallback(async (itemId: string, text: string): Promise<void> => {
     const topicId = currentTopicIdRef.current
     if (topicId == null || !text.trim()) return
@@ -1649,8 +1787,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   }, [])
 
   /**
-   * 立即插话：把这条排队消息并入**正在运行**的回合（下一个工具节点边界生效）。
-   * 回执与落库由主进程在注入点统一下发（steered chunk），这里只发请求。
+   * Steer now: merge this queued message into the **running** turn (effective at the next tool
+   * node boundary). The receipt and persistence are emitted by the main process at the injection
+   * point (steered chunk); this only sends the request.
    */
   const handleSteerQueued = useCallback(async (itemId: string): Promise<void> => {
     const topicId = currentTopicIdRef.current
@@ -1662,21 +1801,22 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     }
   }, [])
 
-  /** 进入**气泡内**编辑（内容不出气泡，聊天输入框不参与） */
+  /** Enter **in-bubble** editing (content stays in the bubble; the chat input is not involved) */
   const handleStartEditMessage = useCallback((msgIndex: number): void => {
     const current = messagesSnapshotRef.current[msgIndex]
     if (!current || current.role !== 'user') return
     setEditingOrphanId(current.id)
   }, [])
 
-  /** 取消气泡内编辑（Esc） */
+  /** Cancel in-bubble editing (Esc) */
   const handleCancelEditMessage = useCallback((): void => {
     setEditingOrphanId(null)
   }, [])
 
   /**
-   * 气泡内回车提交：内容**就地替换**这条提问（不新增用户气泡），随后按普通一轮发起请求；
-   * 库里用 UPDATE 改写同一行（reuseUserDialogueId），行 id 与历史顺序都不变。
+   * Submit in-bubble with Enter: **replace this question in place** (no extra user bubble), then
+   * start a normal turn; the database updates the same row via UPDATE (reuseUserDialogueId), so
+   * the row id and history order stay unchanged.
    */
   const handleSubmitEditMessage = useCallback(
     async (msgIndex: number, content: string): Promise<void> => {
@@ -1720,7 +1860,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           if (dialogueId !== null) {
             await harnessApi.harness.deleteDialogue(dialogueId)
           } else {
-            // 流式期间的消息用临时 id（Date.now() 时间戳），拿它去删会命中不存在的行
+            // Messages during streaming use temporary ids (Date.now() timestamps); deleting by them hits nonexistent rows
             console.warn(`[Harness] Skipping delete: message has no stored id yet (index=${idx})`)
           }
         }
@@ -1738,9 +1878,12 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           currentTopicIdRef.current = null
           messagesBelongToTopicRef.current = null
           setCurrentTopicId(null)
-          // 会话空了 = 回到了空白态：挂起值交回**当前会话那一套**（undefined → 建话题时用
-          // 当前作用域，主进程再按工作区种类兜底）。**不重置成工作区**：插件 /「对话」会话
-          // 清空全部消息后仍然是这一侧的内容，掉回工作区记忆会让侧栏和下一轮都串味。
+          // The session is now empty = back to the blank state: hand the pending value back to
+          // **the current session's scope** (undefined → use the current scope when creating the
+          // topic, with the main process falling back by workspace kind). **Do not reset to the
+          // workspace**: after clearing all messages, a plugin / "chat" session is still on that
+          // side, and falling back to workspace memory would taint both the sidebar and the next
+          // turn.
           pendingMemoryScopeRef.current = undefined
           if (deletedTopicId != null) {
             sessionsRef.current.delete(deletedTopicId)
@@ -1754,7 +1897,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     [syncLoadingTopics]
   )
 
-  /** 聊天输入框的 Enter 发送（气泡内编辑的 Enter 由 UserMessage 自己处理） */
+  /** Enter send from the chat input (Enter for in-bubble editing is handled by UserMessage itself) */
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>): void => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1774,7 +1917,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       syncLoadingTopics()
       setIsLoading(false)
 
-      // 清理流监听器
+      // Clean up the stream listeners
       chunkCleanupsRef.current.get(topicId)?.()
       chunkCleanupsRef.current.delete(topicId)
       doneCleanupsRef.current.get(topicId)?.()
@@ -1802,7 +1945,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       if (!grouped.has(p.provider)) {
         grouped.set(p.provider, [])
       }
-      // 自定义端点按 extra_config.api_format 判定（Anthropic 兼容协议同样会下发档位）
+      // Custom endpoints are determined by extra_config.api_format (Anthropic-compatible protocols also send the effort level)
       const anthropicFormat =
         String((p.extra_config as Record<string, unknown> | null)?.api_format ?? 'openai') ===
         'anthropic'
@@ -1811,7 +1954,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
         displayName: getProviderDisplayName(p),
         model: p.model,
         effort: p.reasoning_effort ?? null,
-        // 档位真源是模型档案：未收录的模型不给档位（界面上只能选「默认」）
+        // The model profile is the source of truth for effort levels: models not covered get none (the UI only offers "default")
         levels: sortReasoningEfforts(getCapabilities(p.metadata).reasoning_effort_levels),
         controllable: supportsReasoningEffort(p.provider, anthropicFormat)
       })
@@ -1834,7 +1977,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     messages,
     inputValue,
     setInputValue,
-    /** 每次「外部请求聚焦输入框」自增（HarnessInput 用它把光标放进输入框，不改内容） */
+    /** Incremented on every external "focus the input" request (HarnessInput uses it to place the caret without changing content) */
     focusInputToken,
     availableTools,
     copiedId,
@@ -1888,7 +2031,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     handleLoadMoreTopics,
     handleLoadMoreMessages,
     refreshTopics,
-    // 插话队列
+    // Steering queue
     queuedMessages,
     steeredNotice,
     handleRemoveQueued,
@@ -1896,7 +2039,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
     handleSteerQueued,
     agentSelection,
     setAgentSelection,
-    // 会话检索命中定位
+    pendingTeamMode,
+    setPendingTeamMode,
+    // Session-search hit navigation
     pendingJumpDialogueId,
     setPendingJumpDialogueId,
     clearPendingJumpDialogueId

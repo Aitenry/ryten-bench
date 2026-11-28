@@ -12,18 +12,18 @@ import {
 } from '../../schema'
 import type { WorkspaceKind } from '../../schema/workspace'
 
-// --- 类型定义 ---
+// --- Type definitions ---
 
-/** 工作区行（字段由 schema 推导） */
+/** Workspace row (fields inferred from the schema) */
 export type WorkspaceRow = typeof workspace.$inferSelect
 
-/** 对话用量行（字段由 schema 推导）：一条助手回复一行 */
+/** Dialogue usage row (fields inferred from the schema): one row per assistant reply */
 export type HarnessDialogueUsageRow = typeof harness_dialogue_usage.$inferSelect
 
-/** 会话（话题）行 */
+/** Topic (conversation) row */
 export type HarnessTopicRow = typeof harness_topic.$inferSelect
 
-/** 对话记录行（role 的联合类型由 schema 的 $type 提供） */
+/** Dialogue record row (the role union type is provided by the schema's $type) */
 export type HarnessDialogueRow = typeof harness_dialogue.$inferSelect
 
 export interface PaginatedResult<T> {
@@ -45,7 +45,7 @@ async function getAllWorkspaces(): Promise<WorkspaceRow[]> {
 async function createWorkspace(
   name: string,
   path: string,
-  /** 工作区种类：'user'（默认，工作模式里用户自己选的目录）/ 'plugin' / 'chat' */
+  /** Workspace kind: 'user' (default, a directory the user picked in work mode) / 'plugin' / 'chat' */
   kind: WorkspaceKind = 'user'
 ): Promise<number> {
   return withOrm('createWorkspace', async (db) => {
@@ -55,23 +55,26 @@ async function createWorkspace(
       .returning({ id: workspace.id })
     const newId = rows[0].id
     logger.info(`Created workspace ID=${newId}, name="${name}", path="${path}", kind=${kind}`)
-    // 文档/知识库/待办为全局数据（不属于任一工作区），无需承接存量
+    // Documents/knowledge bases/todos are global data (not owned by any workspace), so no
+    // existing data needs migrating
     return newId
   })
 }
 
 /**
- * 改工作区种类（只给「认领已有行」用：历史上那批插件工作区是 0010 之前建的，
- * 它们的 kind 是默认的 'user'，取插件工作区时顺手就地分类；启动时的 migrateWorkspaceData
- * 也会按路径把它们一次性归位）。路径与名字都不动，因此不刷 updated_at。
+ * Change a workspace's kind (only used to "claim existing rows": the historical batch of plugin
+ * workspaces was created before 0010 and has the default kind 'user', so they are classified in
+ * place when plugin workspaces are fetched; the startup migrateWorkspaceData also puts them in
+ * place by path in one pass). Path and name are untouched, so updated_at is not refreshed.
  */
 async function setWorkspaceKind(id: number, kind: WorkspaceKind): Promise<boolean> {
   return withOrm('setWorkspaceKind', async (db) => {
     const updated = await db
       .update(workspace)
       .set({ kind })
-      // ⚠️ `ne(kind, 'plugin')` 对 NULL 行是 NULL（不是 true）：0010 之前若有人手写库或
-      // 迁移异常留下 NULL，认领会静默不生效。显式把 NULL 也算成「需要分类」。
+      // ⚠️ `ne(kind, 'plugin')` is NULL (not true) for NULL rows: if a pre-0010 database was
+      // edited by hand or a migration left NULLs, claiming would silently do nothing. Treat NULL
+      // as "needs classification" explicitly.
       .where(and(eq(workspace.id, id), or(isNull(workspace.kind), ne(workspace.kind, kind))))
       .returning({ id: workspace.id })
     if (updated.length > 0) {
@@ -81,7 +84,7 @@ async function setWorkspaceKind(id: number, kind: WorkspaceKind): Promise<boolea
   })
 }
 
-/** 按 id 取一行工作区（找不到返回 null）：建话题时按工作区种类兜底记忆作用域用它 */
+/** Fetch one workspace row by id (null if not found): used to fall back to the memory scope by workspace kind when creating a topic */
 async function getWorkspaceById(id: number): Promise<WorkspaceRow | null> {
   return withOrm('getWorkspaceById', async (db) => {
     const rows = await db.select().from(workspace).where(eq(workspace.id, id)).limit(1)
@@ -89,7 +92,7 @@ async function getWorkspaceById(id: number): Promise<WorkspaceRow | null> {
   })
 }
 
-/** 按路径找一行工作区（找不到返回 null）：插件工作区认领、chat 目录核对都用它 */
+/** Find one workspace row by path (null if not found): used for plugin workspace claiming and chat directory checks */
 async function findWorkspaceByPath(path: string): Promise<WorkspaceRow | null> {
   return withOrm('findWorkspaceByPath', async (db) => {
     const rows = await db.select().from(workspace).where(eq(workspace.path, path)).limit(1)
@@ -97,7 +100,7 @@ async function findWorkspaceByPath(path: string): Promise<WorkspaceRow | null> {
   })
 }
 
-/** 某一类工作区（侧栏按 kind 分流：user → 工作列表，plugin / chat → 各自的模式） */
+/** Workspaces of one kind (the sidebar splits by kind: user → work list, plugin / chat → their respective modes) */
 async function getWorkspacesByKind(kind: WorkspaceKind): Promise<WorkspaceRow[]> {
   return withOrm('getWorkspacesByKind', async (db) => {
     return db
@@ -123,10 +126,12 @@ async function updateWorkspace(id: number, updates: { name: string }): Promise<b
 }
 
 /**
- * 改工作区路径（存储根整体搬迁后，让旧会话跟到新位置）。
+ * Change a workspace path (after the storage root is relocated, so old sessions follow to the new
+ * location).
  *
- * 只由 `storage/workspace-refs.ts` 调用：它先查重（`workspace_path_key` 有唯一约束），
- * 再逐行改；这里保持「只改一个字段」的最小语义。
+ * Only called by `storage/workspace-refs.ts`: it checks for duplicates first (`workspace_path_key`
+ * has a unique constraint) and then updates rows one by one; this keeps the minimal "change one
+ * field" semantics.
  */
 async function updateWorkspacePath(id: number, nextPath: string): Promise<boolean> {
   return withOrm('updateWorkspacePath', async (db) => {
@@ -145,19 +150,24 @@ async function updateWorkspacePath(id: number, nextPath: string): Promise<boolea
 async function deleteWorkspace(id: number): Promise<boolean> {
   return withOrm('deleteWorkspace', async (db) => {
     await db.transaction(async (tx) => {
-      // 允许删除最后一个工作区：应用不再自动创建默认工作区，删空后回到「未配置」，
-      // 由对话页引导用户重新选择目录。
-      // 只清理工作区私有内容（聊天话题 / 子代理配置 / 记忆目录）
-      // 文档 / 知识库 / 待办 / 计划 / 歌单均为全局数据，不属于任一工作区，不随工作区删除
-      // 修复：harness_goals 与 topic_compactions 表无外键级联（023/024 均无 REFERENCES），
-      // 工作区删除后目标行与压缩 checkpoint 会成孤儿永久残留——先按话题枚举删除
+      // Allows deleting the last workspace: the app no longer creates a default workspace
+      // automatically and returns to "unconfigured" once all are gone, with the chat page
+      // prompting the user to pick a directory again.
+      // Only workspace-private content is cleaned up (chat topics / subagent config / memory
+      // directories)
+      // Documents / knowledge bases / todos / plans / playlists are all global data, not owned by
+      // any workspace, and are not deleted with it
+      // Fix: harness_goals and topic_compactions have no foreign-key cascade (neither 023 nor 024
+      // has REFERENCES), so goal rows and compaction checkpoints would remain orphaned forever
+      // after the workspace is deleted — delete them by enumerating topics first
       const topicIds = tx
         .select({ id: harness_topic.id })
         .from(harness_topic)
         .where(eq(harness_topic.workspace_id, id))
       await tx.delete(harness_goals).where(inArray(harness_goals.topic_id, topicIds))
       await tx.delete(topic_compactions).where(inArray(topic_compactions.topic_id, topicIds))
-      // 聊天话题与子代理配置有外键级联，删除工作区行即可
+      // Chat topics and subagent config have foreign-key cascades, so deleting the workspace row
+      // suffices
       const deleted = await tx.delete(workspace).where(eq(workspace.id, id)).returning({
         id: workspace.id
       })
@@ -170,11 +180,14 @@ async function deleteWorkspace(id: number): Promise<boolean> {
 // --- harness_topic CRUD ---
 
 /**
- * 会话列表排序：未归档在前（归档的沉底）→ 置顶在前 → 其余按活跃时间倒序。
+ * Topic list order: unarchived first (archived sink to the bottom) → pinned first → the rest by
+ * activity time descending.
  *
- * 为什么要写成 SQL 片段：`desc(pinned_at)` 的 NULL 位置不是我们要的——置顶（非 NULL）
- * 必须先出现、未置顶（NULL）在后。按「is not null」的布尔值排最直接；归档同理，方向相反。
- * 置顶 / 归档两个动作都不改 `updated_at`，所以取消之后会回到它原来的活跃位置。
+ * Why raw SQL fragments: the NULL placement of `desc(pinned_at)` is not what we want — pinned
+ * (non-NULL) must come first and unpinned (NULL) after. Sorting by the "is not null" boolean is
+ * the most direct; archived works the same way with the opposite direction. Neither pinning nor
+ * archiving touches `updated_at`, so after un-pinning/un-archiving a topic returns to its
+ * original activity position.
  */
 const topicOrderBy = [
   sql`${harness_topic.archived_at} is not null asc`,
@@ -197,10 +210,11 @@ async function getAllTopics(workspaceId: number): Promise<HarnessTopicRow[]> {
 }
 
 /**
- * 所有工作区里已归档的会话（侧栏底部的「已归档」分组用）。
+ * Archived topics across all workspaces (for the "Archived" group at the bottom of the sidebar).
  *
- * 不分工作区：归档的会话统一收在侧栏一处（用户 2026-11-25 口径），列表要能看到它们的
- * 工作区名字，所以行里带 `workspace_id`，由渲染层配名字。按归档时间倒序。
+ * Not scoped to a workspace: archived topics are collected in one place in the sidebar (per the
+ * user's 2026-11-25 decision), and the list needs each topic's workspace name, so rows carry
+ * `workspace_id` and the renderer resolves the name. Ordered by archive time descending.
  */
 async function getArchivedTopics(): Promise<HarnessTopicRow[]> {
   return withOrm('getArchivedTopics', async (db) => {
@@ -221,7 +235,8 @@ async function getAllTopicsPaginated(
 ): Promise<PaginatedResult<HarnessTopicRow>> {
   return withOrm('getAllTopicsPaginated', async (db) => {
     const safePage = Number.isFinite(page) ? Math.floor(page) : 0
-    // 页大小钳制 ≥1（修复：pageSize 传 0/负数 → LIMIT 0 空页且 hasMore 恒真）
+    // Clamp page size to ≥1 (fix: pageSize 0/negative produced an empty LIMIT 0 page with hasMore
+    // always true)
     const safePageSize = Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20)
     const safeWorkspaceId = Number.isFinite(workspaceId) ? Math.floor(workspaceId) : 0
 
@@ -257,13 +272,16 @@ async function getTopicById(id: number): Promise<HarnessTopicRow[]> {
 }
 
 /**
- * 把某插件作用域的历史会话收拢到它的插件工作区下。
+ * Move historical sessions of a plugin scope under that plugin's workspace.
  *
- * 用途：插件会话「有自己的工作目录」是 2026-09-28 才补上的，在那之前开出来的插件会话
- * （话题上已经是 `plugin:<id>`，但 workspace_id 还指着当时的工作区）会继续借用工作模式那个
- * 工作区——正是用户报的那个 bug。取插件工作区时顺手归位，老会话下次打开就落在插件目录上。
+ * Purpose: plugin sessions getting "their own working directory" was only added on 2026-09-28;
+ * plugin sessions created before that (already `plugin:<id>` on the topic, but with workspace_id
+ * still pointing at the workspace of the time) kept borrowing the work-mode workspace — exactly
+ * the bug the user reported. Reparenting them when plugin workspaces are fetched makes old
+ * sessions land in the plugin directory the next time they are opened.
  *
- * 不动 `updated_at`：那是会话列表的排序键，搬家不该把老会话顶到最前面。
+ * Does not touch `updated_at`: it is the topic list sort key, and moving house should not push old
+ * sessions to the top.
  */
 async function reparentPluginTopics(workspaceId: number, memoryScope: string): Promise<number> {
   return withOrm('reparentPluginTopics', async (db) => {
@@ -291,8 +309,15 @@ async function createTopic(
   title: string,
   model?: string,
   selectedTools?: string,
-  /** 记忆作用域（`plugin:<插件 id>`；空 = 工作区记忆，见 main/memory-scope.ts） */
-  memoryScope?: string | null
+  /** Memory scope (`plugin:<plugin id>`; empty = workspace memory, see main/memory-scope.ts) */
+  memoryScope?: string | null,
+  /**
+   * Team collaboration toggle (Agent Teams): persisted together with the topic.
+   * The toggle clicked in a blank conversation is a "draft" and the topic is only created with
+   * the first message, so it must be written here in one go — creating first and updating later
+   * would make the UI flash "off then on" and leave a fallible intermediate state.
+   */
+  teamMode?: boolean
 ): Promise<number> {
   return withOrm('createTopic', async (db) => {
     const rows = await db
@@ -302,7 +327,8 @@ async function createTopic(
         title,
         model: model || null,
         selected_tools: selectedTools || null,
-        memory_scope: memoryScope || null
+        memory_scope: memoryScope || null,
+        team_mode: teamMode === true
       })
       .returning({ id: harness_topic.id })
     const newId = rows[0].id
@@ -352,10 +378,11 @@ async function deleteTopic(id: number): Promise<boolean> {
 }
 
 /**
- * 置顶 / 取消置顶。
+ * Pin / unpin.
  *
- * **不动 `updated_at`**：那是「最近活跃时间」，也是未置顶会话之间的排序键。
- * 若这个动作顺手改了它，取消置顶后这条会话会跳到最前面，而不是回到它原来的位置。
+ * **Does not touch `updated_at`**: that is the "last active time" and the sort key among
+ * unpinned topics. If this action changed it, unpinning would jump the topic to the front
+ * instead of returning it to its original position.
  */
 async function setTopicPinned(id: number, pinned: boolean): Promise<boolean> {
   return withOrm('setTopicPinned', async (db) => {
@@ -369,7 +396,7 @@ async function setTopicPinned(id: number, pinned: boolean): Promise<boolean> {
   })
 }
 
-/** 归档 / 取消归档（理由同上：不碰 `updated_at`，取消归档后回到原来的位置） */
+/** Archive / unarchive (same reason: does not touch `updated_at`, so unarchiving returns to the original position) */
 async function setTopicArchived(id: number, archived: boolean): Promise<boolean> {
   return withOrm('setTopicArchived', async (db) => {
     const updated = await db
@@ -385,10 +412,11 @@ async function setTopicArchived(id: number, archived: boolean): Promise<boolean>
 }
 
 /**
- * 读取话题的计划模式（plan mode）。
+ * Read a topic's plan mode.
  *
- * 话题不存在 / 查询失败一律按「未激活」处理：计划模式只影响提示词与工具清单，
- * 读取失败时宁可少一段规划指引，也不能让整轮请求失败。
+ * A missing topic / failed query is always treated as "inactive": plan mode only affects the
+ * prompt and tool list, and on a read failure it is better to lose a planning section than to
+ * fail the whole request.
  */
 async function getTopicPlanMode(id: number): Promise<boolean> {
   return withOrm('getTopicPlanMode', async (db) => {
@@ -402,9 +430,10 @@ async function getTopicPlanMode(id: number): Promise<boolean> {
 }
 
 /**
- * 写入话题的计划模式。
+ * Write a topic's plan mode.
  *
- * 不碰 `updated_at`：计划模式是会话内的一个开关，不应该把它顶到会话列表最前面。
+ * Does not touch `updated_at`: plan mode is a switch inside the conversation and should not
+ * push it to the top of the topic list.
  */
 async function setTopicPlanMode(id: number, active: boolean): Promise<boolean> {
   return withOrm('setTopicPlanMode', async (db) => {
@@ -421,10 +450,11 @@ async function setTopicPlanMode(id: number, active: boolean): Promise<boolean> {
 }
 
 /**
- * 话题的 Agent Teams 开关（opt-in）。
+ * A topic's Agent Teams toggle (opt-in).
  *
- * 与 plan_mode 同一口径：读取失败按「关闭」处理（团队工具/提示词是增强能力，
- * 失败时宁可没有团队能力，也不能让整轮请求失败）；写入不碰 `updated_at`。
+ * Same policy as plan_mode: a read failure is treated as "off" (team tools/prompts are an
+ * enhancement, and it is better to lose team capabilities than to fail the whole request);
+ * writing does not touch `updated_at`.
  */
 async function getTopicTeamMode(id: number): Promise<boolean> {
   return withOrm('getTopicTeamMode', async (db) => {
@@ -450,14 +480,18 @@ async function setTopicTeamMode(id: number, enabled: boolean): Promise<boolean> 
 }
 
 /**
- * 分叉会话：把一条会话（话题行 + 全部对话）复制成一条**独立的**新会话。
+ * Fork a conversation: copy one conversation (topic row + all dialogues) into an
+ * **independent** new one.
  *
- * 复制的是数据快照，之后两条会话各走各的：父会话继续聊不会改到分叉，分叉里发消息也不回写父会话。
- * - `created_at` 原样保留 ⇒ 分叉里的历史时间线与源会话一致；新会话的 `updated_at` 是现在
- *   （排在列表最前，用户点完立刻能看到它）；
- * - 不复制置顶 / 归档状态（分叉出来是一条新的、正常的会话）；
- * - 不复制摘要压缩 checkpoint：它记的是「已压缩段最后一条对话 id」，指向源会话的行，
- *   搬到新会话里就是错的（新会话宁可重新压缩一次）。
+ * What is copied is a data snapshot; afterwards the two proceed separately: the parent continuing
+ * to chat will not affect the fork, and messages in the fork are not written back to the parent.
+ * - `created_at` is preserved as is ⇒ the fork's history timeline matches the source; the new
+ *   conversation's `updated_at` is now (so it sits at the top of the list and the user sees it
+ *   immediately);
+ * - pin / archive state is not copied (the fork is a new, normal conversation);
+ * - the summary compaction checkpoint is not copied: it records the "last dialogue id of the
+ *   compacted segment" pointing at a row of the source conversation, which would be wrong in the
+ *   new one (better to compact again).
  */
 async function forkTopic(sourceId: number, title: string): Promise<HarnessTopicRow | null> {
   return withOrm('forkTopic', async (db) => {
@@ -542,7 +576,8 @@ async function getDialoguesByTopicIdPaginated(
       .where(eq(harness_dialogue.topic_id, safeTopicId))
     const total = Number(countRows[0]?.total) || 0
 
-    // 从最新消息开始分页：DESC 排序，取一页后反转，上层得到 oldest→newest
+    // Paginate starting from the newest message: DESC order, reverse after fetching a page so the
+    // caller gets oldest→newest
     const rows = await db
       .select()
       .from(harness_dialogue)
@@ -571,8 +606,8 @@ async function addDialogue(
         .values({ topic_id, role, content, blocks: blocks || null })
         .returning({ id: harness_dialogue.id })
       newId = rows[0].id
-      // 修复：新消息要刷新话题活跃时间——此前 updated_at 只在编辑标题时写入，
-      // 「活跃排序」实为「创建/编辑排序」
+      // Fix: new messages must refresh the topic's activity time — previously updated_at was only
+      // written when editing the title, so "activity order" was really "created/edited order"
       await tx
         .update(harness_topic)
         .set({ updated_at: sql`now()` })
@@ -584,12 +619,14 @@ async function addDialogue(
 }
 
 /**
- * 就地改写一条对话的正文（「编辑并重发」用）。
+ * Rewrite a dialogue's body in place (used by "edit and resend").
  *
- * 为什么必须是 UPDATE 而不是「删掉旧的 + 插一条新的」：编辑重发的是**同一条**提问，
- * 删插会让它在库里变成一条新行（created_at 变成现在）——历史顺序被挪到末尾、行 id 也变了，
- * 前端手里的 id 随即失效（删除/用量都按 id 找行）。改内容、保 id、保位置才对。
- * 与 addDialogue 一样顺手刷新话题活跃时间。
+ * Why it must be an UPDATE rather than "delete the old + insert a new": edit-and-resend refers to
+ * the **same** question, and delete+insert would turn it into a new row in the database
+ * (created_at becomes now) — the historical order moves to the end and the row id changes, so the
+ * id the frontend holds immediately goes stale (deletion/usage look rows up by id). Changing the
+ * content while keeping the id and position is correct.
+ * Like addDialogue, it also refreshes the topic's activity time.
  */
 async function updateDialogueContent(id: number, content: string): Promise<boolean> {
   return withOrm('updateDialogueContent', async (db) => {
@@ -635,9 +672,9 @@ async function deleteDialogueById(id: number): Promise<boolean> {
   })
 }
 
-// --- harness_dialogue_usage（对话真实用量） ---
+// --- harness_dialogue_usage (actual dialogue usage) ---
 
-/** 写入一条对话用量；同一对话重复写入直接忽略（dialogue_id 唯一） */
+/** Write a dialogue usage row; repeated writes for the same dialogue are ignored (dialogue_id is unique) */
 async function addDialogueUsage(
   usage: Omit<HarnessDialogueUsageRow, 'id' | 'created_at'>
 ): Promise<number | null> {
@@ -656,11 +693,13 @@ async function addDialogueUsage(
 }
 
 /**
- * 只取该话题**最后一条**用量行（性能审计 P09）。
+ * Fetch **only the last** usage row of the topic (performance audit P09).
  *
- * 每轮对话开头估算「上一轮真实上下文 token」只需要最后一行；旧实现在这里
- * `getUsageByTopic` 全量读出（长会话数百行、含 usage_metadata JSON）再取最后一条。
- * 渲染层回填用量仍走 `getUsageByTopic` 全量接口，语义不变。
+ * Estimating the "real context tokens of the previous round" at the start of each dialogue round
+ * only needs the last row; the old implementation called `getUsageByTopic` here to read
+ * everything (hundreds of rows for long sessions, including the usage_metadata JSON) and then
+ * took the last one. The renderer still backfills usage through the full `getUsageByTopic` API,
+ * so its semantics are unchanged.
  */
 async function getLastUsageByTopic(topicId: number): Promise<HarnessDialogueUsageRow | null> {
   return withOrm('getLastUsageByTopic', async (db) => {
@@ -674,7 +713,7 @@ async function getLastUsageByTopic(topicId: number): Promise<HarnessDialogueUsag
   })
 }
 
-/** 按话题取用量明细（渲染层按 dialogue_id 回填到各条消息） */
+/** Usage detail for a topic (the renderer backfills it into each message by dialogue_id) */
 async function getUsageByTopic(topicId: number): Promise<HarnessDialogueUsageRow[]> {
   return withOrm('getUsageByTopic', async (db) => {
     return db
@@ -685,7 +724,7 @@ async function getUsageByTopic(topicId: number): Promise<HarnessDialogueUsageRow
   })
 }
 
-/** 按工作区聚合用量（按供应商 + 模型分组，用于账单/统计） */
+/** Aggregate usage by workspace (grouped by provider + model, for billing/statistics) */
 async function getUsageSummaryByWorkspace(workspaceId: number): Promise<
   {
     provider: string | null
@@ -720,7 +759,7 @@ async function getUsageSummaryByWorkspace(workspaceId: number): Promise<
   })
 }
 
-/** 跨话题搜索的一条命中（含所属话题标题） */
+/** One search hit across topics (including the title of its topic) */
 export interface HarnessDialogueSearchRow {
   id: number
   topic_id: number
@@ -731,11 +770,13 @@ export interface HarnessDialogueSearchRow {
 }
 
 /**
- * 跨话题搜索历史消息（按工作区隔离）。
+ * Search historical messages across topics (isolated per workspace).
  *
- * - `query` 里的 `%` / `_` / `\` 会被转义：用户输入是文本，不是 LIKE 通配符；
- * - 只返回**当前工作区**的话题（跨工作区搜索会把别的项目的历史带进来）；
- * - 按时间倒序、上限 50 条，够模型定位「哪次会话聊过」即可，详情再按话题读。
+ * - `%` / `_` / `\` in `query` are escaped: user input is literal text, not LIKE wildcards;
+ * - only topics in the **current workspace** are returned (searching across workspaces would
+ *   bring in the history of other projects);
+ * - newest first, capped at 50 hits, which is enough for the model to locate "which conversation
+ *   discussed this"; details are then read per topic.
  */
 async function searchDialogues(
   workspaceId: number,

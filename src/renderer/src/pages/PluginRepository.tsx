@@ -48,31 +48,31 @@ import type {
 import type { PluginListEntry } from '@shared/plugin/types'
 
 /**
- * 平台目录的会话内快照（按「账号 + 基址」记账）。
+ * In-session snapshot of the platform catalog (keyed by "account + base URL").
  *
- * 为什么要留一份：每次进插件仓库都会重新拉目录，请求回来之前页面只能铺骨架；
- * 在「对话 ↔ 插件仓库」之间来回切时，同一个人每次都要看一眼占位再看到卡片，
- * 观感上就是加载闪屏（用户 2026-11-25）。
+ * Why keep one: the catalog is fetched again on every visit to the plugin repository, and the page can only show a skeleton before the request returns;
+ * switching back and forth between "chat ↔ plugin repository", the same person has to look at the placeholder before seeing the cards every time,
+ * which looks like a loading flicker (user 2026-11-25).
  *
- * 命中时先用上一份目录把网格铺满，再在后台刷新；账号 / 基址变了不命中——
- * 那是另一套安装记录，把 A 的「已安装」画到 B 的目录上是错的。
+ * On a hit, fill the grid with the previous catalog first and refresh in the background; a changed account / base URL is a miss —
+ * that is another set of install records, and painting A's "installed" onto B's catalog would be wrong.
  */
 let hubSnapshot: { account: string; list: HubListResultV2 } | null = null
 
 /**
- * 插件仓库（系统页面 `/plugins`）。
+ * Plugin repository (system page `/plugins`).
  *
- * 本页**只有平台一个远程来源**：
- * - 目录来自 `lattice.list`（搜索/分类在本地过滤），没有第二个数据源；
- * - 安装、更新、发布、源码下载都走 `lattice.*` 通道；
- * - 发布相关的入口收进顶栏「发布」下拉（用户 2026-11-23：按钮太多、功能相似）：
- *   发布插件目录 / 发布 .zip / 发布安装包+源码目录 / 导入本地插件目录；
- *   「从本地安装」（本机 zip/目录装进应用）是另一类动作，单独保留。
+ * This page has **only the platform as a remote source**:
+ * - The catalog comes from `lattice.list` (search/category are filtered locally); there is no second data source;
+ * - Install, update, publish and source download all go through the `lattice.*` channels;
+ * - Publish-related entries are grouped into the "Publish" dropdown in the top bar (user 2026-11-23: too many buttons with similar functions):
+ *   publish plugin directory / publish .zip / publish installer + source directory / import local plugin directory;
+ *   "Install from local" (install a local zip/directory into the app) is a different kind of action and stays separate.
  *
- * 卡片按契约 v2 显示：版本 / 作者 / 描述 / tags / 下载数 / 已安装・可更新 / 源码标记；
- * 操作：安装、更新、打开源码（已安装且有源码）。本机已安装但未发布到平台的插件与目录卡片
- * 排在**同一张网格**里（用户 2026-11-23：「本地的和线上的不要分开显示，合并」），
- * 保证「发布到插件中心」这条入口可达。
+ * Cards show: version / author / description / tags / downloads / installed・update available / source marker;
+ * Actions: install, update, open source (installed with source). Plugins installed locally but not published to the platform and catalog cards
+ * sit in the **same grid** (user 2026-11-23: "don't show local and online separately, merge them"),
+ * so the "publish to plugin hub" entry stays reachable.
  */
 const PluginRepository: React.FC = () => {
   const { token } = theme.useToken()
@@ -82,12 +82,12 @@ const PluginRepository: React.FC = () => {
   const descriptors = usePlugins()
 
   /**
-   * 插件中心真实登录态。未登录 / 主进程通道未就绪时这里会安全降级，
-   * 页面展示对应的行动卡（登录后才有目录）。
+   * Real login state of the plugin hub. When not logged in / the main-process channel is not ready this safely degrades,
+   * and the page shows the corresponding action card (the catalog is only available after login).
    */
   const {
     available: latticeReady,
-    /** 登录态是否已经读回来过：没有它就只能先铺骨架，不能按「未登录」渲染 */
+    /** Whether the login state has been read back: without it we can only show the skeleton, not render as "not logged in" */
     ready: latticeStatusReady,
     status: latticeStatus,
     loggedIn,
@@ -107,34 +107,34 @@ const PluginRepository: React.FC = () => {
     importLocalDir
   } = useLattice()
 
-  /** 目录快照的归属：同一账号 + 同一基址才算命中（换号 / 换平台不命中） */
+  /** Ownership of the catalog snapshot: only the same account + same base URL counts as a hit (a different account / platform is a miss) */
   const hubAccount = latticeStatus.user?.id
     ? `${latticeStatus.baseUrl}#${latticeStatus.user.id}`
     : ''
 
   const [entries, setEntries] = useState<PluginListEntry[]>([])
   /**
-   * 本机**真的存在源码**的插件 id 集合。
+   * Set of plugin ids whose source **really exists locally**.
    *
-   * 不能用平台目录的 `has_source` 代替：它说的是「最新版本带源码包」，而本机装的可能
-   * 是旧版本、或安装时源码下载失败（源码只落在安装包目录）。只看它会渲染出一个
-   * 「源码」按钮，点下去却只能打开安装包所在的资源管理器窗口（用户 2026-11-25）。
+   * The catalog's `has_source` must not be used instead: it says "the latest version ships a source package", while the local install may be
+   * an older version, or the source download failed during install (the source only lands in the installer directory). Relying on it would render a
+   * "source" button that only opens the file explorer window of the installer directory when clicked (user 2026-11-25).
    */
   const [localSourceIds, setLocalSourceIds] = useState<Set<string>>(() => new Set())
   /**
-   * 本机清单是否已经回来过一次。
+   * Whether the local list has come back at least once.
    *
-   * 未登录时登录提示有两种形态（下方有本机卡片 → 紧凑提示条；整页只有登录这一件事 → 居中引导）。
-   * 清单没回来之前 `entries` 还是空数组，直接按「没有本机插件」渲染会让整块引导先闪一下再塌成一条。
+   * The login hint has two shapes when logged out (local cards below → compact hint bar; the whole page is only about logging in → centered guide).
+   * Before the list returns, `entries` is still an empty array, so rendering as "no local plugins" would make the whole guide flash and then collapse into one line.
    */
   const [localLoaded, setLocalLoaded] = useState(false)
   /**
-   * 本机清单是否**成功**读到过一次。
+   * Whether the local list has been read **successfully** at least once.
    *
-   * `localLoaded` 只表示「请求已经结束」（未登录时的引导形态要靠它避免闪屏）；
-   * 卡片判断「已安装 / 已启用」时用这个：只有真的读到了本机清单，才敢用
-   * 「不在清单里 = 未安装」覆盖平台字段；读取失败时退回平台视图，而不是把
-   * 所有插件都误报成未安装。
+   * `localLoaded` only means "the request has finished" (the logged-out guide shape needs it to avoid flicker);
+   * card checks for "installed / enabled" use this one: only when the local list was really read may
+   * "not in the list = not installed" override the platform fields; on a read failure fall back to the platform view instead of
+   * misreporting every plugin as not installed.
    */
   const [localTrusted, setLocalTrusted] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -146,8 +146,8 @@ const PluginRepository: React.FC = () => {
   const [query, setQuery] = useState('')
 
   /**
-   * 平台目录（服务端全量拉一次，搜索/分类在本地过滤，输入即响应）。
-   * 命中会话快照时直接铺满，后台刷新由下面的 effect 负责。
+   * Platform catalog (fetched in full once from the server; search/category are filtered locally so input responds immediately).
+   * When the in-session snapshot hits, fill it in directly; the background refresh is handled by the effect below.
    */
   const [hub, setHub] = useState<HubListResultV2 | null>(() =>
     hubSnapshot && hubSnapshot.account === hubAccount ? hubSnapshot.list : null
@@ -156,18 +156,18 @@ const PluginRepository: React.FC = () => {
   const [hubError, setHubError] = useState<string | null>(null)
   const [hubCategory, setHubCategory] = useState('all')
   const [uploadOpen, setUploadOpen] = useState(false)
-  /** 未解决的插件数据冲突（同步弹窗里逐条让用户选「用本机/用云端」） */
+  /** Unresolved plugin data conflicts (the sync modal asks the user to choose "use local / use cloud" one by one) */
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflicts, setConflicts] = useState<LatticeSyncConflict[]>([])
   const [conflictLoading, setConflictLoading] = useState(false)
   const [conflictBusy, setConflictBusy] = useState<string | null>(null)
   const [mergeBusy, setMergeBusy] = useState(false)
-  /** 「更新全部」批量升级进行中（逐个安装，失败不中断） */
+  /** "Update all" bulk upgrade in progress (installs one by one; a failure does not abort) */
   const [bulkUpdating, setBulkUpdating] = useState(false)
 
   /**
-   * 「同步详情」弹窗：自动补齐成功/失败明细 + 平台已删除（orphaned）的安装记录 + 数据冲突。
-   * 自动补齐失败**不静默**：同步条上一直有「N 个自动补齐失败（可查看原因）」入口。
+   * "Sync details" modal: per-item auto-repair success/failure details + install records deleted on the platform (orphaned) + data conflicts.
+   * Auto-repair failures are **not silent**: the sync bar always has an "N auto-repair failures (view reason)" entry.
    */
   const [syncDetailsOpen, setSyncDetailsOpen] = useState(false)
   const [syncDetailsData, setSyncDetailsData] = useState<LatticeSyncDetails | null>(null)
@@ -175,8 +175,8 @@ const PluginRepository: React.FC = () => {
   const [autoInstallSaving, setAutoInstallSaving] = useState(false)
 
   /**
-   * 插件工坊（弹窗）：草稿/构建/验收/安装。入口收成图标按钮，
-   * 与「上传/本地安装」这些高频动作不抢位置。
+   * Plugin workshop (modal): drafts/build/accept/install. The entry is compressed into an icon button,
+   * so it does not compete with high-frequency actions like "upload/install local".
    */
   const [workshopOpen, setWorkshopOpen] = useState(false)
   const [workshopDraftPending, setWorkshopDraftPending] = useState<string | null>(null)
@@ -187,7 +187,7 @@ const PluginRepository: React.FC = () => {
     [allSettingsSections]
   )
 
-  /** 本机安装清单（已安装/启用态、版本） */
+  /** Local install list (installed/enabled state, version) */
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const list = await window.api.plugin.list()
@@ -200,7 +200,7 @@ const PluginRepository: React.FC = () => {
     }
   }, [])
 
-  /** 逐个问主进程「这个插件本机有没有源码」（数量很少，装/卸后随 entries 重算） */
+  /** Ask the main process one by one whether each plugin has source locally (very few; recomputed with entries after install/uninstall) */
   const loadLocalSources = useCallback(
     async (list: PluginListEntry[]): Promise<void> => {
       if (!capabilities.sourcePath || list.length === 0) {
@@ -237,11 +237,11 @@ const PluginRepository: React.FC = () => {
     try {
       const result = await listHub()
       setHub(result)
-      // 只缓存有归属的目录（未登录 / 账号信息缺失时不缓存，免得把匿名视图留给下一个人）
+      // Only cache a catalog that has an owner (when logged out / account info is missing, do not cache, so the anonymous view is not left for the next person)
       if (hubAccount) hubSnapshot = { account: hubAccount, list: result }
     } catch (err) {
-      // 刷新失败不要清掉已经拿到的目录：一次网络抖动 / 插件状态广播触发的后台刷新失败，
-      // 会把整页目录、分类与搜索上下文一起抹掉（用户什么也没做，页面却变成「加载失败」）。
+      // Do not clear the catalog already obtained when a refresh fails: one network blip / a background refresh triggered by a plugin
+      // state broadcast would wipe the whole page's catalog, categories and search context (the user did nothing, yet the page becomes "load failed").
       setHubError(latticeErrorMessage(err))
     } finally {
       setHubLoading(false)
@@ -254,7 +254,7 @@ const PluginRepository: React.FC = () => {
     return unsub
   }, [refresh])
 
-  /** 冲突列表：同步摘要出现 conflicts 时补拉一次（含云端数据快照） */
+  /** Conflict list: fetched once more when the sync summary reports conflicts (includes cloud data snapshots) */
   const loadConflicts = useCallback(async (): Promise<void> => {
     if (!latticeReady || !loggedIn) {
       setConflicts([])
@@ -275,7 +275,7 @@ const PluginRepository: React.FC = () => {
     if ((latticeStatus.sync?.conflicts ?? 0) > 0) void loadConflicts()
   }, [latticeStatus.sync?.conflicts, loadConflicts])
 
-  /** 显式解决一个冲突：local=用本机覆盖云端；cloud=用云端覆盖本机 */
+  /** Resolve one conflict explicitly: local = local overrides cloud; cloud = cloud overrides local */
   const resolveConflict = useCallback(
     async (pluginId: string, strategy: 'local' | 'cloud' | 'merge'): Promise<void> => {
       const key = `${pluginId}:${strategy}`
@@ -304,8 +304,8 @@ const PluginRepository: React.FC = () => {
   )
 
   /**
-   * 侧栏（Harness 路由）点插件行 → 请求「导航到 /plugins 并打开插件工坊、展开这份插件」。
-   * 请求由模块级快照暂存（导航前派发的事件本页收不到），本页挂载或已挂载时都能取到。
+   * Clicking a plugin row in the sidebar (Harness route) → request "navigate to /plugins, open the plugin workshop and expand this plugin".
+   * The request is staged in a module-level snapshot (events dispatched before navigation are not received by this page), so this page picks it up whether it is already mounted or mounts later.
    */
   useEffect(() => {
     const apply = (request: { draftId?: string } | null): void => {
@@ -317,7 +317,7 @@ const PluginRepository: React.FC = () => {
     return subscribeWorkshopModalRequest(() => apply(takeWorkshopModalRequest()))
   }, [])
 
-  /** 工坊弹窗打开且指定了草稿：等 `WorkshopSettings` 挂载后再派发展开事件（它自己订阅） */
+  /** The workshop modal is open with a specified draft: dispatch the expand event after `WorkshopSettings` mounts (it subscribes itself) */
   useEffect(() => {
     if (!workshopOpen || !workshopDraftPending) return
     const id = workshopDraftPending
@@ -328,13 +328,13 @@ const PluginRepository: React.FC = () => {
     return () => window.clearTimeout(timer)
   }, [workshopOpen, workshopDraftPending])
 
-  /** 平台目录：登录后加载，并跟随插件启停/安装广播刷新（安装后 installed/update_available 会变） */
+  /** Platform catalog: loaded after login and refreshed on plugin enable/disable/install broadcasts (installed/update_available change after install) */
   useEffect(() => {
     if (!latticeReady || !loggedIn) {
       /**
-       * 退出登录后不能留着上一个账号的目录快照：它是按账号算的安装态，且会把
-       * 本机已装插件误判成「平台上已有」（localOnly 过滤掉它们）→ 访客态看不到本机插件。
-       * 等重新登录后由下面的分支重新拉。
+       * After logging out, the previous account's catalog snapshot must not be kept: it is an install state computed per account, and it would
+       * misjudge locally installed plugins as "already on the platform" (localOnly filters them out) → the guest state cannot see local plugins.
+       * The branch below fetches it again after logging back in.
        */
       setHub(null)
       setHubError(null)
@@ -358,14 +358,14 @@ const PluginRepository: React.FC = () => {
   }, [entries])
 
   /**
-   * 目录条目在本机是否真有更新：**以本机已装版本**与平台最新版比对。
+   * Whether a catalog entry really has an update locally: compare **the locally installed version** with the platform's latest.
    *
-   * 不用平台的 `update_available`：它是按账号安装记录算的，本机卸载/降级后要等同步才更新，
-   * 会出现「本机没装却提示可更新」「仓库有更新但详情页没有」这类不一致。
+   * Do not use the platform's `update_available`: it is computed from the account's install records and only updates on the next sync after a local uninstall/downgrade,
+   * producing inconsistencies like "shows update available though not installed locally" or "repository has an update but the detail page does not".
    *
-   * 比的是**版本优先级**而不是字符串不等：本机 v0.4.1、中心最新 v0.3.0 时字符串不等，
-   * 但那不是「有更新」，而是「本机更新」（2026-11-23 用户反馈）；按 semver 比才不会再
-   * 给用户一个「更新到 v0.3.0」的降级按钮。
+   * Compare **version precedence** rather than string inequality: with local v0.4.1 and hub latest v0.3.0 the strings differ,
+   * but that is not "an update available", it is "the local version is newer" (2026-11-23 user feedback); a semver comparison no longer
+   * gives the user a downgrade button "update to v0.3.0".
    */
   const hasLocalUpdate = useCallback(
     (item: HubEntryV2): boolean => {
@@ -388,7 +388,7 @@ const PluginRepository: React.FC = () => {
 
   const normalizedQuery = query.trim().toLowerCase()
 
-  /** 搜索/分类在本地过滤（目录已整页拉回），输入即时响应，不再逐字打服务端 */
+  /** Search/category are filtered locally (the catalog is fetched as a whole), so input responds immediately without hitting the server per keystroke */
   const visibleHub = useMemo(() => {
     return hubItems.filter((item) => {
       if (hubCategory !== 'all' && item.category !== hubCategory) return false
@@ -409,10 +409,10 @@ const PluginRepository: React.FC = () => {
   }, [hubCategory, hubItems, normalizedQuery])
 
   /**
-   * 已装但平台上没有的插件（本地上传装的）。
+   * Plugins installed but not on the platform (installed from a local upload).
    *
-   * 展示上不再单独成组（用户 2026-11-23：「本地的和线上的不要分开显示，合并」）：
-   * 它们和目录卡片排在同一张网格里，只是详情页/发布入口要保证可达。
+   * They are no longer shown as a separate group (user 2026-11-23: "don't show local and online separately, merge them"):
+   * they sit in the same grid as catalog cards; only the detail page/publish entry must stay reachable.
    */
   const localOnlyAll = useMemo(() => {
     const hubIds = new Set(hubItems.map((item) => item.plugin_id))
@@ -421,7 +421,7 @@ const PluginRepository: React.FC = () => {
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [entries, hubItems])
 
-  /** 上面这组再按搜索词过滤（登录提示的形态只看未过滤的 localOnlyAll） */
+  /** Further filter the group above by search term (the login-hint shape only looks at the unfiltered localOnlyAll) */
   const localOnly = useMemo(() => {
     return localOnlyAll.filter((entry) => {
       if (!normalizedQuery) return true
@@ -434,14 +434,14 @@ const PluginRepository: React.FC = () => {
   }, [localOnlyAll, normalizedQuery])
 
   /**
-   * 网格里实际出现的本机插件。
+   * Local plugins that actually appear in the grid.
    *
-   * 选了平台分类时它们不出现：本机插件没有登记到目录的分类里，跟着任何分类显示都算错配
-   * （合并成一张网格后尤其明显）；搜索框仍然能搜到它们，清掉分类就回来。
+   * They are hidden when a platform category is selected: local plugins are not registered in catalog categories, so showing them under any category would be a mismatch
+   * (especially obvious after merging into one grid); the search box can still find them, and clearing the category brings them back.
    */
   const visibleLocal = hubCategory === 'all' ? localOnly : []
 
-  /** 顶栏「上传插件」：选插件包目录 → 主进程打包上传（安装包 + 源码） */
+  /** Top bar "Upload plugin": choose a plugin package directory → the main process packages and uploads it (installer + source) */
   const handleUpload = useCallback(async (): Promise<void> => {
     if (!loggedIn) {
       navigate('/login')
@@ -477,7 +477,7 @@ const PluginRepository: React.FC = () => {
     }
   }, [clearUploadProgress, loadHub, loggedIn, message, navigate, pickAndUpload, refresh, t])
 
-  /** 顶栏 zip 入口：选 .zip 安装包发布（同样支持 readme/清单解析与源码包上传的既有流水线） */
+  /** Top bar zip entry: choose a .zip installer to publish (also supports the existing pipeline of readme/manifest parsing and source package upload) */
   const handleUploadZip = useCallback(async (): Promise<void> => {
     if (!loggedIn) {
       navigate('/login')
@@ -514,10 +514,10 @@ const PluginRepository: React.FC = () => {
   }, [clearUploadProgress, loadHub, loggedIn, message, navigate, pickAndUploadZip, refresh, t])
 
   /**
-   * 顶栏「连同源码目录发布」：先选构建产物目录（安装包），再选源码目录。
+   * Top bar "Publish with source directory": first choose the build output directory (installer), then the source directory.
    *
-   * 安装包与源码是两份不同的 zip：仓库类插件 dist/<id>/ 是产物、plugins/<id>/ 是源码，
-   * 平台「源代码」下载到的才是真正的源码，而不是安装包本身。
+   * The installer and the source are two different zips: for repository plugins dist/<id>/ is the artifact and plugins/<id>/ is the source;
+   * only what the platform "Source code" download gives you is the real source, not the installer itself.
    */
   const handleUploadWithSource = useCallback(async (): Promise<void> => {
     if (!loggedIn) {
@@ -563,7 +563,7 @@ const PluginRepository: React.FC = () => {
     t
   ])
 
-  /** 顶栏「从本地安装」：选 zip / 目录装进应用（不发布） */
+  /** Top bar "Install from local": choose a zip / directory to install into the app (no publishing) */
   const handleInstallLocal = useCallback(async (): Promise<void> => {
     try {
       const result = await window.api.plugin.installLocalFromDialog()
@@ -583,8 +583,8 @@ const PluginRepository: React.FC = () => {
   }, [loadHub, message, refresh, t])
 
   /**
-   * 顶栏「导入本地插件目录」：主进程弹目录选择框，把目录下所有含 plugin.json 的插件
-   * 批量发布到平台（安装包 + 源码）。路径由用户选，渲染层不硬编码任何目录。
+   * Top bar "Import local plugin directory": the main process opens a directory picker and batch-publishes every plugin under that directory
+   * containing a plugin.json to the platform (installer + source). The path is chosen by the user; the renderer hardcodes no directory.
    */
   const handleImportLocalDir = useCallback(async (): Promise<void> => {
     if (!loggedIn) {
@@ -630,7 +630,7 @@ const PluginRepository: React.FC = () => {
     t
   ])
 
-  /** 卡片主操作：安装（未装）/ 更新（可更新）；安装时主进程会自动下载并解压源码 */
+  /** Card primary action: install (not installed) / update (update available); during install the main process downloads and extracts the source automatically */
   const handleHubInstall = useCallback(
     async (item: HubEntryV2): Promise<void> => {
       const wasInstalled = Boolean(localById.get(item.plugin_id))
@@ -669,8 +669,8 @@ const PluginRepository: React.FC = () => {
   )
 
   /**
-   * 「更新全部」：把当前所有 `update_available && installed` 的插件逐个升到最新版。
-   * 失败不中断后续插件（单个失败很常见：网络/源码包），最后汇总成功/失败数量。
+   * "Update all": upgrade every plugin currently matching `update_available && installed` to the latest version one by one.
+   * A failure does not abort the remaining plugins (single failures are common: network/source package); at the end summarize the success/failure counts.
    */
   const handleUpdateAll = useCallback(async (): Promise<void> => {
     const targets = (hub?.items ?? []).filter((item) => hasLocalUpdate(item))
@@ -725,8 +725,8 @@ const PluginRepository: React.FC = () => {
   ])
 
   /**
-   * 卡片「打开源码」：主进程优先建/复用工作区并开一条插件会话；
-   * 只能回退到文件管理器时如实提示（不假装开了对话）。
+   * Card "Open source": the main process creates/reuses a workspace and opens a plugin session first;
+   * when it can only fall back to the file manager, say so truthfully (do not pretend a chat was opened).
    */
   const handleOpenSource = useCallback(
     async (pluginId: string): Promise<void> => {
@@ -747,7 +747,7 @@ const PluginRepository: React.FC = () => {
         }
         message.success(t('plugins.hub.openSource.success'))
         if (isChatOpened(result)) {
-          // 侧栏收到这个事件后按 pluginId+topicId 直接切到插件会话（主进程已把设置写盘）
+          // After receiving this event the sidebar switches to the plugin session by pluginId+topicId (the main process has already persisted the settings)
           window.dispatchEvent(
             new CustomEvent('lattice-open-source', {
               detail: {
@@ -773,8 +773,8 @@ const PluginRepository: React.FC = () => {
   )
 
   /**
-   * 打开「同步详情」：拉最近一次同步的自动补齐失败/孤儿记录明细。
-   * 失败原因、孤儿记录都在这里逐条可见（不在同步时静默吞掉）。
+   * Open "Sync details": fetch the auto-repair failures / orphan record details from the latest sync.
+   * Failure reasons and orphan records are all visible here item by item (not silently swallowed during sync).
    */
   const openSyncDetails = useCallback(async (): Promise<void> => {
     setSyncDetailsOpen(true)
@@ -790,8 +790,8 @@ const PluginRepository: React.FC = () => {
   }, [syncDetails])
 
   /**
-   * 「缺失插件自动补齐」开关（默认开启）。
-   * 关闭后 pull 只把缺失插件放进 `pending` 列表，不再自动安装；已标记的孤儿记录仍保留。
+   * "Auto-install missing plugins" toggle (on by default).
+   * When off, pull only puts missing plugins into the `pending` list and no longer installs them automatically; marked orphan records are still kept.
    */
   const handleToggleAutoInstall = useCallback(
     async (enabled: boolean): Promise<void> => {
@@ -821,7 +821,7 @@ const PluginRepository: React.FC = () => {
     const autoInstalled = result.autoInstall?.installed.length ?? 0
     const autoFailed = result.autoInstall?.failed.length ?? 0
     if (autoFailed > 0) {
-      // 有失败：明确提示数量并打开详情（失败原因可查看，不静默）
+      // Failures exist: clearly report the count and open the details (failure reasons are viewable, not silent)
       message.warning(
         autoInstalled > 0
           ? t('sync.autoInstall.partial', { ok: autoInstalled, fail: autoFailed })
@@ -846,12 +846,12 @@ const PluginRepository: React.FC = () => {
   }, [loadHub, message, openSyncDetails, syncLattice, t])
 
   /**
-   * 合并云端数据：逐插件按 merge base 做 git 式快进 / 冲突。
+   * Merge cloud data: per plugin do a git-style fast-forward / conflict based on the merge base.
    *
-   * 提示和「同步完成」同构（用户 2026-11-25：「要和同步一样的简化提示」）：
-   * - 本机改过、云端没动 → 推上去（删除/修改不会被回填）；
-   * - 云端更新、本机没动 → 拉下来；
-   * - 两边都改过 → 记冲突，提示用户去「解决冲突」显式选择（不再自动并集）。
+   * The notice has the same shape as "sync complete" (user 2026-11-25: "keep it as simple as the sync notice"):
+   * - changed locally, untouched in the cloud → push it up (deletes/modifications are not backfilled);
+   * - updated in the cloud, untouched locally → pull it down;
+   * - changed on both sides → record a conflict and prompt the user to choose explicitly in "Resolve conflicts" (no automatic union anymore).
    */
   const handleMergeCloud = useCallback(async (): Promise<void> => {
     setMergeBusy(true)
@@ -863,14 +863,14 @@ const PluginRepository: React.FC = () => {
       const conflicts = result.conflicts ?? 0
       const blocked = result.blocked ?? 0
       if (!result.ok && failed === 0 && conflicts === 0) {
-        // 前置失败（未登录 / 账号数据尚未就绪）：原因直接给用户，不进三态
+        // Precondition failure (not logged in / account data not ready): give the user the reason directly instead of the three-state path
         message.error(result.error || t('sync.error', { reason: '' }))
         return
       }
       if (conflicts > 0) {
         message.warning(t('sync.merge.conflicts', { merged, rows, conflicts }))
       } else if (blocked > 0 && blocked === failed) {
-        // 全是「还没建立合并基线」：提示先同步一次，比笼统的「合并失败」可执行
+        // All "no merge base established yet": suggest syncing once first, which is more actionable than a generic "merge failed"
         message.warning(t('sync.merge.blocked', { blocked }))
       } else if (failed > 0 && merged > 0) {
         message.warning(t('sync.merge.partial', { merged, rows, failed }))
@@ -890,11 +890,11 @@ const PluginRepository: React.FC = () => {
   }, [loadHub, message, t])
 
   /**
-   * 顶栏「发布」下拉菜单（用户 2026-11-23：「按键太多，很多都是功能相似的」）。
+   * Top bar "Publish" dropdown menu (user 2026-11-23: "too many buttons, many with similar functions").
    *
-   * 发布插件目录 / 发布 .zip / 发布安装包+源码 / 导入本地插件目录，本质都是
-   * 「把本机的一个插件包/目录发到插件中心」，收进一个菜单后顶栏只剩：
-   * 工坊、本地安装、发布、刷新（+ 有更新时的「更新全部」）。
+   * Publish plugin directory / publish .zip / publish installer + source / import local plugin directory are all essentially
+   * "send a local plugin package/directory to the plugin hub"; grouped into one menu, the top bar keeps only:
+   * workshop, install local, publish, refresh (+ "update all" when updates exist).
    */
   const publishing = uploading || uploadingZip || uploadingWithSource || importing
   const publishMenuItems: MenuProps['items'] = [
@@ -927,8 +927,8 @@ const PluginRepository: React.FC = () => {
   ]
 
   /**
-   * 页面级 CSS 变量：把 antd token 下发到 main.css 里的 `.lattice-*` 类，
-   * 亮/暗主题切换时卡片、同步条一起换色，不在组件里写死颜色。
+   * Page-level CSS variables: pass antd tokens down to the `.lattice-*` classes in main.css,
+   * so cards and the sync bar change color together on light/dark theme switches without hardcoding colors in components.
    */
   const pageVars = {
     '--lattice-card-bg': token.colorBgElevated,
@@ -999,10 +999,10 @@ const PluginRepository: React.FC = () => {
   )
 
   /**
-   * 平台目录处于状态卡（未就绪 / 未登录 / 加载中 / 失败 / 空）时的本机插件兜底。
+   * Fallback for local plugins while the platform catalog is in a state card (not ready / not logged in / loading / failed / empty).
    *
-   * 本机插件不依赖平台目录，任何时候都得能管理：状态卡照常显示，本机卡片接在下面。
-   * 目录可用时不再走这里——本机卡片直接排在目录卡片后面，是同一张网格。
+   * Local plugins do not depend on the platform catalog and must be manageable at any time: the state card still shows, with local cards below it.
+   * This path is not used when the catalog is available — local cards then come right after catalog cards in the same grid.
    */
   const withLocalCards = (state: React.ReactNode): React.ReactNode => {
     if (visibleLocal.length === 0) return state
@@ -1024,11 +1024,11 @@ const PluginRepository: React.FC = () => {
   }
 
   /**
-   * 卡片点击 → 详情页，但**忽略来自按钮/输入控件的冒泡**。
+   * Card click → detail page, but **ignore bubbling from buttons/input controls**.
    *
-   * antd 的 Button 在 `loading` 时会在内部 handler 里直接 return（连我们的
-   * `e.stopPropagation()` 都不执行）：双击「安装」的第二下被按钮吞掉、继续冒泡到卡片，
-   * 结果安装还在跑，人却被带到了详情页。按事件目标判断比依赖 stopPropagation 稳。
+   * When `loading`, antd's Button returns directly in its internal handler (so even our
+   * `e.stopPropagation()` does not run): the second click of an "install" double-click is swallowed by the button and keeps bubbling to the card,
+   * so the install is still running while the user is taken to the detail page. Checking the event target is more reliable than relying on stopPropagation.
    */
   const handleCardNavigate =
     (pluginId: string) =>
@@ -1039,15 +1039,15 @@ const PluginRepository: React.FC = () => {
     }
 
   /**
-   * 平台目录内容区状态：首屏骨架 / 未就绪 / 未登录 / 加载中 / 失败 / 空 / 卡片网格。
+   * Platform catalog content states: first-screen skeleton / not ready / not logged in / loading / failed / empty / card grid.
    *
-   * 所有加载态都用**与真实卡片同尺寸的骨架网格**占住卡片最终要出现的位置：
-   * 旧版用「居中转圈 + 240px 占位块」，本机卡片排在它下面，目录一回来占位块消失，
-   * 同一批卡片整组向上跳——用户 2026-11-25 反馈的「一开始插件在下面，突然移动上去」。
+   * All loading states occupy the card's final position with a **skeleton grid the same size as real cards**:
+   * the old version used "centered spinner + 240px placeholder block", local cards were below it, and when the catalog returned the block disappeared and
+   * the same batch of cards jumped up as a group — the "plugins were below at first, then suddenly moved up" reported by the user 2026-11-25.
    */
   const renderHubContent = (): React.ReactNode => {
-    // 桥接 / 登录态还没定下来：先铺骨架。不要先画「不可用」大状态卡，
-    // 它下一帧就会被换成真实内容，整页跟着塌一次。
+    // The bridge / login state is not settled yet: lay the skeleton first. Do not draw the big "unavailable" state card first,
+    // it would be replaced by real content on the next frame and the whole page would collapse once.
     if (!latticeStatusReady) return <HubGridSkeleton />
     if (!latticeReady) {
       return withLocalCards(
@@ -1060,13 +1060,13 @@ const PluginRepository: React.FC = () => {
       )
     }
     if (!loggedIn) {
-      // 本机清单没回来之前不画：否则会先按「没有本机插件」铺一块引导，再塌成一条提示
+      // Do not draw before the local list returns: otherwise a guide for "no local plugins" would be laid first and then collapse into one hint
       if (!localLoaded) return <HubGridSkeleton />
       const goLogin = (): void => {
         void navigate('/login')
       }
-      // 下方还有本机插件卡片时，登录只是目录不可用的说明 → 一条提示；
-      // 整页只剩登录这一件事时才铺开成居中引导。
+      // When local plugin cards remain below, login is only an explanation that the catalog is unavailable → one hint;
+      // only when the whole page is about logging in does it expand into a centered guide.
       return withLocalCards(
         localOnlyAll.length > 0 ? (
           <GuestNotice onLogin={goLogin} />
@@ -1091,11 +1091,11 @@ const PluginRepository: React.FC = () => {
       )
     }
     /**
-     * 目录还没回来（登录后第一次拉取 / 刚切进本页）。
+     * The catalog has not returned yet (first fetch after login / just switched into this page).
      *
-     * 这里**必须**先不画本机卡片：目录为空时 `localOnlyAll` 等于本机全部已装插件，
-     * 它们会先按「本机插件」排在占位块下面；目录一到，同一批插件被认成目录卡片，
-     * 整组挪到网格顶部，就是那次向上跳。骨架占住最终位置，回来时原地换成真实卡片。
+     * Here local cards **must** be hidden first: when the catalog is empty, `localOnlyAll` equals all locally installed plugins,
+     * and they would first appear as "local plugins" below the placeholder; once the catalog arrives the same plugins are recognized as catalog cards,
+     * the whole group moves to the top of the grid — that is the upward jump. The skeleton holds the final position and is replaced in place when it returns.
      */
     if (!hub) return <HubGridSkeleton />
     if (visibleHub.length === 0) {
@@ -1133,11 +1133,11 @@ const PluginRepository: React.FC = () => {
         {visibleHub.map((item) => {
           const localEntry = localById.get(item.plugin_id)
           /**
-           * 本机视角优先（用户 2026-11-23）：
-           * 「已安装 / 已启用 / 可更新」一律以**本机插件清单**为准。平台目录里的
-           * `installed` 是按账号保存的安装记录视图，本机卸载后要等下一次 push 才变；
-           * 直接拿它渲染就会出现「仓库卡片说已安装、点进详情说未安装」的自相矛盾。
-           * 本机清单还没回来时才退回平台字段，避免首帧闪一下。
+           * Local view takes precedence (user 2026-11-23):
+           * "installed / enabled / update available" always follow the **local plugin list**. The `installed` in the platform catalog is
+           * an install-record view saved per account and only changes on the next push after a local uninstall;
+           * rendering from it directly produces the contradiction "repository card says installed, detail page says not installed".
+           * Only when the local list has not returned yet do we fall back to the platform fields, to avoid a first-frame flash.
            */
           const installed = localTrusted
             ? Boolean(localEntry)
@@ -1146,7 +1146,7 @@ const PluginRepository: React.FC = () => {
           const localVersion = localEntry ? localEntry.version : undefined
           const hasSource = Boolean(item.has_source)
           const hasLocalSource = localSourceIds.has(item.plugin_id)
-          // 可更新 = 中心最新版**严格新于**本机版本（不是「版本号字符串不相等」）
+          // Update available = the hub's latest version is **strictly newer** than the local version (not "version strings differ")
           const updateAvailable = installed
             ? localVersion
               ? isVersionNewer(item.latest_version, localVersion)
@@ -1159,9 +1159,9 @@ const PluginRepository: React.FC = () => {
             localEntry?.version ??
             '—'
           /**
-           * 描述按「这张卡片代表谁」取（2026-11-23 用户反馈「描述不正确」）：
-           * 卡片显示的是本机已装版本（版本号取 local），描述也必须取本机那份——
-           * 否则会拿插件中心**旧版本**的描述配本机版本号，两边对不上。
+           * Pick the description by "who this card represents" (2026-11-23 user feedback "the description is wrong"):
+           * the card shows the locally installed version (the version number comes from local), so the description must come from the local copy too —
+           * otherwise the plugin hub's **older version** description is paired with the local version number, and the two disagree.
            */
           const cardDescription =
             (installed ? (localEntry?.description ?? item.description) : item.description) ??
@@ -1173,8 +1173,8 @@ const PluginRepository: React.FC = () => {
               : ''
             : t('plugins.hub.install')
           /**
-           * 「源码」按钮：本机有源码就直接开工作区；没有源码但已登录且平台说明有源码时，
-           * 允许点一次（主进程会按本机安装的版本按需下载），不再出现「点了只弹资源管理器」。
+           * The "source" button: if the source exists locally, open the workspace directly; if it does not but the user is logged in and the platform
+           * says the source exists, allow one click (the main process downloads the version installed locally on demand), so "clicking only pops up the file explorer" no longer happens.
            */
           const sourceOpenable =
             installed && capabilities.openSource && (hasLocalSource || (loggedIn && hasSource))
@@ -1406,19 +1406,19 @@ const PluginRepository: React.FC = () => {
             </div>
           )
         })}
-        {/* 本机已装、平台上还没有的插件：同一张网格里接着排（不是另一组） */}
+        {/* Plugins installed locally but not yet on the platform: continue in the same grid (not a separate group) */}
         {renderLocalCards()}
       </div>
     )
   }
 
   /**
-   * 本机已安装但未发布到平台的插件（本地安装包）：保证详情页与「发布到插件中心」可达。
+   * Plugins installed locally but not published to the platform (local installers): keep the detail page and "publish to plugin hub" reachable.
    *
-   * 和平台目录的卡片**排在同一张网格**里（用户 2026-11-23：「本地的和线上的不要分开显示，合并」）：
-   * 不再单独铺一张网格，也不单起分组标题（用户 2026-11-22：「不需要这个内容」）。
-   * 外面这层 `display: contents` 不参与布局，卡片本身就是调用方网格的网格项——
-   * 所以本机插件不会另起一行，而是紧接在目录卡片后面按同列宽、同间距排下去。
+   * They are **in the same grid** as platform catalog cards (user 2026-11-23: "don't show local and online separately, merge them"):
+   * no separate grid and no separate group heading (user 2026-11-22: "this content is not needed").
+   * This outer `display: contents` takes no part in layout; the cards themselves are grid items of the caller's grid —
+   * so local plugins do not start a new row but follow the catalog cards with the same column width and gap.
    */
   const renderLocalCards = (): React.ReactNode => {
     if (visibleLocal.length === 0) return null
@@ -1566,7 +1566,7 @@ const PluginRepository: React.FC = () => {
     )
   }
 
-  /** 同步状态条：最近同步 / 自动补齐结果 / 冲突数 / 自动补齐开关 / 手动同步（已登录时出现） */
+  /** Sync status bar: last sync / auto-repair result / conflict count / auto-repair toggle / manual sync (shown when logged in) */
   const renderSyncBar = (): React.ReactNode => {
     const syncSnapshot = latticeStatus.sync
     const conflictCount = syncSnapshot?.conflicts ?? 0
@@ -1576,7 +1576,7 @@ const PluginRepository: React.FC = () => {
     const orphanedCount = syncSnapshot?.orphaned ?? 0
     const pushedRows = syncSnapshot?.pushedRows ?? 0
     const pulledRows = syncSnapshot?.pulledRows ?? 0
-    // 主进程缺省/旧主进程时按默认「开启」展示（与主进程 getLatticeAutoInstallMissing 默认一致）
+    // When the main process is missing/old, display the default "on" (consistent with the main process getLatticeAutoInstallMissing default)
     const autoInstallEnabled = latticeStatus.autoInstallMissing !== false
     return (
       <div className="lattice-hub-sync-bar">
@@ -1603,7 +1603,7 @@ const PluginRepository: React.FC = () => {
             {t('sync.resolve.button', { n: conflictCount })}
           </Button>
         )}
-        {/* PL-18：换机自动补齐结果（失败不静默，可点开同步详情看原因） */}
+        {/* PL-18: auto-repair result after switching machines (failures are not silent; open sync details to see reasons) */}
         {autoFailed > 0 ? (
           <Button
             size="small"
@@ -1695,10 +1695,10 @@ const PluginRepository: React.FC = () => {
   }
 
   const showContent = Boolean(latticeReady && loggedIn)
-  /** 有更新的已安装插件数（顶栏「更新全部」入口；0 时隐藏；口径同卡片：本机已装 + 版本不同） */
+  /** Number of installed plugins with updates (top bar "update all" entry; hidden when 0; same rule as cards: installed locally + version differs) */
   const updatableCount = (hub?.items ?? []).filter((item) => hasLocalUpdate(item)).length
 
-  /** 冲突弹窗里的数据预览：只展示前 240 字符，避免 256KiB JSON 撑爆弹窗 */
+  /** Data preview in the conflict modal: only the first 240 characters, so a 256KiB JSON does not blow up the modal */
   const conflictPreview = (value: unknown): string => {
     if (value === undefined) return t('sync.resolve.noData')
     try {
@@ -1716,14 +1716,14 @@ const PluginRepository: React.FC = () => {
         display: 'flex',
         flexDirection: 'column',
         boxSizing: 'border-box',
-        /* 顶部不留白：首行仍与侧栏品牌区同线；左右下留 12px，与资料库一致 */
+        /* No top gutter: the first row stays aligned with the sidebar brand area; 12px left/right/bottom, consistent with the library */
         padding: '6px 9px',
         background: token.colorBgContainer,
         borderTopLeftRadius: token.borderRadiusLG,
         ...pageVars
       }}
     >
-      {/* 内容排满页面；首行仍是与品牌区同高的工具条 */}
+      {/* Content fills the page; the first row is still a toolbar at the same height as the brand area */}
       <div
         className="custom-scrollbar"
         style={{
@@ -1809,10 +1809,10 @@ const PluginRepository: React.FC = () => {
         {renderHubContent()}
       </div>
 
-      {/* 上传进度（发布到插件中心）：进度来自 lattice:upload-progress 推送 */}
+      {/* Upload progress (publish to plugin hub): progress comes from lattice:upload-progress pushes */}
       <UploadProgressModal open={uploadOpen} />
 
-      {/* 同步详情：自动补齐成功/失败明细 + 平台已删除（orphaned）记录 + 数据冲突（失败原因不静默） */}
+      {/* Sync details: auto-repair success/failure details + records deleted on the platform (orphaned) + data conflicts (failure reasons are not silent) */}
       <Modal
         open={syncDetailsOpen}
         onCancel={() => setSyncDetailsOpen(false)}
@@ -1852,7 +1852,7 @@ const PluginRepository: React.FC = () => {
               }
               return (
                 <>
-                  {/* 自动补齐 */}
+                  {/* Auto-repair */}
                   <div style={sectionStyle}>
                     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                       {t('sync.details.autoInstallTitle')}
@@ -1910,7 +1910,7 @@ const PluginRepository: React.FC = () => {
                     )}
                   </div>
 
-                  {/* 平台已删除的安装记录（orphaned） */}
+                  {/* Install records deleted on the platform (orphaned) */}
                   <div style={sectionStyle}>
                     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                       {t('sync.details.orphanedTitle', { n: orphanItems.length })}
@@ -1942,7 +1942,7 @@ const PluginRepository: React.FC = () => {
                     )}
                   </div>
 
-                  {/* 数据冲突：与同步条「解决冲突」同一个弹窗 */}
+                  {/* Data conflicts: the same modal as "Resolve conflicts" in the sync bar */}
                   <div style={sectionStyle}>
                     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                       {t('sync.details.conflictsTitle', { n: conflictItems.length })}
@@ -1986,7 +1986,7 @@ const PluginRepository: React.FC = () => {
         )}
       </Modal>
 
-      {/* 插件数据冲突：逐条让用户显式选择「用本机 / 用云端」（不自动覆盖） */}
+      {/* Plugin data conflicts: ask the user to choose "use local / use cloud" explicitly for each (no automatic overwrite) */}
       <Modal
         open={conflictOpen}
         onCancel={() => setConflictOpen(false)}
@@ -2114,7 +2114,7 @@ const PluginRepository: React.FC = () => {
         )}
       </Modal>
 
-      {/* 插件工坊（弹窗）：草稿列表 + 构建/验收/安装 */}
+      {/* Plugin workshop (modal): draft list + build/accept/install */}
       <Modal
         open={workshopOpen}
         onCancel={() => {
@@ -2134,7 +2134,7 @@ const PluginRepository: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 单个插件自己的设置页（弹窗） */}
+      {/* A single plugin's own settings page (modal) */}
       <Modal
         open={settingsPlugin !== null}
         onCancel={() => setSettingsPlugin(null)}
@@ -2160,12 +2160,12 @@ const PluginRepository: React.FC = () => {
 }
 
 /**
- * 目录首屏的骨架卡片网格。
+ * Skeleton card grid for the catalog's first screen.
  *
- * 卡片外形直接复用 `.lattice-hub-card`（同圆角/描边/底色/最小高度），内部只换成
- * 灰色骨架块：占位与真实卡片同尺寸、同网格列宽，目录回来时是「原地填充」，
- * 页面不会因为占位块消失而整体上移（用户 2026-11-25 的闪屏）。
- * 块宽按固定 pattern 递变——用随机数会让每次渲染都在抖。
+ * The card shape reuses `.lattice-hub-card` directly (same radius/border/background/min height), with only the inside replaced by
+ * gray skeleton blocks: the placeholder has the same size and grid column width as a real card, so when the catalog returns it is "filled in place",
+ * and the page does not shift up as a whole when the placeholder disappears (the flicker reported by the user 2026-11-25).
+ * Block widths vary in a fixed pattern — random values would make every render jitter.
  */
 const HUB_SKELETON_CARDS = 6
 const HUB_SKELETON_TITLE = ['58%', '46%', '62%', '52%', '44%', '56%']
@@ -2219,11 +2219,11 @@ const HubGridSkeleton: React.FC = () => {
 }
 
 /**
- * 未登录时的插件中心提示条。
+ * Plugin hub hint bar for the logged-out state.
  *
- * 本机安装的插件不依赖账号，页面下方照常有卡片；之前这里用整页空态（52px 大图标 +
- * 虚线大卡片）压在卡片上面，既像报错又抢走了真正能点的内容的视觉重量。
- * 现在收成和同步状态条同量级的一条：一行标题 + 一行说明 + 右侧「去登录」。
+ * Locally installed plugins do not depend on the account, so cards still appear below the page; this used to be a full-page empty state (52px large icon +
+ * dashed large card) sitting on top of the cards, which looked like an error and stole visual weight from the content that is actually clickable.
+ * It is now one bar at the same scale as the sync status bar: one title line + one description line + "Log in" on the right.
  */
 const GuestNotice: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const { token } = theme.useToken()
@@ -2266,8 +2266,8 @@ const GuestNotice: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
 }
 
 /**
- * 未登录且本机没有插件时的登录引导：整页只有登录这一件事可做，才铺开成居中引导。
- * 不画边框/底色——和上面的提示条不会同时出现，也不假装这里还有别的内容。
+ * Login guide when logged out and there are no local plugins: only when the whole page is about logging in does it expand into a centered guide.
+ * No border/background — it never appears together with the hint bar above, and it does not pretend there is other content here.
  */
 const GuestWelcome: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const { token } = theme.useToken()
@@ -2329,9 +2329,9 @@ const GuestWelcome: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
 }
 
 /**
- * 插件中心内容区的状态卡（未就绪 / 加载失败共用）。
+ * State card for the plugin hub content area (shared by not ready / load failed).
  *
- * 视觉与插件仓库其它空态一致：大图标 + 标题 + 说明 + 可选行动按钮。
+ * Visually consistent with the other empty states of the plugin repository: large icon + title + description + optional action button.
  */
 const StateCard: React.FC<{
   icon: React.ReactNode

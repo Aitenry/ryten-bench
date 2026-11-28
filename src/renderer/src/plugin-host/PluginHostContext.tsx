@@ -25,32 +25,36 @@ const PluginHostCtx = createContext<PluginHost | null>(null)
 
 interface PluginHostProviderProps {
   plugins: Plugin[]
-  /** 启用态覆写：id → 是否启用；缺省 = 停用（应用不分发插件，装进来不等于让它跑） */
+  /** Enabled-state override: id → enabled; default = disabled (the app does not distribute plugins, so being installed does not mean running) */
   enabledOverride?: Record<string, boolean>
   /**
-   * 主进程**同步**插件清单（`api.plugin.listSync()`）。
-   * 首帧声明式预注册的元数据来源（`routes`/`menu`），见 `declarationsFromEntries`。
+   * Main-process **synchronous** plugin list (`api.plugin.listSync()`).
+   * Metadata source for first-frame declarative pre-registration (`routes`/`menu`), see
+   * `declarationsFromEntries`.
    */
   entries?: PluginListEntry[]
-  /** 外部插件 vendor 模块（react/antd 等宿主唯一实例） */
+  /** Vendor modules for external plugins (the host's single react/antd instances) */
   vendorModules?: Record<string, unknown>
   children: React.ReactNode
 }
 
 /**
- * 主进程清单 → 声明式预注册项（只取 `enabled` 的条目）。
+ * Main-process list → declarative pre-registration items (only `enabled` entries).
  *
- * 为什么：磁盘包插件的渲染模块要 `fetch` + `import` 之后才 `install(ctx)`，首帧侧栏与
- * 路由表里没有它（实测 music 菜单要等几百毫秒才「弹出来」）。清单里的元数据足够先把
- * 菜单/骨架路由放上去，插件模块加载完成后的真实注册按 `key`/`path` 覆盖（见 host 的
- * `declare()`）。
+ * Why: a disk-package plugin's render module needs `fetch` + `import` before `install(ctx)`, so on
+ * the first frame it is missing from the sidebar and route table (in practice the music menu takes
+ * a few hundred ms to "pop in"). The metadata in the list is enough to put the menu/skeleton routes
+ * up first; the real registration, once the plugin module finishes loading, overrides by
+ * `key`/`path` (see the host's `declare()`).
  *
- * 三道过滤，都是为了「只占位、不添乱」：
- * - 只处理 `enabled` 条目（停用插件不该有菜单）；
- * - 字段形状校验：plugin.json 来自磁盘，运行期没有类型校验，脏数据不许进注册表；
- * - `labelKey` 必须**现在就能译出来**（`i18n.exists`）：词条由插件自己在 install 里注册的
- *   外部插件（如某个插件包里的 `demo.menu.title`）此刻还没有词条，声明出去
- *   只会先闪一串原始键名——这类条目等真实注册，不损失什么。
+ * Three filters, all so that it "only holds a place without making trouble":
+ * - Only `enabled` entries are processed (a disabled plugin should have no menu);
+ * - Field shape validation: plugin.json comes from disk with no runtime type checking, so dirty
+ *   data must not enter the registry;
+ * - `labelKey` must be **translatable right now** (`i18n.exists`): for external plugins (such as a
+ *   plugin package's `demo.menu.title`) the entry is registered by the plugin itself in install, so
+ *   no entry exists yet at this point, and declaring it would only flash raw key names — such items
+ *   wait for the real registration, which loses nothing.
  */
 function declarationsFromEntries(
   entries: PluginListEntry[] | undefined
@@ -93,11 +97,12 @@ function declarationsFromEntries(
 }
 
 /**
- * 插件宿主根 Provider：
- * - 创建 PluginHost 单例；
- * - 按 enabledOverride 装载插件（未指定 = 停用）；
- * - 用同步清单里的元数据做**首帧声明式预注册**（构造期，早于任何子组件渲染）；
- * - enabledOverride 变化时 diff 式重放（启停即时生效）。
+ * Plugin host root Provider:
+ * - Creates the PluginHost singleton;
+ * - Loads plugins per enabledOverride (unspecified = disabled);
+ * - Uses metadata from the synchronous list for **first-frame declarative pre-registration**
+ *   (construction time, before any child renders);
+ * - On enabledOverride change, replays as a diff (enable/disable takes effect immediately).
  */
 export const PluginHostProvider: React.FC<PluginHostProviderProps> = ({
   plugins,
@@ -106,7 +111,7 @@ export const PluginHostProvider: React.FC<PluginHostProviderProps> = ({
   vendorModules,
   children
 }) => {
-  // 显式覆写之外的默认值：一律停用
+  // Default value beyond explicit overrides: always disabled
   const enabledMap = useMemo<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {}
     for (const p of plugins) {
@@ -118,12 +123,13 @@ export const PluginHostProvider: React.FC<PluginHostProviderProps> = ({
     return map
   }, [plugins, enabledOverride])
 
-  // 宿主随构造期同步预装载默认启用的插件（首帧即注册路由/菜单）
+  // The host synchronously preloads default-enabled plugins at construction (routes/menus are registered on the first frame)
   const hostRef = useRef<PluginHost | null>(null)
   if (!hostRef.current) {
     hostRef.current = new PluginHost(plugins, enabledMap)
-    // 首帧声明式预注册（必须在任何子组件渲染之前）：插件渲染模块还在异步加载，
-    // 靠这份声明，首帧侧栏/路由表就是完整的。
+    // First-frame declarative pre-registration (must happen before any child renders): plugin
+    // render modules are still loading asynchronously; with this declaration the first-frame
+    // sidebar/route table is complete.
     for (const d of declarationsFromEntries(entries)) hostRef.current.declare(d.id, d.declaration)
   }
   const host = hostRef.current
@@ -133,11 +139,12 @@ export const PluginHostProvider: React.FC<PluginHostProviderProps> = ({
 
   const applyRef = useRef<string>('')
   useEffect(() => {
-    // 构造期已同步装载的内置插件在此为 no-op（diff 跳过）；外部插件与
-    // 运行期启停（桥重放）走异步 enable/disable
+    // Built-in plugins loaded synchronously at construction are a no-op here (the diff skips
+    // them); external plugins and runtime enable/disable (bridge replay) go through async
+    // enable/disable
     if (applyRef.current === enabledJson) return
     applyRef.current = enabledJson
-    // 应用结果经宿主版本号（useSyncExternalStore 订阅）驱动重渲染，无需额外本地状态
+    // The result drives re-rendering through the host version (useSyncExternalStore subscription), with no extra local state
     void host.applyEnabled(enabledMap)
   }, [host, enabledMap, enabledJson])
 
@@ -151,8 +158,9 @@ export function usePluginHost(): PluginHost {
 }
 
 /**
- * 订阅宿主版本号：任何注册表变更（启用/停用/注册/注销）都会触发订阅组件重渲染。
- * 各 usePlugin* 钩子读取的注册表数据与版本号在同一渲染周期内一致。
+ * Subscribe to the host version: any registry change (enable/disable/register/unregister) triggers
+ * a re-render of subscribing components. Registry data read by each usePlugin* hook is consistent
+ * with the version within the same render cycle.
  */
 function useHostVersion(): number {
   const host = usePluginHost()
@@ -180,7 +188,7 @@ export function usePluginMenus(): RegisteredMenuItem[] {
   return host.getMenus()
 }
 
-/** 侧栏合法菜单键集合（AppContent 高亮白名单的注册表驱动版本） */
+/** Set of valid sidebar menu keys (registry-driven version of AppContent's highlight whitelist) */
 export function usePluginMenuKeys(): string[] {
   const host = usePluginHost()
   useHostVersion()
@@ -206,8 +214,9 @@ export function useGlobalComponents(slot: string): GlobalComponentRegistration[]
 }
 
 /**
- * 底栏插槽条目（按 order 排序）。
- * 可见性不进注册表：宿主每次渲染读各条目的 `isVisible()`，插件用 `subscribe` 触发重渲染。
+ * Bottom bar slot items (sorted by order).
+ * Visibility is not part of the registry: the host reads each item's `isVisible()` on every render,
+ * and plugins trigger re-renders through `subscribe`.
  */
 export function useBottomBarItems(): BottomBarItemRegistration[] {
   const host = usePluginHost()

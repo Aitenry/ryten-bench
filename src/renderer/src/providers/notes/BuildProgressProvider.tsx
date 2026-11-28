@@ -17,8 +17,9 @@ import type {
 } from '../../../../shared/notes/types'
 
 /**
- * 构建进度通知的文案组装：模块级纯函数，`t` 由调用方注入（内部不调 hook、不闭包引用），
- * 因此 startBuild / 同步 effect 的依赖里不需要出现它。
+ * Assembles the build progress notification copy: a module-level pure function that takes `t`
+ * from the caller (no hook calls or closure capture inside), so it never needs to appear in the
+ * deps of startBuild or the sync effect.
  */
 const buildStateToNotification = (
   t: TFunction,
@@ -56,19 +57,23 @@ const buildStateToNotification = (
 })
 
 /**
- * 图谱构建进度 Provider（notes 插件，经 `ctx.use('appProvider')` 注册）。
+ * Graph build progress provider (notes plugin, registered via `ctx.use('appProvider')`).
  *
- * 职责（core 收尾后本插件自包含）：
- * - 订阅**本插件自己的**三个事件通道（`notesApi.graph.onBuildProgress/Complete/Error`），
- *   持有 buildMap，并把进度写进 core 的通知中心；
- * - 渲染进度浮层（`components/graph/BuildProgress`），并在外层包 `BuildProgressContext`，
- *   供首页的图谱视图（`GraphView`）注册刷新回调与发起构建。
+ * Responsibilities (the plugin is self-contained now that core is finished):
+ * - Subscribe to the plugin's **own** three event channels
+ *   (`notesApi.graph.onBuildProgress/Complete/Error`), own buildMap, and write progress into
+ *   core's notification center;
+ * - Render the progress overlay (`components/graph/BuildProgress`) and wrap the subtree in
+ *   `BuildProgressContext` so the home page graph view (`GraphView`) can register refresh
+ *   callbacks and start builds.
  *
- * 为什么放在这里而不是 shell：这三个 `notes:graph-build-*` 通道属于资料库自己的数据流，
- * 进度浮层是资料库的一部分。外壳只负责把 Provider 挂上（见 App.tsx 的 SystemProvidersShell）。
+ * Why it lives here and not in the shell: the three `notes:graph-build-*` channels belong to
+ * the notes data flow, and the progress overlay is part of notes. The shell only mounts the
+ * provider (via SystemProvidersShell in App.tsx).
  *
- * 订阅失败仍要吞掉：渲染层首次订阅可能早于主进程注册（`window.api.system.on` 只做前缀校验，
- * 没有发送方时永远收不到事件），异常若从 useEffect 逃逸会卸载整棵树（白屏）。
+ * Subscription failures are still swallowed: the renderer may subscribe before the main process
+ * registers (`window.api.system.on` only validates the prefix, so with no sender the event never
+ * arrives), and an exception escaping useEffect would unmount the whole tree (blank screen).
  */
 export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [buildMap, setBuildMap] = useState<Map<number, BuildProgressState>>(new Map())
@@ -102,8 +107,9 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const navigateToGraph = useCallback(
     (wikiId: number): void => {
-      /* 原实现 navigate('/knowledge/graph?wikiId=...')，但该路由早已不存在
-         （首页重构后图谱改为工作台视图）——改为派发事件，由首页 NotesView 切换选中 */
+      /* The original implementation navigated to '/knowledge/graph?wikiId=...', but that route
+         no longer exists (after the home page rework the graph became a workspace view) — so
+         dispatch an event instead and let the home page NotesView switch the selection */
       window.dispatchEvent(
         new CustomEvent<{ wikiId: number }>(OPEN_WIKI_GRAPH_EVENT, { detail: { wikiId } })
       )
@@ -226,18 +232,20 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
   )
 
   /**
-   * 事件回调进 ref：订阅只在挂载时建立一次，不因每次渲染的新函数反复退订重订，
-   * 同时避免回调闭包停在首次渲染（语言切换后通知文案仍取最新 `t`）。
+   * Keep the event callbacks in a ref: subscriptions are established once on mount instead of
+   * being torn down and re-created for each render's fresh functions, and the callback closure
+   * does not freeze at the first render (notification copy picks up the latest `t` after a
+   * language switch).
    */
   const handlersRef = useRef({ handleProgress, handleComplete, handleError })
   handlersRef.current = { handleProgress, handleComplete, handleError }
 
   /**
-   * 订阅资料库的构建事件（主进程 → 渲染层）。
+   * Subscribe to the notes graph build events (main process -> renderer).
    *
-   * 经 `window.api.system.on('notes:graph-build-*')` 订阅（前缀校验，无白名单）；
-   * 仍统一 try/catch 降级为「没有进度事件」，绝不让异常从 useEffect 逃逸
-   * （那会卸载整棵树 → 白屏）。
+   * Subscribes via `window.api.system.on('notes:graph-build-*')` (prefix validation, no
+   * allowlist); still wrapped in try/catch degrading to "no progress events" so an exception
+   * never escapes useEffect (that would unmount the whole tree and blank the screen).
    */
   useEffect(() => {
     const subscribeProgress = (): (() => void) => {
@@ -280,12 +288,14 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [])
 
-  // 同步 buildMap 变更到通知系统
+  // Sync buildMap changes to the notification system
   useEffect(() => {
     buildMap.forEach((state, wikiId) => {
       const notifId = `build-${wikiId}`
-      // 修复：已完成的构建通知点击后是「恢复一个不会再渲染的 completed 状态」= 无任何反馈
-      // 且通知永不清理——完成态改为直达该知识库图谱（navigateToGraph 会移除通知与状态）
+      // Fix: clicking a completed build notification used to "restore" a completed state that
+      // would never render again, with no feedback, and the notification was never cleaned up —
+      // completed builds now jump straight to that wiki's graph (navigateToGraph removes both
+      // the notification and the state)
       updateNotification(
         notifId,
         buildStateToNotification(t, notifId, state, () =>
@@ -296,11 +306,13 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [buildMap, updateNotification, restoreBuild, navigateToGraph, t])
 
   /**
-   * 卸载即「停用 notes」：把本插件写进通知中心的进度通知摘掉。
+   * Unmounting means "disable notes": remove the progress notifications this plugin wrote into
+   * the notification center.
    *
-   * 通知中心是 core 服务、状态在 core 里；Provider 卸载后没人再更新这些通知，
-   * 留着就是一条永远停在旧百分比的死通知。构建状态本身随 Provider 一起消失
-   * （停用插件 = 卸载它的内容，这是设计语义）。
+   * The notification center is a core service with its state in core; once the provider
+   * unmounts nothing updates these notifications any more, so keeping them would leave a dead
+   * entry stuck at the old percentage. The build state itself disappears with the provider
+   * (disabling a plugin means unmounting its content, which is the intended semantics).
    */
   const notificationIds = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -312,13 +324,14 @@ export const BuildProgressProvider: React.FC<{ children: React.ReactNode }> = ({
         try {
           removeNotification(notifId)
         } catch {
-          // 通知中心已卸载（应用退出）时忽略
+          // Ignore when the notification center is already unmounted (app quitting)
         }
       }
       ids.clear()
       callbacks.clear()
     }
-    // 仅在卸载时清理：buildMap 变化时重跑会把正在构建的通知误删
+    // Clean up only on unmount: re-running when buildMap changes would delete in-flight build
+    // notifications
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -1,11 +1,11 @@
--- 图谱关系业务唯一键（性能/正确性审计 P01/P08）
+-- Business unique key for graph relations (performance and correctness).
 --
--- 背景：batchUpsertRelations 此前是「每条关系先 SELECT 再 UPDATE/INSERT」，
--- 在单连接 PGlite 上把图构建放大成 2N 次串行语句。改成一条 INSERT ... ON CONFLICT
--- 需要数据库层的唯一约束；上线前先把历史重复行清掉（保留 id 最小的那一行，即最早写入的）。
+-- Background: batchUpsertRelations did a SELECT + UPDATE/INSERT per relation, so graph building
+-- became 2N serial statements on single-connection PGlite. One INSERT ... ON CONFLICT needs a
+-- database-level unique constraint, so old duplicate rows are removed first (smallest id wins).
 --
--- 为什么先 DELETE：直接 ADD CONSTRAINT 在存在重复行时会失败，导致应用启动迁移中断。
--- 可回滚：ALTER TABLE "graph_relations" DROP CONSTRAINT IF EXISTS "uq_graph_relations_key";
+-- Why DELETE first: ADD CONSTRAINT fails while duplicates exist, aborting the startup migration.
+-- Rollback: ALTER TABLE "graph_relations" DROP CONSTRAINT IF EXISTS "uq_graph_relations_key";
 DELETE FROM "graph_relations" a
 USING "graph_relations" b
 WHERE a."id" > b."id"

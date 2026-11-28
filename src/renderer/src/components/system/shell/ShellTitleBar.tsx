@@ -5,17 +5,21 @@ import { useTranslation } from '@renderer/i18n'
 import { useTheme } from '@renderer/hooks/useTheme'
 
 /**
- * 自绘标题栏（Windows / macOS 的 Window Controls Overlay 方案）。
+ * Custom-drawn title bar (Window Controls Overlay approach for Windows / macOS).
  *
- * 为什么需要它：用户 2026-11-19 反馈——「移除应用内的自绘窗口按钮」之后，主窗口退成了
- * 系统默认的「图标 + 应用名 + 按钮」标题栏，和参考形态（左侧一条应用菜单、右侧系统窗口
- * 按钮的深色标题条）不一致。所以：
- * - 最小化 / 最大化 / 关闭**仍由系统绘制**（`titleBarStyle: 'hidden'` + `titleBarOverlay`），
- *   是真正的系统按钮，不是这里画的假图标；
- * - 渲染层只画标题条本身：左侧「应用 / 编辑」两个菜单 + 整条拖拽区；
- * - 系统按钮覆盖层的底色/前景色由 `setTitleBarOverlay` 跟随主题同步（见下方 effect）。
+ * Why it is needed: user feedback on 2026-11-19 — after "remove the in-app custom window buttons",
+ * the main window fell back to the system default "icon + app name + buttons" title bar, which did
+ * not match the intended form (an app menu on the left and system window buttons on the right of a
+ * dark title strip). So:
+ * - Minimize / maximize / close are **still drawn by the system** (`titleBarStyle: 'hidden'` +
+ *   `titleBarOverlay`); they are real system buttons, not fake icons drawn here;
+ * - The renderer only draws the title strip itself: the "App / Edit" menus on the left plus the
+ *   full-width drag area;
+ * - The overlay background/foreground colors of the system buttons follow the theme via
+ *   `setTitleBarOverlay` (see the effect below).
  *
- * Linux 没有 WCO，主进程回退系统原生边框，AppShell 也不会挂载本组件。
+ * Linux has no WCO; the main process falls back to the native system frame and AppShell does not
+ * mount this component.
  */
 
 const api = (): Window['api'] => window.api
@@ -28,15 +32,18 @@ const ShellTitleBar: React.FC = () => {
   const isMac = platform === 'darwin'
 
   /**
-   * 系统绘制的窗口按钮配色跟随应用主题。
+   * The colors of the system-drawn window buttons follow the app theme.
    *
-   * **底色必须和自绘标题条严格一致**（用户 2026-11-19 反馈「颜色不一样」）：覆盖层是系统
-   * 画在网页内容之上的独立区域，颜色由 `setTitleBarOverlay` 单独指定；若这里手写死色，
-   * 就会和 CSS 里的 `--shell-titlebar-bg`（来自 antd token.colorBgLayout）差一点点，
-   * 标题条右侧出现一条可见的色差缝。这里直接复用同一个 token，天然同色。
+   * **The background must exactly match the custom title strip** (user feedback on 2026-11-19:
+   * "the colors differ"): the overlay is a separate region the system draws above the web content,
+   * and its color is set independently via `setTitleBarOverlay`; a hard-coded color here would
+   * differ slightly from `--shell-titlebar-bg` in CSS (derived from antd token.colorBgLayout),
+   * leaving a visible seam of different color on the right side of the title strip. Reusing the
+   * same token here keeps them identical by construction.
    *
-   * symbolColor 必须是**实色**：Electron 对 rgba() 解析不稳，传 token.colorText
-   * （rgba(0,0,0,0.88) 这类）会退化成默认色，亮色主题下白符号压在白底上几乎看不见。
+   * symbolColor must be a **solid color**: Electron's rgba() parsing is unreliable, and passing
+   * token.colorText (values like rgba(0,0,0,0.88)) degrades to the default color, making white
+   * symbols almost invisible on a white background in the light theme.
    */
   useLayoutEffect(() => {
     if (platform === 'linux') return
@@ -48,7 +55,7 @@ const ShellTitleBar: React.FC = () => {
         height: 36
       })
     } catch {
-      // 平台不支持 WCO：保持系统默认标题栏即可
+      // Platform does not support WCO: keep the system default title bar
     }
   }, [platform, effectiveTheme, token.colorBgLayout])
 

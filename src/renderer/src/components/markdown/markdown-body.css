@@ -1,5 +1,5 @@
-/* ── Markdown 正文公共样式 ── */
-/* 使用 CSS 自定义属性实现亮色/暗色切换，默认值为亮色 */
+/* ── Shared Markdown body styles ── */
+/* Light/dark switching uses CSS custom properties; the default values are light */
 
 .markdown-body {
   --md-code-bg: #f3f4f6;
@@ -14,7 +14,7 @@
   --md-search-highlight-current-color: #ffffff;
 }
 
-/* 暗色模式变量覆盖 */
+/* Dark mode variable overrides */
 .markdown-body.dark {
   --md-code-bg: #374151;
   --md-code-color: #e5e7eb;
@@ -70,7 +70,7 @@
   scroll-margin-top: 20px;
 }
 
-/* 首个元素为标题或段落时移除顶部 margin，末尾元素移除底部 margin */
+/* Drop the top margin when the first element is a heading or paragraph, and the bottom margin on the last element */
 .markdown-body > :first-child:is(h1, h2, h3, h4, h5, h6, p) {
   margin-top: 0;
 }
@@ -131,15 +131,17 @@
   font-size: 0.9em;
 }
 
-/* 内联代码：外层是「点击复制」的 span（inline-flex items-center，见 InlineCodeCopy），
-   code 若继承段落/列表的 1.7 行高，行盒会比同行文字高出一截，胶囊被撑高且与文字错位；
-   这里固定成 16px。只作用于该包装内的 code，代码块（pre code）不受影响。 */
+/* Inline code: the wrapper is a "click to copy" span (inline-flex items-center, see InlineCodeCopy).
+   If code inherited the 1.7 line-height of paragraphs/lists, its line box would sit higher than
+   the surrounding text, stretching the pill and misaligning it; fix it at 16px here. Applies only
+   to code inside that wrapper; code blocks (pre code) are unaffected. */
 .markdown-body .inline-code-copy > code {
   line-height: 16px;
 }
 
-/* 防横向溢出：根容器兜底断词；内联代码（含斜杠长串）在超宽时断行，
-   代码块（pre code）保持不换行（pre 自带 overflow-x） */
+/* Horizontal overflow guard: the root container breaks words as a fallback; inline code
+   (including long slash-separated strings) wraps when too wide, while code blocks (pre code)
+   keep no wrapping (pre has its own overflow-x) */
 .markdown-body {
   overflow-wrap: break-word;
 }
@@ -225,7 +227,7 @@ mark.search-highlight-current {
   padding: 0 1px;
 }
 
-/* ── 内容适配：Mermaid 图表 ── */
+/* ── Content fitting: Mermaid diagrams ── */
 
 .mermaid-block {
   margin: 1em 0;
@@ -238,7 +240,7 @@ mark.search-highlight-current {
   overflow-x: auto;
 }
 
-/* !important 压过 mermaid 内联的 max-width（自然宽度），保证 SVG 永远不超出容器 */
+/* !important overrides Mermaid's inline max-width (natural width) so the SVG never exceeds the container */
 .mermaid-block svg {
   max-width: 100% !important;
   height: auto;
@@ -259,7 +261,7 @@ mark.search-highlight-current {
   word-break: break-all;
 }
 
-/* ── 内容适配：KaTeX 公式 ── */
+/* ── Content fitting: KaTeX formulas ── */
 
 .markdown-body .katex-display {
   overflow-x: auto;
@@ -271,7 +273,7 @@ mark.search-highlight-current {
   font-family: inherit;
 }
 
-/* ── 内容适配：MDX 源码块（预览中以代码块展示，语言标记为 mdx） ── */
+/* ── Content fitting: MDX source blocks (rendered as code blocks in previews, tagged with the mdx language) ── */
 
 .markdown-body pre code.language-mdx {
   color: var(--md-pre-code-color);

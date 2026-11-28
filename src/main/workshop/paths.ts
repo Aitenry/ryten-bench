@@ -2,42 +2,49 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 /**
- * 工坊的目录约定与**路径安全**（唯一真源）。
+ * Workshop directory conventions and **path safety** (single source of truth).
  *
  * ```
  * <userData>/plugin-workshop/
- *   drafts/<id>/        草稿源码（助手唯一编辑面）
- *   dist/<id>/          构建产物（= 可安装插件包，与插件中心里发布的包同构）
- *   reports/<id>.json   最近一次验收报告（面板与工具都读它）
- *   exports/<id>-<v>.zip 导出的可分发压缩包
+ *   drafts/<id>/         draft source (the only edit surface for the assistant)
+ *   dist/<id>/           build output (= installable plugin package, structurally identical to
+ *                        the packages published from the plugin center)
+ *   reports/<id>.json    latest verification report (read by both the panel and the tools)
+ *   exports/<id>-<v>.zip exported distributable archive
  * ```
  *
- * 三条不变量：
- * 1. **草稿 id 就是插件 id**：目录名 = `plugin.json.id` = 安装后的 `userData/plugins/<id>`，
- *    三者一致才能让「卸载/升级/重装」这套既有语义原样成立（scanner 要求目录名与 id 相同）；
- * 2. **所有对外来的路径都要过 `normalizeDraftRel`**：工具的 `path` 参数来自模型，
- *    `../` 逃逸必须在这里被挡住（不是靠调用方自觉）；
- * 3. **根目录可配**（`configureWorkshopRoot`）：服务本身不 import electron，
- *    离线工装因此能用临时目录跑完整的「生成 → 构建 → 验收 → 发布」链路。
+ * Three invariants:
+ * 1. **The draft id is the plugin id**: directory name = `plugin.json.id` = the installed
+ *    `userData/plugins/<id>`. Only when all three agree do the existing
+ *    uninstall/upgrade/reinstall semantics hold as they are (the scanner requires the directory
+ *    name to match the id);
+ * 2. **Every externally supplied path goes through `normalizeDraftRel`**: the tools' `path`
+ *    argument comes from the model, so `../` escapes must be blocked here (not left to the
+ *    caller's discipline);
+ * 3. **The root is configurable** (`configureWorkshopRoot`): the service itself does not
+ *    import electron, so the offline harness can drive the full
+ *    generate -> build -> verify -> publish pipeline against a temporary directory.
  */
 
-/** 工坊根（未配置时为空字符串 = 工坊不可用，见 `isWorkshopReady`） */
+/** Workshop root (empty string when not configured = workshop unavailable, see `isWorkshopReady`) */
 let root = ''
 
 /**
- * 配置工坊根目录（主进程在插件 install 的 effect 里用 `app.getPath('userData')` 注入；
- * 离线工装注入临时目录）。传空字符串 = 关闭工坊（工具/通道会给出可读错误而不是崩）。
+ * Configure the workshop root directory (the main process injects it via
+ * `app.getPath('userData')` in the plugin install effect; the offline harness injects a
+ * temporary directory). An empty string disables the workshop (tools/channels then return a
+ * readable error instead of crashing).
  */
 export function configureWorkshopRoot(dir: string | null | undefined): void {
   root = typeof dir === 'string' ? dir : ''
 }
 
-/** 工坊是否已接线（未接线时所有动作都返回可读错误） */
+/** Whether the workshop is wired up (while unwired every action returns a readable error) */
 export function isWorkshopReady(): boolean {
   return root !== ''
 }
 
-/** 工坊根（未接线时抛错——调用方应先问 `isWorkshopReady()`） */
+/** Workshop root (throws when unwired — callers should check `isWorkshopReady()` first) */
 export function workshopRoot(): string {
   if (!root) throw new Error('插件工坊尚未接线（未注入工坊根目录）')
   return root
@@ -56,57 +63,62 @@ export function exportsRoot(): string {
 }
 
 /**
- * 覆盖草稿前的**备份目录**：`<userData>/plugin-workshop/backups/<id>-<时间戳>/`。
+ * **Backup directory** used before overwriting a draft:
+ * `<userData>/plugin-workshop/backups/<id>-<timestamp>/`.
  *
- * 为什么需要：`plugin_draft create --overwrite` 的对象是用户自己选定的源码目录
- * （能进 git、能用编辑器打开），直接 `rm -rf` 等于把可能还没提交的工作一起删掉。
- * 覆盖前先整份拷到这里，至少留一条后悔路；保留最近若干份，不让它无限长。
+ * Why it is needed: `plugin_draft create --overwrite` targets a source directory the user
+ * picked (it can be in git, opened in an editor), so a bare `rm -rf` would delete work that
+ * may not be committed yet. Copy the whole thing here before overwriting, leaving at least one
+ * way back; keep only the most recent few so it does not grow without bound.
  */
 export function backupsRoot(): string {
   return path.join(workshopRoot(), 'backups')
 }
 
 /**
- * 旧版草稿目录（每份草稿在自己的工作目录特性之前，源码都落在 `<userData>/plugin-workshop/drafts/`）。
+ * Legacy drafts directory (before each draft had its own workspace directory, all source lived
+ * under `<userData>/plugin-workshop/drafts/`).
  *
- * 现在只用来**迁移**：用户第一次配置插件存放路径时，这里已有的草稿会被搬过去，
- * 之后不再往这里写任何东西。
+ * Now used only for **migration**: when the user configures the plugin storage path for the
+ * first time, drafts already here are moved over; nothing is ever written here afterwards.
  */
 export function legacyDraftsRoot(): string {
   return path.join(workshopRoot(), 'drafts')
 }
 
-// ---------- 插件存放路径（默认预置，用户可改） ----------
+// ---------- Plugin storage path (preset by default, user can change) ----------
 
 /**
- * 用户配置的**插件存放路径**（所有插件的源码根目录）。
+ * User-configured **plugin storage path** (the source root for all plugins).
  *
- * 首次启动由 `storage/layout.ts` 按安装目录预置为 `<安装目录>/data/plugins`
- * （安装目录不可写时退回 `<userData>/data/plugins`），所以开箱就能用工坊；
- * 用户之后可以改到任意可写目录，改地址时旧路径下的插件源码会整体迁移过去
- * （见 `storage/migration.ts`）。未配置（用户主动清空）时工坊不列草稿也不能新建。
+ * On first launch `storage/layout.ts` presets it to `<install dir>/data/plugins` (falling back
+ * to `<userData>/data/plugins` when the install directory is not writable), so the workshop is
+ * usable out of the box; the user can later point it at any writable directory, and existing
+ * plugin sources are migrated over when the location changes (see `storage/migration.ts`).
+ * When unconfigured (the user cleared it), the workshop can neither list nor create drafts.
  *
- * 落盘约定：每个插件一个子目录 `<pluginsPath>/<插件 id>/`；
- * **根目录本身永远不会被删**（删插件只删它自己那个子目录）。
+ * On-disk convention: one subdirectory per plugin `<pluginsPath>/<plugin id>/`;
+ * **the root directory itself is never deleted** (deleting a plugin only removes its own
+ * subdirectory).
  */
 let pluginsRoot = ''
 
-/** 配置插件存放路径（未配置传空字符串） */
+/** Configure the plugin storage path (pass an empty string when unconfigured) */
 export function configurePluginsRoot(dir: string | null | undefined): void {
   pluginsRoot = typeof dir === 'string' && dir.trim() !== '' ? path.resolve(dir) : ''
 }
 
-/** 当前插件存放路径（未配置时为空字符串） */
+/** Current plugin storage path (empty string when unconfigured) */
 export function pluginsRootPath(): string {
   return pluginsRoot
 }
 
-/** 是否已配置插件存放路径（未配置时草稿相关动作全部拒绝） */
+/** Whether the plugin storage path is configured (all draft actions are rejected otherwise) */
 export function hasPluginsRoot(): boolean {
   return pluginsRoot !== ''
 }
 
-/** 取插件存放路径（未配置时抛可读错误，界面据此引导去选文件夹） */
+/** Get the plugin storage path (throws a readable error when unconfigured; the UI prompts folder selection from it) */
 export function requirePluginsRoot(): string {
   if (!pluginsRoot) {
     throw new Error(
@@ -116,7 +128,7 @@ export function requirePluginsRoot(): string {
   return pluginsRoot
 }
 
-/** 某插件的源码目录：`<插件存放路径>/<插件 id>/` */
+/** Source directory of a plugin: `<plugin storage path>/<plugin id>/` */
 export function draftDir(id: string): string {
   return path.join(requirePluginsRoot(), assertDraftId(id))
 }
@@ -130,29 +142,33 @@ export function reportPath(id: string): string {
 }
 
 /**
- * 插件 id 规则（草稿目录名 = 插件 id）。
+ * Plugin id rules (draft directory name = plugin id).
  *
- * 比 `isValidManifest` 的正则更严：**只允许小写 kebab**。理由是这个 id 同时是目录名、
- * IPC 命名空间（`plugin:<id>:*`）与 `plugin://<id>/…` 的地址段，大小写/点号混进来会让
- * 「同一个插件的两种写法」在卸载与路由上分裂。内置插件（notes / harness）本来就是这个形态。
+ * Stricter than the `isValidManifest` regex: **lowercase kebab only**. The reason is that this
+ * id is simultaneously a directory name, an IPC namespace (`plugin:<id>:*`) and an address
+ * segment of `plugin://<id>/…`; mixing in uppercase or dots would split "two spellings of the
+ * same plugin" across uninstall and routing. Built-in plugins (notes / harness) already have
+ * this form.
  */
 const DRAFT_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
-/** 单段长度上限（目录名 + 命名空间都够用） */
+/** Maximum length of a single segment (enough for both directory name and namespace) */
 const DRAFT_ID_MAX = 40
 
 /**
- * 宿主保留 id：`plugin://host/…` 是渲染层宿主 UI 桥的地址（见 scanner.ts 的说明），
- * 目录叫 host 的插件永远取不到自己的文件——因此在**生成草稿**这一步就挡掉，
- * 而不是等安装后才表现为「界面白屏」。
+ * Host-reserved ids: `plugin://host/…` is the address of the renderer host UI bridge (see the
+ * note in scanner.ts), so a plugin whose directory is called host can never reach its own
+ * files — block it at **draft generation** time instead of waiting for a blank screen after
+ * installation.
  */
 export const RESERVED_DRAFT_IDS: ReadonlySet<string> = new Set(['host'])
 
 /**
- * Windows 保留设备名：`con` / `prn` / `aux` / `nul` / `com1..9` / `lpt1..9`。
+ * Windows reserved device names: `con` / `prn` / `aux` / `nul` / `com1..9` / `lpt1..9`.
  *
- * 这些名字完全符合 kebab 规则，但在 Windows 上 `mkdir('con')` 会失败（或被当成设备）；
- * 插件 id 同时是目录名，所以必须在这里挡掉，而不是在建目录时抛系统错误。
- * 其它平台不需要，但「同一份草稿在哪都能建」比按平台分叉简单。
+ * These names fully satisfy the kebab rule, but on Windows `mkdir('con')` fails (or is treated
+ * as a device); since the plugin id is also the directory name they must be blocked here rather
+ * than surfacing as a system error while creating the directory. Other platforms do not need
+ * this, but "the same draft can be created anywhere" is simpler than branching per platform.
  */
 const WINDOWS_DEVICE_NAMES: ReadonlySet<string> = new Set([
   'con',
@@ -163,7 +179,7 @@ const WINDOWS_DEVICE_NAMES: ReadonlySet<string> = new Set([
   ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`)
 ])
 
-/** 校验草稿 id（不合法直接抛可读错误） */
+/** Validate a draft id (throws a readable error when invalid) */
 export function assertDraftId(id: unknown): string {
   if (typeof id !== 'string' || id === '') {
     throw new Error('草稿 id 不能为空')
@@ -186,10 +202,11 @@ export function assertDraftId(id: unknown): string {
 }
 
 /**
- * 归一化草稿内的相对路径。
+ * Normalize a relative path inside a draft.
  *
- * 挡住三类：绝对路径（`C:\…` / `/etc/…`）、上层逃逸（`..`）、空路径。
- * 反斜杠统一成 `/`，因为模型经常按 Windows 习惯写 `renderer\plugin.tsx`。
+ * Blocks three cases: absolute paths (`C:\…` / `/etc/…`), upward escapes (`..`) and empty
+ * paths. Backslashes are unified to `/` because the model often writes
+ * `renderer\plugin.tsx` out of Windows habit.
  */
 export function normalizeDraftRel(rel: unknown): string {
   if (typeof rel !== 'string' || rel.trim() === '') {
@@ -210,12 +227,12 @@ export function normalizeDraftRel(rel: unknown): string {
   return segments.join('/')
 }
 
-/** 把草稿内相对路径解析成绝对路径（越界/非法立即抛错） */
+/** Resolve a draft-relative path to an absolute path (throws immediately on escape/invalid input) */
 export function resolveInDraft(id: string, rel: unknown): string {
   return path.join(draftDir(id), normalizeDraftRel(rel))
 }
 
-/** 把任意相对路径解析到某个根之下（导出/报告等同款保护） */
+/** Resolve an arbitrary relative path under a given root (same protection for exports/reports) */
 export function resolveUnder(base: string, rel: unknown): string {
   const target = path.resolve(base, normalizeDraftRel(rel))
   const normalizedBase = path.resolve(base)
@@ -225,13 +242,13 @@ export function resolveUnder(base: string, rel: unknown): string {
   return target
 }
 
-/** 确保目录存在并返回它 */
+/** Ensure the directory exists and return it */
 export function ensureDir(dir: string): string {
   fs.mkdirSync(dir, { recursive: true })
   return dir
 }
 
-/** 读 JSON（不存在/解析失败返回 null，调用方决定要不要报错） */
+/** Read JSON (returns null when missing/unparsable; the caller decides whether to report an error) */
 export function readJson<T>(file: string): T | null {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as T
@@ -240,13 +257,13 @@ export function readJson<T>(file: string): T | null {
   }
 }
 
-/** 写 JSON（自动建父目录，末尾换行——与仓库里其它产物文件一致） */
+/** Write JSON (creates parent directories, trailing newline — consistent with other artifact files in the repo) */
 export function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', 'utf-8')
 }
 
-/** 草稿是否已存在（有 workshop.json 或 plugin.json 即算存在） */
+/** Whether the draft already exists (either workshop.json or plugin.json counts) */
 export function draftExists(id: string): boolean {
   try {
     const dir = draftDir(id)

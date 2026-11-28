@@ -6,15 +6,17 @@ import { hasBuild, isBuildStale, workshopHost } from './host'
 import { updateReportRenderer } from './verify'
 
 /**
- * 发布 / 卸载 / 导出。
+ * Publish / uninstall / export.
  *
- * **发布 = 走宿主既有的安装链路**（`installPackageDir` → `setEnabledOverride` →
- * `loadExternalMain` → `broadcastPluginStateChanged`），与设置页里的「从本地安装」、
- * 「从插件中心安装」是同一条路径的同一批函数。工坊不另造一条：否则「工坊装的插件」
- * 与「用户装的插件」迟早会在升级清理、卸载记账、渲染层重载这些细节上分叉。
+ * **Publish = go through the host's existing install chain** (`installPackageDir` →
+ * `setEnabledOverride` → `loadExternalMain` → `broadcastPluginStateChanged`), the same set of
+ * functions used by "install from local" and "install from the plugin center" on the settings
+ * page. The workshop does not build a second one: otherwise "plugins installed by the
+ * workshop" and "plugins installed by the user" would eventually diverge on details like
+ * upgrade cleanup, uninstall bookkeeping, and renderer reloads.
  */
 
-/** 发布前的守卫：草稿在、产物在、id 合法 */
+/** Pre-publish guard: the draft exists, the output exists, the id is valid */
 function assertPublishable(id: string): { outDir: string } {
   if (!fs.existsSync(draftDir(id))) {
     throw new Error(`草稿 '${id}' 不存在`)
@@ -26,7 +28,7 @@ function assertPublishable(id: string): { outDir: string } {
   if (!fs.existsSync(manifestFile)) {
     throw new Error(`产物缺少 plugin.json（${manifestFile}）`)
   }
-  // 产物可能被手工改过：id 不一致时装进去的是**另一个插件**，必须在落地前挡住
+  // The output may have been edited by hand: when the id differs, what gets installed is **another plugin**, so block it before touching disk
   const manifest = readJson<{ id?: unknown }>(manifestFile)
   if (typeof manifest?.id !== 'string' || manifest.id !== id) {
     throw new Error(
@@ -37,42 +39,50 @@ function assertPublishable(id: string): { outDir: string } {
 }
 
 /**
- * 把草稿的构建产物装进应用并启用，**随后立刻在真界面上复验一次**。
+ * Install the draft's build output into the app and enable it, **then immediately re-verify
+ * against the real UI**.
  *
- * 为什么发布后要自动复验（而不是只信发布前的静态检查）：渲染层能不能装载只有真界面说了算
- * （`plugin://` 协议、宿主 UI 桥、blob import 三者缺一不可），而它在插件**已安装**之后才可测。
- * 复验失败就**自动回滚**（卸载），把插件留在用户机器上的失败模式从「菜单里多一个点了就白屏的
- * 插件」变成「一次带原因的安装失败」。
+ * Why re-verify automatically after publish (rather than trusting the static checks done
+ * before publish): only the real UI can tell whether the renderer loads (the `plugin://`
+ * protocol, the host UI bridge, and blob import are all required), and that is testable only
+ * after the plugin is **already installed**. A failed re-verification **rolls back
+ * automatically** (uninstall), turning the failure mode left on the user's machine from "an
+ * extra plugin in the menu that shows a blank screen when clicked" into "a single install
+ * failure with a reason".
  *
- * 产物比源码旧时不阻断（用户可能就是想先看看旧版），但在结果里如实标记 `staleBuild`。
+ * A stale output does not block (the user may simply want to look at the old version), but
+ * the result is honestly flagged with `staleBuild`.
  */
 export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
   const host = workshopHost()
   const { outDir } = assertPublishable(id)
   const staleBuild = isBuildStale(id)
-  /** 新装还是升级：决定失败时「回滚卸载」还是「保留已装但停用」 */
+  /** New install or upgrade: decides whether a failure means "roll back by uninstalling" or "keep it installed but disabled" */
   const wasInstalled = host.isInstalled(id)
 
   let info: ReturnType<typeof host.installPackage>
   try {
     info = host.installPackage(outDir)
   } catch (err) {
-    // 新装失败（拷贝中途出错/清单被拒）可能留下半份目录：清掉，别让面板出现装坏的插件
+    // A failed new install (copy error midway / manifest rejected) may leave a half-written directory: clean it up so the panel does not show a broken plugin
     if (!wasInstalled) {
       try {
         host.uninstall(id)
         host.notify()
       } catch {
-        // 清不掉时下面如实报安装错误即可
+        // If cleanup fails, just report the install error honestly below
       }
     }
     throw new Error(`安装失败：${(err as Error).message}`)
   }
 
   /**
-   * 启用失败要**收敛状态**，不能把「装了但没启用」留给用户自己发现：
-   * - 升级：无法恢复旧版本（产物已被覆盖），保留新装目录并标成停用，提示用户重试；
-   * - 新装：整份回滚卸载，失败模式从「面板里多一个启用不了的插件」变成「一次带原因的安装失败」。
+   * Enable failures must **converge the state**; do not leave "installed but not enabled" for
+   * the user to discover:
+   * - Upgrade: the old version cannot be restored (its output was overwritten), so keep the
+   *   new install directory and mark it disabled, telling the user to retry;
+   * - New install: roll back the whole install, so the failure mode goes from "an extra
+   *   plugin in the panel that cannot be enabled" to "a single install failure with a reason".
    */
   try {
     host.enable(info.id)
@@ -80,7 +90,7 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
     try {
       host.disable(info.id)
     } catch {
-      // 停用也失败时，下面的报错已经足够让用户去面板处理
+      // If disabling also fails, the error below is enough for the user to handle it in the panel
     }
     if (wasInstalled) {
       host.notify()
@@ -110,12 +120,12 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
       rendererProbe = { status: 'fail', detail: `探针异常：${(err as Error).message}` }
     }
     if (rendererProbe.status === 'fail') {
-      // 回滚：删掉刚装上去的代码（数据本来就没有），并把原因原样抛给调用方
+      // Roll back: delete the code just installed (there was no data anyway), and rethrow the reason as-is to the caller
       try {
         host.uninstall(info.id)
         host.notify()
       } catch (err) {
-        // 回滚失败要如实说：否则用户机器上会留一个坏插件
+        // Rollback failures must be reported honestly: otherwise a broken plugin is left on the user's machine
         throw new Error(
           `安装后渲染层复验失败，且自动回滚也失败（请到 设置 → 插件 里手工卸载 '${info.id}'）：` +
             `${rendererProbe.detail ?? '未知原因'}；回滚错误：${(err as Error).message}`
@@ -126,8 +136,9 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
           `常见原因是渲染入口顶层抛错、引了宿主 UI 表里没有的模块，或注册的组件一渲染就崩。`
       )
     }
-    // 复验结论回写最近一次验收报告：安装前这一项只能 SKIP（插件还没装），
-    // 装完立刻兑现的这次探针才是「界面真的能装载」的证据
+    // Write the re-verification result back to the most recent verification report: before
+    // installation this item can only be SKIP (the plugin is not installed yet); the probe
+    // that runs right after installation is the evidence that "the UI really loads"
     updateReportRenderer(info.id, rendererProbe)
   }
 
@@ -143,14 +154,14 @@ export async function publishDraft(id: string): Promise<WorkshopPublishResult> {
   }
 }
 
-/** 停用（保留已装目录与数据）：面板上等价于关掉开关 */
+/** Disable (keep the installed directory and data): equivalent to turning the switch off in the panel */
 export function disableDraft(id: string): void {
   const host = workshopHost()
   host.disable(id)
   host.notify()
 }
 
-/** 启用结果（面板/工具共用：启用了什么 + 渲染层复验结论） */
+/** Enable result (shared by panel/tools: what was enabled + the renderer re-verification result) */
 export interface WorkshopEnableResult {
   id: string
   enabled: boolean
@@ -158,11 +169,14 @@ export interface WorkshopEnableResult {
 }
 
 /**
- * 启用一个**已经装好**的插件，并立刻在真界面上复验一次。
+ * Enable a plugin that is **already installed**, then immediately re-verify against the real
+ * UI.
  *
- * 为什么单独一个动作：发布失败/用户手工装过之后，插件可能停在「已安装·停用」。
- * 此前只能让用户去面板点开关——助手明明能把这件事做完。复验失败会**自动停用**
- * （而不是留一个启用了但界面白屏的插件），把失败收敛成一次带原因的启用失败。
+ * Why a separate action: after a failed publish or a manual install by the user, a plugin may
+ * be left in "installed · disabled". Previously the only option was to have the user click
+ * the switch in the panel — yet the assistant can finish this itself. A failed
+ * re-verification **disables automatically** (rather than leaving a plugin that is enabled
+ * but shows a blank screen), converging the failure into one enable failure with a reason.
  */
 export async function enableDraft(id: string): Promise<WorkshopEnableResult> {
   const host = workshopHost()
@@ -184,7 +198,7 @@ export async function enableDraft(id: string): Promise<WorkshopEnableResult> {
         host.disable(id)
         host.notify()
       } catch {
-        // 停用失败也要如实报探针原因（下面抛出的错误里带着）
+        // Even when disabling fails, report the probe reason honestly (it is included in the error thrown below)
       }
       throw new Error(
         `启用后渲染层复验失败，已自动停用：${rendererProbe.detail ?? '未知原因'}。` +
@@ -195,7 +209,7 @@ export async function enableDraft(id: string): Promise<WorkshopEnableResult> {
   return { id, enabled: host.isEnabled(id), ...(rendererProbe ? { rendererProbe } : {}) }
 }
 
-/** 卸载：摘主模块 + 删 userData/plugins/<id>（数据保留，与面板卸载口径一致） */
+/** Uninstall: unload the main module + delete userData/plugins/<id> (data is kept, same behavior as uninstalling from the panel) */
 export function unpublishDraft(id: string): void {
   const host = workshopHost()
   host.uninstall(id)
@@ -203,10 +217,11 @@ export function unpublishDraft(id: string): void {
 }
 
 /**
- * 导出成可分发的 zip（`<root>/exports/<id>-<version>.zip`）。
+ * Export as a distributable zip (`<root>/exports/<id>-<version>.zip`).
  *
- * 用途是「把我做的插件发给别人 / 传到插件中心」：zip 内容与 `dist/<id>` 逐文件一致，
- * 对方可以用设置页的「从本地安装 → 选 zip」装进来（那条链路本来就有）。
+ * The purpose is "send a plugin I made to someone else / upload it to the plugin center": the
+ * zip content is file-for-file identical to `dist/<id>`, and the other side can install it via
+ * the settings page's "install from local → choose zip" (that chain already exists).
  */
 export async function exportDraft(
   id: string
@@ -235,7 +250,7 @@ export async function exportDraft(
   return { file: target, bytes: buffer.length, files }
 }
 
-/** 打开草稿目录（面板「打开目录」用；由宿主决定怎么打开） */
+/** Open the draft directory (for the panel's "open directory"; how to open it is decided by the host) */
 export function draftDirOf(id: string): string {
   return draftDir(id)
 }

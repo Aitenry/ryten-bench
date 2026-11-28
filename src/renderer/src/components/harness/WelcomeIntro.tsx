@@ -7,7 +7,7 @@ interface WelcomeIntroProps {
   colorTextSecondary: string
 }
 
-/** 欢迎语词条键：文案随语言切换，故只在模块级保存键名 */
+/** Welcome copy keys: the text follows the active language, so only the keys are kept at module level */
 const TITLE_KEY = 'harness.welcome.title' as const
 const SUBTITLE_KEYS = [
   'harness.welcome.subtitleWeather',
@@ -17,11 +17,12 @@ const SUBTITLE_KEYS = [
 ] as const
 
 /**
- * 空白会话欢迎语。
+ * Welcome copy for an empty session.
  *
- * 打字机是「每 40~60ms 一次 setState」的高频动画源，而循环打字机是**无限循环**的。
- * 因此这两个 hook 必须收敛在这个小组件内：若挂在 useHarnessHandlers 上，整个聊天视图
- * （消息区 / 输入框 / 侧边栏 / 搜索框）会被每秒重渲染约 25 次，永不停止。
+ * The typewriter is a high-frequency animation source that calls setState every 40–60ms, and the
+ * cycling typewriter loops **forever**. So these two hooks must stay confined to this small
+ * component: if mounted on useHarnessHandlers, the whole chat view (message area / input box /
+ * sidebar / search box) would re-render roughly 25 times per second and never stop.
  */
 const WelcomeIntro: React.FC<WelcomeIntroProps> = ({ colorText, colorTextSecondary }) => {
   const { t } = useTranslation()

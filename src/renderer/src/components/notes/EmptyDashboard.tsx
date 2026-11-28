@@ -124,7 +124,7 @@ const EmptyDashboard: React.FC<EmptyDashboardProps> = ({
       }}
     >
       <div style={{ maxWidth: 860, margin: '0 auto', padding: '36px 40px 56px' }}>
-        {/* 问候 */}
+        {/* Greeting */}
         <div
           style={{ fontSize: 26, fontWeight: 700, color: token.colorText, letterSpacing: -0.01 }}
         >
@@ -136,7 +136,7 @@ const EmptyDashboard: React.FC<EmptyDashboardProps> = ({
           {dayjs().format(t('notes.dashboard.dateFormat'))} · {t('notes.dashboard.subtitle')}
         </div>
 
-        {/* 统计 */}
+        {/* Stats */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
           {statBlock(
             <RiFileTextLine size={15} />,
@@ -165,7 +165,7 @@ const EmptyDashboard: React.FC<EmptyDashboardProps> = ({
           )}
         </div>
 
-        {/* 快速新建 */}
+        {/* Quick create */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
           <QuickCreate
             token={token}
@@ -187,7 +187,7 @@ const EmptyDashboard: React.FC<EmptyDashboardProps> = ({
           />
         </div>
 
-        {/* 两栏：待办 / 最近文档 */}
+        {/* Two columns: todos / recent documents */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <section>
             <SectionTitle
@@ -331,7 +331,7 @@ const EmptyDashboard: React.FC<EmptyDashboardProps> = ({
   )
 }
 
-/* ──────────── 子组件 ──────────── */
+/* ──────────── Subcomponents ──────────── */
 
 const SectionTitle: React.FC<{
   token: ReturnType<typeof theme.useToken>['token']

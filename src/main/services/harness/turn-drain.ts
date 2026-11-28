@@ -1,42 +1,47 @@
 import type { QueuedMessage } from './queue-store'
 
 /**
- * 排队消息的接续循环（纯逻辑，便于在 `tests/` 里直接跑断言）。
+ * Continuation loop for queued messages (pure logic, so assertions can run directly in `tests/`).
  *
- * 语义（对应产品口径「生成中发的消息，等这一轮跑完自动继续」）：
- *  - 严格 FIFO：一轮结束 → 取队首 → 作为新一轮发出 → 这一轮结束 → 再取队首……
- *    旧的实现只接一条就收工（接续轮自己的收尾不会再触发接续），队列里第二条起永远发不出去；
- *  - 不抢跑：话题上还有回合在跑、或目标自动续跑正在跑，都不接续（交给收尾的那一方）；
- *  - 用户中止：那一轮之后的排队消息保留在队列里，不自动续（避免「停止后又自己跑起来」）；
- *  - 起轮失败：记一次错误就停，不无限重试（队列内容仍在，用户看得到也能删）。
+ * Semantics (matches the product rule "a message sent while generating continues automatically once this turn ends"):
+ *  - Strict FIFO: a turn ends → take the head → send it as a new turn → that turn ends → take the head again…
+ *    The old implementation stopped after one continuation (the continuation turn's own teardown never triggered
+ *    another continuation), so the second and later queued messages could never be sent;
+ *  - No preemption: if the topic still has a running turn, or a goal auto-continuation is running, do not
+ *    continue (leave it to whoever is finishing);
+ *  - User abort: queued messages after that turn stay in the queue and are not continued automatically (avoiding
+ *    "it starts running again after stop");
+ *  - Turn start failure: record an error and stop, without infinite retries (the queue content is still there,
+ *    visible to and deletable by the user).
  *
- * 循环上限只是防御（正常会被队列长度或上面四条终止条件结束）。
+ * The loop cap is only defensive (normally the queue length or the four termination conditions above end it).
  */
 
-/** 接续循环依赖（真实实现在 ipc/harness/harness.ts，测试里用假实现） */
+/** Continuation loop dependencies (real implementation in ipc/harness/harness.ts, fakes in tests) */
 export interface DrainTurnDeps {
-  /** 话题上是否已有回合在跑 */
+  /** Whether a turn is already running on the topic */
   isTurnActive: () => boolean
-  /** 目标自动续跑是否在跑 */
+  /** Whether a goal auto-continuation is running */
   isGoalRunning: () => boolean
-  /** 是否还有排队消息 */
+  /** Whether queued messages remain */
   hasPending: () => boolean
-  /** 取出队首一条（取出即消费） */
+  /** Take one item from the head (taking consumes it) */
   shift: () => QueuedMessage | null
-  /** 把它当作新一轮发出，并等这一轮结束（cancelled=true 表示用户中止） */
+  /** Send it as a new turn and wait for that turn to end (cancelled=true means the user aborted) */
   runTurn: (item: QueuedMessage) => Promise<{ cancelled: boolean } | null>
-  /** 即将接续某一条（写日志用） */
+  /** About to continue an item (for logging) */
   onContinue?: (item: QueuedMessage, index: number) => void
-  /** 起轮抛错（记日志并停止接续） */
+  /** Starting a turn threw (log it and stop continuing) */
   onError?: (error: unknown, item: QueuedMessage) => void
-  /** 防御性上限（默认 50 轮） */
+  /** Defensive cap (50 turns by default) */
   maxTurns?: number
 }
 
 /**
- * 逐条接续排队消息，返回真正起过的轮数。
+ * Continue queued messages one by one; returns the number of turns actually started.
  *
- * 注意：调用方要保证「上一轮已经收尾」（回合登记已清），否则循环第一次检查就会退出。
+ * Note: the caller must ensure "the previous turn has finished" (the turn registration is cleared),
+ * otherwise the first check in the loop exits immediately.
  */
 export async function drainPendingTurns(deps: DrainTurnDeps): Promise<number> {
   const maxTurns = deps.maxTurns ?? 50
@@ -57,7 +62,7 @@ export async function drainPendingTurns(deps: DrainTurnDeps): Promise<number> {
       deps.onError?.(error, item)
       break
     }
-    // 用户中止了这一轮：剩余的排队消息留在队列里，等用户下一次发送再决定
+    // The user aborted this turn: remaining queued messages stay in the queue until the user sends again
     if (!outcome || outcome.cancelled) break
     drained += 1
   }

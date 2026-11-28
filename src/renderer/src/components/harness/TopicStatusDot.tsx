@@ -1,27 +1,31 @@
 import React, { useLayoutEffect } from 'react'
 
 /**
- * 会话行首的「呼吸点」——等待用户确认（黄）/ 刚完成未查看（绿）。
+ * The "breathing dot" at the start of a conversation row — waiting for user confirmation
+ * (yellow) / just completed and unviewed (green).
  *
- * 用户口径 2026-11-23：「当需要用户继续确认操作时，这个图标需要变成黄色的点在呼吸……
- * 当任务完成时，需要将进行中，变成绿色的点在呼吸」。所以这里只做**一个会呼吸的圆点**，
- * 颜色由调用方给（黄=等待确认、绿=刚完成），状态机在 useTopicRunStatus / HarnessSidebar。
+ * User requirement 2026-11-23: "when the user needs to confirm an operation, this icon should
+ * become a yellow dot that breathes... when the task completes, the in-progress state should
+ * become a green dot that breathes". So this is just **one breathing dot**; the color is supplied
+ * by the caller (yellow = waiting for confirmation, green = just completed) and the state machine
+ * lives in useTopicRunStatus / HarnessSidebar.
  *
- * 视觉：实心 7px 圆点做透明度呼吸，外加一圈同色晕环向外扩散后淡出——
- * 16px 的行首槽位里，单靠透明度变化在深色侧栏上不够明显，加晕环才有「在动」的感觉。
- * 节奏 2s（比骨架屏的 1.8s 略慢，属于氛围提示、不抢眼）。
+ * Visual: a solid 7px dot breathing in opacity, plus a same-hue halo ring that expands outward
+ * and fades — in the 16px leading slot, an opacity change alone is not noticeable enough on the
+ * dark sidebar; the halo is what gives the "it's moving" feel. Rhythm is 2s (slightly slower than
+ * the skeleton's 1.8s; an ambient hint, not attention-grabbing).
  */
 
 interface TopicStatusDotProps {
-  /** 圆点颜色（黄 = colorWarning / 绿 = colorSuccess） */
+  /** Dot color (yellow = colorWarning / green = colorSuccess) */
   color: string
-  /** 悬浮与读屏用的文案（等待确认 / 已完成） */
+  /** Text for hover and screen readers (waiting for confirmation / completed) */
   label: string
-  /** 槽位尺寸（px），默认 16——与会话行行首指示槽一致 */
+  /** Slot size (px), default 16 — matches the leading indicator slot of a conversation row */
   size?: number
 }
 
-/** 呼吸动画与样式（全局只注入一次，同 ChaseDots 的做法） */
+/** Breathing animation and styles (injected globally once, same approach as ChaseDots) */
 export const TOPIC_STATUS_DOT_CSS = `
 .ryt-topic-dot {
   position: relative;
@@ -53,7 +57,7 @@ export const TOPIC_STATUS_DOT_CSS = `
   0% { opacity: 0.42; transform: scale(1); }
   70%, 100% { opacity: 0; transform: scale(2.15); }
 }
-/* 减少动态：保留「有状态」的静止外观（实心点 + 淡晕环），不播动画 */
+/* Reduced motion: keep the static "stateful" look (solid dot + faint halo) without animating */
 @media (prefers-reduced-motion: reduce) {
   .ryt-topic-dot__core { animation: none; }
   .ryt-topic-dot__halo { animation: none; opacity: 0.3; transform: scale(1.75); }

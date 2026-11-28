@@ -2,25 +2,27 @@ import React, { useMemo, useState } from 'react'
 import { Button } from 'antd'
 import { useTranslation } from '@renderer/i18n'
 
-/** 超过该长度的 markdown 块默认只渲染尾部窗口 */
+/** Markdown blocks longer than this render only the tail window by default */
 const WINDOW_TRIGGER_CHARS = 20_000
-/** 渲染窗口长度（字符） */
+/** Render window length (characters) */
 const WINDOW_CHARS = 20_000
 
 interface StreamTextWindowProps {
   content: string
-  /** 渲染 markdown 的函数（避免与 MarkdownLoad 形成循环依赖，由调用方包一层） */
+  /** Function that renders markdown (avoids a circular dependency with MarkdownLoad; wrapped by the caller) */
   renderMarkdown: (text: string) => React.ReactNode
 }
 
-/** 统计 ``` / ~~~ 围栏数量（只看行首，够用的近似） */
+/** Count ``` / ~~~ fences (line starts only, a sufficient approximation) */
 const countFences = (text: string): number => (text.match(/^ {0,3}(?:```|~~~)/gm) ?? []).length
 
 /**
- * 把切点吸附到行首，并在切开围栏时补一个配平围栏。
+ * Snap the cut point to a line start and add a balancing fence when the cut falls inside a fence.
  *
- * 只截字符不补围栏的话，窗口起点落在 ``` 代码块内部时，渲染出来的是「一段没有开栏的
- * 代码」——缩进被当正文、整块排版崩掉；补一个同型围栏让窗口自身语法闭合。
+ * Truncating characters without adding a fence would render "a code block without an opening
+ * fence" when the window starts inside a ``` code block — the indentation would be treated as body
+ * text and the whole block's layout would collapse; adding a fence of the same kind closes the
+ * window's syntax on its own.
  */
 function balancedSlice(content: string, start: number): string {
   let from = content.indexOf('\n', start)
@@ -34,17 +36,19 @@ function balancedSlice(content: string, start: number): string {
 }
 
 /**
- * markdown 长文本块的渲染窗口（渲染进程内存/CPU 保护）。
+ * Render window for long markdown text blocks (renderer memory/CPU protection).
  *
- * 背景：模型把整份文件/命令输出直接写进回复正文时，单个 text 块可以有几十万字符。
- * MarkdownLoad 每批 chunk 都要把整段重新解析（react-markdown 的 memo 只挡「props 不变」
- * 的重渲染，挡不住内容增长），一次长回复的下半程等于反复解析几百 KB 文本 + 语法高亮，
- * 是渲染进程 OOM 的另一个来源。
+ * Background: when the model writes an entire file or command output straight into the reply body,
+ * a single text block can be hundreds of thousands of characters. MarkdownLoad re-parses the whole
+ * text for every chunk batch (react-markdown's memo only prevents re-renders with unchanged props,
+ * not growing content), so the second half of a long reply means repeatedly parsing hundreds of KB
+ * plus syntax highlighting — another source of renderer OOM.
  *
- * 处理：正文超过 {@link WINDOW_TRIGGER_CHARS} 时默认只渲染**最后**
- * {@link WINDOW_CHARS} 字符（流式时最新内容就在尾部，同时天然避开「重开围栏导致样式
- * 失效」的问题），上方给出行数与字符数提示；点「显示全部」才渲染完整正文。
- * 只影响渲染，消息状态与落库内容始终是完整文本。
+ * Handling: when the body exceeds {@link WINDOW_TRIGGER_CHARS}, render only the **last**
+ * {@link WINDOW_CHARS} characters by default (the newest content is at the tail while streaming,
+ * which also naturally avoids the "reopened fence breaks the styles" problem), with a line and
+ * character count hint above; "show all" renders the full body. Rendering only — message state and
+ * persisted content always stay complete.
  */
 const StreamTextWindow: React.FC<StreamTextWindowProps> = ({ content, renderMarkdown }) => {
   const { t } = useTranslation()

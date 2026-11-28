@@ -1,128 +1,137 @@
 /**
- * 插件工坊的跨进程契约（主进程服务 / AI 工具 / 设置页三处共用）。
+ * Cross-process contract for the plugin workshop (shared by the main-process service,
+ * AI tools and the settings page).
  *
- * 为什么单独一份：工坊的三条消费路径（IPC → 设置页、工具 → 模型、服务 → 构建/验收）
- * 必须对「草稿长什么样、一次验收由什么构成」有同一个答案。这里**不得** import
- * react / electron / node（与 shared/types.ts 同规矩），三端构建都要能直接打包。
+ * Why a separate file: the workshop's three consumption paths (IPC → settings page,
+ * tool → model, service → build/verify) must agree on what a draft looks like and what
+ * one verify run consists of. This file **must not** import react / electron / node
+ * (same rule as shared/types.ts) so all three builds can bundle it directly.
  *
- * 术语：
- * - **草稿（draft）**：`<userData>/plugin-workshop/drafts/<id>/` 下的插件源码目录，
- *   助手用 `plugin_draft` 工具读写它，用户不直接编辑；
- * - **产物（package）**：构建出来的可安装插件包 `.../dist/<id>/{plugin.json,main.cjs,
- *   renderer.mjs,chunk-*.mjs,plugin.css}`，与插件仓库里的 `dist/<id>` 完全同构；
- * - **验收（verify）**：对产物跑一遍自动化测试电池，产出 `WorkshopReport`。
+ * Terms:
+ * - **draft**: a plugin source directory under `<userData>/plugin-workshop/drafts/<id>/`;
+ *   the assistant reads and writes it with the `plugin_draft` tool, users don't edit it directly;
+ * - **package**: the built installable plugin bundle `.../dist/<id>/{plugin.json,main.cjs,
+ *   renderer.mjs,chunk-*.mjs,plugin.css}`, structurally identical to `dist/<id>` in the
+ *   plugin repository;
+ * - **verify**: run the automated test battery against the package and produce a
+ *   `WorkshopReport`.
  */
 
 /**
- * 草稿模板：决定 `plugin_draft create` 生成哪一套骨架。
+ * Draft template: decides which skeleton `plugin_draft create` generates.
  *
- * `full` 是**默认**（用户口径「默认是全部内容都要」）：页面 + 设置页 + AI 工具 +
- * 通道/事件推送 + 卸载清数据，一份就够。其余四个是「只要一部分」的窄模板，
- * 供助手在明确知道只需某一种形态时使用（界面上的新建入口不提供选择）。
+ * `full` is the **default** (the user's wording: "the default is all content"): page +
+ * settings page + AI tools + channel/event push + uninstall cleanup. The other four are
+ * narrow templates for "only one part is needed", used by the assistant when it knows only
+ * one form is required (the new-draft entry in the UI offers no choice).
  */
 export type WorkshopTemplate = 'full' | 'page' | 'tool' | 'panel' | 'minimal'
 
 /**
- * 插件自带样式表的来源。
+ * Source of the plugin's own stylesheet.
  *
- * - `auto`：构建期用 Tailwind（theme + utilities，**不含 preflight**）扫草稿源码生成
- *   —— 这正是 `plugin.css` 约定的手工做法（见 src/main/workshop/css.ts），工坊把它自动化；
- * - `file`：草稿里手写的 `plugin.css` 原样进包（写纯 CSS 时用）；
- * - `off`：不带样式表（全部用内联 style / antd 组件）。
+ * - `auto`: at build time, Tailwind (theme + utilities, **no preflight**) scans the draft
+ *   source and generates it — exactly the manual approach `plugin.css` prescribes (see
+ *   src/main/workshop/css.ts); the workshop automates it;
+ * - `file`: a hand-written `plugin.css` in the draft goes into the package as-is (for plain CSS);
+ * - `off`: no stylesheet (use inline styles / antd components only).
  *
- * 无论哪种模式，产物里若用了类名却没有对应规则，验收都会点名——这是「外部插件界面变形」
- * 那个事故的回归闸门。
+ * In every mode, verify flags any class name used in the package that has no matching rule —
+ * this is the regression gate for the incident where external plugin UIs got deformed.
  */
 export type WorkshopCssMode = 'auto' | 'file' | 'off'
 
-/** 单项检查的结论 */
+/** Outcome of a single check */
 export type WorkshopCheckStatus = 'pass' | 'warn' | 'fail' | 'skip'
 
-/** 验收电池里的一条检查（面板逐条展示，模型据此决定下一步改什么） */
+/** One check in the verify battery (the panel shows them one by one; the model decides what to fix next) */
 export interface WorkshopCheck {
-  /** 稳定 id（跨版本可比对，例：`pkg.manifest`、`main.smoke`） */
+  /** Stable id (comparable across versions, e.g. `pkg.manifest`, `main.smoke`) */
   id: string
-  /** 一句话标题（面板显示） */
+  /** One-line title (shown in the panel) */
   title: string
   status: WorkshopCheckStatus
-  /** 结论细节（通过也要有信息量：通道数、体积、覆盖了多少类名） */
+  /** Result details (informative even when passing: channel count, size, how many class names were covered) */
   detail?: string
-  /** 失败/警告时给模型的可执行下一步 */
+  /** Actionable next step for the model when failing/warning */
   hint?: string
-  /** true = 插件不可用（致命失败）；false/缺省 = 建议 */
+  /** true = the plugin is unusable (fatal failure); false/absent = advisory */
   fatal?: boolean
   durationMs?: number
 }
 
-/** 构建结果（产物清单 + 诊断） */
+/** Build result (package manifest + diagnostics) */
 export interface WorkshopBuildInfo {
   ok: boolean
-  /** 产物目录（dist/<id>），失败时为 undefined */
+  /** Package directory (dist/<id>), undefined on failure */
   outDir?: string
   at?: number
   /**
-   * 本次产物对应的草稿源码指纹（构建成功时写入）。
+   * Fingerprint of the draft sources this package was built from (written on a successful build).
    *
-   * 与「当前源码指纹」不一致 = 产物比源码旧。**不再用 mtime 判定**：构建结束后
-   * 工坊还要回写 `workshop.json`，它永远比产物新，mtime 口径会让每次构建完都立刻「过期」。
+   * A mismatch with the current source fingerprint means the package is older than the
+   * sources. **mtime is no longer used**: after a build finishes the workshop writes
+   * `workshop.json` back, which is always newer than the package, so an mtime-based rule
+   * would mark every build as stale immediately.
    */
   sourceHash?: string
   durationMs: number
   files: { path: string; size: number }[]
-  /** 致命错误（构不成包） */
+  /** Fatal errors (no package can be produced) */
   errors: string[]
-  /** 非致命警告（包能用，但有问题） */
+  /** Non-fatal warnings (package works but has issues) */
   warnings: string[]
-  /** 样式表产出情况 */
+  /** Stylesheet output */
   css?: {
     mode: WorkshopCssMode
     bytes: number
-    /** 从产物里扫出的候选类名数 */
+    /** Number of candidate class names scanned from the package */
     candidates: number
-    /** 生成的 CSS 里没有规则的类名（前若干条） */
+    /** Class names with no rule in the generated CSS (first few) */
     missing: string[]
   }
 }
 
-/** 主进程冒烟结果（用真实 install(ctx) 契约驱动产物里的 main.cjs） */
+/** Main-process smoke result (drives the package's main.cjs through the real install(ctx) contract) */
 export interface WorkshopMainSmoke {
-  /** 注册的 IPC 通道 */
+  /** Registered IPC channels */
   channels: string[]
-  /** 声明的事件通道（只有发送方） */
+  /** Declared event channels (send side only) */
   events: string[]
-  /** 贡献点（key → 条目标签） */
+  /** Contribution points (key → entry labels) */
   contributions: { key: string; labels: string[] }[]
-  /** `ctx.effect` 登记的可逆效果数 */
+  /** Number of reversible effects registered via `ctx.effect` */
   effects: number
-  /** 草稿自带冒烟用例（workshop.smoke.mjs）的执行结果 */
+  /** Results of the draft's own smoke cases (workshop.smoke.mjs) */
   cases: { name: string; ok: boolean; detail?: string; durationMs?: number }[]
-  /** 装载耗时 */
+  /** Load duration */
   durationMs: number
 }
 
-/** 渲染层实时探针结果（真宿主环境里 import + install 一遍插件的渲染模块） */
+/** Renderer live probe result (import + install the plugin's renderer module inside the real host) */
 export interface WorkshopRendererProbe {
   status: 'pass' | 'fail' | 'skip'
   detail?: string
-  /** 探针里记录到的注册项（`route:/demo`、`menu:demo`、`i18n`…） */
+  /** Registrations recorded by the probe (`route:/demo`, `menu:demo`, `i18n`…) */
   registrations?: string[]
   durationMs?: number
 }
 
-/** 一次验收的完整报告 */
+/** Full report of one verify run */
 export interface WorkshopReport {
   id: string
-  /** 被验收的那份清单版本（面板显示「哪个版本验收通过」） */
+  /** Manifest version that was verified (the panel shows which version passed) */
   version?: string
   at: number
   durationMs: number
-  /** 全部致命检查通过 = true */
+  /** true = all fatal checks passed */
   ok: boolean
   /**
-   * 验收时（构建后）的草稿源码指纹。
+   * Fingerprint of the draft sources at verify time (after the build).
    *
-   * 发布闸门据此判断「这份报告能代表当前源码吗」：报告通过后源码又被改过，
-   * 即使重新构建过（产物是新的）也必须重新验收——没验过的新代码不许装。
+   * The publish gate uses it to decide whether this report represents the current sources:
+   * if the sources changed after a passing report, a fresh verify is required even after a
+   * rebuild (the package is new) — unverified new code must not be installed.
    */
   sourceHash?: string
   checks: WorkshopCheck[]
@@ -131,15 +140,15 @@ export interface WorkshopReport {
   renderer?: WorkshopRendererProbe
 }
 
-/** 草稿目录里的一个文件 */
+/** One file in the draft directory */
 export interface WorkshopDraftFile {
-  /** 相对草稿根的 posix 路径 */
+  /** POSIX path relative to the draft root */
   path: string
   size: number
   mtime: number
 }
 
-/** 草稿元数据（`drafts/<id>/workshop.json`，由工坊维护，助手不手改） */
+/** Draft metadata (`drafts/<id>/workshop.json`, maintained by the workshop; the assistant doesn't edit it) */
 export interface WorkshopDraftMeta {
   id: string
   title: string
@@ -148,22 +157,24 @@ export interface WorkshopDraftMeta {
   css: WorkshopCssMode
   createdAt: number
   updatedAt: number
-  /** 最近一次构建时间（构建成功后写入） */
+  /** Last successful build time (written on a successful build) */
   builtAt?: number
   /**
-   * 当前 `dist/<id>` 是由哪份源码构建出来的（构建成功时写入的指纹）。
+   * Which sources the current `dist/<id>` was built from (fingerprint written on a
+   * successful build).
    *
-   * 只用于「产物 vs 源码」；验收报告另带一份 `sourceHash`——两者都等于当前源码指纹
-   * 才允许发布（产物新但没重验，同样不许装）。
+   * Only covers "package vs sources"; the verify report carries its own `sourceHash` —
+   * publishing is allowed only when both equal the current source fingerprint (a fresh
+   * package without a fresh verify is still not installable).
    */
   sourceHash?: string
 }
 
-/** 发布闸门的判定结果（工具/面板共用一套口径） */
+/** Publish-gate verdict (shared by the tool and the panel) */
 export interface WorkshopPublishGate {
-  /** true = 可以发布 */
+  /** true = can publish */
   ready: boolean
-  /** 不能发布的原因（稳定枚举，便于调用方做不同提示） */
+  /** Reason why not (stable enum so callers can give different prompts) */
   reason?:
     | 'no-report'
     | 'report-failed'
@@ -171,11 +182,11 @@ export interface WorkshopPublishGate {
     | 'stale-report'
     | 'sources-changed'
     | 'stale-build'
-  /** 给模型/用户看的可执行说明（ready 时为空） */
+  /** Actionable explanation for the model/user (empty when ready) */
   detail: string
 }
 
-/** 草稿列表项（设置页列表 + 工具 list 动作共用） */
+/** Draft list item (shared by the settings-page list and the tool's list action) */
 export interface WorkshopDraftSummary {
   id: string
   title: string
@@ -185,76 +196,84 @@ export interface WorkshopDraftSummary {
   createdAt: number
   updatedAt: number
   fileCount: number
-  /** 产物是否存在（dist/<id>/plugin.json） */
+  /** Whether a package exists (dist/<id>/plugin.json) */
   built: boolean
   builtAt?: number
-  /** 是否已装进 userData/plugins/<id> */
+  /** Whether it is already installed into userData/plugins/<id> */
   installed: boolean
   enabled: boolean
   /**
-   * 用户配置的**插件存放路径**（所有插件源码的根目录，`<pluginsPath>/<插件 id>/`）。
+   * The user-configured **plugin storage path** (root of all plugin sources,
+   * `<pluginsPath>/<plugin id>/`).
    *
-   * 首次启动按安装目录预置为 `<安装目录>/data/plugins`（不可写时退回 `<userData>/data/plugins`），
-   * 用户可以在设置里改到别处（旧路径数据会迁过去）。用户主动清空后工坊不列草稿也不能新建。
-   * 工坊自己的产物/报告目录（userData 下）不出现在界面上。
+   * On first launch it defaults to `<installDir>/data/plugins` (falling back to
+   * `<userData>/data/plugins` when not writable); the user can change it in settings
+   * (data in the old path is migrated). Once the user clears it, the workshop lists no
+   * drafts and cannot create new ones. The workshop's own package/report directory (under
+   * userData) does not appear in the UI.
    */
   pluginsPath?: string
   /**
-   * 草稿根绝对路径（`<pluginsPath>/<插件 id>/`）。
+   * Absolute path of the draft root (`<pluginsPath>/<plugin id>/`).
    *
-   * 侧栏用它把插件行和「插件工作区」对上：插件会话的工作目录就是这个目录
-   * （见 main/workshop/workspace.ts），会话也跟着这个工作区走。
+   * The sidebar uses it to match a plugin row with its plugin workspace: the plugin
+   * conversation's working directory is this directory (see main/workshop/workspace.ts),
+   * and the conversation follows this workspace.
    */
   dir: string
-  /** 最近一次验收的摘要（没有则不出现） */
+  /** Summary of the latest verify run (absent when there is none) */
   lastReport?: { at: number; ok: boolean; failed: number; total: number }
-  /** 产物与应用包/已装副本是否同构（打不出来时 undefined） */
+  /** Whether the package is structurally identical to the app bundle / installed copy (undefined when it cannot be determined) */
   distBytes?: number
 }
 
-/** 草稿详情（设置页抽屉用：列表项 + 文件清单 + 清单原文） */
+/** Draft details (for the settings-page drawer: list item + file list + raw manifest) */
 export interface WorkshopDraftDetail extends WorkshopDraftSummary {
   files: WorkshopDraftFile[]
-  /** plugin.json 解析结果（非法时为 null，错误在 lint 检查里） */
+  /** Parsed plugin.json (null when invalid; the error shows up in the lint check) */
   manifest: Record<string, unknown> | null
   css: WorkshopCssMode
 }
 
-/** 工坊动作的统一返回（失败不抛错，面板据此提示） */
+/** Unified return value of workshop actions (failures don't throw; the panel prompts accordingly) */
 export interface WorkshopActionResult<T = unknown> {
   ok: boolean
   error?: string
   data?: T
 }
 
-/** 安装（发布）结果 */
+/** Install (publish) result */
 export interface WorkshopPublishResult {
   id: string
   version: string
-  /** true = 覆盖了同 id 的既有安装 */
+  /** true = overwrote an existing install with the same id */
   upgraded: boolean
-  /** 落地目录（userData/plugins/<id>） */
+  /** Final directory (userData/plugins/<id>) */
   dest: string
   files: number
   enabled: boolean
-  /** 若产物比草稿源码旧，这里如实报出（面板可以提示「重新构建」） */
+  /** Reports honestly when the package is older than the draft sources (the panel can suggest rebuilding) */
   staleBuild?: boolean
   /**
-   * 安装后立刻做的渲染层复验结果（只有真的跑到了才有：装了但渲染层炸 → 已自动回滚，
-   * 此时不会返回结果而是抛错）。
+   * Renderer re-check result taken right after installing (present only if it actually ran:
+   * install succeeded but the renderer crashed → it was rolled back automatically, and this
+   * throws instead of returning a result).
    */
   rendererProbe?: WorkshopRendererProbe
 }
 
 /**
- * 两个文件系统路径是否指同一个位置。
+ * Whether two filesystem paths point to the same location.
  *
- * 用途只有一个但很关键：把**插件行**和它的「插件工作区」对上——主进程建工作区时存的是
- * `<插件存放路径>/<插件 id>/`，渲染层拿草稿的 `dir` 去比；两边都必须用同一套口径，
- * 否则插件行会认不出自己的会话（见 main/workshop/workspace.ts 与 HarnessSidebar）。
+ * Single but critical purpose: match a **plugin row** with its plugin workspace — the main
+ * process stores `<plugin storage path>/<plugin id>/` when creating the workspace, while the
+ * renderer compares using the draft's `dir`; both sides must use the same rule, otherwise a
+ * plugin row cannot recognise its own conversation (see main/workshop/workspace.ts and
+ * HarnessSidebar).
  *
- * 故意不引 node:path（渲染层没有）：只抹平结尾分隔符 + Windows 大小写不敏感，
- * 够用且两侧行为一致。相对路径/大小写敏感平台交给调用方自己保证。
+ * Deliberately avoids node:path (the renderer doesn't have it): it only trims trailing
+ * separators and ignores case for Windows paths, which is enough and consistent on both
+ * sides. Relative paths and case-sensitive platforms are left to the caller.
  */
 export function isSameFsPath(a: unknown, b: unknown): boolean {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -262,7 +281,8 @@ export function isSameFsPath(a: unknown, b: unknown): boolean {
   const left = norm(a)
   const right = norm(b)
   if (!left || !right) return false
-  // 任一侧是 Windows 形态（带反斜杠）就按不区分大小写比：同一个目录不允许出现两种写法
+  // If either side looks like a Windows path (has a backslash), compare case-insensitively:
+  // the same directory must not have two spellings
   return left.includes('\\') || right.includes('\\')
     ? left.toLowerCase() === right.toLowerCase()
     : left === right

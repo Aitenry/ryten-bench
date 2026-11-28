@@ -2,20 +2,25 @@ import { GutterMarker } from '@codemirror/view'
 import { foldGutter, foldKeymap } from '@codemirror/language'
 
 /**
- * 折叠槽标记：用应用统一的 remixicon 图标，而不是 CodeMirror 自带的 `⌄ / ›` 字符。
+ * Fold gutter marker: uses the app's unified remixicon icons instead of CodeMirror's built-in
+ * `⌄ / ›` characters.
  *
- * CodeMirror 默认标记是纯文本（`<span title="Fold line">⌄</span>`），和界面里其余图标
- * （remixicon 组件）不是一套，粗细/居中/观感都不一致。`foldGutter({ markerDOM })` 允许
- * 自己造 DOM，这里就地把 remixicon 图标的路径内联成 `<svg>`。
+ * CodeMirror's default marker is plain text (`<span title="Fold line">⌄</span>`), which is not
+ * the same set as the other icons in the UI (remixicon components): weight, centering and look
+ * all differ. `foldGutter({ markerDOM })` allows building the DOM ourselves, so the remixicon
+ * paths are inlined into an `<svg>` right here.
  *
- * ⚠️ 两个状态必须取**同一家族**的图标，否则大小/粗细对不上（实测图形包围盒，viewBox 24）：
- * - `arrow-drop-down-line` 8.49 × 5.66（drop 家族：厚实的小箭头）
- * - `arrow-drop-right-line` 5.66 × 8.49（drop 家族：同一形状旋转 90°）
- * - `arrow-down-s-line`    12.73 × 7.78（s-line 家族：细长的描边箭头）
- * - `arrow-right-s-line`    7.78 × 12.73（s-line 家族）
- * 混用（比如展开用 drop、折叠用 s-line）会让折叠箭头看着比展开箭头大一倍多。
+ * ⚠️ Both states must use icons from the **same family**, otherwise size and weight won't match
+ * (measured glyph bounding boxes, viewBox 24):
+ * - `arrow-drop-down-line` 8.49 × 5.66 (drop family: chunky little arrow)
+ * - `arrow-drop-right-line` 5.66 × 8.49 (drop family: same shape rotated 90°)
+ * - `arrow-down-s-line`    12.73 × 7.78 (s-line family: thin stroked arrow)
+ * - `arrow-right-s-line`    7.78 × 12.73 (s-line family)
+ * Mixing them (e.g. drop for expanded, s-line for collapsed) makes the collapse arrow look more
+ * than twice as large as the expand arrow.
  *
- * 路径取自 `@remixicon/react` 的同名组件（用 react-dom/server 渲染提取，见文档 0cca4445）。
+ * Paths are taken from the same-named components in `@remixicon/react` (extracted by rendering
+ * with react-dom/server).
  */
 const ARROW_DROP_DOWN_D =
   'M12 15.0006L7.75732 10.758L9.17154 9.34375L12 12.1722L14.8284 9.34375L16.2426 10.758L12 15.0006Z'
@@ -25,10 +30,11 @@ const ARROW_DROP_RIGHT_D =
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /**
- * 造一个 remixicon 风格的内联 SVG。
+ * Build a remixicon-style inline SVG.
  *
- * drop 家族的图形只占画布 24 的约 1/4（8.5×5.7 px），按 16px 渲染出来偏小、
- * 和行号不在一个视觉量级上，所以稍微放大量到 20px（图形约 7×4.7px，与 12.5px 行号相称）。
+ * Drop-family glyphs occupy only about 1/4 of the 24 viewBox (8.5×5.7 px), so they render small
+ * at 16px and don't match the line numbers visually; scale up slightly to 20px (glyph about
+ * 7×4.7px, matching 12.5px line numbers).
  */
 const MARKER_SIZE = 20
 
@@ -45,7 +51,7 @@ function remixicon(pathD: string): SVGSVGElement {
   return svg
 }
 
-/** 折叠槽标记：展开可折叠的行显示向下箭头，已折叠的行显示向右箭头（与资源管理器同一套语义） */
+/** Fold gutter marker: expanded foldable lines show a down arrow, collapsed lines show a right arrow (same semantics as the file explorer) */
 class FoldMarker extends GutterMarker {
   readonly open: boolean
 
@@ -64,9 +70,9 @@ class FoldMarker extends GutterMarker {
 }
 
 /**
- * 折叠扩展：图标化的折叠槽 + 与编辑器一致的键盘绑定。
- * `openText/closedText` 只在 markerDOM 缺省时生效；这里给了 markerDOM，
- * 但仍保留它们作无障碍标签（读屏会念 title）。
+ * Fold extension: icon-ified fold gutter + the same keyboard bindings as the editor.
+ * `openText/closedText` only apply when markerDOM is absent; a markerDOM is provided here, but
+ * they are kept as accessibility labels (screen readers read the title).
  */
 export const rytenFoldGutter = foldGutter({
   markerDOM: (open: boolean) => new FoldMarker(open).toDOM() as HTMLElement,

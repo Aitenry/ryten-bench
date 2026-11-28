@@ -1,10 +1,12 @@
 ﻿import { getMainLanguage } from './index'
 
 /**
- * 历史会话检索工具（session_search / conversation_read）文案。
+ * Texts for the conversation-history tools (session_search / conversation_read).
  *
- * 与其它 `tool-results-*` 模块同一约定：中文是源语言，英文树用 `typeof` 约束。
- * 搜索到的历史正文属于用户数据，不翻译；这里只负责标题、角色标签与空结果的提示语。
+ * Same convention as the other `tool-results-*` modules: Chinese is the source language and the
+ * English tree is checked with `typeof`.
+ * Retrieved history bodies are user data and are not translated; this module only provides the
+ * headings, role labels and empty-result hints.
  */
 export const zhCNSessionToolTexts = {
   sessionSearch: {
@@ -65,7 +67,7 @@ export const enUSSessionToolTexts: typeof zhCNSessionToolTexts = {
   }
 }
 
-/** 按当前界面语言取会话检索工具文案 */
+/** Return the conversation-history tool texts for the current UI language */
 export function getSessionToolTexts(): typeof zhCNSessionToolTexts {
   return getMainLanguage() === 'en-US' ? enUSSessionToolTexts : zhCNSessionToolTexts
 }

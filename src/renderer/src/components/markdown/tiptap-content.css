@@ -1,7 +1,7 @@
 /* ============================================================
-   TipTap 所见即所得 Markdown 编辑器内容样式
-   颜色全部走 CSS 变量（由组件按 antd token 注入），
-   仅代码高亮配色需要显式区分亮/暗（.dark 挂载在 documentElement）
+   TipTap WYSIWYG Markdown editor content styles
+   All colors come from CSS variables (injected by the component from antd tokens);
+   only the code highlight palette needs explicit light/dark variants (.dark on documentElement)
    ============================================================ */
 
 .tiptap-editor-root {
@@ -13,7 +13,7 @@
   min-height: 0;
 }
 
-/* ── 工具栏 ── */
+/* ── Toolbar ── */
 .tiptap-toolbar {
   display: flex;
   align-items: center;
@@ -85,7 +85,7 @@
   white-space: nowrap;
 }
 
-/* ── 正文编辑区 ── */
+/* ── Body editor area ── */
 .tiptap-editor-scroll {
   flex: 1;
   min-height: 0;
@@ -99,7 +99,7 @@
   padding: var(--ed-body-pad-top, 32px) 18px 32px;
 }
 
-/* 保存中旋转图标 */
+/* Spinner shown while saving */
 .spin-anim {
   animation: tiptap-spin 1s linear infinite;
 }
@@ -126,7 +126,7 @@
   margin-top: 0.75em;
 }
 
-/* 占位符 */
+/* Placeholder */
 .tiptap-editor p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
@@ -135,7 +135,7 @@
   color: var(--ed-text-tertiary);
 }
 
-/* ── 标题 ── */
+/* ── Headings ── */
 .tiptap-editor h1 {
   font-size: 28px;
   font-weight: 700;
@@ -172,7 +172,7 @@
   margin-top: 0;
 }
 
-/* ── 段落 / 列表 ── */
+/* ── Paragraphs / lists ── */
 .tiptap-editor p {
   margin: 0.5em 0;
 }
@@ -226,7 +226,7 @@
   text-decoration-color: var(--ed-text-tertiary);
 }
 
-/* 嵌套列表紧凑化 */
+/* Compact nested lists */
 .tiptap-editor ul ul,
 .tiptap-editor ol ol,
 .tiptap-editor ul ol,
@@ -234,7 +234,7 @@
   margin: 0.15em 0;
 }
 
-/* ── 引用 ── */
+/* ── Blockquote ── */
 .tiptap-editor blockquote {
   border-left: 3px solid var(--ed-accent);
   background: var(--ed-quote-bg);
@@ -248,7 +248,7 @@
   margin: 0.25em 0;
 }
 
-/* ── 行内代码 / 代码块 ── */
+/* ── Inline code / code block ── */
 .tiptap-editor code {
   font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
   font-size: 0.88em;
@@ -277,7 +277,7 @@
   display: block;
 }
 
-/* ── 链接 / 图片 ── */
+/* ── Links / images ── */
 .tiptap-editor a {
   color: var(--ed-accent);
   text-decoration: underline;
@@ -303,14 +303,14 @@
   outline-offset: 2px;
 }
 
-/* ── 分割线 ── */
+/* ── Horizontal rule ── */
 .tiptap-editor hr {
   border: none;
   border-top: 1px solid var(--ed-border);
   margin: 1.6em 0;
 }
 
-/* ── 高亮 / 下划线 / 删除线 ── */
+/* ── Highlight / underline / strikethrough ── */
 .tiptap-editor mark {
   background: var(--ed-mark-bg);
   color: inherit;
@@ -327,7 +327,7 @@
   color: var(--ed-text-tertiary);
 }
 
-/* ── 表格 ── */
+/* ── Tables ── */
 .tiptap-editor table {
   border-collapse: collapse;
   table-layout: fixed;
@@ -370,13 +370,13 @@
   overflow-x: auto;
 }
 
-/* ── 选区 ── */
+/* ── Selection ── */
 .tiptap-editor ::selection {
   background: var(--ed-selection-bg);
 }
 
 /* ============================================================
-   代码高亮配色（highlight.js 风格，light / dark 两套）
+   Code highlight palette (highlight.js style, one set each for light / dark)
    ============================================================ */
 .tiptap-editor .hljs-comment,
 .tiptap-editor .hljs-quote {
@@ -441,7 +441,7 @@
   background: #e6ffed;
 }
 
-/* 暗色模式 */
+/* Dark mode */
 .dark .tiptap-editor .hljs-comment,
 .dark .tiptap-editor .hljs-quote {
   color: #8b949e;
@@ -496,7 +496,7 @@
   background: rgba(63, 185, 80, 0.15);
 }
 
-/* ── 气泡菜单 ── */
+/* ── Bubble menu ── */
 .tiptap-bubble-menu {
   display: flex;
   align-items: center;
@@ -515,7 +515,7 @@
   border-radius: 5px;
 }
 
-/* ── 链接编辑浮层 ── */
+/* ── Link edit popup ── */
 .tiptap-link-pop {
   position: fixed;
   z-index: 1200;
@@ -567,7 +567,7 @@
   background: var(--ed-hover-bg);
 }
 
-/* ── Slash 块菜单 ── */
+/* ── Slash block menu ── */
 .slash-menu-wrap {
   z-index: 1300;
 }
@@ -660,7 +660,7 @@
   color: var(--slash-text-tertiary);
 }
 
-/* ═══ 内容适配：KaTeX 数学公式 ═══ */
+/* ═══ Content adaptations: KaTeX math ═══ */
 
 .tiptap-math {
   display: inline-block;
@@ -727,7 +727,7 @@
   outline: none;
 }
 
-/* ═══ 内容适配：Mermaid 图表 ═══ */
+/* ═══ Content adaptations: Mermaid diagrams ═══ */
 
 .tiptap-mermaid {
   margin: 10px 0;
@@ -798,9 +798,10 @@
   cursor: grabbing;
 }
 
-/* 变换层：translate/scale 由 JS 控制（拖拽平移 + 滚轮缩放）。
-   注意：不能 flex 居中——svg 从左上角起排，居中完全由 transform 计算，
-   否则 flex 偏移与 translate 叠加会把内容推到右侧 */
+/* Transform layer: translate/scale are controlled by JS (drag to pan + wheel to zoom).
+   Note: do not center with flex — the svg is laid out from the top-left and centering is
+   computed entirely by transform; otherwise flex offset plus translate would push the content
+   to the right */
 .tiptap-mermaid-viewport {
   position: absolute;
   left: 0;
@@ -810,11 +811,12 @@
   box-sizing: border-box;
   transform-origin: 0 0;
   will-change: transform;
-  text-align: center; /* 空态/错误文本居中（块级 svg 不受影响） */
+  text-align: center; /* Center empty/error text (block-level svg is unaffected) */
 }
 
-/* SVG 以自然尺寸（viewBox）布局，由 JS 设 style.width/height；
-   max-width:none 压过 mermaid 内联的 max-width（自然宽度），避免拉伸/变形 */
+/* The SVG is laid out at its natural size (viewBox) with style.width/height set by JS;
+   max-width:none overrides mermaid's inline max-width (natural width) to avoid
+   stretching/distortion */
 .tiptap-mermaid-viewport svg {
   display: block;
   max-width: none !important;
@@ -850,7 +852,7 @@
   outline: none;
 }
 
-/* ═══ 内容适配：MDX 源码块与内联 JSX ═══ */
+/* ═══ Content adaptations: MDX source blocks and inline JSX ═══ */
 
 .tiptap-editor [data-mdx-src] {
   position: relative;

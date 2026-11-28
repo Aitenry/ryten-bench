@@ -1,10 +1,11 @@
 import type { MainPluginContext } from './context'
 
 /**
- * 本插件当前不需要主进程能力。
+ * This plugin does not need main-process capabilities yet.
  *
- * 保留这个入口的原因是插件包契约要求 main.cjs 存在（缺入口的包装不上），
- * 需要通道/后台逻辑时在这里 ctx.registerIpc / ctx.effect 即可。
+ * The entry is kept because the plugin package contract requires main.cjs to exist (packages
+ * without an entry cannot be installed); when channels or background logic are needed, call
+ * ctx.registerIpc / ctx.effect here.
  */
 export function install(ctx: MainPluginContext): void {
   void ctx

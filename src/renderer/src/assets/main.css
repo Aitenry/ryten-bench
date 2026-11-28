@@ -2,30 +2,37 @@
 @import 'animate.css';
 
 /**
- * 系统功能目录（src/features/**：harness 对话页、notes 资料库）在 Vite root
- * （src/renderer）之外，Tailwind v4 的自动扫描扫不到它们——不显式声明，这些页面里
- * 用到的工具类就不会进产物 CSS，页面会以「无样式」形态渲染（2026-11-19 用户反馈
- * 「对话窗口整体不可用」就是 harness 移出插件后 src/features 没被扫到：
- * max-w-4xl / px-8 / min-h-0 等类全部缺失，消息区被撑到 3600px 宽、布局整体错乱）。
- * 路径相对本 CSS 文件（../../../ = 仓库 src/）。
+ * The system feature directories (src/features/**: the harness conversation page, the notes
+ * library) sit outside the Vite root (src/renderer), so Tailwind v4's automatic scan cannot
+ * see them — without an explicit declaration, the utility classes used there never reach the
+ * output CSS and those pages render unstyled (the 2026-11-19 user report that "the conversation
+ * window is completely unusable" was exactly this: after harness moved out of the plugin,
+ * src/features was not scanned, so max-w-4xl / px-8 / min-h-0 etc. were all missing and the
+ * message area stretched to 3600px wide with a broken layout).
+ * Paths are relative to this CSS file (../../../ = repo src/).
  *
- * 外部插件的类名不在这里扫：插件包自带 `plugin.css`，由宿主在装载时注入
- * （见 `src/renderer/src/plugin-host/plugin-css.ts` 与工坊的样式构建）。
+ * External plugins' class names are not scanned here: plugin bundles ship their own `plugin.css`,
+ * injected by the host at load time (see `src/renderer/src/plugin-host/plugin-css.ts` and the
+ * workshop's style build).
  */
 @source '../../../features/**/*.{ts,tsx}';
 
-/* ======== 文档级约束：窗口就是一个固定视口，永远不许出现滚动条 ======== */
+/* ======== Document-level constraint: the window is a fixed viewport, never allow scrollbars ======== */
 
 /**
- * 为什么必须有这两条（用户 2026-09-19 反馈：「把鼠标放在对话历史里任何一个按钮上，出现提示内容后，
- * 快速滚动会导致页面整体出现滚动条，过一会就好了」）：
+ * Why these two rules are required (user feedback 2026-09-19: "putting the mouse on any button
+ * in the conversation history shows a tooltip, and then scrolling quickly makes the whole page
+ * grow a scrollbar; it goes away after a while"):
  *
- * antd 的 Tooltip / Dropdown / Select 等浮层是 **portal 到 document.body** 的绝对定位元素，
- * 位置按触发元素的 rect 计算。快速滚动时这一帧的 rect 已经过期，浮层会短暂落在视口之外——
- * 这时它是 body 的子元素，没人裁剪，于是整个**文档**被撑出滚动条；等浮层重定位/隐藏后自己消失。
+ * antd Tooltip / Dropdown / Select overlays are absolutely positioned elements **portaled to
+ * document.body**, positioned from the trigger element's rect. During fast scrolling that
+ * frame's rect is already stale, so the overlay briefly lands outside the viewport — as a child
+ * of body nothing clips it, so the whole **document** grows a scrollbar; it disappears once the
+ * overlay repositions or hides.
  *
- * 桌面应用的内容全部在自己的滚动容器里（消息区、侧栏、编辑器…），文档级根本不需要滚动。
- * 关掉它：浮层最坏情况是被裁掉一角，绝不再把整页顶出滚动条。
+ * A desktop app keeps all content in its own scroll containers (message area, sidebar, editors,
+ * …); the document level never needs to scroll. Turn it off: the worst case for an overlay is a
+ * clipped corner, and the page never gets pushed into a scrollbar again.
  */
 html,
 body {
@@ -38,27 +45,31 @@ body {
   height: 100%;
 }
 
-/* ======== 滚动条 ======== */
+/* ======== Scrollbars ======== */
 
 /**
- * 全应用统一的滚动条：6px 圆角细条、透明轨道、悬停加深，深色主题换成白色滑块。
+ * App-wide unified scrollbar: a 6px rounded thin bar with a transparent track, darkening on
+ * hover, and a white thumb in dark themes.
  *
- * 这里写的是**全局兜底**（用户 2026-11-23：「需要优化这个滚动条样式，好丑不符合
- * 整体的滚动条样式」——配图里「更多内容 → 记忆」页面右侧是一条带上下箭头的原生
- * 白色滚动条）：此前滚动条只在个别容器上挂 `.custom-scrollbar` / `.harness-scrollbar`
- * 等类名，谁漏写（页面级 `overflow-y:auto`、弹窗正文、textarea、第三方浮层）谁就掉回
- * Chromium 原生样式，深色界面里是一条刺眼的白条。现在所有滚动容器默认就是这套细条，
- * 类名只负责尺寸/颜色上的细微差别。
+ * This is the **global fallback** (user feedback 2026-11-23: "this scrollbar style needs
+ * polishing, it is ugly and doesn't match the overall scrollbar style" — in the attached
+ * screenshot the "More → Memory" page had a native white scrollbar with up/down arrows on the
+ * right): previously scrollbars were styled only on certain containers via classes such as
+ * `.custom-scrollbar` / `.harness-scrollbar`, so whichever container missed it (page-level
+ * `overflow-y:auto`, modal bodies, textarea, third-party overlays) fell back to Chromium's native
+ * style — a glaring white bar in a dark UI. Now every scroll container gets this thin bar by
+ * default, and the classes only fine-tune size and color.
  *
- * ⚠️ 只写 `::-webkit-scrollbar`，**不要**同时写 `scrollbar-width` / `scrollbar-color`：
- * Chromium 121+ 里标准属性一旦不是 `auto` 就会接管滚动条、让 `::-webkit-scrollbar` 全部
- * 失效（项目里 `.harness-scrollbar` 两套都写，实际生效的是标准属性那套）。那等于把
- * 原生箭头滚动条又带回来。
+ * ⚠️ Only set `::-webkit-scrollbar`; do **not** also set `scrollbar-width` / `scrollbar-color`:
+ * in Chromium 121+ the standard properties take over the scrollbar as soon as they are not
+ * `auto` and disable all of `::-webkit-scrollbar` (`.harness-scrollbar` sets both, and the
+ * standard-property set is what actually applies). That amounts to bringing the native
+ * arrow scrollbar back.
  */
 :root {
   --app-scrollbar-thumb: rgba(128, 128, 128, 0.32);
   --app-scrollbar-thumb-hover: rgba(128, 128, 128, 0.52);
-  /** 弹窗滚动区：内容与滑块之间留的槽宽（见 `.app-modal-scroll`） */
+  /** Modal scroll areas: gutter between content and thumb (see `.app-modal-scroll`) */
   --app-modal-scroll-gutter: 6px;
 }
 
@@ -86,14 +97,14 @@ body {
   background-color: var(--app-scrollbar-thumb-hover);
 }
 
-/* 原生上下/左右箭头按钮与转角：桌面端不需要，出现就说明滚动条掉回了系统样式 */
+/* Native up/down, left/right arrow buttons and the corner: unnecessary on desktop; if they appear, the scrollbar fell back to the system style */
 ::-webkit-scrollbar-button,
 ::-webkit-scrollbar-corner {
   display: none;
   background: transparent;
 }
 
-/* 常规滚动容器（弹窗正文、页面内容区…）：与全局默认同尺寸，显式声明便于阅读 */
+/* Regular scroll containers (modal bodies, page content areas…): same size as the global default, declared explicitly for readability */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -115,43 +126,48 @@ body {
 }
 
 /**
- * 弹窗滚动区统一留白（用户 2026-11-27：「所有的弹出窗口的滚动条设计要和插件设计
- * 里面的一样」；配图里定时任务弹窗的滑块直接压着输入框）。
+ * Uniform gutter for modal scroll areas (user feedback 2026-11-27: "all popup windows should
+ * have the same scrollbar design as the plugin design"; in the attached screenshot the schedule
+ * modal's thumb pressed right against the input).
  *
- * 口径来自插件设置弹窗（PluginDetail / PluginRepository）：滚动容器是
- * `.custom-scrollbar` + `paddingRight: 6`，滑块与内容之间留 6px，滑块再往右是弹窗
- * 自己的内容留白。这里把那 6px 抽成一个类，弹窗正文（antd `classNames.body`）和
- * 弹窗内自绘的滚动列表都挂它，避免每个弹窗各写一个数、又慢慢漂回去。
+ * The convention comes from the plugin settings modals (PluginDetail / PluginRepository): the
+ * scroll container is `.custom-scrollbar` + `paddingRight: 6`, leaving 6px between the thumb and
+ * the content, with the modal's own content padding further to the right. This extracts that
+ * 6px into a class applied to modal bodies (antd `classNames.body`) and to scrollable lists
+ * drawn inside modals, so each modal doesn't write its own number and slowly drift back.
  *
- * ⚠️ 不要和 `padding` 简写写在同一个元素的内联样式里：内联简写会连
- * `padding-right` 一起覆盖掉。需要上下/左侧内边距时用 paddingTop / paddingBottom /
- * paddingLeft 长写。
+ * ⚠️ Do not combine it with the `padding` shorthand in the same element's inline style: the
+ * inline shorthand also overrides `padding-right`. When top/bottom or left padding is needed,
+ * use the longhand paddingTop / paddingBottom / paddingLeft.
  */
 .app-modal-scroll {
   padding-right: var(--app-modal-scroll-gutter);
 }
 
 /**
- * antd v6 的 `.ant-modal-body` 自带 `padding: 0`，选择器（0,2,0）压过单个类名
- * （0,1,0）。弹窗正文直接当滚动容器时用更高一层的组合选择器把右侧留白补回来；
- * 弹窗内自己画的滚动 div 仍然只靠上面那条规则。
+ * antd v6's `.ant-modal-body` has its own `padding: 0` with specificity (0,2,0), which beats a
+ * single class name (0,1,0). When the modal body is itself the scroll container, a combined
+ * selector of one higher level restores the right gutter; scrollable divs drawn inside the
+ * modal still rely only on the rule above.
  */
 .ant-modal .ant-modal-body.app-modal-scroll {
   padding-right: var(--app-modal-scroll-gutter);
 }
 
-/* ======== 智能体弹窗（AgentSettings）表单 ======== */
+/* ======== Agent modal (AgentSettings) form ======== */
 
 /**
- * 用户 2026-11-27：「智能体表单里面每一项和其他表单样式看起来不一样」。
+ * User feedback 2026-11-27: "every item in the agent form looks different from the other forms".
  *
- * 智能体弹窗此前用 antd 的 `size="small"` + 默认 Form.Item：标签 14px、
- * 行高 22px、控件 24px、字段间距 24px；而定时任务等表单的标签是 12px 次要色、
- * 控件默认 32px、字段间距 14px。两边并排看，智能体每一项都更粗、更挤。
+ * The agent modal used antd's `size="small"` + default Form.Item: 14px labels, 22px row height,
+ * 24px controls, 24px field spacing; forms such as schedules use 12px secondary labels, default
+ * 32px controls and 14px field spacing. Side by side, every agent item looked bolder and more
+ * cramped.
  *
- * 这里只把「行高/间距」交给 CSS，标签文字的字号与颜色在 JSX 里用 token 内联
- * （标签内容里还有必填星号，不能靠选择器改）。控件尺寸由 Form 去掉 small 恢复
- * 默认，跟定时任务弹窗一致。
+ * Only the "row height / spacing" is handled here in CSS; label font size and color are set
+ * inline in JSX via tokens (labels also contain the required asterisk, so a selector can't
+ * change them). Control size goes back to the default by dropping `small` from the Form, the
+ * same as the schedule modal.
  */
 .agent-form .ant-form-item {
   margin-bottom: 14px;
@@ -167,14 +183,16 @@ body {
   line-height: 18px;
 }
 
-/* ======== 6 位数字输入（antd Input.OTP） ======== */
+/* ======== 6-digit numeric input (antd Input.OTP) ======== */
 
 /**
- * 让 OTP 的每个格子均分容器宽度。
+ * Make each OTP cell split the container width evenly.
  *
- * antd 的 OTP 根节点是 `inline-flex`，每个格子包在 `.ant-otp-input-wrapper` 里、输入框本身
- * 只按 `htmlSize={1}` 撑出 50px 左右——设置弹窗里 6 个格子只占左半边，右边留一大片空白。
- * 锁屏卡片与改密码弹窗共用这一套口径：根节点吃满宽度，格子 `flex: 1` 均分，输入框再回填。
+ * antd's OTP root is `inline-flex`, each cell is wrapped in `.ant-otp-input-wrapper`, and the
+ * input itself only grows to about 50px from `htmlSize={1}` — in the settings modal the six
+ * cells occupied just the left half, leaving a large blank on the right. The lock-screen card
+ * and the change-password modal share this convention: the root takes the full width, cells
+ * split it with `flex: 1`, and the input fills its cell.
  */
 .otp-fill {
   width: 100%;
@@ -189,7 +207,7 @@ body {
   width: 100%;
 }
 
-/* 改密码弹窗：格子比 antd 默认（32px 高）更适合鼠标点选，也与锁屏界面的观感接近 */
+/* Change-password modal: taller cells than antd's default (32px) are easier to click and closer to the lock screen's look */
 .settings-password-otp .ant-otp-input {
   height: 42px;
   font-size: 18px;
@@ -197,20 +215,23 @@ body {
   border-radius: 10px;
 }
 
-/* ======== 锁屏（全窗口毛玻璃） ======== */
+/* ======== Lock screen (full-window frosted glass) ======== */
 
 /**
- * 用户 2026-11-24：「弹出窗口高斯模糊度不够」——旧版是 antd Modal 的 mask +
- * `backdrop-filter: blur(10px)`：小字糊了，但对话里的大标题/头像/大色块仍然能认出来，
- * 半透明 30% 的白色蒙层在暗色主题下还会把内容提亮。
+ * User feedback 2026-11-24: "the popup window's Gaussian blur is not strong enough" — the old
+ * version was antd Modal's mask + `backdrop-filter: blur(10px)`: small text blurred, but large
+ * headings, avatars and large color blocks in the conversation were still recognizable, and the
+ * 30% translucent white overlay even brightened content in dark themes.
  *
- * **只靠 backdrop-filter 不够**（2026-11-24 真机截图复现）：无 GPU / 远程桌面 / 软件合成时
- * Chromium 会静默忽略 backdrop-filter，锁屏就退化成一层半透明黑纱，正文照样可读。
- * 因此这里把应用根节点本身 `filter: blur(64px)` —— 普通滤镜不依赖合成器能力，
- * 文字会被真正糊成色块；锁屏层再叠主题色径向压暗，形成磨砂贴膜观感。
+ * **backdrop-filter alone is not enough** (reproduced with a real-device screenshot on
+ * 2026-11-24): without a GPU, over remote desktop, or with software compositing, Chromium
+ * silently ignores backdrop-filter, so the lock screen degrades to a translucent dark veil and
+ * the text remains readable. So the app root itself gets `filter: blur(64px)` — an ordinary
+ * filter does not depend on compositor capabilities, so text is genuinely blurred into color
+ * blocks; the lock layer then adds a themed radial darkening for a frosted-film look.
  *
- * z-index 4000：盖住 antd Modal(1000) / message(1010) —— 旧版「密码错误」的 toast
- * 其实一直被锁屏层盖住，用户只看到输入框清空。
+ * z-index 4000: above antd Modal (1000) / message (1010) — the old "wrong password" toast was in
+ * fact always covered by the lock layer, so users only saw the input clear.
  */
 #root.app-root--locked {
   filter: blur(64px) saturate(0.9);
@@ -220,9 +241,10 @@ body {
 }
 
 /**
- * antd 的 Modal / message / tooltip 都 portal 到 body（不在 #root 里），上面的滤镜带不到。
- * 锁屏时把这些直系浮层一并隐藏，否则磨砂层下会留一个清晰的弹窗。
- * 锁屏层自己也是 body 的直系子节点，必须排除。
+ * antd's Modal / message / tooltip all portal to body (not inside #root), so the filter above
+ * does not reach them. While the screen is locked, hide these direct overlays as well, otherwise
+ * a crisp popup would remain under the frosted layer.
+ * The lock layer itself is also a direct child of body and must be excluded.
  */
 body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   visibility: hidden !important;
@@ -258,7 +280,7 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   );
 }
 
-/* 卡片背后的一团品牌色柔光（颜色由 LockScreen 用主题 token 注入） */
+/* A soft brand-color glow behind the card (color injected by LockScreen from theme tokens) */
 .lock-screen-glow {
   position: absolute;
   left: 50%;
@@ -284,7 +306,7 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   animation: lock-screen-rise 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* 顶部一条极细的高光，让卡片在深色磨砂底上「浮」起来 */
+/* A very thin highlight along the top, so the card "floats" on the dark frosted backdrop */
 .lock-screen-card::before {
   content: '';
   position: absolute;
@@ -438,7 +460,7 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   }
 }
 
-/* 自定义滚动条样式 */
+/* Custom scrollbar style */
 .custom-container-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -463,37 +485,45 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   background: transparent;
 }
 
-/* ======== antd 提示气泡（Tooltip / Tour）======== */
+/* ======== antd tooltip (Tooltip / Tour) ======== */
 
 /**
- * 亮色下把提示气泡从「黑底白字」改成与其它浮层一致的白卡观感（用户 2026-09-24：
- * 「白色主题下是黑色的，应该是白色的才对」）。
+ * In light mode, turn the tooltip from "black background, white text" into a white card that
+ * matches the other overlays (user feedback 2026-09-24: "in the white theme it is black; it
+ * should be white").
  *
- * 为什么不改主题 token：气泡的底色/字色来自全局别名 token `colorBgSpotlight`（黑）与
- * `colorTextLightSolid`（白），而这两个 token 同时被 Button 主色/危险按钮的文字、Badge、
- * Avatar、Menu dark、Switch、Tag 等在用——改 token 会连坐一片（主按钮会变成深色字）；
- * antd v6 也没开放气泡自己的颜色组件 token（内部 tooltipBg / tooltipColor 由上面两个
- * 别名 token 直接写死，传 theme.components.Tooltip 不生效）。所以按组件类名覆盖，只影响气泡。
+ * Why not change theme tokens: the tooltip's background/text colors come from the global alias
+ * tokens `colorBgSpotlight` (black) and `colorTextLightSolid` (white), and those two tokens are
+ * also used by the text of primary/danger Buttons, Badge, Avatar, Menu dark, Switch, Tag and
+ * more — changing the token would drag a whole set along (primary buttons would get dark text);
+ * antd v6 also does not expose component color tokens for the tooltip itself (the internal
+ * tooltipBg / tooltipColor are hard-wired from the two alias tokens above, so passing
+ * theme.components.Tooltip has no effect). Hence the override by component class name, which
+ * only affects the tooltip.
  *
- * 与背景的分离靠 antd 自带的 dropShadowPopover 阴影（挂在气泡根元素上的 filter）。
- * 暗色主题（.dark）保持 antd 默认的深灰底白字。
+ * Separation from the background relies on antd's own dropShadowPopover shadow (a filter on the
+ * tooltip root element). The dark theme (.dark) keeps antd's default dark-gray background with
+ * white text.
  *
- * `.ant-tooltip-container` 是气泡正文的类名（antd v6 / @rc-component/tooltip 1.4 的
- * Popup 渲染；v5 时代叫 -inner）。不确定这一点时看：改了没生效就是类名变了。
+ * `.ant-tooltip-container` is the tooltip body's class name (antd v6 / @rc-component/tooltip 1.4
+ * Popup rendering; it was called -inner in the v5 era). When unsure, check: if the change has no
+ * effect, the class name changed.
  */
 :root:not(.dark) .ant-tooltip .ant-tooltip-container {
   color: rgba(0, 0, 0, 0.88);
   background-color: #fff;
 }
 
-/* 箭头跟着气泡底色走（不带箭头的提示不受影响）。
+/* The arrow follows the tooltip's background color (tooltips without arrows are unaffected).
  *
- * ⚠️ 只涂 `::before`：antd v6 的箭头是**两层**——
- *   `.ant-tooltip-arrow` 外层是 16×16 的方形槽位（不旋转，只做位移），
- *   `::before` 才是用 clip-path 裁出来的箭头形状（真正贴在气泡上的那一小块）。
- * 两层一起涂白时，外层那块 16×16 的轴对齐白方块会露在气泡边上——用户 2026-09-26
- * 截图反馈的「气泡下面多出一个大方块」就是它（实测：外层 `background: rgb(255,255,255)`
- * 且 `transform` 只有位移、没有旋转；::before 才有 clip-path）。
+ * ⚠️ Only paint `::before`: antd v6's arrow is **two layers** —
+ *   the outer `.ant-tooltip-arrow` is a 16×16 square slot (not rotated, only translated),
+ *   `::before` is the arrow shape cut out with clip-path (the small piece that actually sits on
+ *   the tooltip body).
+ * Painting both layers white leaves the outer 16×16 axis-aligned white square exposed at the
+ * tooltip edge — that is the "extra big square below the tooltip" reported with a screenshot on
+ * 2026-09-26 (measured: the outer layer has `background: rgb(255,255,255)` and a `transform`
+ * with translation only, no rotation; only ::before has clip-path).
  */
 :root:not(.dark) .ant-tooltip .ant-tooltip-arrow {
   background: transparent;
@@ -503,27 +533,31 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   background: #fff;
 }
 
-/* ======== antd 下拉菜单（Dropdown）子菜单标题的行内对齐 ======== */
+/* ======== antd Dropdown submenu title inline alignment ======== */
 
 /**
- * 子菜单项里的图标要跟文字同一条中线（用户 2026-11-27 截图：「图标和内容没有居中」，
- * 是会话行「⋯」→「在应用中打开」那一行）。
+ * Icons in submenu items must share the text's center line (screenshot with user feedback
+ * 2026-11-27: "the icon and the content are not centered"; this is the conversation row's "⋯" →
+ * "Open in app" item).
  *
- * 根因在 antd v6 的 dropdown 样式：普通项 `.ant-dropdown-menu-item` 声明了
- * `display: flex; align-items: center`，而子菜单标题这一支**只给了 display:flex、
- * 漏了 align-items**。flex 默认的 `align-items: normal` 等价于 stretch，14px 图标
- * 于是贴着内容区上沿排——实测行高 32、内容区 22，图标中线比文字高 4px；右边的
- * 展开箭头是绝对定位（top/bottom 各 5px）自己居中的，所以三项里只有图标歪。
+ * The root cause is in antd v6's dropdown styles: regular items `.ant-dropdown-menu-item`
+ * declare `display: flex; align-items: center`, while the submenu title branch **only sets
+ * display:flex and misses align-items**. flex's default `align-items: normal` is equivalent to
+ * stretch, so 14px icons sit against the top of the content box — measured row height 32,
+ * content box 22, so the icon center is 4px above the text; the expand arrow on the right is
+ * absolutely positioned (top/bottom 5px each) and centers itself, so only the icon is off among
+ * the three.
  *
- * 用组件类名补齐（这是结构样式，antd 没有对应 token 可配），与普通项对齐；
- * 不限定页面：会话行、工作区行、页头「更多」等所有 Dropdown 的子菜单一起生效。
+ * Fixed with the component class name (this is structural styling, antd has no matching token);
+ * it aligns with regular items. Not scoped to a page: every Dropdown submenu benefits —
+ * conversation rows, workspace rows, the header "More", etc.
  */
 .ant-dropdown-menu-submenu-title {
   align-items: center;
 }
 
-/* 模型选择弹窗（ModelRecoveryModal）目录滚动区：
-   5px 超细 + 圆角滑块，轨道隐藏；悬停滑块加深（与项目其余细滚动条同一套中性色） */
+/* Model selection modal (ModelRecoveryModal) directory scroll area:
+   extra-thin 5px + rounded thumb, hidden track; thumb darkens on hover (same neutral palette as the app's other thin scrollbars) */
 .model-picker-scroll::-webkit-scrollbar {
   width: 5px;
   height: 5px;
@@ -556,9 +590,9 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   background-color: rgba(255, 255, 255, 0.42);
 }
 
-/* ======== antd 弹层虚拟列表滚动条（Select 下拉等 portal 到 body） ======== */
-/* 原生细条：统一为 6px 圆角细滚动条，与 .custom-scrollbar 同一套视觉；
-   遵循 Chromium 121+ 陷阱：只走 ::-webkit-scrollbar 路径，禁用 scrollbar-width/color */
+/* ======== antd overlay virtual-list scrollbars (Select dropdowns etc. portaled to body) ======== */
+/* Native thin bars: unified as a 6px rounded thin scrollbar with the same look as .custom-scrollbar;
+   following the Chromium 121+ pitfall: only use the ::-webkit-scrollbar path, avoid scrollbar-width/color */
 .rc-virtual-list-holder::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -587,7 +621,7 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   background: transparent;
 }
 
-/* rc-virtual-list 自绘的可拖拽滚动条（滚动/悬停时出现）：颜色跟随同一套滚动条色 */
+/* rc-virtual-list's self-drawn draggable scrollbar (appears while scrolling/hovering): color follows the same scrollbar palette */
 .rc-virtual-list {
   --rc-virtual-list-scrollbar-bg: rgba(128, 128, 128, 0.45);
 }
@@ -596,8 +630,8 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
   --rc-virtual-list-scrollbar-bg: rgba(255, 255, 255, 0.28);
 }
 
-/* ======== 首页三栏（思源风格）列拖拽 ======== */
-/* 视觉缝宽 6px；拖拽条 10px 宽并向外各溢出 2px，扩大命中热区又不挤压可见间距 */
+/* ======== Home page three-column column dragging ======== */
+/* Visual gap 6px; the drag handle is 10px wide and overflows 2px on each side, enlarging the hit area without squeezing the visible spacing */
 .home-col-resizer {
   width: 10px;
   margin: 0 -2px;
@@ -608,8 +642,9 @@ body.lock-screen-active > :not(#root):not(.lock-screen-overlay) {
 }
 
 /**
- * 资料库三栏之间的拖拽条：页面底色统一成容器色后，栏与栏只能靠一条 1px 分隔线区分。
- * 6px 宽是拖拽热区，线画在正中（不参与布局）。
+ * Drag handles between the notes library's three columns: once the page background is unified to
+ * the container color, columns can only be told apart by a 1px divider.
+ * The 6px width is the drag hit area; the line is drawn in the middle (not part of layout).
  */
 .notes-col-resizer {
   width: 6px;
@@ -654,8 +689,8 @@ body.home-resizing * {
   cursor: col-resize !important;
 }
 
-/* ======== ShinyText 光泽扫过动效（reactbits ShinyText 移植） ======== */
-/* 文字：基底色→白色高光→基底色渐变填充，光泽带周期扫过（background-position 100% → -100%） */
+/* ======== ShinyText gloss sweep animation ======== */
+/* Text: base color → white highlight → base color gradient fill, the gloss band sweeps periodically (background-position 100% → -100%) */
 .shiny-text {
   display: inline-block;
   background-image: linear-gradient(
@@ -673,18 +708,18 @@ body.home-resizing * {
   animation: shiny-shine 1.5s linear infinite;
 }
 
-/* 包裹 markdown 正文时恢复块级布局（inline-block 会收缩宽度导致排版异常） */
+/* Restore block layout when wrapping markdown body text (inline-block shrinks the width and breaks the layout) */
 .shiny-text.shiny-text-block {
   display: block;
 }
 
-/* 自带背景的元素（行内代码/代码块）恢复实色文字，避免透明填充下文字不可见 */
+/* Elements with their own background (inline code / code blocks) get solid text again, so text stays visible under the transparent fill */
 .shiny-text code,
 .shiny-text pre {
   -webkit-text-fill-color: initial;
 }
 
-/* 图标：双层叠加——底层基底色图标 + 上层白色图标，上层用渐变 mask 带裁剪出光泽扫过 */
+/* Icon: double layer — a base-color icon underneath and a white icon on top, the top one clipped by a gradient mask band for the gloss sweep */
 .shiny-icon {
   position: relative;
   display: inline-flex;
@@ -722,7 +757,7 @@ body.home-resizing * {
   }
 }
 
-/* ======== 新系统外壳（自绘标题栏 + 深色侧栏 + 浅色主内容） ======== */
+/* ======== New system shell (custom title bar + dark sidebar + light main content) ======== */
 
 .shell-root {
   width: 100vw;
@@ -733,8 +768,9 @@ body.home-resizing * {
   background: #fcfcfd;
 }
 
-/* 自绘标题栏：左侧应用菜单，右侧区域由系统绘制窗口按钮（Window Controls Overlay）。
-   整条是可拖拽区（-webkit-app-region: drag），菜单按钮内部改回 no-drag 才能点。 */
+/* Custom title bar: app menu on the left, the system draws the window buttons on the right
+   (Window Controls Overlay). The whole strip is draggable (-webkit-app-region: drag); menu
+   buttons must switch back to no-drag inside to be clickable. */
 .shell-titlebar {
   height: 36px;
   flex-shrink: 0;
@@ -743,9 +779,10 @@ body.home-resizing * {
   gap: 2px;
   padding: 0 12px 0 10px;
   background: var(--shell-titlebar-bg, #1b1b1d);
-  /* 分隔线**不能**画在标题条自己身上：右侧 36px 由系统按钮覆盖层整块盖住，
-     自绘的 border-bottom 会在覆盖层边界处断一截（用户 2026-11-19 反馈「颜色不一样」）。
-     改由下方 .shell-body 的 border-top 画，整行贯通、覆盖层盖不到。 */
+  /* The divider must **not** be drawn on the title bar itself: the right 36px is fully covered
+     by the system button overlay, so a custom border-bottom breaks off at the overlay boundary
+     (user feedback 2026-11-19: "the colors are different"). Draw it with the .shell-body
+     border-top below instead — it spans the full row and the overlay cannot cover it. */
   -webkit-app-region: drag;
   user-select: none;
   color: var(--shell-text-secondary, #b0b0b8);
@@ -768,14 +805,14 @@ body.home-resizing * {
   color: var(--shell-text, #f0f0f2);
 }
 
-/* 标题栏以下的身体：左侧栏 + 主内容区 */
+/* Body below the title bar: left sidebar + main content area */
 .shell-body {
   flex: 1;
   min-height: 0;
   display: flex;
   overflow: hidden;
 }
-/* 只有存在自绘标题栏时才有这条分隔线（Linux 走系统原生边框，没有标题条） */
+/* This divider exists only when a custom title bar is present (Linux uses the native frame, with no title strip) */
 .shell-titlebar + .shell-body {
   border-top: 1px solid var(--shell-border, #2b2b2f);
 }
@@ -789,9 +826,9 @@ body.home-resizing * {
   color: #f0f0f2;
 }
 
-/* 侧栏品牌区（logo / 名称 / 版本号） */
+/* Sidebar brand area (logo / name / version) */
 .shell-brand {
-  /* 高度与右侧内容区顶部头栏（44px）齐平：品牌区与各页面顶栏对齐居中 */
+  /* Height matches the content area's top bar on the right (44px): the brand area and each page's top bar align and center */
   height: 40px;
   flex-shrink: 0;
   padding: 0 12px;
@@ -801,10 +838,12 @@ body.home-resizing * {
 }
 
 /**
- * 内容区顶部条：与侧栏品牌区同高（33px），左右两栏的顶行共用一条水平中线。
+ * Content area top bar: the same height as the sidebar brand area (33px), so the top rows of the
+ * left and right columns share one horizontal center line.
  *
- * 所有页面（对话 / 资料库 / 插件仓库 / 插件详情）顶部的第一行都用它，
- * 不再各自写 padding-top —— 那正是“侧栏 logo 和右边顶栏对不齐”的来源。
+ * Every page (conversation / notes library / plugin repository / plugin detail) uses it for its
+ * first top row, instead of each writing its own padding-top — which is exactly the source of
+ * "the sidebar logo and the right top bar don't line up".
  */
 .shell-topbar {
   min-height: 33px;
@@ -814,9 +853,10 @@ body.home-resizing * {
 }
 
 /**
- * 顶部栏「后台任务」内联托盘（2026-11-26 设计确认）：
- * 行头 hover / 停止按钮 hover / 运行中状态点呼吸 —— 组件里用 token 控制配色，
- * 这里只放少量跨主题通用的交互反馈（与 TaskProgressCard 的 0.07 灰底同一口径）。
+ * Top bar "background jobs" inline tray (design confirmed 2026-11-26):
+ * row header hover / stop button hover / breathing running-status dot — colors are controlled by
+ * tokens inside the component; only a small set of theme-agnostic interaction feedback lives here
+ * (the same convention as TaskProgressCard's 0.07 gray background).
  */
 .harness-bg-toggle {
   background: transparent;
@@ -906,30 +946,36 @@ body.home-resizing * {
   outline-offset: 1px;
 }
 
-/* ======== harness 消息区排版（主对话 / 子代理会话视图共用） ========
+/* ======== harness message area layout (shared by the main conversation / subagent session views) ========
  *
- * 这些规则原先只写在 Harness 页面的内联 <style> 里——只有主对话页面能命中。
- * 子代理会话视图（以及未来右侧栏 embedded 会话）复用同一个 HarnessMessageArea，
- * 内联样式覆盖不到，就会出现「用户消息与 AI 回复贴在一起、思考过程的折叠头不居中」。
- * 抽到全局 CSS 后，所有挂 .harness-message-list 的会话区共用同一套呼吸感与折叠对齐。
+ * These rules used to live only in the Harness page's inline <style> — only the main conversation
+ * page could match them. The subagent session view (and future embedded sessions in the right
+ * panel) reuse the same HarnessMessageArea, which inline styles cannot reach, so "user messages
+ * and AI replies stuck together, and the thinking-process collapse header not centered" showed
+ * up there. Extracted into global CSS, every conversation area with .harness-message-list shares
+ * the same breathing room and collapse alignment.
  */
 
-/* 任务段折叠头（消息内容按任务折叠）：外观沿用既有 Collapse，只收紧布局——
-   标签必须撑满 header 且自身可压缩，否则长任务名会顶出容器、右侧的
-   清单按钮也贴不到右边（antd 的标签容器是 .ant-collapse-title，没法定 inline 样式）。 */
-/* 折叠头统一垂直居中：文字装在 .ant-collapse-title 里，它默认是块级盒子，
-   里面的行内文字按基线排版 → 看着偏上（用户反馈「思考过程这几个字并没有居中」）。
-   任务段此前单独修过（下面的 .task-segment-collapse 规则），其余折叠头没有，
-   于是同一屏里两种对齐并存。这两条把整个聊天区统一。 */
+/* Task-segment collapse header (message content folded per task): keeps the existing Collapse
+   look, only tightens the layout — the label must fill the header and be compressible, otherwise
+   a long task name pushes out of the container and the checklist button on the right can't reach
+   the edge (antd's label container is .ant-collapse-title, which can't be given inline styles). */
+/* Collapse headers uniformly vertically centered: the text sits in .ant-collapse-title, which is
+   a block box by default, so the inline text inside is laid out on the baseline → it looks too
+   high (user feedback: "the words 'thinking process' are not centered"). The task segment had
+   been fixed separately (the .task-segment-collapse rules below), but the other collapse headers
+   had not, so two alignments coexisted on one screen. These two rules unify the whole chat area. */
 .harness-message-list .ant-collapse-header { align-items: center; }
-/* 消息之间与折叠步骤之间留出呼吸空间：长任务里连续工具调用不再挤成一片 */
+/* Breathing room between messages and between collapsed steps: back-to-back tool calls in a long task no longer bunch up */
 .harness-message-list .harness-message-row { margin-bottom: 14px; }
-/* 最后一条消息不留尾巴：底部只需要给悬浮「回到底部」按钮留出空间（见消息区的 pb-14）。
-   endRef 放在内容容器**外面**，所以这里的 :last-child 真的命中最后一行；
-   它以前是内容容器的最后一个子节点，导致这条规则一直没生效。 */
+/* No trailing gap on the last message: the bottom only needs room for the floating "back to
+   bottom" button (see pb-14 in the message area).
+   endRef sits **outside** the content container, so :last-child here really hits the last row;
+   it used to be the content container's last child, which is why this rule never took effect. */
 .harness-message-list .harness-message-row:last-child { margin-bottom: 0; }
-/* 消息主体的段间距（原先是各消息根节点上的 mb-6）：最后一条同样清零，
-   否则它会带着 24px 尾距和消息区的 pb-14 一起把输入框上方的空隙撑大。 */
+/* Paragraph spacing for the message body (previously mb-6 on each message root): also zeroed for
+   the last one, otherwise its 24px trailing margin plus the message area's pb-14 would enlarge
+   the gap above the input box. */
 .harness-message-list .harness-message-body { margin-bottom: 24px; }
 .harness-message-list .harness-message-row:last-child .harness-message-body {
   margin-bottom: 0;
@@ -953,10 +999,11 @@ body.home-resizing * {
 .task-segment-collapse .ant-collapse-header { padding-block: 7px !important; }
 
 /**
- * 插件详情页的「返回插件仓库」：合并进头部卡片的那一行。
+ * Plugin detail page's "back to plugin repository": merged into the header card's row.
  *
- * 常态是静音的文字按钮，hover 才浮出底色——避免它看起来比插件标题还重。
- * 配色走页面下发的 CSS 变量（`PluginDetail` 的 pageVars），亮/暗主题都跟随 antd token。
+ * It is a muted text button at rest, with a background only on hover — so it never looks heavier
+ * than the plugin title. Colors come from CSS variables provided by the page (`PluginDetail`'s
+ * pageVars); both light and dark themes follow antd tokens.
  */
 .plugin-detail-back {
   display: inline-flex;
@@ -985,13 +1032,13 @@ body.home-resizing * {
   outline-offset: 1px;
 }
 .shell-brand-logo {
-  /* 20px：与右侧顶栏里 24~28px 的控件落在同一条视觉中线上，不再显得比顶栏“重” */
+  /* 20px: shares a visual center line with the 24–28px controls in the top bar on the right, so it no longer looks "heavier" than the top bar */
   width: 24px;
   height: 24px;
   border-radius: 5px;
   display: block;
 }
-/* 名称与版本号按**基线**对齐：两个字号并排时不会一个偏高一个偏低 */
+/* Name and version align on the **baseline**: two font sizes side by side won't sit at different heights */
 .shell-brand-text {
   display: flex;
   align-items: baseline;
@@ -1032,14 +1079,14 @@ body.home-resizing * {
   text-decoration: none;
   transition: background 0.15s;
 }
-/* 「更多」里的助手设置独立页面：标题与描述由页面的 hero 渲染，
-   隐藏设置组件自带的页头（display:flex 是行内样式，必须 !important 才能盖住），
-   避免同一屏出现两个标题 */
+/* The standalone agent settings page under "More": title and description are rendered by the
+   page hero, so hide the page header bundled with the settings component (its display:flex is
+   inline, hence !important to override), avoiding two titles on one screen */
 .more-detail .sui-page-header {
   display: none !important;
 }
 
-/* 会话检索命中定位：滚到目标消息后短暂高亮（1.8s 后由组件移除类名） */
+/* Conversation search hit locator: brief highlight after scrolling to the target message (the component removes the class after 1.8s) */
 @keyframes harness-jump-highlight {
   0% {
     background-color: rgba(77, 107, 254, 0.14);
@@ -1060,16 +1107,17 @@ body.home-resizing * {
   border-radius: 10px;
 }
 
-/* 侧栏检索命中行：标题 + 关键词片段，悬停浅底（与普通会话行同一套观感） */
+/* Sidebar search hit row: title + keyword snippet, light background on hover (same look as regular conversation rows) */
 
-/* 技能页（More → skills）：hero + 目录区固定，技能列表吃满剩余高度并在内部滚动。
-   页面本身不再随卡片数量出现整页滚动条（用户 2026-11-27）。 */
+/* Skills page (More → skills): hero + directory area fixed, the skills list fills the remaining
+   height and scrolls internally. The page itself no longer grows a full-page scrollbar with the
+   number of cards (user feedback 2026-11-27). */
 .more-fill-view > * {
   flex: 1;
   min-height: 0;
 }
 
-/* 侧栏导航里的按钮项（例如「更多」下拉触发器）：外观与 NavLink 完全一致 */
+/* Button items in the sidebar nav (e.g. the "More" dropdown trigger): same look as a NavLink */
 button.shell-nav-item {
   width: 100%;
   border: none;
@@ -1160,7 +1208,7 @@ button.shell-nav-item {
   color: #e6e6e9;
 }
 
-/* 侧栏用户区铃铛的未读小红点 */
+/* Unread dot on the bell in the sidebar user area */
 .shell-icon-btn-bell {
   position: relative;
 }
@@ -1175,17 +1223,18 @@ button.shell-nav-item {
   box-shadow: 0 0 0 2px var(--shell-sidebar-bg, #1b1b1d);
 }
 
-/* ======== 通知中心弹层 ========
-   不再用 antd Popover 浮在铃铛上方（会横向溢出侧边栏、压到主内容区），
-   改成侧边栏底部的「消息面板」：左边缘与侧边栏对齐、宽度 = 侧边栏宽度（272px），
-   浮在用户区之上，右下角带未读红点的铃铛负责开关。 */
+/* ======== Notification center popup ========
+   No longer an antd Popover floating above the bell (it overflows the sidebar horizontally and
+   presses into the main content area), but a "message panel" at the bottom of the sidebar: its
+   left edge aligns with the sidebar, width = sidebar width (272px), it floats above the user
+   area, and the bell with the unread dot at the bottom right toggles it. */
 .shell-user-dock {
   position: relative;
   flex-shrink: 0;
 }
 .shell-notif-panel {
   position: absolute;
-  /* 左右各留 8px：面板不再贴着侧边栏边框，而是像一张浮在侧栏里的卡片 */
+  /* 8px on each side: the panel no longer hugs the sidebar border but looks like a card floating inside the sidebar */
   left: 8px;
   right: 8px;
   bottom: calc(100% + 8px);
@@ -1211,8 +1260,10 @@ button.shell-nav-item {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* 兜底色用「布局色」而不是「容器色」：主内容区（对话/资料库卡片）是容器色，
-     两者必须有差，卡片左上角等处的圆角才看得见（用户 2026-11-19「左上角增加圆角」）。 */
+  /* Fallback color uses the "layout color", not the "container color": the main content area
+     (conversation / notes library cards) is container-colored, and the two must differ so that
+     rounded corners such as the card's top-left are visible (user feedback 2026-11-19: "add
+     rounded corners at the top left"). */
   background: #f5f5f5;
 }
 .shell-content {
@@ -1221,16 +1272,17 @@ button.shell-nav-item {
   display: flex;
   overflow: hidden;
 }
-/* min-width: 0 必须显式给：flex 项的 min-width 默认是 auto（min-content），
-   页面内容一宽（长路径/命令行/表格）就会把整行撑出容器、再被 overflow:hidden
-   从窗口右侧裁掉——表现为「对话区只占了左半边、右边一片空」。 */
+/* min-width: 0 must be set explicitly: a flex item's min-width defaults to auto
+   (min-content), so wide page content (long paths / command lines / tables) pushes the whole row
+   out of the container and overflow:hidden then clips it on the window's right side — showing up
+   as "the conversation area only takes the left half with a blank right side". */
 .shell-content > * {
   flex: 1;
   min-width: 0;
   min-height: 0;
 }
 
-/* ======== 外壳主题变量（跟随设置里的亮色 / 暗色） ======== */
+/* ======== Shell theme variables (follow the light / dark setting) ======== */
 .shell-root {
   background: var(--shell-bg, #fcfcfd);
   color: var(--shell-text);
@@ -1283,10 +1335,12 @@ button.shell-nav-item {
   background: var(--shell-bg, #f5f5f5);
 }
 
-/* ======== 启动页（主窗口内，盖在界面之上；初始化完成后淡出） ========
-   前景只有 logo：淡入 → 缓慢浮动，表面周期性扫过一道高光（亮片），四周星芒闪烁。
-   背景是缓慢漂移的暖色柔光（金 / 品牌红 / 暖白）+ 点阵 + 浮尘。
-   吉祥物 GIF、标语、进度条都已按 2026-11-21 口径移除。 */
+/* ======== Startup splash (inside the main window, above the UI; fades out after init) ========
+   The foreground is only the logo: fade in → slow float, with a periodic highlight sweeping
+   across its surface (a sheen) and twinkling sparks around it.
+   The background is slowly drifting warm soft glows (gold / brand red / warm white) plus a dot
+   grid and floating dust.
+   The mascot GIF, tagline and progress bar were removed per the 2026-11-21 requirement. */
 .startup-splash {
   position: fixed;
   inset: 0;
@@ -1306,7 +1360,7 @@ button.shell-nav-item {
   pointer-events: none;
 }
 
-/* ======== 背景层：暖金 / 品牌红 / 暖白三团柔光缓慢漂移，叠加点阵与浮尘 ======== */
+/* ======== Background layer: three soft glows (warm gold / brand red / warm white) drift slowly, over a dot grid and floating dust ======== */
 .startup-splash-bg {
   position: absolute;
   inset: 0;
@@ -1357,7 +1411,7 @@ button.shell-nav-item {
   animation: startup-orb-c 11s ease-in-out -4s infinite;
 }
 
-/* 点阵：中心清晰、四周淡出，随 transform 斜向漂移（位移正好一格，循环无缝） */
+/* Dot grid: crisp in the center, fading out toward the edges, drifting diagonally via transform (shifted exactly one cell for a seamless loop) */
 .startup-splash-grid {
   position: absolute;
   inset: -20vmin;
@@ -1374,7 +1428,7 @@ button.shell-nav-item {
   pointer-events: none;
 }
 
-/* 浮尘：几颗小光点慢慢上浮，错开相位，让背景一直有细微动态 */
+/* Dust: a few small light dots float up slowly with staggered phases, keeping the background subtly alive */
 .startup-splash-mote {
   position: absolute;
   width: 4px;
@@ -1432,7 +1486,7 @@ button.shell-nav-item {
   padding: 24px;
 }
 
-/* logo 舞台：光晕 / 星芒都相对它定位；尺寸随窗口轻微放大（1200×800 时约 224px） */
+/* Logo stage: the glow / sparks are positioned relative to it; its size scales slightly with the window (about 224px at 1200×800) */
 .startup-splash-logo {
   --startup-logo-size: clamp(200px, 28vmin, 280px);
   position: relative;
@@ -1444,7 +1498,7 @@ button.shell-nav-item {
   animation: startup-logo-in 0.72s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* 背后的暖光：跟着 logo 一起呼吸，给亮片一个发光底座 */
+/* The warm light behind: breathes together with the logo, giving the sheen a glowing base */
 .startup-splash-logo-glow {
   position: absolute;
   inset: -46%;
@@ -1459,7 +1513,7 @@ button.shell-nav-item {
   pointer-events: none;
 }
 
-/* 浮动单独一层，避免和外层淡入的 transform 互相覆盖 */
+/* Floating is a separate layer so it doesn't overwrite the outer fade-in transform */
 .startup-splash-logo-float {
   position: relative;
   width: 100%;
@@ -1467,13 +1521,13 @@ button.shell-nav-item {
   animation: startup-logo-float 4.2s ease-in-out infinite;
 }
 
-/* 圆角与 logo 自带的徽章外形对齐（512px 图约 23% 圆角），高光被这里裁切 */
+/* Corner radius matches the logo's own badge shape (about 23% on a 512px image); the highlight is clipped here */
 .startup-splash-logo-frame {
   position: absolute;
   inset: 0;
   overflow: hidden;
   border-radius: 23%;
-  /* 与 logo 自身底色一致：透明圆角不会漏出页面背景，亮片也不会跑到徽章外 */
+  /* Matches the logo's own background color: the transparent corners don't leak the page background, and the sheen doesn't escape the badge */
   background: #f8f7f3;
   box-shadow:
     0 18px 48px var(--startup-shadow, rgba(28, 24, 18, 0.22)),
@@ -1490,8 +1544,9 @@ button.shell-nav-item {
   -webkit-user-drag: none;
 }
 
-/* 亮片：一道斜向高光周期性地从左扫到右，screen 混合让它在深色毛发上更通透。
-   两侧用很宽的柔光过渡 + 中间一条窄亮芯，避免在深色毛发上出现生硬的白条。 */
+/* Sheen: a diagonal highlight periodically sweeps left to right; screen blending makes it more
+   translucent on dark fur. Wide soft falloffs on both sides plus a narrow bright core in the
+   middle avoid a harsh white band on dark fur. */
 .startup-splash-logo-sheen {
   position: absolute;
   inset: 0;
@@ -1507,16 +1562,19 @@ button.shell-nav-item {
   );
   transform: translateX(-130%);
   mix-blend-mode: screen;
-  /* 0.2s 就开始第一道扫光：窗口若在 1s 左右才显示，用户仍能看见亮片扫过 */
+  /* The first sweep starts at 0.2s: if the window only appears around 1s, users still see the sheen pass */
   animation: startup-sheen 4.2s cubic-bezier(0.3, 0, 0.2, 1) 0.2s infinite;
   will-change: transform;
   pointer-events: none;
 }
 
-/* 星芒（亮片）：四角星形，出现时机跟着高光一起走。
-   形状放在伪元素上：clip-path 会把 drop-shadow 一起裁掉，光晕留在外层才不会丢。
-   常态保留 30% 亮度：星星是 logo 周围不动的装饰，不该只在动画的「亮」区间里存在——
-   动画被系统动效设置关掉时，用户也应该看得见它们（见文件末尾的 reduced-motion 段）。 */
+/* Sparks (glints): four-pointed stars whose timing follows the highlight.
+   The shape goes on a pseudo-element: clip-path would clip the drop-shadow too, so the glow stays
+   on the outer element to avoid losing it.
+   Kept at 30% brightness by default: the stars are static decorations around the logo and should
+   not exist only during the animation's "bright" interval — users should still see them when the
+   animation is turned off by the system motion setting (see the reduced-motion section at the end
+   of the file). */
 .startup-splash-spark {
   position: absolute;
   width: 20px;
@@ -1671,7 +1729,7 @@ button.shell-nav-item {
   }
 }
 
-/* 只在初始化失败时出现（正常加载整页只有 logo） */
+/* Only appears when initialization fails (on a normal load the page shows only the logo) */
 .startup-splash-error {
   margin-top: 24px;
   max-width: 520px;
@@ -1682,10 +1740,12 @@ button.shell-nav-item {
   color: var(--startup-error, #b42318);
 }
 
-/* 降低动效（Windows「动画效果」关闭 / prefers-reduced-motion: reduce）：
-   只停「位移 / 缩放 / 漂移」这类容易让人不适的动效，**不能把亮片和星芒整块隐藏**——
-   它们是不动的装饰，不是动画本身。此前这里把 sheen / spark 的 opacity 归零，于是这类
-   机器上启动页只剩一个死板的方块图标（用户 2026-11-24 反馈「亮片和周围的星星没有了」）。 */
+/* Reduced motion (Windows "Animation effects" off / prefers-reduced-motion: reduce):
+   only stop motion that easily causes discomfort — "translation / scale / drift"; do **not hide
+   the sheen and sparks entirely** — they are static decorations, not the animation itself.
+   This block used to zero the opacity of sheen / spark, so on such machines the startup page was
+   left with a lifeless square icon (user feedback 2026-11-24: "the sheen and surrounding stars
+   are gone"). */
 @media (prefers-reduced-motion: reduce) {
   .startup-splash-logo,
   .startup-splash-logo-float,
@@ -1698,26 +1758,27 @@ button.shell-nav-item {
   .startup-splash-logo-glow {
     opacity: 0.7;
   }
-  /* 亮片停在徽章中部：像一块固定的高光，而不是扫过的高光 */
+  /* Sheen rests in the middle of the badge: a fixed highlight rather than a sweeping one */
   .startup-splash-logo-sheen {
     animation: none;
     transform: translateX(0);
     opacity: 0.5;
   }
-  /* 星芒静止地亮在 logo 四周（不旋转、不缩放、不闪） */
+  /* Sparks stay lit statically around the logo (no rotation, scaling or twinkle) */
   .startup-splash-spark {
     animation: none;
     opacity: 0.95;
   }
-  /* 浮尘变成固定的小光点，背景仍有层次 */
+  /* Dust becomes fixed small dots, keeping the background layered */
   .startup-splash-mote {
     opacity: 0.5;
   }
 }
 
-/* ======== 登录页（/login 独立整窗） ========
-   左侧品牌面板（logo + 定位语 + 3 条能力点 + 极淡网格/柔光），右侧登录卡片。
-   颜色全部来自 antd token（由 Login.tsx 映射成 --login-* 内联变量），深色模式自动适配。 */
+/* ======== Login page (/login, standalone full window) ========
+   Left brand panel (logo + tagline + 3 capability points + very faint grid/glow), right login card.
+   All colors come from antd tokens (mapped by Login.tsx into --login-* inline variables); dark
+   mode adapts automatically. */
 .shell-standalone {
   width: 100vw;
   height: 100vh;
@@ -1744,7 +1805,7 @@ button.shell-nav-item {
   background: var(--login-bg, #f5f5f5);
   color: var(--login-text, #1f1f1f);
 }
-/* 页面级极淡渐晕：不是一整块纯色，视线上更聚焦到中央卡片 */
+/* Page-level very faint vignette: not a flat solid block, visually focusing on the central card */
 .login-page::before {
   content: '';
   position: absolute;
@@ -1758,7 +1819,7 @@ button.shell-nav-item {
     radial-gradient(46% 46% at 100% 100%, var(--login-glow-b, rgba(0, 0, 0, 0.03)), transparent 72%);
   pointer-events: none;
 }
-/* macOS 交通灯覆盖层下保留一条可拖拽带；Windows/Linux 原生标题栏时无副作用 */
+/* Keeps a draggable strip under the macOS traffic-light overlay; no side effects with the native title bar on Windows/Linux */
 .login-drag-region {
   position: absolute;
   top: 0;
@@ -1795,7 +1856,7 @@ button.shell-nav-item {
   }
 }
 
-/* —— 左侧品牌面板 —— */
+/* —— Left brand panel —— */
 .login-brand {
   position: relative;
   overflow: hidden;
@@ -1860,7 +1921,7 @@ button.shell-nav-item {
   height: 44px;
   border-radius: 12px;
   display: block;
-  /* 与 logo 自身底色一致：圆角外的四角不会漏出页面背景（暗色主题下也不突兀） */
+  /* Matches the logo's own background color: the corners outside the radius don't leak the page background (and it isn't jarring in dark themes) */
   background: #f8f7f3;
   box-shadow:
     0 6px 18px rgba(17, 24, 39, 0.18),
@@ -1874,15 +1935,16 @@ button.shell-nav-item {
 }
 .login-brand-tagline {
   margin: 26px 0 0;
-  /* 定位语宁可整句一行，也别把「解决」「办了」这种词拆到第二行只剩一两个字 */
+  /* Prefer keeping the tagline on one line rather than breaking words like "solve" / "handle" so the second line keeps only one or two characters */
   max-width: 100%;
   font-size: 15px;
   line-height: 1.62;
   font-weight: 500;
   letter-spacing: -0.01em;
   color: var(--login-text-secondary, rgba(0, 0, 0, 0.65));
-  /* 中文只在标点处断行：别把「专属工作台」这种词拆到两行，也别留「需求。」当尾巴；
-     overflow-wrap 只兜「一句话长到没有任何可断点」的极端情况，正常不会生效 */
+  /* Break Chinese only at punctuation: don't split words like "dedicated workspace" across two
+     lines, and don't leave "requirements." as a dangling tail; overflow-wrap only covers the
+     extreme case of a sentence with no break opportunity at all, so it normally never kicks in */
   word-break: keep-all;
   overflow-wrap: anywhere;
   text-wrap: balance;
@@ -1897,7 +1959,7 @@ button.shell-nav-item {
 }
 .login-capability {
   display: flex;
-  /* 图标对齐的是「标题 + 描述」这一整块：顶对齐时图标会吊在标题上方，看起来和右边的字错位 */
+  /* The icon aligns with the whole "title + description" block: with top alignment it hangs above the title and looks misaligned with the text on the right */
   align-items: center;
   gap: 13px;
 }
@@ -1931,7 +1993,7 @@ button.shell-nav-item {
   font-size: 11.5px;
   line-height: 1.62;
   color: var(--login-text-tertiary, rgba(0, 0, 0, 0.45));
-  /* 任何宽度的窗口、任何一条翻译都不许把文字列撑出面板 */
+  /* No window width and no translation string may push the text column out of the panel */
   max-width: 100%;
   overflow-wrap: anywhere;
   text-wrap: pretty;
@@ -1954,7 +2016,7 @@ button.shell-nav-item {
   box-shadow: 0 0 0 3px var(--login-primary-bg, rgba(22, 119, 255, 0.1));
 }
 
-/* —— 右侧登录面板 —— */
+/* —— Right login panel —— */
 .login-panel {
   position: relative;
   display: flex;
@@ -2016,11 +2078,11 @@ button.shell-nav-item {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  /* 主按钮统一为中性反色（见 ThemeContext 的 Button token）；投影也跟着去蓝，
-     否则深色按钮下面垫一圈蓝光会很脏 */
+  /* Primary buttons are unified to a neutral inverted color (see ThemeContext's Button token);
+     the shadow is de-blued to match, otherwise a dark button over a blue glow looks dirty */
   box-shadow: 0 10px 20px -12px rgba(0, 0, 0, 0.45);
 }
-/* 「服务器地址」是「记住我」右侧的次要动作：原地展开，输入框落到下一行 */
+/* "Server address" is a secondary action to the right of "Remember me": it expands in place and the input drops to the next line */
 .login-advanced-toggle {
   display: inline-flex;
   align-items: center;
@@ -2045,7 +2107,7 @@ button.shell-nav-item {
 .login-advanced-chevron.is-open {
   transform: rotate(180deg);
 }
-/* 负上边距抵消 .login-form-row 的 16px 下边距，展开后输入框紧跟这一行 */
+/* A negative top margin cancels .login-form-row's 16px bottom margin so the input follows directly after this row when expanded */
 .login-advanced-body {
   margin: -6px 0 14px;
   animation: login-adv-in 0.18s ease-out both;
@@ -2091,7 +2153,7 @@ button.shell-nav-item {
   border-radius: 10px;
 }
 
-/* 窄窗兜底：左栏收起，登录卡片独占（最小窗口 1200×800 时不会触发，仅防极端缩放） */
+/* Narrow-window fallback: the left column collapses and the login card takes over (not triggered at the 1200×800 minimum window; only guards against extreme zoom) */
 @media (max-width: 960px) {
   .login-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -2129,7 +2191,7 @@ button.shell-nav-item {
   }
 }
 
-/* ======== Lattice 上传进度弹窗 ======== */
+/* ======== Lattice upload progress modal ======== */
 .lattice-upload-bar {
   position: relative;
   flex: 1;
@@ -2160,9 +2222,10 @@ button.shell-nav-item {
   }
 }
 
-/* ======== 侧栏用户区（真实账号） ========
-   未登录：灰头像 + 「未登录」+「点击登录」；已登录：首字母头像 + 名称 + 角色副行，
-   整块是 Dropdown 触发器。原写死的 E / Eddie / 本地工作区已移除。 */
+/* ======== Sidebar user area (real account) ========
+   Signed out: gray avatar + "Not signed in" + "Click to sign in"; signed in: initial avatar +
+   name + role subline, the whole block being a Dropdown trigger. The formerly hard-coded E /
+   Eddie / local workspace have been removed. */
 .shell-user-copy {
   display: flex;
   flex-direction: column;
@@ -2215,7 +2278,7 @@ button.shell-nav-item {
   white-space: nowrap;
 }
 
-/* ======== 插件仓库：Lattice 插件中心面板 ======== */
+/* ======== Plugin repository: Lattice plugin hub panel ======== */
 .lattice-hub-card {
   position: relative;
   display: flex;

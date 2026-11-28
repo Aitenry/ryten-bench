@@ -32,8 +32,8 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({ data, onEntityClick, onEntity
   const isDarkMode = effectiveTheme === 'dark'
 
   // Count isolated nodes (no connections) — used by both chart and hint overlay
-  //（修复：此前每次渲染新建 connectedNodes 引用,父级任何重渲染（如点选实体）都触发
-  // 下方 effect 重跑 → 整图重建、缩放/平移视口被重置）
+  // (fix: a new connectedNodes reference was created on every render, so any parent re-render such as
+  // selecting an entity re-ran the effect below → full graph rebuild, resetting the zoom/pan viewport)
   const { connectedNodes, isolatedCount } = useMemo(() => {
     const connectedNodeIds = new Set<string>()
     for (const link of data.links) {

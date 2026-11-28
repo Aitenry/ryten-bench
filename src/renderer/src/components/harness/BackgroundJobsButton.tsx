@@ -6,11 +6,12 @@ import { useTranslation } from '@renderer/i18n'
 import type { JobSnapshot } from '../../../../shared/harness/types'
 
 /**
- * 顶部栏「后台任务」入口（execute run_in_background=true）。
+ * "Background jobs" entry in the top bar (execute run_in_background=true).
  *
- * 按用户 2026-11-26 的设计口径：按钮本身是**整个内联托盘的折叠开关**，
- * 左侧是折叠箭头，右边显示运行数；真正的任务行在 HarnessHeader 下方展开，
- * 不再用 Popover/Modal。数据由 useBackgroundJobs 提供，这里只负责渲染。
+ * Per the 2026-11-26 design: the button itself is the **collapse toggle for the entire inline
+ * tray** — collapse arrow on the left, running count on the right. The actual job rows expand
+ * below HarnessHeader instead of using a Popover/Modal. Data comes from useBackgroundJobs; this
+ * component only renders it.
  */
 interface BackgroundJobsButtonProps {
   jobs: JobSnapshot[]
@@ -18,7 +19,7 @@ interface BackgroundJobsButtonProps {
   onToggle: () => void
 }
 
-/** 运行中的任务数（stopping 也算「还在跑」，与托盘的停止按钮状态一致） */
+/** Number of active jobs (stopping counts as still running, matching the tray's stop button) */
 const activeCountOf = (jobs: JobSnapshot[]): number =>
   jobs.filter((job) => job.status === 'running' || job.status === 'stopping').length
 
@@ -58,7 +59,7 @@ const BackgroundJobsButton: React.FC<BackgroundJobsButtonProps> = ({ jobs, open,
         fontFamily: 'inherit'
       }}
     >
-      {/* 左侧折叠箭头：整个托盘的开合状态 */}
+      {/* Left chevron: the expand/collapse state of the whole tray */}
       <span
         aria-hidden="true"
         style={{

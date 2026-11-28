@@ -9,10 +9,11 @@ import { notesZhCN } from './notes'
 import { zhCNLattice } from './lattice'
 
 /**
- * 简体中文是**源语言**：词条结构与文案以这里为准。
- * 其它语言文件必须以 `typeof zhCN` 声明，键多一个少一个都会编译报错。
+ * Simplified Chinese is the **source language**: entry structure and copy are defined here.
+ * Other locale files must be declared as `typeof zhCN`; a missing or extra key is a compile error.
  *
- * harness / notes 已移出插件，词条改为随系统功能静态打包（不再由插件 install 注册）。
+ * harness / notes are no longer plugins; their entries are now bundled statically with system
+ * features (no longer registered by plugin install).
  */
 export const zhCN = {
   common: zhCNCommon,
@@ -23,6 +24,6 @@ export const zhCN = {
   markdown: zhCNMarkdown,
   ...harnessZhCN,
   ...notesZhCN,
-  /* 登录 / 账号 / Lattice 插件中心 / 同步（login.*、lattice.*、plugins.hub.*、sync.*） */
+  /* Login / account / Lattice plugin hub / sync (login.*, lattice.*, plugins.hub.*, sync.*) */
   ...zhCNLattice
 }

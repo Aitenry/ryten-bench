@@ -6,32 +6,39 @@ import { useHarness } from '../../../contexts/harness/HarnessContextCore'
 import HarnessSidebar from '../../harness/HarnessSidebar'
 
 /**
- * 系统外壳里的对话侧栏。
+ * The conversation sidebar inside the system shell.
  *
- * harness 从插件移出后，原来的 HarnessSidebar（胶囊模式切换 / 工作区树 / 记忆）
- * 作为系统侧栏常驻在新外壳中；这里只负责从 HarnessProvider 取状态、接到导航上。
+ * After moving out of the plugin, the former HarnessSidebar (capsule mode switch / workspace tree /
+ * memory) lives permanently as the system sidebar in the new shell; this component only pulls state
+ * from HarnessProvider and wires it to navigation.
  *
- * 颜色全部走 antd 主题 token：亮色/暗色设置切换时侧栏和主内容一起变化，
- * 不再固定为深色侧栏 + 浅色主内容。
+ * All colors go through antd theme tokens: when the light/dark setting switches, the sidebar and
+ * the main content change together instead of a fixed dark sidebar with light main content.
  */
 const AssistantSidebar: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
   /**
-   * 侧栏的「用户动作」要把主内容区带回对话页（`/harness`），但**启动恢复不算用户动作**。
+   * A "user action" from the sidebar must bring the main content area back to the conversation page
+   * (`/harness`), but **startup restoration does not count as a user action**.
    *
-   * 此前的写法：这里按「当前是不是已经在对话页」决定导不导航，本意是拦住
-   * 挂载后那次启动恢复——它会把内容复位成空白会话 / 恢复上次那条会话，回调原先无条件
-   * `navigate('/harness')`，于是「从登录页进入 /plugins」时外壳刚挂载就被拉回对话页。
+   * Previous approach: navigation was decided here based on whether the conversation page was
+   * already active. The intent was to block the startup restoration right after mount — it resets
+   * the content to a blank session / restores the last session, and the callback used to call
+   * `navigate('/harness')` unconditionally, so entering `/plugins` from the login page pulled the
+   * freshly mounted shell back to the conversation page.
    *
-   * 但那个守卫把**真实点击**也一并拦了：人停在资料库 / 插件仓库 / 更多（智能体…）时点
-   * 「＋ 新建会话」或一条会话，state 变了、路由不动，界面看起来毫无反应
-   * （用户口径 2026-11-21「打开其他界面……然后点击新建会话，都没有反应，页面不会回到
-   * 新建会话这个页面」）。
+   * But that guard also blocked **real clicks**: while the user stays on the library / plugin
+   * repository / more (agents…) page and clicks "+ New session" or a session, state changes but the
+   * route does not, so the UI appears unresponsive (user report 2026-11-21: "after opening another
+   * page… then clicking new session, nothing happens, the page does not return to the new session
+   * page").
    *
-   * 现在把两件事分开：导航只由 HarnessSidebar 在**显式点击**时通过 `onOpenHarness`
-   * 通知（见那边的 prop 注释），启动恢复那条路根本不通知——因此不需要按路由猜意图。
-   * 已经在对话页时不再重复 push，避免点几次「新建会话」就多出几层历史。
+   * The two concerns are now separated: navigation is only notified by HarnessSidebar on an
+   * **explicit click** via `onOpenHarness` (see the prop comment there), while the startup
+   * restoration path never notifies — so there is no need to guess intent from the route. When
+   * already on the conversation page nothing is pushed again, avoiding extra history entries from
+   * repeated "new session" clicks.
    */
   const inHarness = location.pathname === '/harness' || location.pathname.startsWith('/harness/')
   const openHarness = useCallback((): void => {

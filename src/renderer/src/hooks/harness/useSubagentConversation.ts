@@ -11,19 +11,22 @@ import { applyChunkToMessages } from '../../utils/harness/applyChunk'
 import { harnessApi } from '../../api/harness'
 
 /**
- * 后台子代理会话视图的数据源。
+ * Data source for the background subagent conversation view.
  *
- * 主进程把子代理每一轮的流式 chunk 记成事件流（turn_start / chunk* / turn_end）：
- * - 打开会话时 watch 接口直接返回**快照**（全量事件 + seq）；
- * - 此后增量事件按 40ms 合批推送，这里按 seq 合并（丢弃快照之前的重复事件）；
- * - 事件重放复用主对话同一套 `applyChunkToMessages` reducer，所以正文 / 思考 /
- *   工具卡的渲染与主对话完全同源。
+ * The main process records each subagent turn's streaming chunks as an event stream
+ * (turn_start / chunk* / turn_end):
+ * - When a conversation is opened, the watch API returns **snapshot** data directly (all events + seq);
+ * - After that, incremental events are pushed in 40ms batches; they are merged here by seq
+ *   (duplicate events from before the snapshot are dropped);
+ * - Event replay reuses the same `applyChunkToMessages` reducer as the main conversation, so text /
+ *   thinking / tool card rendering shares exactly the same path as the main conversation.
  *
- * 会话视图是只读的（v1 不提供从 UI 向子代理投递消息的入口）；渲染层不修改主对话
- * 的状态，也不影响主代理正在跑的流。
+ * The conversation view is read-only (v1 offers no entry point for sending messages from the UI to a
+ * subagent); the renderer neither mutates the main conversation state nor affects the main agent's
+ * running stream.
  */
 
-/** 会话视图的元信息（来自快照 / 顶部栏列表广播） */
+/** Metadata for the conversation view (from the snapshot / top bar list broadcast) */
 export interface SubagentConversationMeta {
   topicId: number
   agentId: string
@@ -32,27 +35,27 @@ export interface SubagentConversationMeta {
   prompt: string
   status: 'running' | 'idle' | 'inactive'
   lastStatus?: 'completed' | 'failed' | 'killed'
-  /** 运行中排队的用户消息条数（会话视图据此提示「已排队」） */
+  /** Number of user messages queued while running (the view uses it to hint "queued") */
   queuedMessages: number
 }
 
 export interface SubagentConversationState {
-  /** 快照是否已到（false 时视图显示加载骨架） */
+  /** Whether the snapshot has arrived (when false the view shows a loading skeleton) */
   ready: boolean
   meta: SubagentConversationMeta | null
-  /** 与主对话同构的消息列表（每轮 = 用户消息 + 助手消息） */
+  /** Message list shaped like the main conversation (each turn = user message + assistant message) */
   messages: Message[]
-  /** 该会话当前是否有一轮正在流式输出 */
+  /** Whether this conversation currently has a turn streaming */
   streaming: boolean
-  /** 快照之前是否还有更早轮次（消息区顶部滚动加载） */
+  /** Whether there are older turns before the snapshot (loaded by scrolling at the top of the message area) */
   hasOlder: boolean
-  /** 更早轮次是否正在加载 */
+  /** Whether older turns are loading */
   loadingOlder: boolean
-  /** 加载更早一页历史（消息区滚动到顶部时调用） */
+  /** Load one page of older history (called when the message area scrolls to the top) */
   loadMore: () => void
 }
 
-/** 内部状态不含回调：回调在 hook 末尾按 ref 组装，避免每次 setState 存函数 */
+/** Internal state without callbacks: callbacks are assembled from refs at the end of the hook, so setState never stores a function */
 type ConversationViewState = Omit<SubagentConversationState, 'loadMore'>
 
 const EMPTY_STATE: ConversationViewState = {
@@ -64,13 +67,13 @@ const EMPTY_STATE: ConversationViewState = {
   loadingOlder: false
 }
 
-/** 会话视图一次最多合并的事件批大小（防单帧处理过多事件） */
+/** Upper bound on how many events the conversation view merges at once (avoids handling too many events in one frame) */
 const FLUSH_INTERVAL_MS = 40
 
 const userMessageId = (agentId: string, turnId: string): string => `sub-u-${agentId}-${turnId}`
 const assistantMessageId = (agentId: string, turnId: string): string => `sub-a-${agentId}-${turnId}`
 
-/** 构造一轮的用户消息（渲染端只用于展示，不落库、不参与主会话分页） */
+/** Build the user message for a turn (renderer-side display only: not persisted, not part of main session pagination) */
 function createUserMessage(agentId: string, turnId: string, prompt: string, at: number): Message {
   return {
     id: userMessageId(agentId, turnId),
@@ -81,7 +84,7 @@ function createUserMessage(agentId: string, turnId: string, prompt: string, at: 
   }
 }
 
-/** 构造一轮的助手占位消息（后续 chunk 追加到这条消息的 blocks） */
+/** Build the assistant placeholder message for a turn (later chunks are appended to this message's blocks) */
 function createAssistantMessage(agentId: string, turnId: string, at: number): Message {
   return {
     id: assistantMessageId(agentId, turnId),
@@ -94,7 +97,7 @@ function createAssistantMessage(agentId: string, turnId: string, at: number): Me
   }
 }
 
-/** 把一批事件重放到消息列表上（纯函数：不读 React 状态，便于快照回放与增量共用） */
+/** Replay a batch of events onto the message list (pure function: reads no React state, so snapshot replay and incremental updates can share it) */
 function applyConversationEvents(
   messages: Message[],
   events: SubagentConversationEvent[],
@@ -136,9 +139,11 @@ const isStreaming = (messages: Message[]): boolean =>
   messages.length > 0 && messages[messages.length - 1].loading === true
 
 /**
- * 订阅并维护一个后台子代理的流式会话（topicId/agentId 为 null 时为空状态）。
+ * Subscribe to and maintain the streaming conversation of one background subagent
+ * (empty state when topicId/agentId are null).
  *
- * 切换会话/返回主智能体时自动解除 watch，主进程不再为它推送事件。
+ * Switching conversations or returning to the main agent releases the watch automatically, and the
+ * main process stops pushing events for it.
  */
 export function useSubagentConversation(
   topicId: number | null,
@@ -146,9 +151,9 @@ export function useSubagentConversation(
 ): SubagentConversationState {
   const [state, setState] = useState<ConversationViewState>(EMPTY_STATE)
 
-  /** 当前视图（topic/agent）：loadMore 在 effect 外按 ref 读取，避免闭包过期 */
+  /** Current view (topic/agent): loadMore reads it from a ref outside the effect to avoid a stale closure */
   const viewRef = useRef<{ topicId: number; agentId: string } | null>(null)
-  /** 已加载的原始事件（升序；向前翻页时整体重放，保证与增量 reducer 同源） */
+  /** Raw events loaded so far (ascending; paging backwards replays them all so it stays identical to the incremental reducer) */
   const eventsRef = useRef<SubagentConversationEvent[]>([])
   const hasOlderRef = useRef(false)
   const loadingOlderRef = useRef(false)
@@ -161,7 +166,7 @@ export function useSubagentConversation(
   const pendingRef = useRef<SubagentConversationEvent[]>([])
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const metaRef = useRef<SubagentConversationMeta | null>(null)
-  /** 断档重拉的在途锁与退避时间：失败/连续断档时不产生重拉风暴 */
+  /** In-flight lock and backoff timestamp for gap refetches: failures / repeated gaps never cause a refetch storm */
   const refetchingRef = useRef(false)
   const lastRefetchAtRef = useRef(0)
 
@@ -170,7 +175,7 @@ export function useSubagentConversation(
       setState(EMPTY_STATE)
       return
     }
-    // 守卫后收窄成非空常量：快照/事件回调是异步闭包，闭包里保留非空类型
+    // Narrow to non-null constants after the guard: snapshot/event callbacks are async closures, so keep the non-null types in them
     const viewTopicId: number = topicId
     const viewAgentId: string = agentId
 
@@ -199,12 +204,12 @@ export function useSubagentConversation(
       setState((prev) => ({ ...prev, messages, streaming }))
     }
 
-    /** 合并一批增量事件（按 seq 丢弃重复/过期；出现断档则重拉快照兜底） */
+    /** Merge a batch of incremental events (drop duplicates/stale ones by seq; refetch the snapshot if a gap appears) */
     function applyBatch(events: SubagentConversationEvent[]): void {
       if (!readyRef.current || events.length === 0) return
       const fresh = events.filter((event) => event.seq > seqRef.current)
       if (fresh.length === 0) return
-      // 正常情况事件严格连续；出现断档（例如期间切走又切回）直接重拉快照，避免会话缺段
+      // Events are strictly consecutive in the normal case; on a gap (e.g. switching away and back) refetch the snapshot instead, so the conversation never misses a segment
       if (fresh[0].seq !== seqRef.current + 1) {
         void refetchSnapshot()
         return
@@ -240,7 +245,7 @@ export function useSubagentConversation(
         setState({ ...EMPTY_STATE, ready: true })
         return
       }
-      // 快照是权威基准：清空本地状态后整段重放（同一 agent 的重复打开同样走这里）
+      // The snapshot is the authoritative baseline: clear local state and replay the whole thing (re-opening the same agent comes through here too)
       messagesRef.current = []
       turnAssistantsRef.current = new Map()
       eventsRef.current = [...(snapshot.events ?? [])]
@@ -274,16 +279,16 @@ export function useSubagentConversation(
         hasOlder: hasOlderRef.current,
         loadingOlder: false
       })
-      // 快照返回前到达的增量事件（已带更大的 seq）：补在同一帧里合并
+      // Incremental events that arrived before the snapshot returned (already carrying larger seq): merge them in the same frame
       const buffered = pendingRef.current
       pendingRef.current = []
       if (buffered.length > 0) applyBatch(buffered)
     }
 
-    /** 断档兜底：不登记 watch 地重拉一次快照（watch 仍由本 effect 持有） */
+    /** Gap fallback: refetch the snapshot once without registering a watch (the watch is still owned by this effect) */
     async function refetchSnapshot(): Promise<void> {
       if (refetchingRef.current) return
-      // 连续断档/重拉失败时每批事件都重试会打满主进程：800ms 退避窗口
+      // Retrying on every batch after repeated gaps/failures would saturate the main process: 800ms backoff window
       if (Date.now() - lastRefetchAtRef.current < 800) return
       refetchingRef.current = true
       lastRefetchAtRef.current = Date.now()
@@ -291,13 +296,13 @@ export function useSubagentConversation(
         const snapshot = await harnessApi.harness.agentConversation(viewTopicId, viewAgentId)
         if (!cancelled) applySnapshot(snapshot)
       } catch {
-        /* 快照重拉失败不打扰：保留现状，退避结束后下一批事件会再触发 */
+        /* A failed snapshot refetch is silent: keep the current state, and the next batch after the backoff triggers another try */
       } finally {
         refetchingRef.current = false
       }
     }
 
-    // 先订阅增量再拉快照：两者之间的空窗事件进入 pending，由 applySnapshot 合并
+    // Subscribe to increments before fetching the snapshot: events arriving in the gap go into pending and are merged by applySnapshot
     const unsubscribeConversation = harnessApi.harness.onAgentConversationUpdated((data) => {
       if (data.topicId !== viewTopicId || data.agentId !== viewAgentId) return
       pendingRef.current.push(...data.events)
@@ -307,7 +312,7 @@ export function useSubagentConversation(
       if (!readyRef.current) return
       scheduleFlush()
     })
-    // 顶部栏列表广播：同步「进行中 / 已完成 / 失败 / 已停止」徽标
+    // Top bar list broadcast: sync the "running / completed / failed / stopped" badge
     const unsubscribeAgents = harnessApi.harness.onAgentsUpdated((data) => {
       if (data.topicId !== viewTopicId) return
       const row = (data.rows ?? []).find((item: SubagentSessionRow) => item.id === viewAgentId)
@@ -348,7 +353,7 @@ export function useSubagentConversation(
     }
   }, [topicId, agentId])
 
-  /** 向前加载一页更早轮次：整体重放（与增量同一 reducer），失败保持现状 */
+  /** Load one page of older turns backwards: replay everything (same reducer as increments); on failure keep the current state */
   const loadMore = useCallback((): void => {
     const view = viewRef.current
     const oldestSeq = eventsRef.current[0]?.seq

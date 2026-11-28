@@ -1,10 +1,13 @@
 /**
- * `list_subagent_models` 工具：列出**已启用**的模型路由（`provider:model`）与能力摘要。
+ * `list_subagent_models` tool: lists **enabled** model routes (`provider:model`) with a
+ * capability summary.
  *
- * 为什么需要：`agent_create` / 子代理配置的 `model` 字段只接受已启用的 `provider:model`；
- * 模型看不到供应商配置，没有这个只读清单就只能瞎猜（猜错会静默回退主模型）。
+ * Why it is needed: the `model` field of `agent_create` / subagent configuration only accepts
+ * enabled `provider:model` routes; models cannot see the provider configuration, so without
+ * this read-only list they can only guess (a wrong guess silently falls back to the main model).
  *
- * 只读、无副作用；数据来自 provider mapper（启用中的供应商行）与模型档案（能力标签）。
+ * Read-only, no side effects; data comes from the provider mapper (enabled provider rows) and
+ * model profiles (capability labels).
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -14,7 +17,7 @@ import { getEnabledProviders } from '../../database/mapper/provider'
 import { findModelProfile } from '../../provider/model-tags'
 import { formatModelRoutes, type ModelRouteEntry } from './model-routes-core'
 
-/** 构造模型路由清单工具 */
+/** Builds the model route list tool */
 export function buildModelRoutesTool(): StructuredToolInterface {
   return tool(
     async () => {

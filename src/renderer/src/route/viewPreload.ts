@@ -1,32 +1,36 @@
 /**
- * 视图 chunk 预加载（注册表驱动版）
+ * View chunk preloading (registry-driven)
  *
- * 背景：懒加载页面（Harness / Planner / Music 及外部插件页）首次切换时才现场加载
- * 对应 chunk。重型 chunk（如 Harness 的整套代码编辑器）下载 + 求值期间界面会
- * 「卡在上一页」一会儿。
+ * Background: lazily loaded pages (Harness / Planner / Music and external plugin pages) only load
+ * their chunk on the first switch to them. While a heavy chunk (such as the whole code editor
+ * suite for Harness) downloads and evaluates, the UI stays "stuck on the previous page" for a
+ * while.
  *
- * 方案（与旧实现一致，改为注册表驱动）：
- * 1. 启动后的空闲时段分批提前 import 各 chunk（重 → 轻），首次切换时模块
- *    已求值完毕，直接渲染目标页面；
- * 2. 侧边栏悬停/聚焦时也提前加载对应 chunk，作为空闲预加载未完成时的兜底；
- * 3. 万一仍未就绪，Suspense 会展示对应页面的骨架屏（见 RouteSkeleton）。
+ * Approach (same as the previous implementation, but registry-driven):
+ * 1. During idle periods after startup, import each chunk in batches ahead of time (heavy to
+ *    light) so that by the first switch the module has already been evaluated and the target page
+ *    renders immediately;
+ * 2. Hovering/focusing an item in the sidebar also preloads its chunk, as a fallback while the
+ *    idle preload has not finished yet;
+ * 3. If it is still not ready, Suspense shows the skeleton screen for that page (see
+ *    RouteSkeleton).
  *
- * 插件化语义：任务列表来自宿主注册表中「已启用插件」的路由 loader，
- * 停用的插件不参与预加载。
+ * Plugin semantics: the task list comes from the route loaders of the "enabled plugins" in the
+ * host registry; disabled plugins do not take part in preloading.
  */
 
 export type LazyModule = () => Promise<{ default: unknown }>
 
 const inflight = new Map<string, Promise<void>>()
 
-/** 立即加载指定插件的 chunk；幂等，重复调用共享同一次加载 */
+/** Immediately load the chunk for the given plugin; idempotent, repeated calls share one load */
 export function preloadView(key: string, load: LazyModule): Promise<void> {
   const running = inflight.get(key)
   if (running) return running
   const task = load()
     .then(() => undefined)
     .catch((err) => {
-      // 预加载失败不阻塞使用：Suspense 仍会按需加载并显示骨架屏
+      // A failed preload does not block usage: Suspense still loads on demand and shows the skeleton
       console.warn(`[preload] Failed to preload view "${key}"`, err)
     })
   inflight.set(key, task)
@@ -36,8 +40,8 @@ export function preloadView(key: string, load: LazyModule): Promise<void> {
 const scheduledKeys = new Set<string>()
 
 /**
- * 启动后空闲预加载：按传入顺序分批（先重后轻由调用方排序），
- * 每个 key 只调度一次（插件在运行中重新启用后仍能补调度新 key）。
+ * Idle preloading after startup: batching in the given order (the caller sorts heavy to light),
+ * with each key scheduled only once (a plugin re-enabled at runtime can still schedule new keys).
  */
 export function scheduleViewPreload(tasks: { key: string; load: LazyModule }[]): void {
   let slot = 0

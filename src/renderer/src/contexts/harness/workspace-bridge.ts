@@ -2,47 +2,50 @@ import { createContext, useContext } from 'react'
 import type { ToolCardKind } from '../../../../shared/harness/types'
 
 /**
- * 聊天 → 右侧工作区面板的桥。
+ * Bridge from the chat to the workspace panel on the right.
  *
- * 为什么用 Context 而不是继续往下传 props：工具卡片渲染在 AssistantMessage 的
- * **块级渲染缓存**里（见 AssistantMessage.renderBlockAt：按块对象身份缓存 React 元素，
- * 缓存键只有主题/语言/颜色这些）。如果把回调当 props 传下去，回调换了身份也进不了
- * 缓存键，缓存里的旧节点会一直持有旧闭包（这是本项目踩过的坑）。放在 Context 里、
- * 由卡片组件自己订阅，就不存在这个失配：回调永远取到最新值，也不影响块缓存命中率。
+ * Why a Context instead of threading props further down: tool cards render inside
+ * AssistantMessage's **block-level render cache** (see AssistantMessage.renderBlockAt: React
+ * elements cached by block object identity, with a cache key of only theme/language/colors).
+ * Passing callbacks as props would not let a changed callback identity into the cache key, so a
+ * cached node would keep holding the old closure (a pitfall this codebase has hit). With a
+ * Context that the card components subscribe to themselves, there is no such mismatch: the
+ * callback is always the latest value, and block cache hit rate is unaffected.
  */
 
 export interface ToolDetailRequest {
-  /** 话题 id（主进程按 topicId + callId 定位结果详情） */
+  /** Topic id (the main process locates the result detail by topicId + callId) */
   topicId: number
-  /** 工具调用 id（tool.id） */
+  /** Tool call id (tool.id) */
   callId: string
-  /** 卡片语义分类：决定详情页签的呈现方式 */
+  /** Card semantic kind: determines how the detail tab is presented */
   kind: ToolCardKind
-  /** 页签名（命令 / 模式 / 路径）与页签内标题 */
+  /** Tab name (command / pattern / path) and the title inside the tab */
   title: string
-  /** execute：退出码 */
+  /** execute: exit code */
   exitCode?: number
-  /** 结果是否被截断（详情页签给出提示） */
+  /** Whether the result was truncated (the detail tab shows a hint) */
   truncated?: boolean
-  /** 命中数量等附加说明 */
+  /** Extra description such as the hit count */
   summary?: string
 }
 
 export interface WorkspaceBridge {
-  /** 打开虚拟路径指向的文件（read_file / write_file / edit_file 卡片） */
+  /** Open the file a virtual path points to (read_file / write_file / edit_file cards) */
   openFile: (virtualPath: string) => void
   /**
-   * 在右侧资源管理器中定位目录（ls 卡片）。
-   * 返回是否已定位——路径不在工作区内（如 /memories/...）时返回 false，卡片据此退回详情页签。
+   * Reveal a directory in the right-hand file explorer (ls card).
+   * Returns whether it was revealed — false when the path is outside the workspace
+   * (e.g. /memories/...), in which case the card falls back to the detail tab.
    */
   revealPath: (virtualPath: string) => boolean
-  /** 打开工具结果详情页签（glob / grep / execute 卡片） */
+  /** Open the tool result detail tab (glob / grep / execute cards) */
   openToolDetail: (request: ToolDetailRequest) => void
 }
 
 export const WorkspaceBridgeContext = createContext<WorkspaceBridge | null>(null)
 
-/** 取桥；未挂载 Provider 时返回 null（卡片仍可渲染，只是不可点击） */
+/** Read the bridge; returns null when no Provider is mounted (cards still render, just not clickable) */
 export function useWorkspaceBridge(): WorkspaceBridge | null {
   return useContext(WorkspaceBridgeContext)
 }

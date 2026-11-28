@@ -109,8 +109,8 @@ from the hub or from a local package, and both paths end in the same host instal
 - **Goals** — a long-running objective can be persisted on the topic; the goal bar shows phase
   (active / paused / blocked / complete) and round progress, and automatic continuations are
   rendered as their own rounds in the transcript. Typing `/` as the first character of the
-  composer opens the **command menu** (a grouped "Add" list in the style of the reference:
-  icon, title, command alias and description): **Goal** turns the composer into an objective
+  composer opens the **command menu** (a grouped "Add" list: icon, title, command alias and
+  description): **Goal** turns the composer into an objective
   input with a **round-limit** field (empty = the default 256), and the goal bar's `⋯` menu
   pauses, resumes, completes or clears the objective.
 - **Plan mode** — the same command menu's **Plan** entry toggles a per-topic mode (persisted
@@ -234,12 +234,10 @@ from the hub or from a local package, and both paths end in the same host instal
   Every create/claim/complete/update/delete is appended to a `team_task_event` log and the panel
   footer shows the most recent activity. Team membership
   is the existing subagent tree, not a separate agent type. Agent teamwork is opt-in per
-  conversation (enable/disable it from the composer's model menu; off by default, matching DSH), and
+  conversation (enable/disable it from the composer's model menu; off by default), and
   when disabled the `team_task_*` tools and team prompt section are not injected at all. The board
   is persisted as a per-topic JSON snapshot (`team_board`) and lazily rehydrated after a restart,
-  including task ids, revisions, owners and tombstones. See
-  [`docs/agent-teams-alignment.md`](docs/agent-teams-alignment.md) for the current status matrix
-  (subagent capabilities, configuration, Agent Teams, remaining gaps).
+  including task ids, revisions, owners and tombstones.
 - **Workflow orchestration** — a workflow tool lets the model write a JavaScript orchestration
   script (top-level `await`, `agent` / `pipeline` / `parallel` / `phase` / `log` / `args` hooks)
   that fans work out across many one-shot sub-agents, executed in a `node:vm` sandbox with no
@@ -552,7 +550,7 @@ runtime that covers exactly the capability surface this application needs:
   live in `runtime/harness/model-recovery.ts`. A provider that returns no text and no tool calls
   (an empty stream, or a gateway error page served with a 2xx status) is retried once with a
   **non-streaming** request before it is reported as an error, which keeps gateways whose streaming
-  implementation is broken working (this is the mode Spring AI uses by default). If both attempts
+  implementation is broken working (this is a common gateway default). If both attempts
   are empty, a `ModelEmptyResponseError` carrying the provider, model, `finish_reason` and both raw
   payloads is raised, so the real upstream failure is visible instead of a silent empty turn;
 - `graph.ts` — a minimal state-graph engine (`Annotation` / `StateGraph` / `START` / `END`), including
@@ -564,15 +562,15 @@ runtime that covers exactly the capability surface this application needs:
   AWS event-stream) and Cloudflare Workers AI.
 
 OpenAI-compatible providers are deliberately permissive, because gateways differ in the details:
-both base-URL conventions work (a bare host is probed with Spring AI's `/v1/chat/completions`
+both base-URL conventions work (a bare host is probed with `/v1/chat/completions`
 first, a versioned or custom path keeps the OpenAI SDK's `base_url + /chat/completions`), the
 stream parser accepts standard SSE, CR-only framing, bare NDJSON lines, JSON arrays and mislabeled
 content types, and a gateway that rejects optional fields (`stream_options`, `thinking`,
-`reasoning_effort`, …) with 400/422 gets one retry with a minimal, Spring-AI-equivalent request
+`reasoning_effort`, …) with 400/422 gets one retry with a minimal, broadly compatible request
 body before the error is reported.
 
-Plugins see the same implementation through `@host/main/ai/*`; the old `@langchain/*` specifiers are
-kept only as legacy aliases in the plugin host table so already-published plugins keep loading.
+Plugins see the same implementation through `@host/main/ai/*`; the legacy specifiers are
+kept only as aliases in the plugin host table so already-published plugins keep loading.
 
 ### Host contract
 
@@ -581,8 +579,8 @@ pointing into the core or the host UI are rewritten to `@host/**` specifiers, an
 host injects the single instances it already has:
 
 - **Main process** — `globalThis.__RB_HOST_RESOLVE__` resolves the host module table in
-  `src/main/plugins/runtime.ts` (`@host/main/**`, `@host/shared/**` and the legacy `@langchain/*`
-  aliases); other bare modules (electron, zod, drizzle, …) resolve to the host's own instances from
+  `src/main/plugins/runtime.ts` (`@host/main/**`, `@host/shared/**` and the legacy aliases); other
+  bare modules (electron, zod, drizzle, …) resolve to the host's own instances from
   the application root.
 - **Renderer** — an ESM bridge served from `plugin://host/ui.js?m=<key>` exposes 15 host UI
   modules (i18n, hooks, Markdown components, settings UI, routing skeletons, utilities) plus 8
@@ -822,7 +820,6 @@ RytenBench/
 │   └── sandbox/                      # Generated sandbox assets (not committed)
 ├── tests/                            # Offline regression tests (node:assert; scripts/run-all-tests.mjs)
 ├── scripts/                          # Test runners, self-tests and local tooling
-├── docs/audit-2026-11/               # 2026-11 architecture + health audit and optimization roadmap
 ├── drizzle/                          # Generated migrations and snapshots
 ├── build/                            # electron-builder resources (macOS entitlements)
 ├── .github/workflows/                # Release builds for Windows, macOS and Linux (on main)

@@ -1,11 +1,16 @@
 /**
- * `run_code` 工具（PTC：programmatic tool calling）——让模型写一段 JS，在 `node:vm` 里
- * 循环/过滤/聚合地调用**只读工具**，一次调用完成本来要多轮的工具编排。
+ * `run_code` tool (PTC: programmatic tool calling) — lets the model write a snippet of JS that
+ * calls **read-only tools** in loops/filters/aggregations inside `node:vm`, doing in one call what
+ * would otherwise take multiple rounds of tool orchestration.
  *
- * 安全边界（与持久终端同一规则）：`node:vm` 不是安全边界，所以
- * - 只在 `danger-full-access` 档放行（工具层强制校验，其它档返回本地化拒绝文本）；
- * - 桥接只暴露**只读类**工具（`classifyTool(name) === 'read'`），写/执行类不注入；
- * - 执行核心还有同步时限、整体时限、输出上限与工具调用上限（见 `run-code.ts`）。
+ * Security boundary (same rule as the persistent terminal): `node:vm` is not a security boundary,
+ * so
+ * - it is only allowed in the `danger-full-access` mode (enforced by the tool layer; other modes
+ *   return a localized refusal text);
+ * - the bridge exposes **read-only** tools only (`classifyTool(name) === 'read'`); write/execute
+ *   tools are not injected;
+ * - the execution core also has a synchronous time limit, an overall time limit, an output cap and
+ *   a tool-call cap (see `run-code.ts`).
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -20,7 +25,7 @@ import {
   type RunCodeBridge
 } from './run-code'
 
-/** 工具运行时上下文：话题与本次调用实际生效的档位 */
+/** Tool runtime context: topic and the permission mode actually in effect for this call */
 function contextOf(config: unknown): { topicId: number; mode: PermissionMode } {
   const cfg = config as
     | { configurable?: { topicId?: unknown; sandboxMode?: unknown } }
@@ -31,7 +36,7 @@ function contextOf(config: unknown): { topicId: number; mode: PermissionMode } {
   return { topicId, mode }
 }
 
-/** 档位名称本地化 */
+/** Localize the permission mode name */
 function modeLabel(texts: RunCodeTexts, mode: PermissionMode): string {
   if (mode === 'read-only') return texts.modeReadOnly
   if (mode === 'workspace-write') return texts.modeWorkspace
@@ -39,15 +44,16 @@ function modeLabel(texts: RunCodeTexts, mode: PermissionMode): string {
 }
 
 /**
- * 构造 run_code 工具。
+ * Build the run_code tool.
  *
- * @param availableTools 当前会话已装配的工具（运行时在**全部工具装配完成后**再建本工具，
- *   避免把自己也桥接进去）；桥接时按只读类过滤。
+ * @param availableTools tools already assembled for the current session (the runtime builds this
+ *   tool **after all tools are assembled** to avoid bridging itself); only read-only ones are
+ *   bridged.
  */
 export function buildRunCodeTool(options: {
   availableTools: StructuredToolInterface[]
 }): StructuredToolInterface {
-  // 只读、且不是 run_code 本身的工具才允许被代码调用
+  // Only read-only tools other than run_code itself may be called from code
   const bridgeable = options.availableTools.filter(
     (candidate) => candidate.name !== 'run_code' && classifyTool(candidate.name) === 'read'
   )
@@ -64,7 +70,7 @@ export function buildRunCodeTool(options: {
         return mainFormat(texts.tooLong, { max: RUN_CODE_MAX_CHARS })
       }
 
-      // 每个只读工具包装成 (args) => Promise<string>；schema 校验仍由各工具自己完成
+      // Wrap each read-only tool as (args) => Promise<string>; schema validation stays in the tool
       const bridge: RunCodeBridge = {}
       for (const candidate of bridgeable) {
         bridge[candidate.name] = async (args) => {
@@ -72,7 +78,7 @@ export function buildRunCodeTool(options: {
             const result = await candidate.invoke(args, config)
             return typeof result === 'string' ? result : JSON.stringify(result)
           } catch (err) {
-            // 工具参数校验失败等：作为普通值返回给模型代码，让它自己决定怎么处理
+            // Tool argument validation failures etc.: return as a plain value and let code decide
             return `[tool-error] ${err instanceof Error ? err.message : String(err)}`
           }
         }

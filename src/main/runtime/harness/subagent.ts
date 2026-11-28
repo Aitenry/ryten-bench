@@ -17,52 +17,59 @@ import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
 /**
- * 子代理（task 工具）— 替代 deepagents subagents + task 分派
+ * Subagent (task tool): delegates work to dedicated subagents.
  *
- * 机制：
- * - task 工具 schema 保持 deepagents 兼容（subagent_type / description / prompt）；
- * - 每次调用动态编译子代理子图（独立模型/工具/系统提示词 + 专属记忆 + 技能）；
- * - causeId 通过 config.configurable.toolCallId 注入（由工具节点写入）；
- * - 子图 token 级事件转发为 sub_* 记录，驱动前端子代理活动块；
- * - 模型按 'provider:model' 解析，失败回退主模型（依赖缺失 = 降级而非报错）；
- * - 子代理清单（名称/功能描述）动态注入 task 工具描述与 schema，
- *   主模型据此决定是否委托及选用哪个子代理（deepagents 同款行为）。
+ * Mechanics:
+ * - the task tool schema keeps the subagent_type / description / prompt fields;
+ * - every call dynamically compiles a subagent subgraph (independent model/tools/system
+ *   prompt + dedicated memory + skills);
+ * - causeId is injected through config.configurable.toolCallId (written by the tool node);
+ * - subgraph token-level events are forwarded as sub_* records, driving the frontend
+ *   subagent activity block;
+ * - the model is resolved from 'provider:model', falling back to the main model (a missing
+ *   dependency degrades instead of failing);
+ * - the subagent list (name/description) is injected dynamically into the task tool
+ *   description and schema, so the main model can decide whether to delegate and which
+ *   subagent to pick.
  */
 
-/** 子代理运行时上下文 */
+/** Subagent runtime context */
 export interface SubAgentRuntimeContext {
-  /** 子代理定义列表 */
-  /** 子代理定义列表（构造期快照：用于 task 工具描述/初始 schema） */
+  /** Subagent definition list */
+  /** Subagent definitions (construction-time snapshot: used for the task tool description / initial schema) */
   subAgents: SubAgentConfig[]
   /**
-   * 调用期重新解析子代理清单（主智能体刚用 agent_create 建好、或设置页刚改过配置时，
-   * 同一轮内的 task 调用必须看到最新配置，而不是构造 Runtime 时的快照）。
-   * 缺省 = 使用构造期快照（后台会话/工作流等无作者化能力的路径）。
+   * Re-resolve the subagent list at call time (when the main agent just created one with
+   * agent_create or the settings page just changed the config, a task call in the same
+   * turn must see the latest config rather than the snapshot taken when the Runtime was
+   * constructed).
+   * Default = use the construction-time snapshot (paths without authoring capability,
+   * such as background sessions / workflows).
    */
   reloadSubAgents?: () => Promise<SubAgentConfig[]>
-  /** 主代理模型（回退目标） */
+  /** Main agent model (fallback target) */
   mainModel: BaseChatModel
-  /** 按 'provider:model' 创建模型的回调（由 Runtime 注入） */
+  /** Callback that creates a model from 'provider:model' (injected by the Runtime) */
   resolveModel: (spec: string | undefined) => Promise<BaseChatModel | undefined>
-  /** spawn 时主模型描述符：随后台会话持久化，冷恢复回到同一模型 */
+  /** Main model descriptor at spawn time: persisted with background sessions so cold resume returns to the same model */
   mainModelDescriptor?: SubAgentMainModelDescriptor
-  /** 业务工具构建（按子代理声明的工具名） */
+  /** Business tool construction (by the tool names declared by the subagent) */
   buildTools: (subAgent: SubAgentConfig) => StructuredToolInterface[]
-  /** 记录队列引用（流式时注入） */
+  /** Record queue reference (injected while streaming) */
   queue: QueueRef
-  /** 溢出存储引用（与主图共享同一次请求的实例；子代理工具输出同样走溢出策略） */
+  /** Spill store reference (shared with the main graph for the same request; subagent tool output follows the same spill policy) */
   spillRef?: { current?: SpillStore }
-  /** 子代理图递归上限（由主运行时工程常量推导） */
+  /** Subagent graph recursion limit (derived from main runtime constants) */
   recursionLimit: number
-  /** 工具调用总次数上限（模型级「工具调用轮数」；与主图共用同一模型设置） */
+  /** Total tool call limit (the model-level "tool call rounds"; shares the same model setting as the main graph) */
   maxToolCalls: number
-  /** 子代理记忆存储根（<memoryPath>/workspace-<wsId>/，其下 sub-agents/<name>/memories/AGENTS.md） */
+  /** Subagent memory root (<memoryPath>/workspace-<wsId>/, under which sub-agents/<name>/memories/AGENTS.md) */
   memoryPath?: string
-  /** 技能目录（含 SKILL.md 的子目录即技能），子代理按声明的 skills 过滤 */
+  /** Skills directory (any subdirectory containing SKILL.md is a skill); subagents filter by their declared skills */
   skillsPath?: string
 }
 
-/** 子代理专属记忆文件（AGENTS.md），与旧版 deepagents 目录约定一致 */
+/** Subagent-specific memory file (AGENTS.md), consistent with the existing directory convention */
 function loadSubAgentMemory(memoryPath: string | undefined, name: string): string {
   if (!memoryPath) return ''
   const memoryFile = path.join(memoryPath, 'sub-agents', name, 'memories', 'AGENTS.md')
@@ -77,18 +84,20 @@ function loadSubAgentMemory(memoryPath: string | undefined, name: string): strin
   return ''
 }
 
-/** 子代理会话提示词构建所需的挂载路径（前台 spawn / 后台会话 / 冷恢复共用） */
+/** Mount paths needed to build the subagent session prompt (shared by foreground spawn / background sessions / cold resume) */
 export interface SubAgentPromptPaths {
   memoryPath?: string
   skillsPath?: string
 }
 
 /**
- * 构建子代理系统提示词：基础 systemPrompt + 专属记忆 + 技能段 + 团队协作段。
+ * Build the subagent system prompt: base systemPrompt + dedicated memory + skills section +
+ * team collaboration section.
  *
- * 抽成独立导出函数的原因：冷恢复（`subagent-resume.ts`）没有 `SubAgentRuntimeContext`
- * （没有主模型/工具构建器等运行时依赖），但必须用与前台/后台会话完全一致的提示词规则，
- * 否则恢复后的子代理行为会漂移。
+ * Extracted into a standalone export because cold resume (`subagent-resume.ts`) has no
+ * `SubAgentRuntimeContext` (no main model / tool builder and other runtime dependencies)
+ * yet must use exactly the same prompt rules as foreground/background sessions; otherwise
+ * the resumed subagent's behavior would drift.
  */
 export function buildSubAgentSessionPrompt(
   sa: SubAgentConfig,
@@ -116,7 +125,7 @@ export function buildSubAgentSessionPrompt(
   return prompt
 }
 
-/** 构建子代理系统提示词（运行时上下文版本；委托给共享实现） */
+/** Build the subagent system prompt (runtime-context version; delegates to the shared implementation) */
 function buildSubAgentSystemPrompt(
   ctx: SubAgentRuntimeContext,
   sa: SubAgentConfig,
@@ -129,7 +138,7 @@ function buildSubAgentSystemPrompt(
   )
 }
 
-/** 构建 task 工具描述：静态引导 + 子代理清单（名称 + 功能描述） */
+/** Build the task tool description: static guidance + subagent list (name + description) */
 function buildTaskDescription(subAgents: SubAgentConfig[]): string {
   if (subAgents.length === 0) {
     return 'Delegate complex work to a dedicated subagent. A subagent has its own system prompt and toolset, which suits subtasks that need focused handling. No subagent definitions are configured in this workspace yet: create one with agent_create (name/description/system_prompt/tools), then delegate to it with task.'
@@ -150,7 +159,7 @@ Usage rules:
 - A subagent's full output is shown to the user directly. Once the task finishes, just give a brief summary or wrap up; do not restate the detail the subagent already produced.`
 }
 
-/** 解析子代理图输入（systemPrompt + 任务消息） */
+/** Build the subagent graph input (systemPrompt + task message) */
 function buildSubAgentMessages(
   systemPrompt: string,
   prompt: string
@@ -158,7 +167,7 @@ function buildSubAgentMessages(
   return [new SystemMessage(systemPrompt), new HumanMessage(prompt)]
 }
 
-/** 子代理执行器：编译子图 → 流式执行 → 转发记录 → 返回最终文本 */
+/** Subagent executor: compile the subgraph → stream → forward records → return the final text */
 export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInterface {
   const availableNames =
     ctx.subAgents.length > 0
@@ -181,7 +190,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
   return tool(
     async ({ subagent_type, description, prompt, background }, config) => {
       const m = getAgentToolTexts()
-      // 调用期重新解析：agent_create / 设置页可能在 Runtime 构造之后刚改过配置
+      // Re-resolve at call time: agent_create / the settings page may have changed the config after the Runtime was constructed
       const subAgents = ctx.reloadSubAgents ? await ctx.reloadSubAgents() : ctx.subAgents
       const sa = subAgents.find((s) => s.name === subagent_type)
       if (!sa) {
@@ -191,8 +200,8 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
         })
       }
 
-      // 后台模式：启动可续接的子代理会话（send_message/list_agents/interrupt_agent 续接），
-      // 会话运行同时注册为同名后台任务（job_output/job_kill 监控）
+      // Background mode: start a continuable subagent session (continued via send_message/list_agents/interrupt_agent),
+      // and register the session run as a background job with the same name (monitored via job_output/job_kill)
       if (background) {
         const configurable = (config?.configurable ?? {}) as Record<string, unknown>
         const topicId = typeof configurable.topicId === 'number' ? configurable.topicId : 0
@@ -213,30 +222,30 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
       const causeId =
         ((config?.configurable as Record<string, unknown> | undefined)?.toolCallId as
           string | undefined) ?? 'unknown'
-      // 父图 configurable 里的 topicId：前台子代理同样要能读写本话题的共享任务板
+      // topicId from the parent graph's configurable: foreground subagents must also read/write this topic's shared task board
       const parentConfigurable = (config?.configurable ?? {}) as Record<string, unknown>
       const parentTopicId =
         typeof parentConfigurable.topicId === 'number' ? parentConfigurable.topicId : 0
       const queue = ctx.queue
       const push = (record: SubAgentRecord): void => queue.current?.push(record)
 
-      // sub_start：前端子代理活动块（started 由 toolCalls 流的 task 记录发出，此处供内容流标记）
+      // sub_start: frontend subagent activity block (started is emitted by the toolCalls stream's task record; this marks the content stream)
       push({ kind: 'sub_start', name: sa.name, causeId, description } satisfies SubAgentRecord)
 
       try {
-        // 模型解析（provider:model → 模型；失败回退主模型）
+        // Resolve the model (provider:model → model; fall back to the main model on failure)
         const model = (await ctx.resolveModel(sa.model)) ?? ctx.mainModel
 
-        // 工具：子代理声明的业务工具
+        // Tools: business tools declared by the subagent
         const tools = ctx.buildTools(sa)
-        // 系统提示词：基础提示词 + 专属记忆 + 技能段
+        // System prompt: base prompt + dedicated memory + skills section
         const systemPrompt = buildSubAgentSystemPrompt(
           ctx,
           sa,
           teamModeStore.isEnabled(parentTopicId)
         )
 
-        // 编译子代理子图（记录经 subagentCtx 包装为 sub_* 记录）
+        // Compile the subagent subgraph (records are wrapped as sub_* records via subagentCtx)
         const graph = buildAgentGraph({
           model,
           tools,
@@ -247,9 +256,9 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           maxToolCalls: ctx.maxToolCalls
         })
 
-        // 流式执行：转发 token / 推理 / 工具块为 sub_* 记录，并累积最终文本。
-        // 注意：messages 模式会把工具节点的 ToolMessage 也发出来，累积前必须过滤，
-        // 否则子代理最终输出会混入工具结果文本。
+        // Stream execution: forward tokens / reasoning / tool blocks as sub_* records and accumulate the final text.
+        // Note: messages mode also emits ToolMessages from tool nodes; they must be filtered before
+        // accumulating, otherwise tool result text would leak into the subagent's final output.
         const seenIndexes = new Set<number>()
         let fullText = ''
         try {
@@ -259,7 +268,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
               streamMode: ['messages'] as const,
               recursionLimit: ctx.recursionLimit,
               signal: config?.signal,
-              // 团队身份：前台子代理也作为 member 参与共享任务板（id 用派遣调用 id）
+              // Team identity: foreground subagents also join the shared task board as members (id = dispatch call id)
               configurable: {
                 topicId: parentTopicId,
                 teamAgent: { id: `task-${causeId}`, name: sa.name, isLead: false }
@@ -268,7 +277,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           )
           for await (const item of stream) {
             if (config?.signal?.aborted) break
-            // 迭代元素为 [mode, [message, metadata]] 元组
+            // Each iterated element is a [mode, [message, metadata]] tuple
             const [, payload] = item as readonly [string, [StreamMessageLike, unknown]]
             const chunk = payload[0]
             const chunkType = chunk._getType?.()
@@ -282,11 +291,11 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
 
           const output = fullText.trim() || m.subagent.noTextOutput
           push({ kind: 'sub_end', name: sa.name, causeId, output } satisfies SubAgentRecord)
-          // 返回给主模型的内容末尾附加抑制提示：子智能体完整输出已直接展示给用户，
-          // 主模型无需在最终回答中复述（否则出现「子智能体块 + 主内容」双份重复）。
+          // Append a suppression hint to the content returned to the main model: the subagent's full output
+          // is already shown to the user directly, so the main model need not restate it (otherwise the subagent block and main content would duplicate).
           return `${output}\n\n(The above is the complete output of subagent ${sa.name} and has already been shown to the user directly. Do not restate it in your final answer; just wrap up briefly.)`
         } catch (err) {
-          // 工具调用轮次耗尽：返回已生成的部分内容 + 收尾提示（而非「执行失败」）
+          // Tool call rounds exhausted: return the partial content generated so far + a closing hint (instead of "execution failed")
           const isRecursion =
             err instanceof GraphRecursionError || (err as Error)?.name === 'GraphRecursionError'
           if (isRecursion) {
@@ -306,7 +315,7 @@ export function createTaskTool(ctx: SubAgentRuntimeContext): StructuredToolInter
           return output
         }
       } catch (err) {
-        // 模型解析 / 建图等前置步骤失败（流式执行阶段的错误已由内层 catch 处理）
+        // Failures in prerequisite steps such as model resolution / graph construction (errors in the streaming phase are handled by the inner catch)
         const message = err instanceof Error ? err.message : String(err)
         logger.warn(`[SubAgent] ${sa.name} failed to initialize:`, err)
         const output = mainFormat(m.subagent.failed, { message })

@@ -1,17 +1,19 @@
 import { getMainLanguage } from './index'
 
 /**
- * MCP 资源工具（list_mcp_resources / list_mcp_resource_templates / read_mcp_resource）文案。
+ * Texts for the MCP resource tools (list_mcp_resources / list_mcp_resource_templates /
+ * read_mcp_resource).
  *
- * 与其它 `tool-results-*` 模块同一约定：中文是源语言，英文树用 `typeof` 约束。
- * 服务器返回的资源内容属于外部数据，不翻译、原样返回。
+ * Same convention as the other `tool-results-*` modules: Chinese is the source language and the
+ * English tree is checked with `typeof`.
+ * Resource content returned by the server is external data; it is returned verbatim, untranslated.
  */
 export const zhCNMcpToolTexts = {
   common: {
-    /** 没有连接任何服务器时给出的提示（列出可用的服务器名） */
+    /** Hint shown when no server is connected (lists the available server names) */
     unknownServer: '没有已连接的 MCP 服务器名为 "{{server}}"。当前已连接：{{servers}}',
     noServers: '当前没有已连接的 MCP 服务器。请先在「设置 → MCP」里添加并连接一台服务器。',
-    /** 服务器已连接，但没被本轮勾选（资源工具只允许读本轮启用的服务器） */
+    /** The server is connected but not selected for this turn (resource tools may only read servers enabled this turn) */
     notSelected: '服务器 "{{server}}" 不在本轮启用的 MCP 服务器里。本轮启用：{{servers}}',
     failed: '读取 MCP 服务器 "{{server}}" 失败: {{message}}'
   },
@@ -67,7 +69,7 @@ export const enUSMcpToolTexts: typeof zhCNMcpToolTexts = {
   }
 }
 
-/** 按当前界面语言取 MCP 资源工具文案 */
+/** Return the MCP resource tool texts for the current UI language */
 export function getMcpToolTexts(): typeof zhCNMcpToolTexts {
   return getMainLanguage() === 'en-US' ? enUSMcpToolTexts : zhCNMcpToolTexts
 }

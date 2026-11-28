@@ -1,11 +1,13 @@
 /**
- * `present` 的纯路径校验（无 electron / i18n 依赖，可离线测试）。
+ * Pure path validation for `present` (no electron / i18n dependencies, so it can be tested offline).
  *
- * 规则（与 DSH 的 present 一致：交付物必须是**已存在的工作区文件**）：
- * - 只接受工作区虚拟路径（`/docs/a.pdf`）或工作区相对路径（`docs/a.pdf`，自动补 `/`）；
- * - 拒绝绝对磁盘路径（`C:\...`、`/home/...` 在 Windows 上会被当成相对路径，因此按段校验）；
- * - 拒绝 `..` 逃逸出工作区；
- * - 文件必须存在且是普通文件。
+ * Rules (deliverables must be **existing workspace files**):
+ * - only workspace virtual paths (`/docs/a.pdf`) or workspace-relative paths (`docs/a.pdf`, with
+ *   the leading `/` added automatically) are accepted;
+ * - absolute disk paths are rejected (`C:\...` and `/home/...` would be treated as relative paths
+ *   on Windows, hence the per-segment validation);
+ * - `..` escaping the workspace is rejected;
+ * - the file must exist and be a regular file.
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -21,12 +23,12 @@ export type PresentPathResult =
   | { ok: true; virtualPath: string; realPath: string }
   | { ok: false; failure: PresentPathFailure }
 
-/** 把用户/模型给的路径归一化成工作区虚拟路径；失败返回失败原因 */
+/** Normalize a user/model supplied path into a workspace virtual path; on failure returns the reason */
 export function normalizePresentPath(raw: string, workspaceRoot?: string): PresentPathResult {
   const input = (raw ?? '').trim()
   if (!input) return { ok: false, failure: { code: 'empty' } }
 
-  // 统一分隔符；绝对磁盘路径（含盘符）一律拒绝
+  // Unify separators; reject any absolute disk path (including a drive letter)
   const unified = input.replace(/\\/g, '/')
   if (/^[a-zA-Z]:\//.test(unified)) {
     return { ok: false, failure: { code: 'escape', path: input } }

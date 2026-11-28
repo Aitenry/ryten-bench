@@ -3,35 +3,39 @@ import { MAX_EXEC_CHARS, MAX_FILE_CHARS } from '../../runtime/harness/tool-limit
 import type { ToolResultFacts } from '../../runtime/harness/tool-result-facts'
 
 /**
- * 内置工具结果的「前端投影」——决定一次工具调用有哪些内容会离开主进程。
+ * Frontend projection of built-in tool results — decides which parts of a tool call leave the main process.
  *
- * 背景（本次重构的动因）：内置文件/命令工具（read_file / write_file / edit_file /
- * ls / glob / grep / execute）的结果此前被**原样**发往渲染进程并原样落库，而聊天里
- * 这些工具走的是定制卡片（只显示路径/命令/计数）——也就是说，一份几十 KB 的
- * read_file 正文、一份整文件的 write_file 入参、几百条 grep 匹配，被完整地
- * 传输 + 存进数据库，却**从来没有人看**。一个工具密集轮次能白白搬运数 MB。
+ * Background (the motivation for this refactor): results of the built-in file/command tools (read_file /
+ * write_file / edit_file / ls / glob / grep / execute) used to be sent to the renderer **verbatim** and
+ * stored verbatim, while in chat these tools use custom cards (showing only path/command/count) — meaning a
+ * multi-KB read_file body, a whole-file write_file input, or hundreds of grep matches were fully transferred
+ * and written to the database, yet **nobody ever looked at them**. A tool-heavy turn could wastefully move
+ * several MB.
  *
- * 现在的口径：
- *  - 卡片需要的元信息 → `card`（路径、计数、行数、字节、退出码、失败原因）；
- *  - 需要看内容 → 点击卡片，在右侧面板打开真实文件（文件类工具）
- *    或结果详情页签（ls / glob / grep / execute，详情另存于 runtime/tool-output-store）；
- *  - 因此 `input` 只保留卡片必需的字段（write_file 的 content、edit_file 的
- *    old_string/new_string 这类大入参一律丢弃），`output` 一律置空。
+ * Current policy:
+ *  - metadata the card needs → `card` (path, count, line count, bytes, exit code, failure reason);
+ *  - content that needs viewing → click the card to open the real file in the right-side panel (file tools)
+ *    or the result details tab (ls / glob / grep / execute; details are stored separately in
+ *    runtime/tool-output-store);
+ *  - therefore `input` keeps only the fields the card needs (large inputs such as write_file content and
+ *    edit_file old_string/new_string are dropped entirely), and `output` is always empty.
  *
- * 安全网：**卡片生成不出来时保留一小段输出**（≤ FALLBACK_CHARS）。否则一旦出现
- * 未预期的调用形态（模型把参数名写错等），前端会看到一张既没有卡片、又没有内容的
- * 空块——宁可多传 2KB，也不能让错误从界面上消失。
+ * Safety net: **when no card can be built, keep a short slice of output** (≤ FALLBACK_CHARS). Otherwise, once
+ * an unexpected call shape shows up (e.g. the model misspells an argument name), the frontend would see an
+ * empty block with neither a card nor content — better to transfer 2KB extra than let errors vanish from the
+ * UI.
  *
- * 本模块保持零依赖（只用类型与常量），可被 node 离线回归脚本直接导入验证。
+ * This module stays dependency-free (types and constants only), so offline regression scripts can import it
+ * directly for verification.
  */
 
-/** 无卡片兜底时保留的输出上限（字符） */
+/** Max output kept when no card can be built (chars) */
 export const FALLBACK_OUTPUT_CHARS = 2_000
-/** 卡片摘要文本上限（字符） */
+/** Max card summary text length (chars) */
 const MESSAGE_CHARS = 200
-/** 需要另存结果详情的工具：卡片点开后在右侧面板查看 */
+/** Tools whose result details are stored separately: viewed in the right-side panel after opening the card */
 const DETAIL_TOOLS = new Set(['ls', 'glob', 'grep', 'execute'])
-/** 参与投影的工具（其余工具保持原样下发） */
+/** Tools that take part in projection (other tools are sent through unchanged) */
 export const PROJECTED_TOOLS = new Set([
   'read_file',
   'read_image',
@@ -45,22 +49,22 @@ export const PROJECTED_TOOLS = new Set([
 ])
 
 export interface ToolProjection {
-  /** 下发/落库用的输入（已裁剪到卡片所需） */
+  /** Input used for sending/persistence (already trimmed to what the card needs) */
   input: Record<string, unknown>
-  /** 下发/落库用的输出（内置工具一律为空串；无卡片时保留一小段兜底文本） */
+  /** Output used for sending/persistence (always an empty string for built-in tools; a short fallback slice is kept when there is no card) */
   output: string
-  /** 卡片数据 */
+  /** Card data */
   card?: ToolCard
-  /** 需要另存的结果详情原文（ls / glob / grep / execute） */
+  /** Raw result details to store separately (ls / glob / grep / execute) */
   detailText?: string
 }
 
-/** 非空字符串取用 */
+/** Use only non-empty strings */
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-/** 单行摘要：折叠空白 + 截断（卡片只展示一行） */
+/** Single-line summary: collapse whitespace + truncate (cards show one line only) */
 function clampLine(text: string | undefined, max = MESSAGE_CHARS): string | undefined {
   if (!text) return undefined
   const oneLine = text.replace(/\s+/g, ' ').trim()
@@ -68,7 +72,7 @@ function clampLine(text: string | undefined, max = MESSAGE_CHARS): string | unde
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine
 }
 
-/** 按白名单挑字段（丢弃 undefined） */
+/** Pick fields by allowlist (dropping undefined) */
 function pick(input: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of keys) {
@@ -78,7 +82,7 @@ function pick(input: Record<string, unknown>, keys: string[]): Record<string, un
   return out
 }
 
-/** 安全 JSON 解析（失败返回 null） */
+/** Safe JSON parse (returns null on failure) */
 function parseJson(text: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(text)
@@ -89,11 +93,11 @@ function parseJson(text: string): Record<string, unknown> | null {
 }
 
 /**
- * 裁剪工具**入参**（执行中/完成态共用）。
+ * Trim tool **input** (shared by the running and completed states).
  *
- * write_file 的 `content` 可能是整个文件（几百 KB~MB）；edit_file 的
- * `old_string`/`new_string` 同样可能是成段代码。前端卡片只需要路径，
- * 这两类大字段必须在进入 IPC 之前就丢掉。
+ * write_file's `content` may be an entire file (hundreds of KB to MB); edit_file's
+ * `old_string`/`new_string` may likewise be sizeable code blocks. The frontend card only needs the
+ * path, so these large fields must be dropped before they enter IPC.
  */
 export function projectToolInput(
   name: string,
@@ -106,7 +110,7 @@ export function projectToolInput(
     case 'read_image':
       return pick(raw, ['file_path'])
     case 'write_file': {
-      // content 是整份文件正文：只保留长度供卡片展示，正文本身不进 IPC/库
+      // content is the whole file body: keep only its length for the card, the body never enters IPC/storage
       const out = pick(raw, ['file_path'])
       if (typeof raw.content === 'string')
         out.content_bytes = Buffer.byteLength(raw.content, 'utf-8')
@@ -121,7 +125,7 @@ export function projectToolInput(
       return out
     }
     case 'apply_patch': {
-      // 补丁正文可能很长：只保留字节数供卡片展示，正文本身不进 IPC/库
+      // The patch body may be long: keep only its byte count for the card, the body never enters IPC/storage
       const out: Record<string, unknown> = {}
       if (typeof raw.input === 'string') out.patch_bytes = Buffer.byteLength(raw.input, 'utf-8')
       return out
@@ -140,12 +144,12 @@ export function projectToolInput(
 }
 
 /**
- * 构建一次工具调用的完整投影（完成态）。
+ * Build the full projection for one tool call (completed state).
  *
- * @param name    工具名
- * @param input   模型给出的入参
- * @param output  工具返回的原始文本（模型看到的那份）
- * @param facts   执行期登记的结构化事实（失败原因/字节/替换处数/行数），见 tool-result-facts
+ * @param name    Tool name
+ * @param input   Arguments supplied by the model
+ * @param output  Raw text returned by the tool (the copy the model sees)
+ * @param facts   Structured facts recorded during execution (failure reason/bytes/replacements/lines), see tool-result-facts
  */
 export function buildToolProjection(params: {
   name: string
@@ -157,7 +161,7 @@ export function buildToolProjection(params: {
   const input = projectToolInput(name, params.input)
   const error = str(facts?.error)
 
-  /** 兜底：没有卡片 → 保留一小段输出，别让内容凭空消失 */
+  /** Fallback: no card → keep a short slice of output so content does not vanish */
   const fallback = (): ToolProjection => ({
     input,
     output: output.length > FALLBACK_OUTPUT_CHARS ? output.slice(0, FALLBACK_OUTPUT_CHARS) : output,
@@ -168,8 +172,8 @@ export function buildToolProjection(params: {
     case 'read_file': {
       const path = str(params.input?.file_path)
       if (!path) return fallback()
-      // 截断判定：正常读取的正文不超过 MAX_FILE_CHARS；被截断时输出必然超过它
-      // （返回的是「前 N 字符 + 省略提示」）。工具另有 facts.truncated 时以其为准。
+      // Truncation check: a normal read body does not exceed MAX_FILE_CHARS; when truncated the output
+      // necessarily exceeds it (it is "first N chars + omission notice"). If facts.truncated is set, trust it.
       const truncated = facts?.truncated ?? output.length > MAX_FILE_CHARS
       const card: ToolCard = {
         kind: 'file',
@@ -187,8 +191,8 @@ export function buildToolProjection(params: {
     case 'write_file': {
       const path = str(params.input?.file_path)
       if (!path) return fallback()
-      // 写文件的返回值是一句很短的本地化确认文本（含路径与字节数），保留它没有成本，
-      // 也是「这次写入到底做了什么」的唯一记录
+      // write_file's return value is a very short localized confirmation text (path and byte count); keeping it
+      // costs nothing and is the only record of what this write actually did
       const card: ToolCard = {
         kind: 'file',
         path,
@@ -212,7 +216,7 @@ export function buildToolProjection(params: {
         status: error ? 'error' : 'ok',
         message: error ? clampLine(error) : clampLine(output),
         count: facts?.replacements,
-        // 替换处数 + 差异规模：一个说「改了几处」，一个说「文件实际变了多少行」
+        // Replacement count + diff size: one says "how many places changed", the other "how many lines actually changed"
         added: facts?.added,
         removed: facts?.removed
       }
@@ -233,7 +237,7 @@ export function buildToolProjection(params: {
     }
 
     case 'apply_patch': {
-      // 成功时输出是「补丁已应用（N 个文件）」+ 逐文件摘要：卡片一行摘要 + 差异规模
+      // On success the output is "patch applied (N files)" plus a per-file summary: one-line card summary + diff size
       const card: ToolCard = {
         kind: 'file',
         status: error ? 'error' : 'ok',
@@ -321,8 +325,9 @@ export function buildToolProjection(params: {
         }
       }
       if (!parsed) return fallback()
-      // 后台运行：工具立刻返回 jobId，没有退出码/stdout；卡片展示「后台 · job id」，
-      // 真正的状态与日志在顶部栏「后台任务」入口里（卡片不随任务更新，避免落库后失真）
+      // Background run: the tool returns a jobId immediately with no exit code/stdout; the card shows
+      // "background · job id", while the real status and logs live under Background Jobs in the top bar
+      // (the card is not updated with the job, to avoid drift after persistence)
       if (typeof parsed.jobId === 'string') {
         return {
           input,
@@ -345,7 +350,7 @@ export function buildToolProjection(params: {
         status: exitCode !== undefined && exitCode !== 0 ? 'error' : 'ok',
         exitCode,
         chars: stdout.length,
-        // 命令输出被 MAX_EXEC_CHARS 截断时，末尾带本地化省略提示；长度即可判定
+        // When command output is truncated by MAX_EXEC_CHARS, a localized omission notice is appended; length is enough to tell
         truncated: stdout.length > MAX_EXEC_CHARS,
         detail: true
       }
@@ -353,13 +358,13 @@ export function buildToolProjection(params: {
     }
 
     default:
-      // 非内置工具（mnemon_* / manage_* 等）：保持原样下发与落库，
-      // 它们自带条数上限，且前端要解析 JSON 渲染专属卡片
+      // Non-built-in tools (mnemon_* / manage_* etc.): sent through and persisted unchanged;
+      // they have their own count limits and the frontend parses their JSON to render dedicated cards
       return { input, output }
   }
 }
 
-/** 判断某次工具调用是否需要另存结果详情 */
+/** Whether a tool call needs its result details stored separately */
 export function needsDetailStore(name: string): boolean {
   return DETAIL_TOOLS.has(name)
 }

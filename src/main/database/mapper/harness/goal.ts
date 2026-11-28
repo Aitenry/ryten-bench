@@ -2,12 +2,12 @@ import { eq, sql } from 'drizzle-orm'
 import { withOrm } from '../../orm'
 import { harness_goals } from '../../schema'
 
-// --- 类型定义 ---
+// --- Type definitions ---
 
-/** 会话目标行（phase 的联合类型由 schema 的 $type 提供） */
+/** Session goal row (the union type of phase is provided by the schema's $type) */
 export type GoalRow = typeof harness_goals.$inferSelect
 
-/** 按话题读取当前目标（无则 null） */
+/** Read the current goal for a topic (null if absent) */
 export async function getGoalByTopic(topicId: number): Promise<GoalRow | null> {
   return withOrm('getGoalByTopic', async (db) => {
     const rows = await db
@@ -20,8 +20,8 @@ export async function getGoalByTopic(topicId: number): Promise<GoalRow | null> {
 }
 
 /**
- * 写入/覆盖目标（每个话题一行）。
- * 返回写入后的行。
+ * Write/overwrite the goal (one row per topic).
+ * Returns the written row.
  */
 export async function upsertGoal(
   row: Omit<GoalRow, 'created_at' | 'updated_at'>
@@ -48,7 +48,7 @@ export async function upsertGoal(
   })
 }
 
-/** 删除话题的目标（话题删除时级联清理） */
+/** Delete a topic's goal (cascades when the topic is deleted) */
 export async function deleteGoalByTopic(topicId: number): Promise<void> {
   await withOrm('deleteGoalByTopic', async (db) => {
     await db.delete(harness_goals).where(eq(harness_goals.topic_id, topicId))

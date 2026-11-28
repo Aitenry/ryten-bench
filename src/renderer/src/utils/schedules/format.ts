@@ -1,18 +1,20 @@
 /**
- * 定时任务页面用的纯格式化/计算（无 React 依赖，便于复用与阅读）。
+ * Pure formatting/computation for the schedules page (no React dependency, easy to reuse
+ * and read).
  *
- * 注意：规则「下一次触发」的计算与主进程 `schedule-core` 保持同一语义：
- * - once：给定时间（已经过去则视为过期）；
- * - every：现在 + N 分钟；
- * - daily：今天该时刻已过 → 明天。
- * 页面只用于**预览**，真正排期仍以主进程计算为准。
+ * Note: the "next trigger" rule keeps the same semantics as the main process's
+ * `schedule-core`:
+ * - once: the given time (already past counts as expired);
+ * - every: now + N minutes;
+ * - daily: if that time today has passed → tomorrow.
+ * The page only **previews**; actual scheduling is still computed by the main process.
  */
 import type { ScheduleView } from '../../api/harness'
 
-/** 两位数补零 */
+/** Zero-pad to two digits */
 const pad = (value: number): string => String(value).padStart(2, '0')
 
-/** 本地日期时间：`2026-11-28 09:00` */
+/** Local date-time: `2026-11-28 09:00` */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const date = new Date(iso)
@@ -22,14 +24,14 @@ export function formatDateTime(iso: string | null | undefined): string {
   )}:${pad(date.getMinutes())}`
 }
 
-/** 本地时间：`09:00` */
+/** Local time: `09:00` */
 export function formatClock(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** 相对今天：今天 / 明天 / 具体日期 */
+/** Relative to today: today / tomorrow / an explicit date */
 export function formatRelativeDay(iso: string | null, now = new Date()): string {
   if (!iso) return ''
   const date = new Date(iso)
@@ -44,7 +46,7 @@ export function formatRelativeDay(iso: string | null, now = new Date()): string 
   return `${formatDateTime(iso)}`
 }
 
-/** 下一个触发（预览用；与主进程语义一致，但不落库） */
+/** Next trigger (for preview only; same semantics as the main process, but never persisted) */
 export function computeNextRunPreview(
   when: ScheduleView['when'],
   now = new Date()

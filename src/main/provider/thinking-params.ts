@@ -1,33 +1,39 @@
 /**
- * 思考（thinking）与推理等级（reasoning effort）参数适配 —— 只负责「把统一设置翻译成各家参数」。
+ * Thinking mode / reasoning effort parameter adaptation - only responsible for "translating the
+ * unified settings into each vendor's parameters".
  *
- * 「哪些协议支持哪种参数」的判定在 shared/model-params（设置界面提示与主进程注入同源），
- * 这里只做参数组装：
+ * The decision of "which protocol supports which parameter" lives in shared/model-params (the
+ * settings UI hints and the main-process injection share one source); this file only assembles
+ * parameters:
  *
- * 思考模式（开/关）：
- * - Anthropic（含自定义端点的 Anthropic 兼容协议）：thinking.type = enabled/disabled
- *   （enabled 必须带 budget_tokens，且要小于 max_tokens）
- * - Ollama：think = true/false
- * - Google Gemini / Vertex：thinkingConfig.thinkingBudget（-1 动态预算 / 0 关闭）
- * - DeepSeek / 智谱 GLM / 火山方舟：thinking.type = enabled/disabled
- * - OpenRouter：reasoning.enabled = true/false
- * - 阿里云百炼 / 硅基流动 / Moonshot / 腾讯混元：enable_thinking = true/false
- * - 其余（OpenAI / xAI / Groq / Mistral / Bedrock / Cloudflare / LM Studio…）：
- *   未适配，一律不注入——宁可不生效，也不往请求体里塞对方不认识的字段导致 400
+ * Thinking mode (on/off):
+ * - Anthropic (including Anthropic-compatible protocols on custom endpoints): thinking.type =
+ *   enabled/disabled (enabled must carry budget_tokens, and it must be less than max_tokens)
+ * - Ollama: think = true/false
+ * - Google Gemini / Vertex: thinkingConfig.thinkingBudget (-1 dynamic budget / 0 off)
+ * - DeepSeek / Zhipu GLM / Volcano Ark: thinking.type = enabled/disabled
+ * - OpenRouter: reasoning.enabled = true/false
+ * - Alibaba Cloud Bailian / SiliconFlow / Moonshot / Tencent Hunyuan: enable_thinking = true/false
+ * - the rest (OpenAI / xAI / Groq / Mistral / Bedrock / Cloudflare / LM Studio…): not adapted,
+ *   never injected - better for it not to take effect than to put a field the other side does not
+ *   recognize into the request body and get a 400
  *
- * 推理等级（档位来自模型档案 capabilities.reasoning_effort_levels）：
- * - OpenAI 兼容族（OpenAI / xAI / DeepSeek / 智谱 / 火山 / 阿里 / 硅基 / 月之暗面 / 腾讯）：
- *   请求体 `reasoning_effort`（DeepSeek、智谱官方文档均为此字段）；
- *   其中「思考由 thinking.type / enable_thinking 开关」的协议顺带把开关翻到与档位一致
- *   （none = 放弃思考，其余档位 = 开启思考），避免同一请求里开关与档位自相矛盾
- * - OpenRouter：`reasoning.effort`
- * - Anthropic：`output_config.effort`（none 走 thinking.type = disabled）
- * - Gemini / Vertex：`thinkingConfig.thinkingLevel`（none 走 thinkingBudget = 0）
- * - Ollama：`think`（none = false，low/medium/high 直接给档位，其余档位 = true）
- * - 未适配的协议只记录不下发（设置界面会给出「仅记录」提示）
+ * Reasoning effort (the tiers come from the model profile's capabilities.reasoning_effort_levels):
+ * - OpenAI-compatible family (OpenAI / xAI / DeepSeek / Zhipu / Volcano / Alibaba / SiliconFlow /
+ *   Moonshot / Tencent): request body `reasoning_effort` (DeepSeek and Zhipu official docs both use
+ *   this field); for protocols where "thinking is toggled by thinking.type / enable_thinking", the
+ *   toggle is also flipped to match the tier (none = drop thinking, other tiers = enable thinking),
+ *   avoiding a request where the toggle and the tier contradict each other
+ * - OpenRouter: `reasoning.effort`
+ * - Anthropic: `output_config.effort` (none goes through thinking.type = disabled)
+ * - Gemini / Vertex: `thinkingConfig.thinkingLevel` (none goes through thinkingBudget = 0)
+ * - Ollama: `think` (none = false, low/medium/high pass the tier directly, other tiers = true)
+ * - unadapted protocols only record it without sending it (the settings UI shows a "recorded only"
+ *   hint)
  *
- * 优先级：同一请求里档位与模式冲突时**档位优先**（档位是更具体的设置），
- * 因此实现上先按 mode 组装、再用 effort 覆盖同名键。
+ * Priority: when the tier and the mode conflict in the same request, **the tier wins** (it is the
+ * more specific setting), so the implementation assembles by mode first and then overwrites the
+ * same-named keys with the effort.
  */
 
 import {
@@ -37,57 +43,58 @@ import {
   type ThinkingMode
 } from '../../shared/model-params'
 
-/** Anthropic 扩展思考的预算下限（Anthropic 要求 >= 1024） */
+/** Lower bound of the Anthropic extended-thinking budget (Anthropic requires >= 1024) */
 const ANTHROPIC_MIN_BUDGET = 1024
-/** Anthropic 扩展思考的预算上限（不设更高，避免吃掉输出预算） */
+/** Upper bound of the Anthropic extended-thinking budget (not set higher, to avoid eating the output budget) */
 const ANTHROPIC_MAX_BUDGET = 4096
 
 export interface ThinkingParamsInput {
-  /** 供应商协议标识（大小写不敏感） */
+  /** Provider protocol identifier (case-insensitive) */
   provider: string
-  /** 自定义端点是否走 Anthropic 兼容协议 */
+  /** Whether the custom endpoint uses the Anthropic-compatible protocol */
   anthropicFormat?: boolean
   mode: ThinkingMode
   /**
-   * 推理等级：null / undefined / 空串 = 用户没选。
-   * 没选时按模型档案的档位表取「中等思考」兜底（见 defaultReasoningEffort）；
-   * 连档位表都没有（模型没有思考档位）就不下发任何档位参数。
+   * Reasoning effort: null / undefined / empty string = the user did not choose. When not chosen,
+   * fall back to "medium thinking" from the model profile's tier table (see
+   * defaultReasoningEffort); if there is no tier table at all (the model has no thinking tiers), no
+   * tier parameter is sent.
    */
   effort?: string | null
-  /** 该模型档案声明的档位表（models-profile 的 capabilities.reasoning_effort_levels） */
+  /** The tier table declared by the model profile (capabilities.reasoning_effort_levels of models-profile) */
   effortLevels?: readonly string[] | null
-  /** 当前生效的输出上限（max_tokens 列，或模型档案的输出上限） */
+  /** Currently effective output limit (max_tokens column, or the output limit from the model profile) */
   maxTokens: number | null
 }
 
 export interface ThinkingParams {
-  /** 直接并入 ChatModel 构造参数的字段（Anthropic / Ollama / Google 用类字段接收） */
+  /** Fields merged directly into the ChatModel constructor arguments (Anthropic / Ollama / Google receive them as class fields) */
   fields?: Record<string, unknown>
-  /** 需要并入请求体的额外参数（OpenAI 兼容族走 modelKwargs） */
+  /** Extra parameters to merge into the request body (the OpenAI-compatible family goes through modelKwargs) */
   modelKwargs?: Record<string, unknown>
 }
 
-/** 参数累加器：fields / modelKwargs 两层都是「后写覆盖先写」 */
+/** Parameter accumulator: both layers, fields / modelKwargs, are "later writes overwrite earlier ones" */
 interface ParamsAccumulator {
   fields: Record<string, unknown>
   modelKwargs: Record<string, unknown>
   touched: boolean
 }
 
-/** Anthropic 扩展思考预算：卡在 [1024, 4096] 且必须小于 max_tokens */
+/** Anthropic extended-thinking budget: clamped to [1024, 4096] and must be less than max_tokens */
 function anthropicBudget(maxTokens: number | null): number {
   const cap = maxTokens ?? ANTHROPIC_MAX_BUDGET + ANTHROPIC_MIN_BUDGET
   return Math.max(ANTHROPIC_MIN_BUDGET, Math.min(ANTHROPIC_MAX_BUDGET, cap - ANTHROPIC_MIN_BUDGET))
 }
 
-/** 归一化档位：统一小写去空格（档案与界面都可能给出不同写法） */
+/** Normalize the tier: lowercase and trim (both the profile and the UI may give different spellings) */
 function normalizeEffort(effort: string | null | undefined): string {
   return String(effort ?? '')
     .trim()
     .toLowerCase()
 }
 
-/** 思考模式（开/关）参数：auto 与未适配的供应商都不写任何键 */
+/** Thinking-mode (on/off) parameters: auto and unadapted providers write no keys at all */
 function applyThinkingMode(acc: ParamsAccumulator, input: ThinkingParamsInput): void {
   const { mode, provider, anthropicFormat = false, maxTokens } = input
   if (mode === 'auto') return
@@ -102,7 +109,8 @@ function applyThinkingMode(acc: ParamsAccumulator, input: ThinkingParamsInput): 
         return
       }
       const budget = anthropicBudget(maxTokens)
-      // 开启思考必须留出比预算更大的输出额度，否则接口直接拒绝
+      // Enabling thinking must leave an output budget larger than the budget, otherwise the API
+      // rejects it outright
       acc.fields.thinking = { type: 'enabled', budget_tokens: budget }
       if (maxTokens == null || maxTokens <= budget) {
         acc.fields.maxTokens = budget + ANTHROPIC_MIN_BUDGET
@@ -143,10 +151,11 @@ function applyThinkingMode(acc: ParamsAccumulator, input: ThinkingParamsInput): 
   }
 }
 
-/** 推理等级参数：未设置档位且模型有档位表时按「中等思考」兜底；没有档位表就什么都不写 */
+/** Reasoning effort parameters: when no tier is set and the model has a tier table, fall back to "medium thinking"; no tier table means write nothing */
 function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput): void {
   const explicit = normalizeEffort(input.effort)
-  // 思考被显式关掉时不兜底：用户要的就是「别思考」，别在这里把它又打开
+  // Do not fall back when thinking is explicitly turned off: the user wants "no thinking", so do
+  // not turn it back on here
   const fallback = input.mode === 'off' ? null : defaultReasoningEffort(input.effortLevels)
   const effort = explicit || (fallback ?? '')
   if (!effort) return
@@ -160,7 +169,8 @@ function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput
 
   switch (family) {
     case 'reasoning-effort': {
-      // 「思考开关」与档位同源的协议：把开关翻到与档位一致（档位优先于 mode）
+      // Protocols where "the thinking toggle" is the same source as the tier: flip the toggle to
+      // match the tier (tier wins over mode)
       if (thinkingFamily === 'thinking-type') {
         acc.modelKwargs.thinking = { type: off ? 'disabled' : 'enabled' }
       } else if (thinkingFamily === 'enable-thinking') {
@@ -182,7 +192,7 @@ function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput
         acc.touched = true
         return
       }
-      // minimal 在 Anthropic 侧没有对应档位，映射到 low（其余档位原样下发）
+      // minimal has no corresponding tier on the Anthropic side; map it to low (other tiers are sent as-is)
       acc.fields.output_config = { effort: effort === 'minimal' ? 'low' : effort }
       acc.touched = true
       return
@@ -194,7 +204,7 @@ function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput
         acc.touched = true
         return
       }
-      // Gemini 的 thinkingLevel 只有 LOW/MEDIUM/HIGH 三档，两端各向外收敛
+      // Gemini's thinkingLevel has only three tiers, LOW/MEDIUM/HIGH, so both ends are pulled inward
       const level =
         effort === 'minimal' || effort === 'low' ? 'LOW' : effort === 'medium' ? 'MEDIUM' : 'HIGH'
       acc.fields.thinkingConfig = { thinkingLevel: level, includeThoughts: true }
@@ -215,8 +225,9 @@ function applyReasoningEffort(acc: ParamsAccumulator, input: ThinkingParamsInput
 }
 
 /**
- * 组装思考与推理等级参数。
- * auto（跟随模型默认配置）+ 未设置推理等级 + 未适配的供应商 ⇒ 返回 null（不注入任何字段）。
+ * Assemble thinking and reasoning-effort parameters.
+ * auto (follow the model's default config) + no reasoning effort set + unadapted provider => return
+ * null (inject no fields at all).
  */
 export function buildThinkingParams(input: ThinkingParamsInput): ThinkingParams | null {
   const acc: ParamsAccumulator = { fields: {}, modelKwargs: {}, touched: false }

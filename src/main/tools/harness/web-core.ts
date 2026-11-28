@@ -1,19 +1,21 @@
 /**
- * 联网工具核心：URL/SSRF 守卫、抓取、内容渲染、HTML 正文抽取与搜索结果解析。
+ * Web tool core: URL/SSRF guard, fetching, content rendering, HTML text extraction and search
+ * result parsing.
  *
- * 本文件刻意做成**无 electron / 无 i18n 依赖的单模块**：Node 的 TS 类型擦除要求相对
- * import 带扩展名，而项目源码统一用无扩展名 import（bundler 解析），所以可离线测试的
- * 纯逻辑必须收在同一个文件里（测试直接 import 本文件）。失败以结构化 code 返回，
- * 由 tools/harness/web.ts 负责本地化。
+ * This file is deliberately a **single module with no electron / no i18n dependencies**: Node's
+ * TS type stripping requires file extensions on relative imports, while project sources uniformly
+ * use extensionless imports (bundler resolution), so the offline-testable pure logic has to live
+ * in one file (tests import this file directly). Failures are returned as structured codes and
+ * localized by tools/harness/web.ts.
  */
 import * as cheerio from 'cheerio'
 import * as dns from 'node:dns/promises'
 
 // ============================================================================
-// 判定与解析（纯函数）
+// Detection and parsing (pure functions)
 // ============================================================================
 
-/** 把点分 IPv4 解析成 4 个 0-255 的整数；非法返回 null */
+/** Parse a dotted IPv4 into 4 integers in 0-255; returns null when invalid */
 function parseIpv4(ip: string): [number, number, number, number] | null {
   const parts = ip.split('.')
   if (parts.length !== 4) return null
@@ -22,7 +24,7 @@ function parseIpv4(ip: string): [number, number, number, number] | null {
   return nums as [number, number, number, number]
 }
 
-/** 判断一个 IPv4 字面量是否属于私有/保留网段 */
+/** Whether an IPv4 literal belongs to a private/reserved range */
 export function isPrivateIpv4(ip: string): boolean {
   const parsed = parseIpv4(ip)
   if (!parsed) return false
@@ -31,9 +33,10 @@ export function isPrivateIpv4(ip: string): boolean {
   if (a === 169 && b === 254) return true
   if (a === 172 && b >= 16 && b <= 31) return true
   if (a === 192 && b === 168) return true
-  // 运营商级 NAT（100.64.0.0/10）
+  // Carrier-grade NAT (100.64.0.0/10)
   if (a === 100 && b >= 64 && b <= 127) return true
-  // IETF 协议分配 / 文档示例 / 基准测试 / 组播 / 保留段（不会承载真实公网服务）
+  // IETF protocol assignments / documentation examples / benchmarking / multicast / reserved
+  // blocks (these never host real public services)
   if (a === 192 && b === 0 && (c === 0 || c === 2)) return true
   if (a === 198 && (b === 18 || b === 19)) return true
   if (a === 198 && b === 51 && c === 100) return true
@@ -43,8 +46,8 @@ export function isPrivateIpv4(ip: string): boolean {
 }
 
 /**
- * 解析 IPv6 为 8 个 16 位分组（支持 `::` 压缩、尾部内嵌 IPv4、`%zone`）。
- * 非法输入返回 null，由调用方按"非私有"处理（与旧行为一致）。
+ * Parse IPv6 into 8 16-bit groups (supports `::` compression, an embedded IPv4 tail and `%zone`).
+ * Invalid input returns null, which the caller treats as "not private" (same as the old behavior).
  */
 function parseIpv6(value: string): number[] | null {
   let text = value.split('%')[0]
@@ -69,31 +72,32 @@ function parseIpv6(value: string): number[] | null {
   return nums.some((n) => Number.isNaN(n)) ? null : nums
 }
 
-/** 把两个 16 位分组还原成点分 IPv4（仅供私有网段判定） */
+/** Reassemble two 16-bit groups into a dotted IPv4 (only used for private-range checks) */
 function ipv4FromGroups(high: number, low: number): string {
   return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
 }
 
-/** 判断一个 IP 字面量（v4/v6）是否私有/保留 */
+/** Whether an IP literal (v4/v6) is private/reserved */
 export function isPrivateIp(ip: string): boolean {
   const value = ip.trim().toLowerCase().replace(/^\[|\]$/g, '')
   if (!value.includes(':')) return isPrivateIpv4(value)
   const groups = parseIpv6(value)
   if (!groups) return false
-  // `::`（未指定地址）与 `::1`（回环）
+  // `::` (unspecified address) and `::1` (loopback)
   if (groups.every((group) => group === 0)) return true
   if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) return true
-  // fc00::/7（唯一本地地址，含 fd00::/8）与 fe80::/10（链路本地）
+  // fc00::/7 (unique local addresses, including fd00::/8) and fe80::/10 (link-local)
   if ((groups[0] & 0xfe00) === 0xfc00) return true
   if ((groups[0] & 0xffc0) === 0xfe80) return true
-  // fec0::/10（已废弃的站点本地地址）
+  // fec0::/10 (deprecated site-local addresses)
   if ((groups[0] & 0xffc0) === 0xfec0) return true
-  // IPv4 映射 `::ffff:a.b.c.d` / `::ffff:7f00:1` 与 IPv4 兼容 `::a.b.c.d`
+  // IPv4-mapped `::ffff:a.b.c.d` / `::ffff:7f00:1` and IPv4-compatible `::a.b.c.d`
   const v4Mapped = groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff
   const v4Compat =
     groups.slice(0, 6).every((group) => group === 0) && (groups[6] !== 0 || groups[7] > 1)
   if (v4Mapped || v4Compat) return isPrivateIpv4(ipv4FromGroups(groups[6], groups[7]))
-  // 64:ff9b::/96（NAT64）与 2002::/16（6to4）内嵌的 IPv4 同样按私有段判定
+  // IPv4 addresses embedded in 64:ff9b::/96 (NAT64) and 2002::/16 (6to4) are also checked
+  // against the private ranges
   if (groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((g) => g === 0)) {
     return isPrivateIpv4(ipv4FromGroups(groups[6], groups[7]))
   }
@@ -101,7 +105,7 @@ export function isPrivateIp(ip: string): boolean {
   return false
 }
 
-/** 私有/保留主机名（字面量判定：localhost、.local/.internal，以及私有 IP 字面量） */
+/** Private/reserved hostname (literal check: localhost, .local/.internal and private IP literals) */
 export function isPrivateHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (!host) return true
@@ -112,7 +116,7 @@ export function isPrivateHostname(hostname: string): boolean {
   return isPrivateIp(host)
 }
 
-/** 截断到上限，返回是否截断与原始长度 */
+/** Truncate to the limit; returns whether it was truncated and the original length */
 export function truncateText(
   text: string,
   max: number
@@ -121,7 +125,7 @@ export function truncateText(
   return { text: text.slice(0, max), truncated: true, total: text.length }
 }
 
-/** 判断响应类型（头部缺失时按内容前几个字节兜底） */
+/** Determine the response type (falls back to the first bytes of the body when the header is missing) */
 export function guessContentType(header: string | null, body: string): string {
   const declared = (header ?? '').split(';')[0].trim().toLowerCase()
   if (declared) return declared
@@ -132,10 +136,12 @@ export function guessContentType(header: string | null, body: string): string {
 }
 
 /**
- * HTML → 面向模型的 Markdown 文本（去脚本/导航/页脚，保留标题、段落、列表、代码块）。
+ * HTML -> model-facing Markdown text (drops scripts/navigation/footers, keeps headings,
+ * paragraphs, lists and code blocks).
  *
- * 不用 Readability + jsdom：项目没有 @types/jsdom，而 cheerio 已带类型、内存也更可控；
- * 抽取规则按常见正文结构（article/main/body）走，够用且可离线测试。
+ * Not reaching for Readability + jsdom: the project has no @types/jsdom, while cheerio ships its
+ * own types and keeps memory more predictable; extraction follows the common body structure
+ * (article/main/body), which is sufficient and testable offline.
  */
 export function extractReadableHtml(html: string): { title: string; text: string } {
   const $ = cheerio.load(html)
@@ -166,7 +172,8 @@ export function extractReadableHtml(html: string): { title: string; text: string
     const node = $(element)
     const tag = (element as { tagName?: string }).tagName?.toLowerCase() ?? ''
     if (!tag) return
-    // 嵌套结构只取最外层：pre 里的 p、li 里的 li 会重复正文
+    // For nested structures only keep the outermost node: a p inside pre or an li inside li
+    // would duplicate the text
     if (tag !== 'pre' && node.parents('pre').length > 0) return
     if (tag === 'li' && node.parents('li').length > 0) return
     if (tag === 'p' && node.parents('li, blockquote').length > 0) return
@@ -191,19 +198,19 @@ export function extractReadableHtml(html: string): { title: string; text: string
     else push(text)
   })
 
-  // 没有任何块级内容时退回整页纯文本（极端页面结构）
+  // Fall back to the page's plain text when there is no block-level content (extreme page layout)
   const text = lines.length > 0 ? lines.join('\n') : $('body').text().replace(/\s+/g, ' ').trim()
   return { title, text }
 }
 
-/** 一条搜索结果 */
+/** One search result */
 export interface SearchHit {
   title: string
   url: string
   snippet: string
 }
 
-/** 把 DuckDuckGo 的跳转链接还原成真实 URL */
+/** Restore a DuckDuckGo redirect link to its real URL */
 export function normalizeSearchHref(href: string): string {
   let value = href.trim()
   if (value.startsWith('//')) value = `https:${value}`
@@ -217,7 +224,7 @@ export function normalizeSearchHref(href: string): string {
   }
 }
 
-/** 解析 DuckDuckGo HTML 结果页 */
+/** Parse a DuckDuckGo HTML results page */
 export function parseDuckDuckGoResults(html: string, limit = 8): SearchHit[] {
   const $ = cheerio.load(html)
   const hits: SearchHit[] = []
@@ -236,24 +243,24 @@ export function parseDuckDuckGoResults(html: string, limit = 8): SearchHit[] {
 }
 
 // ============================================================================
-// 抓取（结构化失败，无本地化文案）
+// Fetching (structured failures, no localized text)
 // ============================================================================
 
-/** 一次抓取的最长时间（包含手动跟随的全部重定向） */
+/** Maximum duration of one fetch (including all manually followed redirects) */
 export const FETCH_TIMEOUT_MS = 20_000
-/** 手动跟随重定向的最大跳数（每跳都重新做私网校验，防止 302 到内网） */
+/** Maximum manual redirect hops (each hop re-runs the private-network check so a 302 to an internal host cannot slip through) */
 const MAX_REDIRECTS = 5
-/** 视为重定向的状态码 */
+/** Status codes treated as redirects */
 const REDIRECT_STATUS_CODES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
-/** 响应体上限（字节）：超过直接拒绝，避免把大文件读进内存 */
+/** Response body limit (bytes): anything larger is rejected so big files are never read into memory */
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-/** 返回给模型的正文上限（字符） */
+/** Content limit returned to the model (characters) */
 export const MAX_CONTENT_CHARS = 24_000
-/** 公共 UA：不少站点会拒绝空 UA 或明显的脚本 UA */
+/** Public UA: many sites reject an empty UA or an obviously scripted one */
 export const WEB_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 RytenBenchWebTool/1.0'
 
-/** 抓取失败的结构化原因（上层负责本地化） */
+/** Structured fetch failure reasons (localization is the caller's job) */
 export type WebFetchFailure =
   | { code: 'invalid-url'; url: string }
   | { code: 'blocked-private'; host: string }
@@ -263,32 +270,32 @@ export type WebFetchFailure =
   | { code: 'unsupported-type'; url: string; type: string }
 
 export interface WebFetchOptions {
-  /** 替换全局 fetch（离线测试） */
+  /** Replace the global fetch (offline tests) */
   fetchImpl?: typeof globalThis.fetch
-  /** 测试用：允许访问本地/内网地址（默认拒绝，防 SSRF） */
+  /** For tests: allow local/internal addresses (denied by default to prevent SSRF) */
   allowPrivateHosts?: boolean
-  /** 测试用：替换 DNS 解析 */
+  /** For tests: replace DNS resolution */
   lookup?: (host: string) => Promise<string[]>
 }
 
 export type WebFetchResult =
   | {
       ok: true
-      /** 最终地址（跟随重定向后） */
+      /** Final URL (after following redirects) */
       url: string
-      /** HTML 的 <title>/og:title；其它类型为空 */
+      /** HTML <title>/og:title; empty for other types */
       title: string
       contentType: string
-      /** 渲染后的模型可读正文（已截断） */
+      /** Rendered model-readable body (already truncated) */
       content: string
-      /** 渲染前的原始响应体（搜索结果解析用） */
+      /** Raw response body before rendering (used for search-result parsing) */
       raw: string
       truncated: boolean
       total: number
     }
   | { ok: false; failure: WebFetchFailure }
 
-/** 是否属于「模型能读」的内容类型 */
+/** Whether this is a content type the model can read */
 export function isReadableContentType(contentType: string): boolean {
   if (contentType.startsWith('text/')) return true
   if (contentType === 'application/json' || contentType.endsWith('+json')) return true
@@ -296,7 +303,7 @@ export function isReadableContentType(contentType: string): boolean {
   return false
 }
 
-/** 渲染响应体：HTML → Markdown 风格正文；JSON → 缩进；其余原样 */
+/** Render the response body: HTML -> Markdown-style text; JSON -> indented; others as-is */
 export function renderBody(contentType: string, body: string): string {
   if (contentType === 'text/html' || contentType === 'application/xhtml+xml') {
     return extractReadableHtml(body).text
@@ -311,7 +318,7 @@ export function renderBody(contentType: string, body: string): string {
   return body
 }
 
-/** 私有地址守卫：字面量 + DNS 解析结果都检查（默认拒绝，测试可放开） */
+/** Private-address guard: checks both the literal and the DNS resolution results (denied by default, tests can relax it) */
 async function checkPublicAddress(
   host: string,
   options: WebFetchOptions
@@ -324,7 +331,8 @@ async function checkPublicAddress(
       ? await options.lookup(host)
       : (await dns.lookup(host, { all: true })).map((entry) => entry.address)
   } catch {
-    // 解析失败交给 fetch 报错；这里不把 DNS 失败误判成私有地址
+    // Leave resolution failures for fetch to report; a DNS failure is not mistaken for a private
+    // address
     return null
   }
   for (const address of addresses) {
@@ -336,10 +344,10 @@ async function checkPublicAddress(
 }
 
 /**
- * 抓取一个 URL 并返回模型可读文本。
+ * Fetch one URL and return model-readable text.
  *
- * @param rawUrl 绝对地址（http/https）
- * @param options 测试注入点（fetch / DNS / 私有地址放行）
+ * @param rawUrl absolute URL (http/https)
+ * @param options test injection points (fetch / DNS / private-address allowlist)
  */
 export async function fetchReadable(
   rawUrl: string,
@@ -361,9 +369,10 @@ export async function fetchReadable(
   let response: Response
   let finalUrl = url
   try {
-    // 手动跟随重定向：fetch 的 redirect:'follow' 只在发起前校验一次 host，
-    // 公网页面 302 到 http://127.0.0.1/ 或云 metadata 时绕过 SSRF 守卫。
-    // 这里每一跳都重新做「字面量 + DNS 解析」校验，并限制跳数与协议。
+    // Follow redirects manually: fetch's redirect:'follow' validates the host only once before
+    // starting, so a public page could 302 to http://127.0.0.1/ or cloud metadata and bypass the
+    // SSRF guard. Here every hop re-runs the "literal + DNS resolution" check, and the hop count
+    // and protocol are limited.
     for (let hop = 0; ; hop += 1) {
       if (hop > MAX_REDIRECTS) {
         return {
@@ -389,7 +398,7 @@ export async function fetchReadable(
       if (!REDIRECT_STATUS_CODES.has(response.status)) break
       const location = response.headers.get('location')
       if (!location) break
-      // 重定向响应体不再需要：显式 cancel，避免占用连接
+      // The redirect body is no longer needed: cancel it explicitly to avoid holding the connection
       await response.body?.cancel().catch(() => undefined)
       let next: URL
       try {

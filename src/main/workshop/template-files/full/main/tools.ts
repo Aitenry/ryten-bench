@@ -6,12 +6,14 @@ import { createItem, deleteItem, listItems, updateItem } from './db/mapper'
 import { getToolTexts, toolDescriptions } from './tool-texts'
 
 /**
- * ${vars.title} 给助手的 AI 工具。
+ * AI tools that ${vars.title} exposes to the assistant.
  *
- * 两条规矩：
- * - 经 **工具贡献点**（HARNESS_TOOL_CONTRIBUTION）注册：插件停用时 harness 拉不到这条贡献，
- *   工具自然从模型面前消失（不需要去改宿主的工具表）；
- * - 工具读的是**本插件自己的 mapper**（与页面同一份数据），不跨插件直读别人的表。
+ * Two rules:
+ * - Registered through the **tool contribution point** (HARNESS_TOOL_CONTRIBUTION): when the
+ *   plugin is disabled the harness cannot see this contribution, so the tools vanish from the
+ *   model's view (no need to edit the host's tool table);
+ * - The tools read **this plugin's own mapper** (the same data as the page) and never reach
+ *   into another plugin's tables directly.
  */
 export const ITEM_TOOL_NAME = '${vars.itemsToolName}'
 

@@ -1,13 +1,14 @@
 ﻿/**
- * MCP 服务器配置的持久化（electron-store 的 `mcpServers` 键）。
+ * Persistence of MCP server configuration (the electron-store `mcpServers` key).
  *
- * 为什么与 harness 设置分开存：`HarnessSettings` 是「目录/工作区」这类全局项，
- * 而 MCP 是一份可增删的**列表**（含命令、环境变量、请求头等凭据），两者结构不同；
- * 与 `mainAgent` 同款——单独一个顶层键，不进 `harness` 对象。
+ * Why stored separately from harness settings: `HarnessSettings` holds global items such as
+ * directories/workspace, while MCP is an editable **list** (containing commands, environment
+ * variables, request headers and other credentials), so the two have different structures; like
+ * `mainAgent`, it is a separate top-level key rather than part of the `harness` object.
  *
- * 这个文件是全项目唯一读写 `mcpServers` 的地方：管理器（runtime/mcp.ts）通过
- * `configureMcp(readMcpServers)` 注入读取方法，因此管理器自身不必 import electron，
- * 可以离线跑回归。
+ * This file is the only place in the project that reads/writes `mcpServers`: the manager
+ * (runtime/mcp.ts) gets a read method injected via `configureMcp(readMcpServers)`, so the manager
+ * itself does not need to import electron and can run regression offline.
  */
 import { randomUUID } from 'node:crypto'
 import { settingsStore } from '../../context'
@@ -21,20 +22,20 @@ import {
 
 const STORE_KEY = 'mcpServers'
 
-/** 读取原始配置（形状不保证合法：历史数据/手改过的 store 都要容错） */
+/** Read the raw configuration (the shape is not guaranteed valid: historical data / hand-edited stores must be tolerated) */
 export function readMcpServers(): McpServerInput[] {
   const raw = settingsStore.get(STORE_KEY)
   return Array.isArray(raw) ? (raw as McpServerInput[]) : []
 }
 
-/** 规范化后的服务器列表（供管理器连接，顺序即用户排序） */
+/** Normalized server list (for the manager to connect; order is the user's ordering) */
 export function listMcpServerConfigs(): McpServerConfig[] {
   const out: McpServerConfig[] = []
   for (const item of readMcpServers()) {
     try {
       out.push(normalizeMcpServer(item))
     } catch {
-      // runtime/mcp.ts 的 listMcpServers 已经会告警一次，这里静默跳过
+      // listMcpServers in runtime/mcp.ts already warns once, so skip silently here
     }
   }
   return out
@@ -45,9 +46,10 @@ function writeMcpServers(servers: McpServerInput[]): void {
 }
 
 /**
- * 命名空间唯一性校验：工具名里只有净化后的服务器名（`mcp__<ns>__<tool>`），
- * 因此 "My Server" 与 "my-server" 会撞到同一个命名空间 —— 保存时直接挡住并给出可读提示，
- * 而不是等到工具清单里出现「后一个被忽略」这种难以察觉的行为。
+ * Namespace uniqueness check: tool names only contain the sanitized server name
+ * (`mcp__<ns>__<tool>`), so "My Server" and "my-server" collide on the same namespace — block it at
+ * save time with a readable message instead of waiting for the hard-to-notice behavior of "the
+ * latter one is ignored" in the tool list.
  */
 function assertNamespaceAvailable(name: string, excludeId?: string): void {
   const ns = mcpNamespace(name)
@@ -59,11 +61,12 @@ function assertNamespaceAvailable(name: string, excludeId?: string): void {
   }
 }
 
-/** 新增或更新一台服务器（input 带 id 且已存在 → 就地更新；否则新建并生成 id） */
+/** Add or update a server (input with an existing id → update in place; otherwise create and generate an id) */
 export function upsertMcpServer(input: McpServerInput): McpServerConfig {
   const raw = readMcpServers()
   const wantsUpdate = Boolean(input.id && raw.some((s) => s.id === input.id))
-  // 掩码还原要在规范化之前做：先拿回真实凭据，再按字段规则校验/落盘
+  // Mask restoration must happen before normalization: recover the real credentials first, then
+  // validate/persist according to the field rules
   const previous = wantsUpdate ? raw.find((s) => s.id === input.id) : undefined
   const config = normalizeMcpServer(restoreServerSecrets(input, previous))
   const id = wantsUpdate ? config.id : randomUUID()
@@ -78,17 +81,18 @@ export function upsertMcpServer(input: McpServerInput): McpServerConfig {
   return next
 }
 
-/** 删除一台服务器（其连接与工具随下一次刷新消失） */
+/** Delete a server (its connection and tools disappear on the next refresh) */
 export function removeMcpServer(id: string): void {
   writeMcpServers(readMcpServers().filter((s) => s.id !== id))
 }
 
-/** 只切启用态（列表行的开关；不动其余字段，避免把半填的配置写坏） */
+/** Toggle only the enabled state (the row switch; leave other fields untouched to avoid corrupting a half-filled config) */
 export function setMcpServerEnabled(id: string, enabled: boolean): McpServerConfig {
   const raw = readMcpServers()
   const index = raw.findIndex((s) => s.id === id)
   if (index < 0) throw new Error(`MCP server not found: ${id}`)
-  // 这里**不做掩码还原**：切开关不碰 env/headers，原值原样留在磁盘上
+  // **No mask restoration** here: toggling the switch does not touch env/headers, so the original
+  // values stay on disk as-is
   const next = normalizeMcpServer({ ...raw[index], id, enabled })
   raw[index] = next
   writeMcpServers(raw)
@@ -96,11 +100,12 @@ export function setMcpServerEnabled(id: string, enabled: boolean): McpServerConf
 }
 
 /**
- * 导入 mcp.json 形态的配置（Cursor / Claude Desktop / VS Code 都用这个形状）。
+ * Import an mcp.json-shaped configuration (the common shape used by MCP clients).
  *
- * 支持两种外壳：`{ "mcpServers": { "name": {...} } }` 与直接
- * `{ "name": {...} }`；条目内 `type`/`transport` 都认，缺省按 stdio。
- * 返回逐条结果——**部分成功也要能用**，失败原因逐条回报而不是整体失败。
+ * Two envelopes are supported: `{ "mcpServers": { "name": {...} } }` and a bare
+ * `{ "name": {...} }`; entries accept either `type` or `transport`, defaulting to stdio.
+ * Results are returned per entry — **partial success must remain usable**, so failures are reported
+ * entry by entry instead of failing the whole import.
  */
 export function importMcpServers(raw: unknown): {
   imported: string[]

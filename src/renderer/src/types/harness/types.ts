@@ -1,13 +1,14 @@
 import type { MessageBlock, ToolCall } from '../../../../shared/harness/types'
 
 /**
- * harness 插件的渲染层类型：**纯前端**的视图模型与展示形状。
+ * Renderer-layer types for the harness plugin: **pure frontend** view models and display shapes.
  *
- * 跨进程 DTO（消息块 / 工具卡片 / 各运行时视图行）在 `../shared/types.ts`——
- * 这里的类型只在渲染进程里构造与消费，不会经 IPC 传输，也不会落库。
+ * Cross-process DTOs (message blocks / tool cards / runtime view rows) live in
+ * `../shared/types.ts` — the types here are only constructed and consumed in the renderer process;
+ * they never travel over IPC and are never persisted.
  */
 
-/** 聊天消息（渲染端的会话模型：由库内的对话行 + 流式 chunk 组装而成） */
+/** Chat message (the renderer-side conversation model: assembled from stored dialogue rows + streaming chunks) */
 export interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -17,27 +18,31 @@ export interface Message {
   toolCalls?: ToolCall[]
   loading?: boolean
   reasoning_content?: string
-  /** 最后收到流式 chunk 的时间戳（渲染端瞬时字段，不落库；供静默指示判定） */
+  /** Timestamp of the last received streaming chunk (renderer-only transient field, not persisted; used to decide the silence indicator) */
   lastChunkAt?: number
   /**
-   * 该条助手消息在库里的对话行 id。
-   * 流式期间消息用的是临时 id，主进程保存后随 harness-stream-done 回传并写回这里，
-   * 用量行（harness_dialogue_usage.dialogue_id）靠它对上号，无需重新加载会话。
+   * The dialogue row id of this assistant message in the database.
+   * During streaming the message uses a temporary id; after the main process saves it, the id is
+   * sent back with harness-stream-done and written back here, so usage rows
+   * (harness_dialogue_usage.dialogue_id) can be matched up without reloading the conversation.
    */
   dialogueId?: number
   /**
-   * 「最终答复」在本条消息 `blocks` 数组里的下标集合（协议层真源，渲染端只读不猜）。
+   * Index set of the "final answer" within this message's `blocks` array (the protocol-layer
+   * source of truth; the renderer reads it but never guesses).
    *
-   * - `Set`：这些块是本轮的答复，渲染在任务折叠之外常显；
-   * - `null`：主进程明确说本轮没有答复（中止 / 只有工具与思考），或已撤回标记；
-   * - `undefined`：主进程没给结论（旧版本或异常路径）——保留旧的「整轮结束再摘」行为。
+   * - `Set`: these blocks are this turn's answer and are always shown outside the task fold;
+   * - `null`: the main process explicitly says there is no answer this turn (aborted / only tools
+   *   and reasoning), or the marker was withdrawn;
+   * - `undefined`: the main process gave no verdict (older version or an exceptional path) — keep
+   *   the old "extract once the whole turn ends" behavior.
    *
-   * 来源见 main/service/answer-boundary.ts 与主进程下发的 `answer` chunk。
+   * Origin: main/service/answer-boundary.ts and the `answer` chunk sent by the main process.
    */
   answer?: Set<number> | null
 }
 
-/** 附件（渲染端持有 dataUrl，不落库） */
+/** Attachment (the renderer holds the dataUrl; not persisted) */
 export interface Attachment {
   dataUrl: string
   fileName: string
@@ -45,11 +50,12 @@ export interface Attachment {
 }
 
 /**
- * 工具清单行（`harness:harness-get-tools` 的返回形状）。
+ * Tool list row (the return shape of `harness:harness-get-tools`).
  *
- * 主进程按 `mainMessages().tools` 的文案字典给每个工具补 `label`，`icon`/`color` 是设置页
- * 下拉项的展示元数据。原先借用 core 的 `resource/types/window` 里的 `ToolInfo`，
- * 那其实是 window/api 类型表里的遗留副本，随本轮收进插件自己的渲染层类型。
+ * The main process fills in `label` for each tool from the `mainMessages().tools` copy dictionary;
+ * `icon`/`color` are display metadata for the settings page dropdown. This used to borrow `ToolInfo`
+ * from core's `resource/types/window`, which was in fact a leftover copy in the window/api type
+ * table; it now lives in the plugin's own renderer-layer types.
  */
 export interface HarnessToolInfo {
   name: string
@@ -58,9 +64,10 @@ export interface HarnessToolInfo {
   icon: string
   color: string
   /**
-   * 来源标签：`system` = 随应用编译（本地工具 + 内置资料整理），`plugin` = 第三方插件贡献，
-   * `mcp` = 外部 MCP 服务器。主进程在 `harness-get-tools` 里写入；缺省不显示标签。
-   * 定义与主进程 `ToolSourceKind` 保持一致（`main/plugins/tool-contract.ts`）。
+   * Source tag: `system` = compiled with the app (local tools + built-in material organization),
+   * `plugin` = contributed by a third-party plugin, `mcp` = an external MCP server. The main
+   * process writes it in `harness-get-tools`; when absent, no tag is shown.
+   * Kept consistent with the main process `ToolSourceKind` (`main/plugins/tool-contract.ts`).
    */
   source?: 'system' | 'plugin' | 'mcp'
 }

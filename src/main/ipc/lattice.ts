@@ -44,16 +44,19 @@ import {
 } from '../lattice/types'
 
 /**
- * 插件中心 IPC（core，非插件；契约 §3）。
+ * Plugin center IPC (core, not a plugin).
  *
- * 全部走 `ipcMain.handle`：
- * - 登录/登出/me/基址/同步/上传/安装在**业务层**就把失败归一成可展示文本，
- *   需要事务结果的方法返回 `{ok:false,error}`（不把异常抛到渲染层）；
- * - 列表/详情这类「读」接口按契约直接返回数据，失败抛错由渲染层兜；
- * - 事件（state-changed / upload-progress / sync-state）在 lattice/index.ts 广播，
- *   这里只负责通道注册与参数校验。
+ * Everything goes through `ipcMain.handle`:
+ * - Login/logout/me/base URL/sync/upload/install normalize failures into displayable text in the
+ *   **business layer**; methods needing a transaction result return `{ok:false,error}` (exceptions
+ *   are not thrown to the renderer);
+ * - Read interfaces such as list/detail return data directly, and failures are thrown for the
+ *   renderer to handle;
+ * - Events (state-changed / upload-progress / sync-state) are broadcast in lattice/index.ts; this
+ *   file only handles channel registration and argument validation.
  *
- * 参数一律做运行时校验：IPC 入参来自渲染进程，不能假设形状正确。
+ * All arguments are validated at runtime: IPC input comes from the renderer process, so its shape
+ * must not be assumed.
  */
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -68,7 +71,7 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 }
 
-/** `lattice:login` 入参：`{baseUrl?,username,password}` */
+/** `lattice:login` input: `{baseUrl?,username,password}` */
 function normalizeLoginInput(raw: unknown): LatticeLoginInput | null {
   const record = asRecord(raw)
   if (!record) return null
@@ -79,7 +82,7 @@ function normalizeLoginInput(raw: unknown): LatticeLoginInput | null {
   return baseUrl ? { baseUrl, username, password } : { username, password }
 }
 
-/** `lattice:hub-list` 入参：`{q?,category?,sort?,page?,pageSize?}` */
+/** `lattice:hub-list` input: `{q?,category?,sort?,page?,pageSize?}` */
 function normalizeListQuery(raw: unknown): LatticeListQuery {
   const record = asRecord(raw)
   if (!record) return {}
@@ -98,9 +101,10 @@ function normalizeListQuery(raw: unknown): LatticeListQuery {
 }
 
 /**
- * `lattice:sync` 入参归一化：
- * - 契约 v1 `{direction}` / 裸字符串 `'push'|'pull'|'both'`；
- * - v3 扩展 `{direction, installMissing?}`（本次 pull 是否自动补齐缺失插件；缺省跟随设置项）。
+ * `lattice:sync` argument normalization:
+ * - `{direction}` / bare string `'push'|'pull'|'both'`;
+ * - extended form `{direction, installMissing?}` (whether this pull auto-installs missing plugins;
+ *   defaults to the setting).
  */
 function normalizeSyncInput(raw: unknown): LatticeSyncOptions {
   if (typeof raw === 'string') {
@@ -121,7 +125,7 @@ function normalizeSyncInput(raw: unknown): LatticeSyncOptions {
   return options
 }
 
-/** `lattice:uploadSource` 入参：契约是 `{source, sourcePath?}`；也接受裸路径字符串 */
+/** `lattice:uploadSource` input: `{source, sourcePath?}`; a bare path string is also accepted */
 function normalizeUploadSource(raw: unknown): { source: string; sourcePath?: string } | null {
   if (typeof raw === 'string') return raw.trim() !== '' ? { source: raw } : null
   const record = asRecord(raw)
@@ -132,8 +136,8 @@ function normalizeUploadSource(raw: unknown): { source: string; sourcePath?: str
 }
 
 /**
- * `lattice:hub-install` 入参：契约是 `(pluginId, version?)`；同时兼容
- * `{pluginId|plugin_id, version?}`（渲染层封装不同写法时不至于直接失效）。
+ * `lattice:hub-install` input: `(pluginId, version?)`; also accepts `{pluginId|plugin_id,
+ * version?}` (so alternative renderer wrappers do not break outright).
  */
 function normalizeInstallArgs(
   pluginIdRaw: unknown,
@@ -152,8 +156,9 @@ function normalizeInstallArgs(
 }
 
 /**
- * 登录前若传了基址：先落地，并处理「换服务器 = 旧 token 作废」。
- * 返回错误文本表示这次登录不能继续（如设置被环境变量锁死）。
+ * If a base URL is passed before login: persist it first and handle "server switch = old token
+ * invalidated". Returning error text means this login cannot continue (e.g. the setting is locked
+ * by an environment variable).
  */
 function applyLoginBaseUrl(baseUrl: string): string | null {
   const previous = settings.getLatticeBaseUrl()
@@ -161,8 +166,9 @@ function applyLoginBaseUrl(baseUrl: string): string | null {
   if (normalized !== previous) {
     const hadSession = session.hasLatticeSession()
     session.clearLatticeSession()
-    // 不清 lattice-sync.json：账号级数据空间按「基址+用户」分容器，
-    // 旧账号的 rev 缓存留在旧容器里，换服务器不会污染新账号；切空间在重启时完成。
+    // lattice-sync.json is not cleared: account-level data spaces are partitioned by "base URL +
+    // user", so the old account's rev cache stays in the old container and switching servers does
+    // not pollute the new account; the space switch happens on restart.
     logger.info(
       `[Lattice] Base URL switched before login: ${previous} -> ${normalized}${hadSession ? ' (old session cleared)' : ''}`
     )
@@ -177,7 +183,8 @@ function applyLoginBaseUrl(baseUrl: string): string | null {
 }
 
 /**
- * 单个插件 id 入参：契约是裸字符串；也兼容 `{pluginId|plugin_id}`（渲染层封装不同写法时不至于失效）。
+ * Single plugin id input: a bare string; `{pluginId|plugin_id}` is also accepted (so alternative
+ * renderer wrappers do not break).
  */
 function normalizePluginIdArg(raw: unknown): string | null {
   if (typeof raw === 'string') {
@@ -190,10 +197,11 @@ function normalizePluginIdArg(raw: unknown): string | null {
 }
 
 /**
- * `lattice:republish` 入参：`{pluginId, version, changelog?, sourceDir?}`。
+ * `lattice:republish` input: `{pluginId, version, changelog?, sourceDir?}`.
  *
- * 同时兼容下划线写法（`plugin_id`/`source_dir`）；版本号是否合法/递增由业务层与平台校验
- * （业务层的错误是可读中文，直接返回给界面）。
+ * Underscore naming (`plugin_id`/`source_dir`) is also accepted; whether the version is valid /
+ * increasing is validated by the business layer and the platform (business-layer errors are
+ * readable text and are returned to the UI directly).
  */
 function normalizeRepublishInput(raw: unknown): LatticeRepublishInput | null {
   const record = asRecord(raw)
@@ -227,7 +235,8 @@ export function registerLatticeIpc(): void {
           return { ok: false, error: blocked }
         }
       }
-      // 换号场景：先尽力吊销旧账号的 refresh（失败不影响新登录）
+      // Account switch: revoke the old account's refresh token on a best-effort basis (a failure
+      // does not block the new login)
       if (session.hasLatticeSession()) {
         try {
           await client.logoutLattice()
@@ -243,9 +252,10 @@ export function registerLatticeIpc(): void {
       broadcastLatticeStatus()
       logger.info(`[Lattice] IPC login succeeded: ${result.user.username}`)
 
-      // 换号（包括未登录 → 登录、A → B）：本机数据空间要按新账号换一套。
-      // 现在可以**原地切换**（不重启应用）：先悬停/对调/重连，再刷新主窗口；
-      // 条件不满足（初始化还没完成）或切换失败时，live.ts 内部会回退成 app.relaunch()。
+      // Account switch (including logged out -> login, A -> B): the local data space must change
+      // along with the new account. This can now happen **in place** (no app restart):
+      // suspend/swap/reconnect, then refresh the main window; when preconditions are not met
+      // (initialization not finished) or the switch fails, live.ts falls back to app.relaunch().
       const nextKey = deriveProfileKey({
         loggedIn: true,
         userId: result.user.id,
@@ -260,7 +270,8 @@ export function registerLatticeIpc(): void {
           reason: `login ${result.user.username}`,
           targetKey: nextKey
         })
-        // 正在切换（并发登录）等罕见情况：如实报错，别让界面以为已经换好号了
+        // Rare cases such as a switch already in progress (concurrent login): report the error
+        // honestly instead of letting the UI believe the account was switched
         if (!switched.ok && !switched.restarted) {
           return { ok: false, error: switched.error ?? '账号数据空间切换失败' }
         }
@@ -273,7 +284,7 @@ export function registerLatticeIpc(): void {
         }
       }
 
-      // 登录后 pull 一次（后台执行；结果通过 lattice:sync-state 广播）
+      // Pull once after login (in the background; the result is broadcast via lattice:sync-state)
       void sync.syncLattice('pull')
       return {
         ok: true,
@@ -295,12 +306,13 @@ export function registerLatticeIpc(): void {
     } catch (err) {
       logger.warn('[Lattice] Logout error (local session already cleared):', err)
     }
-    // 登出后不该再有一次「未登录」的失败 push 冲掉状态
+    // After logout there must not be another failed "logged out" push that overwrites the state
     sync.cancelPendingLatticePush()
     setLatticeLastError(null)
     broadcastLatticeStatus()
-    // 登出 = 回未登录的本地空间（anonymous）：原地对调 + 刷新界面，不重启应用。
-    // 切换失败/条件不满足时 live.ts 回退成重启（旧行为）。
+    // Logout = return to the logged-out local space (anonymous): swap in place and refresh the UI
+    // without restarting the app. If the switch fails or preconditions are unmet, live.ts falls
+    // back to restarting the app, as before.
     const active = getActiveProfileKey()
     if (isAccountProfileReady() && active !== null && active !== ANONYMOUS_PROFILE) {
       const switched = await switchAccountProfile({
@@ -308,9 +320,11 @@ export function registerLatticeIpc(): void {
         targetKey: ANONYMOUS_PROFILE
       })
       /**
-       * 切换失败（不是「需要重启」）时不能报成功：本地会话已经清了，但数据空间仍停在
-       * 旧账号上——界面必须告诉用户「退出没完成」，否则他会在未登录状态继续写旧账号容器。
-       * 需要重启的路径（restarted）算成功：应用马上回来，启动时会按无会话落到 anonymous。
+       * A failed switch (not "restart required") must not be reported as success: the local session
+       * is already cleared but the data space still belongs to the old account, so the UI must tell
+       * the user the logout did not finish; otherwise they keep writing into the old account
+       * container while logged out. The restart path (restarted) counts as success: the app comes
+       * right back and lands in anonymous at startup because there is no session.
        */
       if (!switched.ok && !switched.restarted) {
         return {
@@ -338,8 +352,10 @@ export function registerLatticeIpc(): void {
   })
 
   /**
-   * 基址变更会连带切回 anonymous 数据空间（可能 await 原地切换），所以单独声明并标注返回类型，
-   * 注册处只做一次转发（超长签名会让 ipcMain.handle 那行被格式化拆成三行）。
+   * Changing the base URL also switches back to the anonymous data space (possibly awaiting an
+   * in-place switch), so this is declared separately with an explicit return type and the
+   * registration site only forwards once (a very long signature would make the ipcMain.handle line
+   * wrap into three lines).
    */
   const handleSetBaseUrl = async (raw: unknown): Promise<LatticeSetBaseUrlResult> => {
     if (typeof raw !== 'string' || raw.trim() === '') {
@@ -351,8 +367,9 @@ export function registerLatticeIpc(): void {
       if (normalized !== previous) {
         const hadSession = session.hasLatticeSession()
         if (hadSession) session.clearLatticeSession()
-        // 账号级数据空间按「基址+用户」分容器：旧账号的数据/rev 留在旧容器里，
-        // 这里原地回到 anonymous 空间（不重启应用），随后刷新主窗口。
+        // Account-level data spaces are partitioned by "base URL + user": the old account's data
+        // and rev stay in the old container, so return to the anonymous space in place (no app
+        // restart) and then refresh the main window.
         setLatticeLastError(null)
         logger.info(
           `[Lattice] Base URL switched: ${previous} -> ${normalized}${hadSession ? ' (old session cleared)' : ''}`
@@ -403,10 +420,11 @@ export function registerLatticeIpc(): void {
         return await hub.getLatticeHubDetail(pluginId.trim())
       } catch (err) {
         /**
-         * 404 = 这个插件没有发布到平台（本地安装 / 平台已删除），是详情页的正常状态，
-         * 不是 IPC 故障：返回 null 让页面按「尚未发布」渲染。
-         * 之前直接抛错，Electron 会把每次打开本地插件详情都打成一条
-         * `Error occurred in handler for 'lattice:hub-detail': ... 404`，刷满主进程日志。
+         * 404 = the plugin was not published to the platform (installed locally / removed from the
+         * platform), which is a normal state of the detail page, not an IPC failure: return null so
+         * the page renders it as "not yet published". Throwing here made Electron log an
+         * `Error occurred in handler for 'lattice:hub-detail': ... 404` line on every open of a
+         * local plugin's details, flooding the main-process log.
          */
         if (err instanceof client.LatticeApiError && err.status === 404) return null
         throw err
@@ -415,8 +433,9 @@ export function registerLatticeIpc(): void {
   )
 
   /**
-   * 直接发布**本机已安装**的插件（安装包 + 源码）：详情页「发布到插件中心」走这里，
-   * 不再弹系统目录选择框让用户自己找一遍安装目录。
+   * Publish a **locally installed** plugin directly (package + source): the detail page's "publish
+   * to plugin center" uses this instead of showing a system directory picker and making the user
+   * find the install directory again.
    */
   ipcMain.handle(
     LATTICE_IPC.hubPublishInstalled,
@@ -453,7 +472,10 @@ export function registerLatticeIpc(): void {
     }
   })
 
-  /** 选「安装包目录 + 源码目录」两个目录后发布（源码与安装包是两份不同的 zip） */
+  /**
+   * Pick both the package directory and the source directory, then publish (the source and the
+   * package are two separate zips).
+   */
   ipcMain.handle(LATTICE_IPC.hubPickUploadWithSource, async (): Promise<LatticeUploadResult> => {
     try {
       return await hub.pickAndUploadLatticePackageWithSource()
@@ -484,9 +506,9 @@ export function registerLatticeIpc(): void {
 
   ipcMain.handle(LATTICE_IPC.hubInstalls, () => ({ items: sync.listLatticeLocalInstalls() }))
 
-  // ---------- 源码生命周期（契约 v2 §2） ----------
+  // ---------- Source lifecycle ----------
 
-  /** 当前源码目录（path/version/managed；没有源码返回 `{path:null}`） */
+  /** Current source directory (path/version/managed; `{path:null}` when there is no source) */
   ipcMain.handle(
     LATTICE_IPC.sourcePath,
     (_event, pluginIdRaw: unknown): LatticeSourcePathResult => {
@@ -501,7 +523,10 @@ export function registerLatticeIpc(): void {
     }
   )
 
-  /** 本机已安装插件包目录（userData/plugins/<id>，本地安装后发布用） */
+  /**
+   * Locally installed plugin package directory (userData/plugins/<id>; used for publishing after a
+   * local install).
+   */
   ipcMain.handle(
     LATTICE_IPC.localSourcePath,
     (_event, pluginIdRaw: unknown): LatticeLocalSourcePathResult => {
@@ -517,8 +542,10 @@ export function registerLatticeIpc(): void {
   )
 
   /**
-   * 在对话中修改：为源码目录建/复用插件工作区并开一条插件会话；做不到就回退文件管理器。
-   * 返回 `{ok:true,workspaceId,topicId}` 或 `{ok:true,opened:'folder'}`（如实，不假装开了对话）。
+   * Edit in a conversation: create or reuse a plugin workspace for the source directory and open a
+   * plugin topic; fall back to the file manager if that is not possible. Returns
+   * `{ok:true,workspaceId,topicId}` or `{ok:true,opened:'folder'}` (honest: it never pretends a
+   * conversation was opened).
    */
   ipcMain.handle(
     LATTICE_IPC.openSource,
@@ -535,7 +562,9 @@ export function registerLatticeIpc(): void {
     }
   )
 
-  /** 重新发布新版本（安装包 + 源码同包上传；409 转可读错误） */
+  /**
+   * Republish a new version (package + source uploaded together; a 409 becomes a readable error).
+   */
   ipcMain.handle(
     LATTICE_IPC.republish,
     async (_event, raw: unknown): Promise<LatticeRepublishResult> => {
@@ -545,7 +574,9 @@ export function registerLatticeIpc(): void {
     }
   )
 
-  /** 下载安装包 / 源码包到本机（弹保存框；用户取消不是失败） */
+  /**
+   * Download the package / source archive locally (shows a save dialog; cancel is not a failure).
+   */
   ipcMain.handle(
     LATTICE_IPC.downloadAsset,
     async (
@@ -559,8 +590,10 @@ export function registerLatticeIpc(): void {
   )
 
   /**
-   * 弹目录选择框，把本地源码目录下的插件批量发布到平台（安装包 + 源码）。
-   * 第二个参数是**显式路径**（正常 UI 不传，给自动化/工装用；也用于导入后一键设为本机插件源根）。
+   * Show a directory picker and batch-publish the plugins under a local source directory to the
+   * platform (package + source). The second argument is an **explicit path** (normally not passed
+   * by the UI; used by automation/tooling and also for setting the local plugin source root in one
+   * step after an import).
    */
   ipcMain.handle(
     LATTICE_IPC.importLocalDir,
@@ -577,10 +610,12 @@ export function registerLatticeIpc(): void {
   )
 
   /**
-   * 显式设置「插件存放路径」并立即生效（插件中心导入本地目录后调用）。
+   * Explicitly set the plugin storage path and apply it immediately (called after importing a local
+   * directory in the plugin center).
    *
-   * 只接受非空字符串并 resolve 成绝对路径；不传 = 报错（清除路径走设置页，不走这里，
-   * 避免误点把整个插件列表清空）。
+   * Only a non-empty string is accepted and resolved to an absolute path; omitting it is an error
+   * (clearing the path goes through the settings page, not here, so a misclick cannot wipe the
+   * whole plugin list).
    */
   ipcMain.handle(
     LATTICE_IPC.setPluginRoot,
@@ -606,16 +641,18 @@ export function registerLatticeIpc(): void {
   })
 
   /**
-   * 同步详情：最近一次同步的自动补齐成功/失败明细与孤儿记录（失败原因不静默）。
-   * 插件仓库的「同步详情」弹窗在同步条出现自动补齐/孤儿记录时调用。
+   * Sync details: automatic-install success/failure details and orphan records from the last sync
+   * (failure reasons are not silent). The plugin repository's "sync details" dialog calls this when
+   * the sync bar shows automatic installs or orphan records.
    */
   ipcMain.handle(LATTICE_IPC.syncDetails, async (): Promise<LatticeSyncDetails> => {
     return sync.getLatticeSyncDetails()
   })
 
   /**
-   * 「缺失插件自动补齐」开关（持久化；默认开启）。
-   * 关闭后 pull 只把缺失插件放进 `pending`，不再自动安装；已标记的孤儿记录仍保留在详情里。
+   * "Auto-install missing plugins" toggle (persisted; on by default).
+   * When off, a pull only puts missing plugins into `pending` instead of installing them; orphan
+   * records already marked remain in the details.
    */
   ipcMain.handle(
     LATTICE_IPC.setAutoInstallMissing,
@@ -639,12 +676,18 @@ export function registerLatticeIpc(): void {
     }
   )
 
-  /** 未解决的插件数据冲突（含补拉的云端数据快照，供"用本机/用云端"对比） */
+  /**
+   * Unresolved plugin data conflicts (including cloud snapshots from the extra pull, for "use
+   * local/use cloud" comparison).
+   */
   ipcMain.handle(LATTICE_IPC.syncConflicts, async (): Promise<LatticeSyncConflict[]> => {
     return await sync.listLatticeSyncConflictsDetailed()
   })
 
-  /** 显式解决一个冲突：local=用本机覆盖云端（force），cloud=用云端覆盖本机 */
+  /**
+   * Resolve one conflict explicitly: local = local overwrites cloud (force), cloud = cloud
+   * overwrites local.
+   */
   ipcMain.handle(
     LATTICE_IPC.resolveConflict,
     async (
@@ -662,12 +705,16 @@ export function registerLatticeIpc(): void {
     }
   )
 
-  /** 把每个已安装且支持合并的插件的云端快照并进本机（非破坏性），再推回云端 */
+  /**
+   * Merge the cloud snapshot of every installed, merge-capable plugin into the local side
+   * (non-destructive), then push it back to the cloud.
+   */
   ipcMain.handle(
     LATTICE_IPC.mergeData,
     async (): Promise<LatticeMergeDataResult> => await sync.mergeAllLatticePluginData()
   )
 
-  // 通道注册完再初始化：启动恢复/后台 pull 不会跑到未注册的 IPC 上
+  // Initialize only after the channels are registered, so startup restore/background pull never
+  // lands on unregistered IPC
   initLattice()
 }

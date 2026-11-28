@@ -1,10 +1,10 @@
 /**
- * 自研 AI 层统一出口（替代 `@langchain/*`）。
+ * Unified entry point for the in-house AI layer.
  *
- * 分四块：
- * - 消息 / 工具 / ChatModel 基类 / 结构化输出解析：上层 harness 直接消费；
- * - graph：极简状态图执行器（agent 循环 + 流式 token 输出）；
- * - providers：各家协议实现（只实现项目实际用到的能力）。
+ * It consists of four groups:
+ * - Messages / tools / ChatModel base class / structured output parsing: consumed directly by the harness layer;
+ * - graph: minimal state-graph executor (agent loop + streamed token output);
+ * - providers: per-protocol implementations (only the capabilities this project actually uses).
  */
 export * from './messages'
 export * from './tools'

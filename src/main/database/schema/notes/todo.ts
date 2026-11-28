@@ -10,16 +10,20 @@ import {
   unique
 } from 'drizzle-orm/pg-core'
 
-// 迁移说明：本文件原为 src/main/database/schema/todo.ts，迁到 notes 插件后由 core 的
-// database/schema/index.ts 用相对路径 re-export（表结构未改，纯搬家）。
+// Migration note: this file used to be src/main/database/schema/todo.ts; after moving to the notes
+// plugin it is re-exported by core's database/schema/index.ts with a relative path (table structure
+// unchanged, pure move).
 
-/** 待办事项表（全局数据，不按工作区隔离） */
+/** Todo item table (global data, not isolated per workspace) */
 export const todo_items = pgTable(
   'todo_items',
   {
     id: serial().primaryKey().notNull(),
     title: text().notNull(),
-    /** 正文内容（Markdown，与文档正文同源：在待办页内联编辑器里编辑，不再走弹窗） */
+    /**
+     * Body content (Markdown, same source as document bodies: edited in the inline editor on the
+     * todo page, no longer via a dialog)
+     */
     content: text(),
     due_date: date(),
     priority: integer().default(0),
@@ -42,7 +46,10 @@ export const todo_items = pgTable(
   ]
 )
 
-/** 待办依赖关系表（甘特图 / 前置任务）；依赖已删除任务的行会被 INNER JOIN 过滤掉 */
+/**
+ * Todo dependency table (Gantt chart / predecessor tasks); rows depending on deleted tasks are
+ * filtered out by the INNER JOIN
+ */
 export const task_dependencies = pgTable(
   'task_dependencies',
   {

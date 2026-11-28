@@ -1,10 +1,12 @@
 ﻿/**
- * 联网搜索设置服务（主进程）：读取视图、保存/清除密钥、切换默认服务与行为。
+ * Web search settings service (main process): read view, save/clear keys, switch default service and
+ * behavior.
  *
- * 安全约定：
- * - 密钥用与模型供应商相同的**机器派生密钥 + AES-256-GCM** 加密后存数据库；
- * - 对渲染层只暴露「是否已配置 + 掩码（前 6 + 后 6 / 短 Key 只露末 4）」；
- * - 解密只发生在真正发起搜索前（`getProviderApiKey`）。
+ * Security conventions:
+ * - Keys are encrypted with the same **machine-derived key + AES-256-GCM** as model providers before
+ *   being stored in the database;
+ * - The renderer only sees "configured or not + mask (first 6 + last 6 / short keys expose only the last 4)";
+ * - Decryption happens only right before an actual search (`getProviderApiKey`).
  */
 import { decryptApiKey, encryptApiKey } from '../crypto/provider-key'
 import {
@@ -20,22 +22,22 @@ import type { SearchProviderId } from './types'
 
 import { SEARCH_PROVIDER_IDS, asSearchProviderId, maskApiKey } from './mask'
 
-/** 全部可选服务（顺序即 UI 顺序；重新导出给调用方使用） */
+/** All available services (order matches UI order; re-exported for callers) */
 export { SEARCH_PROVIDER_IDS, asSearchProviderId, maskApiKey }
-/** 单条服务的对外状态 */
+/** External state of one service */
 export interface SearchProviderState {
   provider: SearchProviderId
-  /** 是否需要密钥（内置搜索为 false） */
+  /** Whether a key is required (false for builtin search) */
   requiresKey: boolean
-  /** 是否已配置可用（内置搜索恒为 true） */
+  /** Whether it is configured and usable (always true for builtin search) */
   configured: boolean
-  /** 掩码 Key（前 6 + 后 6）；未配置时为空 */
+  /** Masked key (first 6 + last 6); empty when not configured */
   maskedKey?: string
-  /** 「设置 → 模型」里已有同厂商 Key，可提示复用 */
+  /** A key for the same vendor already exists under "Settings -> Models" and can be reused */
   canReuseModelKey?: boolean
 }
 
-/** 设置页读取的完整视图 */
+/** Full view read by the settings page */
 export interface SearchSettingsView {
   defaultProvider: SearchProviderId
   autoFallback: boolean
@@ -43,14 +45,14 @@ export interface SearchSettingsView {
   providers: SearchProviderState[]
 }
 
-/** 稳定错误码（页面负责翻译） */
+/** Stable error codes (the page is responsible for translation) */
 export type SearchSettingsError =
   | 'invalid-provider'
   | 'invalid-key'
   | 'not-configured'
   | 'save-failed'
 
-/** 读取设置视图（含各服务掩码与复用提示） */
+/** Read the settings view (including masks and reuse hints for each service) */
 export async function getSearchSettingsView(): Promise<SearchSettingsView> {
   const settings = await getSearchSettingsRow()
   const rows = await listSearchProviderRows()
@@ -63,7 +65,7 @@ export async function getSearchSettingsView(): Promise<SearchSettingsView> {
     const state: SearchProviderState = { provider, requiresKey, configured }
     if (row?.keyMask) state.maskedKey = row.keyMask
     if (requiresKey && !configured) {
-      // 仅供提示：模型供应商里已有同厂商 Key（不解密、不返回 Key）
+      // Hint only: a key for the same vendor already exists among model providers (not decrypted, not returned)
       state.canReuseModelKey = await hasModelProviderWithKey(provider)
     }
     providers.push(state)
@@ -77,7 +79,7 @@ export async function getSearchSettingsView(): Promise<SearchSettingsView> {
   }
 }
 
-/** 设置默认搜索服务（必须已配置；内置搜索恒可用） */
+/** Set the default search service (must already be configured; builtin search is always available) */
 export async function setSearchDefaultProvider(
   provider: unknown
 ): Promise<{ ok: true; provider: SearchProviderId } | { ok: false; error: SearchSettingsError }> {
@@ -91,7 +93,7 @@ export async function setSearchDefaultProvider(
   return { ok: true, provider: id }
 }
 
-/** 更新行为开关 */
+/** Update behavior toggles */
 export async function setSearchBehaviors(
   patch: { autoFallback?: boolean; includeContent?: boolean }
 ): Promise<void> {
@@ -101,7 +103,7 @@ export async function setSearchBehaviors(
   })
 }
 
-/** 保存某服务的密钥（加密后落库；返回掩码） */
+/** Save a service key (encrypted before storing; returns the mask) */
 export async function saveSearchProviderKey(
   provider: unknown,
   apiKey: unknown
@@ -124,7 +126,7 @@ export async function saveSearchProviderKey(
   }
 }
 
-/** 清除某服务的密钥；若它正是默认服务则退回内置搜索 */
+/** Clear a service key; fall back to builtin search if it was the default service */
 export async function clearSearchProviderKey(
   provider: unknown
 ): Promise<{ ok: boolean; error?: SearchSettingsError }> {
@@ -138,7 +140,7 @@ export async function clearSearchProviderKey(
   return { ok: true }
 }
 
-/** 取某服务的明文 Key（仅主进程内部发起搜索时使用）；未配置/解密失败返回 undefined */
+/** Get the plaintext key of a service (only used inside the main process when starting a search); returns undefined when not configured or decryption fails */
 export async function getProviderApiKey(
   provider: SearchProviderId
 ): Promise<string | undefined> {

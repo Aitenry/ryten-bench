@@ -1,10 +1,11 @@
 /**
- * 知识图谱构建进度文案（进度卡与通知里显示的阶段名 + 进度描述）。
- * 由 `src/main/graph/service/{build-graph,append-docs}.ts` 下发给渲染进程。
- * 中文是源语言，`enUSGraphProgress` 用 `typeof zhCNGraphProgress` 约束。
+ * Knowledge graph build progress texts (phase labels and progress messages shown in the progress
+ * card and notifications).
+ * Sent to the renderer process by the graph build services.
+ * Chinese is the source language; `enUSGraphProgress` is typed against `typeof zhCNGraphProgress`.
  */
 export const zhCNGraphProgress = {
-  /** 阶段名：sendProgress 的第一个参数（phase key）对应 weight 表里的 label */
+  /** Phase labels: keyed by the phase key passed as sendProgress's first argument */
   labels: {
     cleanup: '清理数据',
     collect: '收集文档',
@@ -18,7 +19,7 @@ export const zhCNGraphProgress = {
     updateConfidence: '更新实体置信度',
     saveRelations: '保存关系'
   },
-  /** 进度描述：sendProgress 的第二个参数 */
+  /** Progress messages: the second argument of sendProgress */
   messages: {
     cleaningUp: '清理已有图谱数据...',
     cleanupDone: '清理完成',
@@ -43,14 +44,14 @@ export const zhCNGraphProgress = {
     adjustingConfidence: '计算混合置信度...',
     updatingConfidence: '更新实体置信度...',
     confidenceUpdated: '实体置信度更新完成',
-    /** build-graph 保存的是跨块关系 */
+    /** build-graph saves cross-chunk relations */
     savingRelations: '保存跨块关系...',
-    /** append-docs 保存的是全部关系 */
+    /** append-docs saves all relations */
     savingCrossChunkRelations: '保存关系...',
     relationsSaved: '关系保存完成，共 {{count}} 条',
     docFallbackTitle: '文档 #{{id}}'
   },
-  /** 会经 IPC 冒到界面上的错误 */
+  /** Errors that surface in the UI through IPC */
   errors: {
     emptyDocs: '所选文档均不存在或内容为空'
   }

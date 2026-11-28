@@ -16,31 +16,41 @@ import {
 import { closeAllMnemon } from './mnemon-singleton'
 
 /**
- * harness 插件的**自清数据**实现（`plugin.purge` 贡献，契约见 `src/main/plugins/contributions.ts`）。
+ * Implementation of the harness plugin's **self-purge** logic (`plugin.purge` contribution,
+ * contract in `src/main/plugins/contributions.ts`).
  *
- * 卸载插件且用户勾了「同时删除该插件的全部数据」时由宿主调用。这是四个插件里数据面最大的一块：
+ * Called by the host when the plugin is uninstalled and the user checked "also delete all of this
+ * plugin's data". This is the largest data surface of the four plugins:
  *
- * **① 共享 PGlite 里的 7 张表**（顺序：子 → 父；`harness_goals` / `topic_compactions` 没有外键，
- * 只能显式删——见 `db/schema/harness.ts` 的注释）：
+ * **① 7 tables in the shared PGlite database** (order: child → parent; `harness_goals` and
+ * `topic_compactions` have no foreign keys, so they must be deleted explicitly — see the comments
+ * in `db/schema/harness.ts`):
  * `harness_dialogue_usage` → `topic_compactions` → `harness_goals` → `file_change` →
- * `harness_dialogue` → `harness_topic` → `agent_config`。
+ * `harness_dialogue` → `harness_topic` → `agent_config`.
  *
- * **② 应用托管的磁盘目录**（三处，全部由本插件在 `install` 的 `ctx.effect` 里配置）：
- * - `userData/file-history/`：文件改动的可回溯快照（大块正文放磁盘，库里只存元信息）；
- * - `userData/tool-output/`：内置工具结果的按需详情（`<topicId>/<callId>.json`）；
- * - `<memoryPath>/spill/` 与 `<memoryPath>/workspace-<id>/`：模型临时落盘区 + 每个工作区
- *   一整套记忆（mnemon PGlite 库、USER/MEMORY、长期记忆空间、子代理记忆）。
- *   **不删** `memoryPath` 本身（用户可能把它指向别处、目录里还有别的东西）。
+ * **② App-managed disk directories** (three places, all configured by this plugin in
+ * `install`'s `ctx.effect`):
+ * - `userData/file-history/`: traceable snapshots of file changes (large bodies live on disk,
+ *   only metadata is kept in the database);
+ * - `userData/tool-output/`: on-demand details of built-in tool results (`<topicId>/<callId>.json`);
+ * - `<memoryPath>/spill/` and `<memoryPath>/workspace-<id>/`: scratch space for model spill-over
+ *   plus a full memory set per workspace (mnemon PGlite database, USER/MEMORY, long-term memory
+ *   space, sub-agent memory).
+ *   **Do not delete** `memoryPath` itself (the user may point it elsewhere and the directory may
+ *   contain other things).
  *
- * **刻意不动的东西**：
- * - `workspace` 表（core 的用户工作区/项目路径）——那是用户的工程，不是插件的会话数据；
- * - 设置键 `harness`（里面是 API Key、记忆目录、默认模型这类**配置**）——卸载插件不该
- *   顺手把凭据删掉；真正属于「数据」的东西都在上面两处。
+ * **Deliberately left untouched**:
+ * - the `workspace` table (core's user workspaces / project paths) — that is the user's project,
+ *   not the plugin's session data;
+ * - the settings key `harness` (holds **configuration** such as API keys, memory directory and
+ *   default model) — uninstalling a plugin must not casually delete credentials; everything that
+ *   is really "data" lives in the two places above.
  *
- * 删目录前必须先 `closeAllMnemon()`：记忆库是**进程级 PGlite 实例**，开着文件句柄时
- * 在 Windows 上删不干净。
+ * Call `closeAllMnemon()` before deleting directories: memory stores are **process-level PGlite
+ * instances**, and open file handles make deletion incomplete on Windows.
  *
- * 表结构一律不动：迁移由 core 统一应用，卸载后迁移记录必须仍然一致。
+ * Table schemas are never touched: migrations are applied by core, and the migration records must
+ * stay consistent after uninstall.
  */
 export async function purgeHarnessData(): Promise<void> {
   const counts = await withOrm('purgeHarnessData.deleteRows', async (db) =>
@@ -68,7 +78,7 @@ export async function purgeHarnessData(): Promise<void> {
     })
   )
 
-  // 记忆库是进程级单例（按工作区缓存），开着句柄会删不掉目录
+  // Memory stores are process-level singletons (cached per workspace); open handles block removal
   await closeAllMnemon()
 
   const dirs = [
@@ -79,8 +89,8 @@ export async function purgeHarnessData(): Promise<void> {
     ?.memoryPath
   if (memoryPath) {
     dirs.push(path.join(memoryPath, 'spill'))
-    // 只认本插件建的记忆作用域目录（工作区 `workspace-<数字>` + 插件 `plugin-<id>`，
-    // 见 memory-scope.ts），不碰 memoryPath 下的其它内容
+    // Only recognize this plugin's memory scope dirs (workspace `workspace-<number>` + plugin
+    // `plugin-<id>`, see memory-scope.ts); leave the rest of memoryPath alone
     try {
       for (const name of fs.readdirSync(memoryPath)) {
         if (/^workspace-\d+$/.test(name) || /^plugin-[A-Za-z0-9._-]+$/.test(name)) {
@@ -100,7 +110,7 @@ export async function purgeHarnessData(): Promise<void> {
         removedDirs += 1
       }
     } catch (err) {
-      // 目录被占用/权限不足：只告警，不阻塞卸载（行已经删干净了）
+      // Directory in use / insufficient permissions: warn only, do not block uninstall (rows are gone)
       logger.warn(`[harness] Failed to clean up managed directory: ${dir}`, err)
     }
   }

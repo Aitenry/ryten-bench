@@ -4,43 +4,57 @@ import logger from 'electron-log'
 import { pruneOldestFiles } from './prune-oldest'
 
 /**
- * 工具结果详情存储（内置工具的「结果原文」旁路）。
+ * Tool result detail store (the side channel for the raw result of built-in tools).
  *
- * 与 spill（溢出策略）的区别：spill 是**给模型的**——只在输出超长时保存，
- * 并且把文件放在工作区里让模型用 read_file/grep 自己检索；这里是**给人的**——
- * 内置工具的结果一律不再随 IPC 下发/落库，聊天里只留一张卡片，用户要点开时
- * 才由主进程读这份详情（ls 的条目、glob 的路径表、grep 的匹配行、execute 的 stdout）。
+ * Difference from spill (the overflow strategy): spill is **for the model** — it only saves when
+ * output is oversized, and it puts the file inside the workspace so the model can search it with
+ * read_file/grep; this store is **for humans** — built-in tool results are no longer sent over IPC
+ * or persisted, chat keeps only a card, and when the user expands it the main process reads this
+ * detail (ls entries, glob path list, grep matching lines, execute stdout).
  *
- * 存放位置：<userData>/tool-output/<topicId>/<callId>.txt
- *  - 放在 userData 而不是工作区：工作区挂载为虚拟 '/'，塞进去会污染用户项目，
- *    也会出现在模型自己的 ls/glob 结果里（spill 的目录是模型可见的，这里刻意不共用）；
- *  - 按话题分目录：话题删除时整目录清掉，与 spill / todo / goal 的清理口径一致；
- *  - 每话题有文件数上限，超出时删最旧的（防长会话磁盘膨胀）。
+ * Location: <userData>/tool-output/<topicId>/<callId>.txt
+ *  - In userData rather than the workspace: the workspace is mounted as the virtual '/', so
+ *    dropping files there would pollute the user's project and show up in the model's own
+ *    ls/glob results (the spill directory is model-visible, this one is deliberately not shared);
+ *  - Per-topic subdirectories: deleting a topic removes the whole directory, matching the cleanup
+ *    rules of spill / todo / goal;
+ *  - Each topic has a file-count cap; the oldest files are deleted when it is exceeded (prevents
+ *    disk growth in long sessions).
  *
- * 本模块不 import electron：目录由调用方（主进程启动时）注入，因此可被离线脚本直接验证。
+ * This module does not import electron: the directory is injected by the caller (at main-process
+ * startup), so it can be verified directly by offline scripts.
  */
 
-/** 每个话题保留的详情文件上限 */
+/** Maximum number of detail files kept per topic */
 const MAX_FILES_PER_TOPIC = 300
 
-/** 单份详情的大小上限（字符）：超过则不再另存（卡片也就不显示「查看详情」） */
+/**
+ * Size limit for one detail (characters): beyond it nothing extra is saved (and the card hides
+ * "view details")
+ */
 export const MAX_DETAIL_CHARS = 512_000
 
 export class ToolOutputStore {
   private readonly baseDir: string
-  /** 正在清理的话题（串行合并，避免并发写触发多轮全目录扫描） */
+  /**
+   * Topics currently being pruned (serialized/merged so concurrent writes do not trigger repeated
+   * full-directory scans)
+   */
   private readonly pruning = new Set<number>()
 
   constructor(baseDir: string) {
     this.baseDir = baseDir
   }
 
-  /** 完整路径：<baseDir>/<topicId>/<callId>.txt */
+  /** Full path: <baseDir>/<topicId>/<callId>.txt */
   private filePath(topicId: number, callId: string): string {
     return path.join(this.baseDir, String(topicId), `${sanitizeCallId(callId)}.txt`)
   }
 
-  /** 保存一份详情；返回是否成功（失败是 best-effort，不影响主流程） */
+  /**
+   * Save one detail; returns whether it succeeded (failures are best-effort and do not affect the
+   * main flow)
+   */
   save(topicId: number, callId: string, text: string): boolean {
     if (!topicId || !callId) return false
     if (!text || text.length > MAX_DETAIL_CHARS) return false
@@ -55,17 +69,19 @@ export class ToolOutputStore {
     }
   }
 
-  /** 读取一份详情；不存在返回 null */
+  /** Read one detail; returns null when it does not exist */
   read(topicId: number, callId: string): string | null {
     if (!callId) return null
     const exact = topicId ? this.readAt(topicId, callId) : null
     if (exact !== null) return exact
-    // 话题对不上时按 callId 兜底扫一遍（分支持久化：分支会话是把 blocks 复制到新话题的，
-    // 卡片里的 callId 还是原值，但详情文件留在原话题目录下——不兜底就只能显示「详情不可用」）
+    // When the topic does not match, fall back to scanning by callId (branch persistence: a
+    // branch session copies the blocks into a new topic, so the card still carries the original
+    // callId while the detail file stays in the original topic directory — without the fallback
+    // the card could only show "details unavailable")
     return this.readAcrossTopics(callId)
   }
 
-  /** 精确按话题目录读取 */
+  /** Read exactly from the topic directory */
   private readAt(topicId: number, callId: string): string | null {
     try {
       return fs.readFileSync(this.filePath(topicId, callId), 'utf-8')
@@ -74,7 +90,7 @@ export class ToolOutputStore {
     }
   }
 
-  /** 跨话题目录按文件名兜底查找（同名取最新的一份） */
+  /** Fall back to searching across topic directories by file name (the newest one wins) */
   private readAcrossTopics(callId: string): string | null {
     const name = `${sanitizeCallId(callId)}.txt`
     let topics: fs.Dirent[]
@@ -92,13 +108,13 @@ export class ToolOutputStore {
         if (best && stat.mtimeMs <= best.mtime) continue
         best = { text: fs.readFileSync(full, 'utf-8'), mtime: stat.mtimeMs }
       } catch {
-        // 该话题下没有这份详情，继续找
+        // This topic does not have this detail; keep looking
       }
     }
     return best?.text ?? null
   }
 
-  /** 清理某话题的全部详情（话题删除时调用） */
+  /** Remove every detail of a topic (called when the topic is deleted) */
   removeTopic(topicId: number): void {
     if (!topicId) return
     try {
@@ -108,10 +124,15 @@ export class ToolOutputStore {
     }
   }
 
-  /** 删除最旧文件，保证单话题文件数不超过上限（先写后剪，与 spill 同口径） */
+  /**
+   * Delete the oldest files so a topic stays under its file cap (write first, then prune — same
+   * rule as spill)
+   */
   private prune(topicId: number): void {
-    // 异步清理（性能审计 P19）：工具调用密集时同步 readdir/stat/unlink 会阻塞事件循环。
-    // 同一话题的清理串行合并，避免并发写触发多轮全目录扫描。
+    // Asynchronous pruning (performance audit P19): with dense tool calls, synchronous
+    // readdir/stat/unlink would block the event loop.
+    // Pruning of the same topic is serialized and merged, so concurrent writes do not trigger
+    // repeated full-directory scans.
     if (this.pruning.has(topicId)) return
     this.pruning.add(topicId)
     const dir = path.join(this.baseDir, String(topicId))
@@ -122,21 +143,24 @@ export class ToolOutputStore {
   }
 }
 
-/** callId 可能来自第三方 provider（含 / \ : 等），统一洗成安全文件名 */
+/**
+ * callId may come from a third-party provider (containing / \ : etc.); normalize it into a safe
+ * file name
+ */
 function sanitizeCallId(callId: string): string {
   return callId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120)
 }
 
-// ── 进程级单例（目录由主进程启动时注入；未配置时所有操作降级为 no-op）──
+// ── Process-level singleton (directory injected at startup; unconfigured operations are no-ops) ──
 
 let store: ToolOutputStore | null = null
 
-/** 主进程启动时注入存储目录（userData/tool-output） */
+/** Inject the storage directory at main-process startup (userData/tool-output) */
 export function configureToolOutputStore(baseDir: string): void {
   store = new ToolOutputStore(baseDir)
 }
 
-/** 取进程级存储；未配置返回 null */
+/** Get the process-level store; returns null when unconfigured */
 export function getToolOutputStore(): ToolOutputStore | null {
   return store
 }

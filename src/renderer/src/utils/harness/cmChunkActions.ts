@@ -3,33 +3,41 @@ import { getChunks, type Chunk } from '@codemirror/merge'
 import type { Extension } from '@codemirror/state'
 
 /**
- * 差异视图的「逐处取舍」按钮 —— 画在**改动槽**里，而不是删除块内部。
+ * Per-hunk accept/reject buttons for the diff view — drawn in the **change gutter** rather than
+ * inside the deleted chunk.
  *
- * 背景（用户 2026-09-23）：@codemirror/merge 自带的 `mergeControls` 把两个**文字按钮**
- * （「保留 / 撤销」）用 `position: absolute; insetInlineEnd: 5px` 塞进 `.cm-deletedChunk`
- * 内部——也就是压在正文行的右端。删除块有多行时，按钮跟着块一起滚到看不见的地方，
- * 而且它们是文字，跟这个编辑器里其余「只有图标」的按钮（工具条、状态条）不是一套语言。
+ * Background: @codemirror/merge's built-in `mergeControls` squeezes two **text buttons**
+ * ("accept / revert") into `.cm-deletedChunk` with `position: absolute; insetInlineEnd: 5px` —
+ * that is, on the right end of the body line. When a deleted chunk has several lines the buttons
+ * scroll out of sight with it, and being text they do not match the icon-only buttons elsewhere in
+ * this editor (toolbar, status bar).
  *
- * 现在改成：`mergeControls: false` 关掉自带按钮，由本扩展在 `.cm-gutters`（行号槽，
- * 含 3px 改动槽 `.cm-changeGutter`）之上铺一层绝对定位的图标按钮，**一处差异一个**，
- * 纵向与该处差异的首行对齐（删除块有自己的高度，用它的真实矩形，别用 lineBlockAt 猜）。
- * 图标与工具条同源（remixicon 的 check / close，路径内联，见 cmFoldGutter 的同一做法）。
+ * Now `mergeControls: false` turns off the built-in buttons and this extension lays an absolutely
+ * positioned layer of icon buttons over `.cm-gutters` (the line-number gutter, including the 3px
+ * change gutter `.cm-changeGutter`), **one per hunk**, vertically aligned with that hunk's first
+ * line (a deleted chunk has its own height — use its real rect, do not guess with lineBlockAt).
+ * The icons come from the same source as the toolbar (remixicon check / close with inline paths,
+ * the same approach as cmFoldGutter).
  *
- * 几个必须守住的细节：
- * - 按钮用 `mousedown` 而不是 `click`：与 CodeMirror 自带实现一致，先于光标/选区更新触发，
- *   否则点击会先把光标挪到别处、再按新光标找 chunk，取舍的可能不是你点的那一处；
- * - 每次几何变化都要**重算 top**：折叠未改动区（collapseUnchanged）、换行、字体加载、
- *   面板宽度变化都会让行高变，缓存的坐标会飘；
- * - 重算必须走 `requestAnimationFrame` 合帧：`update()` 在一次输入里会被调用多次，
- *   每次都同步读几何会触发强制重排（长文档上肉眼可见地卡）。
+ * Details that must hold:
+ * - Buttons listen on `mousedown`, not `click`: this matches CodeMirror's own implementation and
+ *   fires before the cursor/selection update; otherwise the click moves the cursor first and the
+ *   hunk is then looked up at the new position, so you may act on a different hunk than the one
+ *   clicked;
+ * - **Recompute top on every geometry change**: collapsing unchanged regions
+ *   (collapseUnchanged), wrapping, font loading, and panel width changes all alter line heights,
+ *   so cached coordinates drift;
+ * - Recomputes must be batched through `requestAnimationFrame`: `update()` runs several times per
+ *   input, and reading geometry synchronously each time forces a reflow (visibly janky on long
+ *   documents).
  */
 
-/** 按钮直径（px）：够点得中，又不至于盖住相邻改动的按钮 */
+/** Button diameter (px): big enough to hit, small enough not to cover an adjacent button */
 const BUTTON_SIZE = 18
-/** 两处差异靠得很近时，两个按钮组至少拉开的距离 */
+/** Minimum separation between two button groups when two hunks are very close */
 const MIN_GAP = 2
 
-/** remixicon 的 check-line / close-line（viewBox 24，取自 @remixicon/react 的同名组件） */
+/** remixicon check-line / close-line (viewBox 24, same-named components in @remixicon/react) */
 const ICON_CHECK_D =
   'M9.9997 15.1709L19.1921 5.97852L20.6063 7.39273L9.9997 17.9993L3.63574 11.6354L5.04996 10.2212L9.9997 15.1709Z'
 const ICON_CLOSE_D =
@@ -38,17 +46,17 @@ const ICON_CLOSE_D =
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 export interface ChunkActionOptions {
-  /** 保留这一处（采用模型的写法） */
+  /** Accept this hunk (adopt the model's version) */
   acceptLabel: string
-  /** 撤销这一处（还原改动前的写法） */
+  /** Reject this hunk (restore the pre-change version) */
   rejectLabel: string
-  /** 点「保留」：接收该处差异在**当前文档**里的起始位置 */
+  /** On accept: receives this hunk's start position in the **current document** */
   onAccept: (pos: number) => void
-  /** 点「撤销」：同上 */
+  /** On reject: same as above */
   onReject: (pos: number) => void
 }
 
-/** 造一个 remixicon 风格的内联 SVG（与折叠槽同一套做法） */
+/** Build a remixicon-style inline SVG (same approach as the fold gutter) */
 function remixicon(pathD: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
@@ -62,7 +70,7 @@ function remixicon(pathD: string): SVGSVGElement {
   return svg
 }
 
-/** 一处差异的纵向占位（相对编辑器左上角） */
+/** Vertical extent of one hunk (relative to the editor's top-left corner) */
 interface ItemBox {
   top: number
   height: number
@@ -70,11 +78,13 @@ interface ItemBox {
 }
 
 /**
- * 取某处差异的**删除块元素**（文档 A 独有的内容渲染在 `.cm-deletedChunk` 这个块级 widget 上）。
+ * Get the **deleted chunk element** for a hunk (content unique to document A renders on the
+ * `.cm-deletedChunk` block-level widget).
  *
- * 摸法：widget 的左缘就是 chunk.fromB（块级 widget 的 side 为 -1），所以拿 fromB 去
- * `posAtDOM` 反查，起点正好落进 widget 的根元素里；命中不到（该处差异没有删除内容、
- * 或视图还没布局）就返回 null，调用方退回 `lineBlockAt` 的近似几何。
+ * How to find it: the widget's left edge is chunk.fromB (block-level widgets have side -1), so
+ * look it up in reverse from fromB with `posAtDOM`; the start position falls inside the widget's
+ * root element. Returns null on a miss (the hunk has no deleted content, or the view is not laid
+ * out yet), and the caller falls back to the approximate geometry from `lineBlockAt`.
  */
 function deletedChunkDomAt(view: EditorView, pos: number): HTMLElement | null {
   const start = view.domAtPos(pos)
@@ -85,11 +95,12 @@ function deletedChunkDomAt(view: EditorView, pos: number): HTMLElement | null {
 }
 
 /**
- * 量出每一处差异的纵向位置。
+ * Measure the vertical position of every hunk.
  *
- * 文档 B 里的位置直接用 `lineBlockAt`；文档 A 独有的内容（删除）渲染在
- * `.cm-deletedChunk` 这个块级 widget 上，它的高度 lineBlockAt 是量不到的，
- * 只能读 widget 自己的矩形——这也正是「按钮要对齐到删除块起始行」的关键。
+ * Positions in document B use `lineBlockAt` directly; content unique to document A (deletions)
+ * renders on the `.cm-deletedChunk` block-level widget, whose height lineBlockAt cannot measure —
+ * only the widget's own rect works. This is exactly what makes the buttons align with the first
+ * line of the deleted chunk.
  */
 function measureItems(view: EditorView): ItemBox[] {
   const result = getChunks(view.state)
@@ -114,11 +125,12 @@ function measureItems(view: EditorView): ItemBox[] {
 }
 
 /**
- * 把量到的纵向占位压成不重叠的按钮位置。
+ * Compress the measured vertical extents into non-overlapping button positions.
  *
- * 差异密集时（连续改十几行、或折叠后两处差异贴在一起）按钮会叠成一团，
- * 点哪个全靠运气。这里只做**最小推挤**：从下往上保证彼此至少隔一个按钮高，
- * 顺序与差异顺序始终一致（否则「上一处 / 下一处」的视觉顺序会骗人）。
+ * When hunks are dense (a dozen changed lines in a row, or two hunks adjacent after folding) the
+ * buttons pile up and which one you hit is luck. Only **minimal pushing** is applied: working from
+ * bottom to top, keep at least one button height between neighbours, and preserve hunk order
+ * (otherwise the visual "previous / next hunk" order would lie).
  */
 function layoutItems(items: ItemBox[]): { top: number; pos: number }[] {
   const sorted = [...items].sort((a, b) => a.top - b.top)
@@ -135,7 +147,7 @@ function layoutItems(items: ItemBox[]): { top: number; pos: number }[] {
   return placed
 }
 
-/** 造一个带图标的按钮 */
+/** Create a button with an icon */
 function makeButton(args: {
   name: 'accept' | 'reject'
   label: string
@@ -154,14 +166,15 @@ function makeButton(args: {
   button.tabIndex = -1
   button.appendChild(remixicon(args.icon))
   button.addEventListener('mousedown', (event) => {
-    // 与 CodeMirror 自带实现一致：mousedown 里就取舍，避免点击先把光标挪走。
-    // 同时阻止默认行为，别让编辑器因这次点击丢掉焦点/选区。
+    // Matches CodeMirror's own implementation: act on mousedown so the click does not move the
+    // cursor first. Also prevent the default so the editor does not lose focus/selection from it.
     event.preventDefault()
     event.stopPropagation()
     args.onAction(args.pos)
     args.schedule()
   })
-  // 触摸/笔触发时浏览器可能不派发 mousedown（或延迟派发），别让这次交互落到编辑器上
+  // Browsers may not dispatch mousedown for touch/pen input (or dispatch it late); keep this
+  // interaction from reaching the editor
   button.addEventListener('pointerdown', (event) => {
     event.stopPropagation()
   })
@@ -169,35 +182,37 @@ function makeButton(args: {
 }
 
 /**
- * 构建「改动槽里的取舍按钮」扩展。
+ * Build the "accept/reject buttons in the change gutter" extension.
  *
- * 传进来的文案与回调在扩展生命周期内保持稳定（调用方用 useMemo + ref 固定），
- * 因此这里不做动态重配置：语言切换时整个差异视图会重建（依赖 t）。
+ * The labels and callbacks passed in stay stable for the extension's lifetime (the caller pins them
+ * with useMemo + ref), so no dynamic reconfiguration happens here: switching language rebuilds the
+ * whole diff view (it depends on t).
  */
 export function chunkActionGutter(options: ChunkActionOptions): Extension {
   const build = (view: EditorView): PluginValue => {
     const layer = document.createElement('div')
     layer.className = 'cm-chunkActionLayer'
-    // 空层不拦事件：整层只有按钮自己吃 mousedown
+    // The empty layer does not intercept events: only the buttons themselves consume mousedown
     layer.style.pointerEvents = 'none'
 
     /**
-     * 挂在 `.cm-editor` 上，以编辑器左上角为原点。
+     * Mounted on `.cm-editor`, with the editor's top-left corner as origin.
      *
-     * 注意：CodeMirror 6 的 ViewPlugin **不会**自动把 value 上的 `dom` 插进编辑器
-     * （只有旧文档说法如此；6.43 的 PluginInstance 不读 `value.dom`）。所以这里自己
-     * `appendChild`，并在 destroy 里摘掉，否则插件重建会留下一堆幽灵层。
+     * Note: CodeMirror 6's ViewPlugin does **not** automatically insert a value's `dom` into the
+     * editor (older docs claimed so; 6.43's PluginInstance does not read `value.dom`). So
+     * `appendChild` here and remove it in destroy, otherwise plugin rebuilds leave ghost layers.
      */
     view.dom.appendChild(layer)
 
     let frame: number | null = null
 
     /**
-     * 重算并重画。
+     * Recompute and repaint.
      *
-     * 用 `view.dom`（.cm-editor）作为定位父元素、以编辑器左上角为原点：
-     * `.cm-gutters` 就贴在编辑器左边缘，两者坐标系天然对齐；而 `.cm-gutters` 自己是
-     * `position: sticky`，把层挂进去反而会被一起钉住。
+     * `view.dom` (.cm-editor) is the positioning parent with the editor's top-left corner as
+     * origin: `.cm-gutters` hugs the editor's left edge, so the two coordinate systems align
+     * naturally. `.cm-gutters` itself is `position: sticky`, so mounting the layer inside it would
+     * pin the layer along with the gutters.
      */
     const paint = (): void => {
       frame = null
@@ -211,7 +226,8 @@ export function chunkActionGutter(options: ChunkActionOptions): Extension {
         const group = document.createElement('div')
         group.className = 'cm-chunkActionGroup'
         group.dataset.chunkPos = String(item.pos)
-        // 按钮落在改动槽右侧，整组右对齐到编辑器左边缘那条线
+        // Buttons sit to the right of the change gutter; the whole group is right-aligned to the
+        // editor's left edge line
         group.style.top = `${Math.round(item.top)}px`
         group.appendChild(
           makeButton({
@@ -238,7 +254,8 @@ export function chunkActionGutter(options: ChunkActionOptions): Extension {
       layer.replaceChildren(fragment)
     }
 
-    /** 合帧重算：一次输入里 update 可能来好几次，别每次都同步读几何 */
+    /** Batched recompute: update can fire several times per input, so do not read geometry
+     * synchronously each time */
     const schedule = (): void => {
       if (frame !== null) return
       frame = requestAnimationFrame(paint)
@@ -246,7 +263,8 @@ export function chunkActionGutter(options: ChunkActionOptions): Extension {
 
     return {
       update(update: ViewUpdate): void {
-        // 文档变了（取舍/编辑）→ 差异集合变了；视口或高度变了 → 坐标变了
+        // Document changed (accept/reject/edit) → hunk set changed; viewport or height changed →
+        // coordinates changed
         if (
           update.docChanged ||
           update.viewportChanged ||
@@ -267,17 +285,18 @@ export function chunkActionGutter(options: ChunkActionOptions): Extension {
   return ViewPlugin.define(build)
 }
 
-/** 供测试断言用：当前编辑器的差异处数 */
+/** For test assertions: the number of hunks in the current editor */
 export function chunkCount(view: EditorView): number {
   return getChunks(view.state)?.chunks.length ?? 0
 }
 
 /**
- * 仅供离线工装使用：把「量几何 → 排位置」两步单独暴露出来。
+ * For offline tooling only: exposes the "measure geometry → lay out positions" steps separately.
  *
- * 这两步是纯逻辑（输入 CodeMirror 的几何读数，输出按钮坐标），把它暴露出来，
- * 回归脚本就能在**没有真实布局引擎**的 jsdom 里直接验算：
- * 按钮是否落在改动槽区间、是否与各自差异的首行对齐、密集差异是否被拉开。
+ * Both steps are pure logic (CodeMirror geometry readings in, button coordinates out), so exposing
+ * them lets regression scripts verify directly in jsdom **without a real layout engine**: whether
+ * buttons fall inside the change-gutter range, align with each hunk's first line, and dense hunks
+ * get pushed apart.
  */
 export const __chunkActionGeometry = { measureItems, layoutItems, BUTTON_SIZE, MIN_GAP }
 

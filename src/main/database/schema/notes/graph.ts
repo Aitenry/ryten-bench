@@ -9,13 +9,16 @@ import {
   foreignKey,
   unique
 } from 'drizzle-orm/pg-core'
-// 迁移说明：图谱表挂在知识库下（同一插件，同目录内相对 import）
+// Migration note: graph tables belong to the knowledge base (same plugin, relative import within the same directory)
 import { wiki } from './wiki'
 
-/** 图谱构建任务状态 */
+/** Graph build job status */
 export type GraphBuildJobStatus = 'pending' | 'running' | 'completed' | 'failed'
 
-/** 知识图谱实体表：挂在知识库下，aliases / properties / source_note_ids 为 JSON 字符串 */
+/**
+ * Knowledge graph entity table: belongs to the knowledge base; aliases / properties /
+ * source_note_ids are JSON strings
+ */
 export const graph_entities = pgTable(
   'graph_entities',
   {
@@ -43,7 +46,10 @@ export const graph_entities = pgTable(
   ]
 )
 
-/** 知识图谱关系表：source/target 均指向实体，删除实体时级联删除 */
+/**
+ * Knowledge graph relation table: source/target both point at entities; deleting an entity
+ * cascades the delete
+ */
 export const graph_relations = pgTable(
   'graph_relations',
   {
@@ -59,8 +65,9 @@ export const graph_relations = pgTable(
     created_at: timestamp({ mode: 'string' }).defaultNow()
   },
   (table) => [
-    // 关系的业务唯一键：同一知识库里 (source, target, relation_type) 只应有一行。
-    // 有它才能真正「一条语句 upsert」（ON CONFLICT），也避免并发构建写出重复关系。
+    // Business unique key for relations: a knowledge base should have only one row per
+    // (source, target, relation_type). It enables a true single-statement upsert (ON CONFLICT) and
+    // prevents concurrent builds from writing duplicate relations.
     unique('uq_graph_relations_key').on(
       table.wiki_id,
       table.source_id,
@@ -97,7 +104,10 @@ export const graph_relations = pgTable(
   ]
 )
 
-/** 图谱构建任务表：每个知识库最多一个任务（uq_graph_build_jobs_wiki），config / processed_note_ids 为 JSON 字符串 */
+/**
+ * Graph build job table: at most one job per knowledge base (uq_graph_build_jobs_wiki);
+ * config / processed_note_ids are JSON strings
+ */
 export const graph_build_jobs = pgTable(
   'graph_build_jobs',
   {

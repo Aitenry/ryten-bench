@@ -20,17 +20,19 @@ import {
   DocRow
 } from '../../database/mapper/notes/document'
 
-/** HTML → Markdown 转换（doc-import 用） */
+/** HTML -> Markdown conversion (used by doc-import) */
 function htmlToMarkdown(html: string): string {
   const turndownService = new TurndownService()
   return turndownService.turndown(html)
 }
 
 /**
- * 文档库 IPC 处理器表（notes 插件的第 2 个域：导入/导出/CRUD/时间范围清理）。
+ * Document library IPC handler map (the notes plugin's second domain: import/export/CRUD/time-range
+ * cleanup).
  *
- * 通道名一律 `notes:<channel>`；迁移说明：原 `src/main/ipc/document.ts` 的 9 个
- * 扁平通道（`doc-*`）逐个改名，参数与返回类型不变，只去掉 ipcMain 的 `_event` 形参。
+ * All channel names are `notes:<channel>`; migration note: the 9 flat channels (`doc-*`) of the old
+ * `src/main/ipc/document.ts` were renamed one by one, with parameters and return types unchanged
+ * and only ipcMain's `_event` parameter dropped.
  */
 export const documentIpcHandlers: IpcHandlerMap = {
   'notes:doc-get-by-id': async (id: number) => {
@@ -109,12 +111,12 @@ export const documentIpcHandlers: IpcHandlerMap = {
 
   'notes:doc-delete-by-time-range': async (startTime: string, endTime: string) => {
     try {
-      // 先查询将要被删除的文档 ID，用于清理节点位置
+      // Query the ids that will be deleted first, so their node positions can be cleaned up
       const deletedIds = await getDocIdsByTimeRange(startTime, endTime)
 
       const result = await deleteDocsByTimeRange(startTime, endTime)
 
-      // 清理对应的节点位置
+      // Clean up the corresponding node positions
       for (const id of deletedIds) {
         deleteNodePosition(`doc-${id}`).catch((err) =>
           logger.error('Failed to delete node position for doc:', err)
@@ -156,20 +158,20 @@ export const documentIpcHandlers: IpcHandlerMap = {
       if (ext === 'docx') {
         const buffer = fs.readFileSync(filePath)
         const conversionResult = await mammoth.convertToHtml({ buffer })
-        // mammoth 输出的 HTML 不含 <head>/<body>，直接转换即可
+        // mammoth's HTML output has no <head>/<body>, so it can be converted directly
         content = htmlToMarkdown(conversionResult.value)
       } else if (ext === 'txt' || ext === 'md') {
         content = fs.readFileSync(filePath, 'utf-8')
       } else if (ext === 'html' || ext === 'htm') {
         const rawHtml = fs.readFileSync(filePath, 'utf-8')
-        // 使用 Readability 智能提取文章正文
+        // Use Readability to extract the article body
         const dom = new JSDOM(rawHtml, { url: `file://${filePath}` })
         const reader = new Readability(dom.window.document)
         const article = reader.parse()
         if (article?.content) {
           content = htmlToMarkdown(article.content)
         } else {
-          // 降级：提取 <body> 内容
+          // Fallback: extract the <body> content
           const bodyMatch = rawHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i)
           const bodyContent = bodyMatch ? bodyMatch[1] : rawHtml
           const cleaned = bodyContent

@@ -21,7 +21,7 @@ interface IpApiResponse {
 
 export const getIp = async (): Promise<IpApiResponse | null> => {
   try {
-    // 国家/地区/城市名会显示在底栏天气与「系统信息」页，所以查询语言跟随界面语言
+    // Country/region/city names appear in the footer weather and the System Info page, so the query language follows the UI language
     const lang = getMainLanguage() === 'en-US' ? 'en' : 'zh-CN'
     const response = await axios.get(`http://ip-api.com/json/?lang=${lang}`, {
       timeout: 3000

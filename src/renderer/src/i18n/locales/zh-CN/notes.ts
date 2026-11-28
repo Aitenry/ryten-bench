@@ -1,17 +1,20 @@
 /**
- * notes 插件词条（简体中文 = `源语言`）。
+ * notes plugin entries (Simplified Chinese = `source language`).
  *
- * 顶层键与原中央词条**完全一致**（`notes` 笔记界面 / `graph` 图谱视图 / `graphSettings` 图谱设置页），
- * 只是从 src/renderer/src/i18n/locales/ 搬到了插件目录：
- * 插件 install 时经 `ctx.use('i18n').addResources('translation', notesLocales)` 注册，
- * 停用插件即不再注册这些键（不再由中央词条无条件打包进首屏）。
+ * Top-level keys are **identical** to the central entries (`notes` notes UI / `graph` graph view /
+ * `graphSettings` graph settings page); only the location changed from
+ * src/renderer/src/i18n/locales/ to the plugin directory:
+ * the plugin registers them install-time via
+ * `ctx.use('i18n').addResources('translation', notesLocales)`,
+ * and disabling the plugin stops registering these keys (they are no longer unconditionally bundled
+ * into the initial screen by the central entries).
  */
 export const notesZhCN = {
-  /* ── notes（原 locales/zh-CN/home.ts） ── */
-  /* 「notes」模块（笔记首页 / 文档树 / 文档与待办编辑器 / 预览弹窗）词条。
-     命名约定：t('notes.<group>.<key>')，键名一律 camelCase，不写中文。 */
+  /* ── notes (formerly locales/zh-CN/home.ts) ── */
+  /* "notes" module entries (notes home / document tree / document and to-do editor / preview dialog).
+     Naming convention: t('notes.<group>.<key>'); keys are always camelCase and contain no Chinese. */
   notes: {
-    /* 名词（树分区标题、搜索分组、统计块、面包屑兜底共用） */
+    /* Nouns (shared by tree section titles, search groups, stat blocks and the breadcrumb fallback) */
     term: {
       doc: '文档',
       docLibrary: '文档库',
@@ -21,19 +24,19 @@ export const notesZhCN = {
       graph: '知识图谱',
       properties: '属性'
     },
-    /* 待办 / 文档状态名 */
+    /* To-do / document status names */
     status: {
       pending: '待办',
       doing: '进行中',
       done: '已完成'
     },
-    /* 面包屑 */
+    /* Breadcrumb */
     breadcrumb: {
       root: '笔记',
       docWithId: '文档 {{id}}',
       todoWithId: '待办 {{id}}'
     },
-    /* 表单字段标签与占位提示 */
+    /* Form field labels and placeholders */
     field: {
       title: '标题',
       summary: '摘要',
@@ -57,16 +60,16 @@ export const notesZhCN = {
       uploadImage: '上传图片',
       removeImage: '移除图片'
     },
-    /* 左侧文档树 */
+    /* Left document tree */
     tree: {
       createNamed: '新建{{name}}'
     },
-    /* 树内搜索 */
+    /* Search within the tree */
     search: {
       placeholder: '搜索文档 / 待办 / 知识库',
       noResults: '无匹配结果'
     },
-    /* 文档 */
+    /* Documents */
     doc: {
       untitled: '未命名文档',
       create: '新建文档',
@@ -93,7 +96,7 @@ export const notesZhCN = {
       propsSaveFailed: '保存文档属性失败',
       flushFailed: '切换文档时保存失败，刚才的修改可能没有保存'
     },
-    /* 待办 */
+    /* To-dos */
     todo: {
       untitled: '未命名待办',
       create: '新建待办',
@@ -126,7 +129,7 @@ export const notesZhCN = {
       empty: '暂无待办',
       notFound: '待办不存在或已被删除'
     },
-    /* 知识库 */
+    /* Wikis */
     wiki: {
       create: '新建知识库',
       edit: '编辑知识库',
@@ -147,7 +150,7 @@ export const notesZhCN = {
       empty: '暂无知识库',
       notFound: '知识库不存在或已被删除'
     },
-    /* 知识库目录 */
+    /* Wiki directories */
     dir: {
       create: '新建目录',
       createChild: '新建子目录',
@@ -172,11 +175,11 @@ export const notesZhCN = {
       removed: '已从目录移除',
       removeFailed: '移除失败'
     },
-    /* 知识图谱入口 */
+    /* Knowledge graph entry */
     graph: {
       view: '查看图谱'
     },
-    /* 文档 / 待办编辑器的保存状态条 */
+    /* Save status bar for the document / to-do editor */
     editor: {
       saving: '保存中…',
       unsaved: '未保存',
@@ -184,7 +187,7 @@ export const notesZhCN = {
       savedWithTime: '已保存 {{time}}',
       hint: 'Ctrl+S 立即保存 · 编辑后自动保存'
     },
-    /* 右侧大纲面板 */
+    /* Right-hand outline panel */
     outline: {
       title: '大纲',
       empty: '暂无标题',
@@ -192,14 +195,14 @@ export const notesZhCN = {
       created: '创建',
       updated: '更新'
     },
-    /* 首页仪表盘 */
+    /* Home dashboard */
     dashboard: {
       greetingNight: '夜深了',
       greetingMorning: '早上好',
       greetingAfternoon: '下午好',
       greetingEvening: '晚上好',
       welcomeBack: '{{greeting}}，欢迎回来',
-      /* dayjs 日期格式：中文保留「年月日」，英文用本地习惯顺序 */
+      /* dayjs date format: Chinese keeps the year/month/day wording; English uses the local customary order */
       dateFormat: 'YYYY 年 M 月 D 日 dddd',
       subtitle: '从左侧文档树选择内容，或快速新建开始记录',
       recentUpdate: '最近更新 {{date}}',
@@ -213,7 +216,7 @@ export const notesZhCN = {
       noPendingTodos: '暂无未完成的待办',
       noDocsHint: '暂无文档，点击「新建文档」开始写作'
     },
-    /* 归档文档弹窗 */
+    /* Archive document dialog */
     archive: {
       title: '归档「{{name}}」到知识库目录',
       ok: '归档',
@@ -225,23 +228,23 @@ export const notesZhCN = {
       success: '文档归档成功！',
       failed: '归档文档失败'
     },
-    /* 文档属性弹窗 */
+    /* Document properties dialog */
     props: {
       title: '文档属性',
       titleWithDoc: '属性 · {{name}}',
       summaryPlaceholder: '一句话描述这篇文档…'
     },
-    /* 文档预览弹窗 */
+    /* Document preview dialog */
     preview: {
       doc: '文档预览',
       empty: '暂无内容'
     }
   },
 
-  /* ── graph（原 locales/zh-CN/graph.ts） ── */
-  /* 「graph」模块词条：图谱视图、工具条、实体详情、构建进度与画布。 */
+  /* ── graph (formerly locales/zh-CN/graph.ts) ── */
+  /* "graph" module entries: graph view, toolbar, entity details, build progress and canvas. */
   graph: {
-    /* 实体类型显示名（键与 renderer/types.ts 的 ENTITY_TYPE_LABEL_KEYS 一一对应） */
+    /* Display names for entity types (keys map one-to-one to ENTITY_TYPE_LABEL_KEYS in renderer/types.ts) */
     entityType: {
       person: '人物',
       organization: '组织',
@@ -264,7 +267,7 @@ export const notesZhCN = {
       creature: '生物',
       realm: '等级'
     },
-    /* 关系类型显示名（同上，对应 RELATION_TYPE_LABEL_KEYS） */
+    /* Display names for relation types (same as above, matching RELATION_TYPE_LABEL_KEYS) */
     relationType: {
       contains: '包含',
       part_of: '属于',
@@ -335,14 +338,14 @@ export const notesZhCN = {
       relatedRelations_one: '关联关系 ({{count}})',
       relatedRelations_other: '关联关系 ({{count}})',
       noRelations: '暂无关联关系',
-      /* 关系行：中文词直接连箭头，英文需要在两侧留空格 */
+      /* Relation row: Chinese words join the arrow directly, English needs spaces on both sides */
       relationLine: '--{{relation}}→',
       createdAt: '创建时间',
       updatedAt: '更新时间'
     },
     canvas: {
       tooltipDescription: '描述：{{description}}',
-      /* 边 tooltip 的三段拼接：中文不加空格，英文要加 */
+      /* Three-part concatenation for the edge tooltip: no spaces in Chinese, spaces in English */
       edgeTooltip: '{{source}}{{relation}}{{target}}',
       showIsolated_one: '显示 {{count}} 个孤点',
       showIsolated_other: '显示 {{count}} 个孤点',
@@ -353,8 +356,8 @@ export const notesZhCN = {
     }
   },
 
-  /* ── graphSettings（原 locales/zh-CN/graphSettings.ts） ── */
-  /* 图谱设置页词条。 */
+  /* ── graphSettings (formerly locales/zh-CN/graphSettings.ts) ── */
+  /* Graph settings page entries. */
   graphSettings: {
     pageTitle: '图谱构建设置',
     pageDescription: '管理知识图谱构建参数与默认模型配置',

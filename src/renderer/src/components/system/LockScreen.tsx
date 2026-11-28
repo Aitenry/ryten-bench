@@ -8,17 +8,24 @@ import { useTheme } from '@renderer/hooks/useTheme'
 import type { LockScreenProps } from '@renderer/types/components'
 
 /**
- * 锁屏界面（全窗口毛玻璃层）。
+ * Lock screen UI (full-window frosted layer).
  *
- * 设计口径（用户 2026-11-24：「这个功能好鸡肋不能保护用户的数据，弹出窗口高斯模糊度不够」）：
- * - 底层内容直接 `filter: blur(64px)`（**不是**锁屏层的 backdrop-filter：无 GPU / 远程桌面 /
- *   软件合成下它会被静默忽略，只剩一层半透明蒙层，正文照样可读），再把主题色径向压暗；
- * - 卡片是半透明磨砂面（18px backdrop-filter 只是锦上添花，不承担隐私）；
- * - 所有交互（验证、退避、失败原因）都在卡片内完成，不再依赖 antd message
- *   （message 的 z-index 低于本层，旧实现里输错密码的提示其实被盖住了）。
+ * Design rationale (user, 2026-11-24: "this feature is useless and cannot protect user data; the
+ * popup window is not blurry enough"):
+ * - the content underneath gets `filter: blur(64px)` directly (**not** the lock layer's
+ *   backdrop-filter: without a GPU / on remote desktop / with software compositing it is silently
+ *   ignored, leaving only a translucent overlay and still-readable content), plus a radial
+ *   darkening in the theme color;
+ * - the card is a translucent frosted surface (the 18px backdrop-filter is only a bonus; it does
+ *   not carry privacy);
+ * - all interaction (verification, backoff, failure reason) happens inside the card and no longer
+ *   relies on antd message (message's z-index is below this layer, so in the old implementation
+ *   the wrong-password hint was actually covered).
  *
- * 安全边界不在这层 DOM（DOM 里的内容用开发者工具总能读到）：真正防绕过的是主进程持有
- * `locked`、验证在主进程、锁屏期间防截屏 + 拦截刷新/DevTools（见 src/main/lock/service.ts）。
+ * The security boundary is not this DOM layer (content in the DOM can always be read with
+ * devtools): what really prevents bypassing is that the main process holds `locked`, verification
+ * runs in the main process, screenshots are blocked while locked, and refresh/DevTools are
+ * intercepted (see `src/main/lock/service.ts`).
  */
 const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
   const { t } = useTranslation()
@@ -29,17 +36,18 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  /** 退避截止时间戳；> now 时输入框禁用并显示倒计时 */
+  /** Backoff deadline timestamp; while > now the input is disabled and a countdown is shown */
   const [retryUntil, setRetryUntil] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const otpRef = useRef<React.ComponentRef<typeof Input.OTP>>(null)
-  /** 防重入：6 位输满会自动提交，紧接着的 Enter 不能触发第二次校验 */
+  /** Re-entrancy guard: filling all 6 digits submits automatically, so a following Enter must not
+   * trigger a second verification */
   const submittingRef = useRef(false)
 
   const retrySeconds = Math.max(0, Math.ceil((retryUntil - now) / 1000))
   const throttled = retrySeconds > 0
 
-  /** 倒计时跳动；到点自动解除禁用 */
+  /** Countdown tick; clears the disabled state once it expires */
   useEffect(() => {
     if (!retryUntil) return
     const timer = setInterval(() => setNow(Date.now()), 250)
@@ -56,17 +64,20 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
   }, [now, retryUntil])
 
   /**
-   * 锁屏期间把整个应用根节点设为 inert，并直接对根节点做高斯模糊。
+   * While locked, make the whole app root inert and apply the gaussian blur directly to the root.
    *
-   * 为什么不是只靠锁屏层自己的 `backdrop-filter`（真机截图复现过）：无 GPU / 远程桌面 /
-   * 软件合成下 Chromium 会静默忽略 backdrop-filter，只剩一层半透明蒙层，正文照样可读。
-   * `filter: blur(64px)` 是普通滤镜，不依赖合成器能力，能把 DOM 里的文字真正糊成色块。
+   * Why not rely only on the lock layer's own `backdrop-filter` (reproduced on a real device):
+   * without a GPU / on remote desktop / with software compositing Chromium silently ignores
+   * backdrop-filter, leaving only a translucent overlay and still-readable content.
+   * `filter: blur(64px)` is a regular filter that does not depend on compositor capabilities and
+   * truly blurs the DOM text into color blocks.
    *
-   * 同时把 body 下除 #root 与锁屏层之外的直系子节点（antd Modal / message / tooltip 等
-   * portal）设为不可见：它们不在 #root 里，不会被上面的滤镜带到，锁屏时不能留一个
-   * 「清晰的浮层」在磨砂层下面。
+   * Also hide the direct children of body other than #root and the lock layer (antd Modal /
+   * message / tooltip portals): they are not inside #root, are not reached by the filter above,
+   * and a "clear floating layer" must not be left under the frosted layer while locked.
    *
-   * 用 layout effect：在浏览器绘制前就把模糊生效，避免锁屏层出现的第一帧里内容还是清晰的。
+   * Uses a layout effect: the blur is in effect before the browser paints, so the first frame of
+   * the lock layer never shows clear content.
    */
   useLayoutEffect(() => {
     const root = document.getElementById('root')
@@ -94,7 +105,7 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
       setError(null)
       try {
         const result = await onUnlock(value)
-        if (result.ok) return // 主进程会广播 locked=false，父组件随即卸载本组件
+        if (result.ok) return // parent unmounts this component after locked=false broadcast
         setCode('')
         if (result.reason === 'throttled') {
           const waitMs = Math.max(result.retryAfterMs ?? 5_000, 1_000)
@@ -116,7 +127,7 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
             setNow(Date.now())
           }
         }
-        // 错误态下把焦点放回第一个格子，用户可以直接重输
+        // In the error state put focus back on the first cell so the user can retype right away
         setTimeout(() => otpRef.current?.focus(), 0)
       } catch (err) {
         console.error('[lock-screen] Unlock request failed:', err)
@@ -134,7 +145,8 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
     const digits = value.replace(/\D/g, '').slice(0, 6)
     setCode(digits)
     if (error) setError(null)
-    // 输满 6 位即提交（比「还要再按一次 Enter」少一步）；Enter 也仍然有效
+    // Submit once 6 digits are filled in (one step fewer than pressing Enter again); Enter still
+    // works
     if (digits.length === 6) void submit(digits)
   }
 
@@ -142,9 +154,10 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
     if (event.key === 'Enter') void submit(code)
   }
 
-  /* 主题色都从 antd token / 当前明暗派生，亮暗切换时锁屏层一起变。
-     底色比旧版更实（0.84/0.88）：底层内容已被 blur(64px) 糊成色块，
-     这里只需要挡住「还能看出大概轮廓」的那一点细节。 */
+  /* All theme colors are derived from antd tokens / the current light-or-dark mode, so the lock
+     layer changes along with them. The base is more opaque than before (0.84/0.88): the content
+     underneath is already blurred into color blocks by blur(64px), so this only needs to hide the
+     last bit of detail that might still hint at shapes. */
   const surface = isDark ? 'rgba(23, 24, 28, 0.84)' : 'rgba(255, 255, 255, 0.88)'
   const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(15, 23, 42, 0.08)'
   const shadow = isDark
@@ -160,7 +173,8 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
       aria-modal="true"
       aria-labelledby="lock-screen-title"
     >
-      {/* 品牌色柔光：底层内容已被糊成色块，这里补一点层次，避免整屏死黑 */}
+      {/* Brand-color soft glow: the content below is already blurred into blocks, so add a little
+          depth here to keep the whole screen from going dead black */}
       <div
         className="lock-screen-glow"
         aria-hidden="true"
@@ -190,8 +204,9 @@ const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
         </div>
 
         <div className={`lock-screen-otp-wrap${error ? ' lock-screen-otp-wrap--error' : ''}`}>
-          {/* `type="password"` 而不是 antd 的 `mask`：6.5.1 的布尔 mask 会把原始数字画在
-              格子上层（6.5.3 才修），锁屏内容等于没隐藏。原生 password 在所有版本都生效。 */}
+          {/* `type="password"` instead of antd's `mask`: the boolean mask in 6.5.1 draws the raw
+              digits on top of the cells (fixed in 6.5.3), so the lock screen content is not hidden
+              at all. Native password works in every version. */}
           <Input.OTP
             ref={otpRef}
             className="lock-screen-otp otp-fill"

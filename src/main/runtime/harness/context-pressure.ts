@@ -1,53 +1,57 @@
 /**
- * 压缩压力判定（纯函数，无 electron / 数据库依赖，便于单测）。
+ * Compaction pressure decision (pure function, no electron/database dependencies, easy to unit test).
  *
- * 两套口径，**真实 token 优先**：
+ * Two measures, **real tokens preferred**:
  *
- * 1. `tokenBased`：上一轮模型调用实际回传的上下文 token（prompt + 输出）÷ 模型上下文窗口。
- *    它把系统提示词、工具 schema、注入的记忆一起算进去——那才是模型真正看到的占用。
- *    触发阈值 [`TOKEN_PRESSURE_RATIO`] = 79%，给本轮回复 + 工具结果留 21%。
- * 2. `charBased`（兜底）：历史字符 ÷ 字符预算，阈值由调用方传（现为 0.7）。
- *    只有拿不到 `usage_metadata`（模型/网关不回传 token）时才用。中英混排下
- *    1 字符 ≈ 0.3~1.2 token，这条口径只是保守近似，不能反映系统提示词的固定开销。
+ * 1. `tokenBased`: context tokens actually reported by the previous model call (prompt + output)
+ *    divided by the model context window. This counts the system prompt, tool schemas and injected
+ *    memory together — what the model really sees. The trigger threshold
+ *    [`TOKEN_PRESSURE_RATIO`] is 79%, leaving 21% for this round's reply plus tool results.
+ * 2. `charBased` (fallback): history characters divided by the character budget, with the threshold
+ *    passed by the caller (currently 0.7). Used only when `usage_metadata` is unavailable (the
+ *    model/gateway does not report tokens). With mixed Chinese/English text 1 character is about
+ *    0.3-1.2 tokens, so this is a conservative approximation and cannot reflect the fixed cost of
+ *    the system prompt.
  */
 
-/** 真实 token 压力阈值：上下文达到模型窗口的 79% 即压缩 */
+/** Real-token pressure threshold: compact when context reaches 79% of the model window */
 export const TOKEN_PRESSURE_RATIO = 0.79
 
-/** 单次摘要调用的转录字符上限（相对窗口再收敛，见 history.ts 的 chunkLimit 计算） */
+/** Transcript character limit for one summary call (further bounded relative to the window; see the chunkLimit computation in history.ts) */
 export const COMPACTION_CHUNK_CHARS = 120_000
 
 export interface ContextPressureInput {
-  /** 可回放历史的字符总量（不含系统提示词） */
+  /** Total characters of replayable history (excluding the system prompt) */
   totalChars: number
-  /** 字符预算（当前模型窗口按 1 字符 ≈ 1 token 换算，见 IPC 层的 contextBudget） */
+  /** Character budget (the model window converted at 1 character ~ 1 token; see contextBudget in the IPC layer) */
   maxChars: number
-  /** 字符口径的触发阈值（0.7） */
+  /** Character-based trigger threshold (0.7) */
   charThreshold: number
-  /** 上一轮模型调用真实上下文规模（token）；拿不到为 null/undefined */
+  /** Real context size of the previous model call (tokens); null/undefined when unavailable */
   measuredContextTokens?: number | null
-  /** 当前模型上下文窗口（token）；未知为 null/undefined */
+  /** Current model context window (tokens); null/undefined when unknown */
   contextWindowTokens?: number | null
 }
 
 export interface ContextPressure {
-  /** 字符口径压力（0..n） */
+  /** Character-based pressure (0..n) */
   charRatio: number
-  /** 真实 token 口径压力；拿不到为 null */
+  /** Real-token pressure; null when unavailable */
   tokenRatio: number | null
-  /** 实际生效的压力值与阈值（token 可用时取 token 口径） */
+  /** The pressure value and threshold actually in effect (token measure when tokens are available) */
   ratio: number
   threshold: number
-  /** 本次判定是否走真实 token */
+  /** Whether this decision used real tokens */
   tokenBased: boolean
   triggered: boolean
 }
 
 /**
- * 判定本轮是否该做摘要压缩。
+ * Decide whether this round should run summary compaction.
  *
- * token 数据不完整（任一侧缺失或为 0）时整条退回字符口径——不做混合加权：
- * 两种口径量纲不同，混在一起既说不清也测不准。
+ * When token data is incomplete (either side missing or 0) fall back entirely to the character
+ * measure — no mixed weighting: the two measures have different dimensions, and mixing them is
+ * neither explainable nor measurable.
  */
 export function decideContextPressure(input: ContextPressureInput): ContextPressure {
   const charRatio = input.maxChars > 0 ? input.totalChars / input.maxChars : 0
@@ -77,11 +81,14 @@ export function decideContextPressure(input: ContextPressureInput): ContextPress
 }
 
 /**
- * 把一串条目按字符上限切成**连续**的若干块（不重排、不拆单条）。
+ * Split items into **contiguous** chunks by a character limit (no reordering, no splitting a
+ * single item).
  *
- * 用途：token 口径下触发得比字符口径晚，待压缩的历史可能是旧实现的数倍；
- * 一次性塞进摘要模型会超窗，切成块后逐块增量合并（既有摘要当 priorSummary）。
- * 单条记录本身超限时仍单独成块——宁可一条超一点，也不能把一条消息切成两半。
+ * Purpose: the token measure triggers later than the character measure, so the history to compact
+ * can be several times larger than before; feeding it to the summarizer in one go would overflow
+ * the window, so chunks are merged incrementally (the existing summary as priorSummary). An
+ * oversized single item still forms its own chunk — better to exceed slightly than to cut a
+ * message in half.
  */
 export function chunkByChars<T>(items: T[], charsOf: (item: T) => number, limit: number): T[][] {
   const safeLimit = Math.max(1, limit)

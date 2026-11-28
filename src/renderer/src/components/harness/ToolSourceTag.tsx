@@ -2,24 +2,30 @@ import React, { useLayoutEffect } from 'react'
 import { useTranslation } from '@renderer/i18n'
 
 /**
- * 工具来源标记（与主进程 `ToolSourceKind` / `HarnessToolInfo.source` 同值）。
+ * Tool source marker (holds the same values as the main process `ToolSourceKind` /
+ * `HarnessToolInfo.source`).
  *
- * - `system`：随应用编译的工具（harness 本地工具 + 内置的资料整理）；
- * - `plugin`：第三方插件经 `harness.tool` 贡献点注册的工具（停用插件即消失）；
- * - `mcp`：外部 MCP 服务器暴露的工具（既不是系统也不是插件）。
+ * - `system`: tools compiled with the app (harness local tools + built-in material organizing);
+ * - `plugin`: tools registered by third-party plugins through the `harness.tool` contribution
+ *   point (disappear when the plugin is disabled);
+ * - `mcp`: tools exposed by external MCP servers (neither system nor plugin).
  */
 export type ToolSourceKind = 'system' | 'plugin' | 'mcp'
 
 /**
- * 工具清单（输入框工具面板、智能体页、定时任务页）里**名称最右边的小胶囊**。
+ * The **small pill at the far right of the name** in tool lists (input tool panel, agent page,
+ * schedule page).
  *
- * 用户口径 2026-11-27：「在其名称最右边增加一个标签来区分是系统工具还是插件工具」——
- * 之前两类工具混在同一张清单里、长得一模一样，用户没法判断勾的这一项是应用自带的，
- * 还是装某个插件才有的（插件一停用那项就消失，看着像工具凭空没了）。
+ * User requirement 2026-11-27: "add a tag to the right of its name to distinguish system tools
+ * from plugin tools" — previously the two kinds were mixed in one list and looked identical, so
+ * users could not tell whether the checked item shipped with the app or only existed because a
+ * plugin was installed (once the plugin is disabled that item vanishes, so the tool seems to
+ * disappear into thin air).
  *
- * 只做展示：`source` 由主进程在组装清单时写入（`main/tools/harness/builders.ts` 的
- * `toolSources`），插件自己声明不了——否则插件把自己标成「系统」就骗过了用户。
- * 样式在这里一次性注入（与 `TopicStatusDot` 同一做法），不占全局样式表。
+ * Display only: `source` is written by the main process while assembling the list
+ * (`toolSources` in `main/tools/harness/builders.ts`); a plugin cannot declare it itself —
+ * otherwise a plugin could label itself "system" and fool the user. Styles are injected here
+ * once (same approach as `TopicStatusDot`), not in the global stylesheet.
  */
 export const TOOL_SOURCE_TAG_CSS = `
 .ryt-tool-source {
@@ -48,7 +54,7 @@ export const TOOL_SOURCE_TAG_CSS = `
   background: rgba(212, 136, 6, 0.1);
   color: #ad6800;
 }
-/* 深色主题：同色系提亮，保证在深灰底上仍然可读 */
+/* Dark theme: brighten within the same hue so it stays readable on dark gray backgrounds */
 .dark .ryt-tool-source {
   color: #a6a6a6;
   border-color: rgba(166, 166, 166, 0.4);
@@ -64,7 +70,7 @@ export const TOOL_SOURCE_TAG_CSS = `
   border-color: rgba(232, 179, 57, 0.45);
   background: rgba(232, 179, 57, 0.12);
 }
-/* 下拉项：名称后面紧跟来源标签（antd Select 的 optionRender 里用） */
+/* Dropdown option: the source tag sits right after the name (used in antd Select's optionRender) */
 .ryt-tool-option {
   display: flex;
   align-items: center;
@@ -83,7 +89,7 @@ export const TOOL_SOURCE_TAG_CSS = `
 let tagCssInjected = false
 
 interface ToolSourceTagProps {
-  /** 工具来源；缺省（旧数据 / 非工具清单行）时不渲染，避免出现空胶囊 */
+  /** Tool source; when omitted (legacy data / non-tool-list rows) nothing renders, avoiding an empty pill */
   source?: ToolSourceKind
 }
 

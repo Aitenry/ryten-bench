@@ -21,11 +21,13 @@ import {
 } from '../lock-screen-state'
 
 /**
- * 改密码弹窗里 6 位数字格子的公共属性。
+ * Shared props for the six passcode cells in the change-password modal.
  *
- * - `type="password"`：格子内容必须隐藏。antd 6.5.1 的 `mask` 布尔值有 bug（会把原始
- *   数字画在格子上层，6.5.3 才修复），这里用原生密码输入框，与锁屏界面同一口径；
- * - `otp-fill`：6 个格子均分弹窗宽度（antd 默认每格约 50px，只占左半边，见 assets/main.css）。
+ * - `type="password"`: the cell contents must be hidden. The `mask` boolean in antd 6.5.1 is buggy
+ *   (it paints the raw digits on top of the cells; fixed in 6.5.3), so use a native password input,
+ *   consistent with the lock screen;
+ * - `otp-fill`: the six cells share the modal width evenly (antd defaults to ~50px per cell, which
+ *   only covers the left half, see assets/main.css).
  */
 const PASSCODE_OTP_PROPS = {
   length: 6,
@@ -47,7 +49,7 @@ const GeneralSettings: React.FC = () => {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [passwordForm] = Form.useForm()
-  /** 锁屏开关 / 自动锁屏时长 / 是否仍是默认码：主进程快照（摘要不在渲染层） */
+  /** Lock screen switch / auto-lock delay / whether the default code is still in use: main-process snapshot (the digest never reaches the renderer) */
   const lockState = useLockScreenState()
 
   useEffect(() => installLockScreenBridge(), [])
@@ -95,8 +97,10 @@ const GeneralSettings: React.FC = () => {
   }
 
   /**
-   * 启用 / 关闭锁屏：走锁屏专用通道（渲染层不能直接写 `lock` 设置，见 ipc/settings.ts），
-   * 主进程落盘并广播新快照 —— Esc 判定与设置页开关读的是同一份状态，不必重启。
+   * Enable / disable the lock screen: goes through the lock-specific channel (the renderer cannot
+   * write the `lock` settings directly, see ipc/settings.ts); the main process persists it and
+   * broadcasts the new snapshot — the Esc check and this settings switch read the same state, so no
+   * restart is needed.
    */
   const handleLockViewChange = async (checked: boolean): Promise<void> => {
     try {
@@ -123,8 +127,9 @@ const GeneralSettings: React.FC = () => {
   }
 
   /**
-   * 改码：原密码的校验在主进程（旧实现拿渲染层里的 MD5 比对，等于把摘要公开给界面代码），
-   * 这里只负责收集输入并把失败原因显示在弹窗里。
+   * Change code: the old password is verified in the main process (the previous implementation
+   * compared an MD5 held in the renderer, exposing the digest to UI code); here we only collect the
+   * input and show the failure reason in the modal.
    */
   const handleChangePassword = async (): Promise<void> => {
     try {
@@ -154,7 +159,7 @@ const GeneralSettings: React.FC = () => {
     }
   }
 
-  /** 自动锁屏下拉：与主进程 `AUTO_LOCK_MINUTES_OPTIONS` 一一对应（0 = 关闭） */
+  /** Auto-lock dropdown: maps one-to-one to `AUTO_LOCK_MINUTES_OPTIONS` in the main process (0 = off) */
   const autoLockOptions = useMemo(
     () => [
       { value: 0, label: t('settings.general.lock.autoLockOff') },
@@ -166,7 +171,7 @@ const GeneralSettings: React.FC = () => {
     [t]
   )
 
-  /** 语言下拉只有两项；语言名用各自母语书写，两种界面下都自解释 */
+  /** The language dropdown has only two entries; each language name is written in its own language, so it explains itself in either UI */
   const languageOptions = useMemo(
     () => [
       { value: 'zh-CN' as AppLanguage, label: t('common.language.zhCN') },
@@ -182,7 +187,7 @@ const GeneralSettings: React.FC = () => {
         description={t('settings.general.pageDescription')}
       />
 
-      {/* 界面语言 */}
+      {/* UI language */}
       <SettingsSection
         title={t('settings.general.language.sectionTitle')}
         icon={<TranslationOutlined size={14} />}
@@ -202,7 +207,7 @@ const GeneralSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 主题设置 */}
+      {/* Theme settings */}
       <SettingsSection
         title={t('settings.general.theme.sectionTitle')}
         icon={<BgColorsOutlined size={14} />}
@@ -225,7 +230,7 @@ const GeneralSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 系统托盘设置 */}
+      {/* System tray settings */}
       <SettingsSection
         title={t('settings.general.tray.sectionTitle')}
         icon={<NotificationOutlined size={14} />}
@@ -243,7 +248,7 @@ const GeneralSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 锁屏设置 */}
+      {/* Lock screen settings */}
       <SettingsSection
         title={t('settings.general.lock.sectionTitle')}
         icon={<LockOutlined size={14} />}
@@ -306,7 +311,7 @@ const GeneralSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 修改密码弹窗 */}
+      {/* Change-password modal */}
       <Modal
         title={
           lockState.hasCode

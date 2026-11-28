@@ -13,16 +13,18 @@ import {
 import { useTranslation } from '@renderer/i18n'
 
 /**
- * 应用内浏览器面板（右侧停靠，Chrome 式多标签 + 标签搜索）。
+ * In-app browser panel (docked on the right, Chrome-style tabs + tab search).
  *
- * 用户 2026-11-27 口径：
- * - 顶部标签栏：左侧箭头打开**标签搜索面板**（搜索/打开中/最近关闭），标签（标题 + ✕），
- *   右侧「＋」新建标签；
- * - 第二行工具栏：后退 / 前进 / 刷新 + 站点图标 + 地址输入（**没有「打开」按钮**，Enter 提交）；
- * - 打开浏览器是空白页，不预设网址、不显示空白页说明文字；
- * - 面板内部不要出现滚动条（标签栏/地址栏/页面容器都不滚，下拉列表自带滚动但隐藏滚动条）。
+ * Spec as of 2026-11-27:
+ * - Top tab bar: the left arrow opens the **tab search panel** (search / open tabs / recently
+ *   closed), then the tabs (title + ✕), and a "+" button on the right to create a tab;
+ * - Second-row toolbar: back / forward / reload + site icon + address input (**no "Open" button**,
+ *   Enter submits);
+ * - Opening the browser shows a blank page: no preset URL and no blank-page explanatory text;
+ * - No scrollbars inside the panel (the tab strip, address bar and page container do not scroll;
+ *   the dropdown list scrolls on its own but hides its scrollbar).
  *
- * 每个标签独立 webview；空白标签不挂 webview，用户输入网址后才加载。
+ * Each tab has its own webview; blank tabs mount no webview and only load once the user enters a URL.
  */
 
 interface ElectronWebviewElement extends HTMLElement {
@@ -52,9 +54,9 @@ interface BrowserPanelProps {
 
 interface BrowserTab {
   id: string
-  /** 用户输入/标签加载的目标 URL（空串 = 空白起始页）；仅由地址栏/恢复标签修改 */
+  /** Target URL the user entered / the tab loads (empty string = blank start page); only changed by the address bar or tab restore */
   url: string
-  /** 页面实际所在 URL（webview 导航后同步，供地址栏/列表显示；不驱动 src，避免二次加载） */
+  /** URL the page is actually on (synced after webview navigation, shown in the address bar and lists; does not drive src, to avoid a second load) */
   displayUrl: string
   title: string
   loading: boolean
@@ -82,7 +84,7 @@ function newTab(): BrowserTab {
   }
 }
 
-/** 输入归一：空 → null（保持空白页）；像 URL → 补协议；否则当搜索词 */
+/** Input normalization: empty → null (keep the blank page); looks like a URL → add a protocol; otherwise treat as a search term */
 function normalizeUrl(raw: string): string | null {
   const text = raw.trim()
   if (!text) return null
@@ -117,11 +119,11 @@ function saveRecentlyClosed(list: RecentlyClosedTab[]): void {
   try {
     window.localStorage.setItem(RECENT_CLOSED_KEY, JSON.stringify(list.slice(0, MAX_RECENT_CLOSED)))
   } catch {
-    // localStorage 不可用：只保留内存中的记录
+    // localStorage unavailable: keep the records in memory only
   }
 }
 
-/** 单个标签的真实网页容器：只负责 webview 生命周期 + 把状态回传父级 */
+/** Real page container for a single tab: owns only the webview lifecycle + reports state to the parent */
 const BrowserTabView: React.FC<{
   tab: BrowserTab
   active: boolean
@@ -255,7 +257,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
     setAddress(activeTab?.displayUrl || activeTab?.url || '')
   }, [activeId, activeTab?.displayUrl, activeTab?.url])
 
-  // Ctrl+Shift+A 打开标签搜索（与界面上提示一致），Ctrl+T 新建标签
+  // Ctrl+Shift+A opens tab search (matching the hint in the UI); Ctrl+T creates a new tab
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const mod = event.ctrlKey || event.metaKey
@@ -272,14 +274,14 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // 标签搜索打开后聚焦输入；点外部 / Esc 关闭
+  // Focus the input once tab search opens; close on outside click / Esc
   useEffect(() => {
     if (!tabSearchOpen) return
     window.setTimeout(() => tabSearchInputRef.current?.focus(), 30)
     const onPointerDown = (event: MouseEvent): void => {
       const target = event.target as Element | null
       if (tabSearchRef.current?.contains(target as Node)) return
-      // 点标签搜索按钮本身由按钮的 onClick 负责开/关，避免先关再开
+      // The tab search button itself opens/closes via its own onClick, avoiding close-then-open
       if (target?.closest('[data-browser-tab-search]')) return
       setTabSearchOpen(false)
     }
@@ -425,7 +427,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
       style={{ background: colorBgContainer, borderRadius: token.borderRadiusLG, position: 'relative' }}
       data-browser-panel="1"
     >
-      {/* 标签栏：标签搜索 + 标签 + 新建 + 收起面板 */}
+      {/* Tab bar: tab search + tabs + new tab + collapse panel */}
       <div
         className="flex items-center overflow-hidden"
         style={{
@@ -557,7 +559,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
         </div>
       </div>
 
-      {/* 工具栏：后退/前进/刷新 + 站点图标 + 地址输入（无「打开」按钮，Enter 提交） */}
+      {/* Toolbar: back/forward/reload + site icon + address input (no "Open" button, Enter submits) */}
       <div
         className="flex items-center"
         style={{
@@ -647,7 +649,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
         </div>
       ) : null}
 
-      {/* 页面区：空白页什么都不显示；输入网址后才挂 webview */}
+      {/* Page area: the blank page shows nothing; the webview mounts only after a URL is entered */}
       <div
         style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}
         data-browser-blank={tabs.every((tab) => !tab.url) ? '1' : undefined}
@@ -663,7 +665,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({
         ))}
       </div>
 
-      {/* 标签搜索面板（打开中 + 最近关闭） */}
+      {/* Tab search panel (open tabs + recently closed) */}
       {tabSearchOpen ? (
         <div
           ref={tabSearchRef}

@@ -5,9 +5,9 @@ import type { SubAgentConfig } from '../../../services/harness/types'
 import { withOrm } from '../../orm'
 import { agent_config } from '../../schema'
 
-// --- 类型定义 ---
+// --- Type definitions ---
 
-/** 子代理配置行（字段由 schema 推导） */
+/** Sub-agent configuration row (fields inferred from the schema) */
 export type AgentConfigRow = typeof agent_config.$inferSelect
 
 export interface PaginatedResult<T> {
@@ -28,7 +28,7 @@ export interface AgentConfigInput {
   enable?: boolean
 }
 
-// --- 内部工具 ---
+// --- Internal helpers ---
 
 export function rowToSubAgentConfig(row: AgentConfigRow): SubAgentConfig {
   return {
@@ -43,14 +43,14 @@ export function rowToSubAgentConfig(row: AgentConfigRow): SubAgentConfig {
   }
 }
 
-/** skills / tools 以 JSON 字符串存 TEXT 列；空数组按 null 存（与原实现一致） */
+/** skills / tools are stored as JSON strings in TEXT columns; empty arrays are stored as null (matching the previous implementation) */
 function toJsonColumn(value: string[] | null | undefined): string | null {
   return value && value.length > 0 ? JSON.stringify(value) : null
 }
 
 // --- CRUD ---
 
-/** 获取指定工作区下所有代理配置 */
+/** Get all agent configurations in the given workspace */
 async function getAllAgents(workspaceId: number): Promise<AgentConfigRow[]> {
   return withOrm('getAllAgents', async (db) => {
     const rows = await db
@@ -63,7 +63,7 @@ async function getAllAgents(workspaceId: number): Promise<AgentConfigRow[]> {
   })
 }
 
-/** 分页获取指定工作区下代理配置 */
+/** Get agent configurations in the given workspace, paginated */
 async function getAgentsPaginated(
   workspaceId: number,
   page: number,
@@ -96,7 +96,7 @@ async function getAgentsPaginated(
   })
 }
 
-/** 获取指定工作区下所有已启用的代理（转换为 SubAgentConfig 供 HarnessService 使用） */
+/** Get all enabled agents in the given workspace (converted to SubAgentConfig for HarnessService) */
 async function getEnabledSubAgentConfigs(workspaceId: number): Promise<SubAgentConfig[]> {
   return withOrm('getEnabledSubAgentConfigs', async (db) => {
     const rows = await db
@@ -109,7 +109,7 @@ async function getEnabledSubAgentConfigs(workspaceId: number): Promise<SubAgentC
   })
 }
 
-/** 根据 ID 获取代理（同时校验 workspace_id） */
+/** Get an agent by ID (also validates workspace_id) */
 async function getAgentById(workspaceId: number, id: number): Promise<AgentConfigRow | null> {
   return withOrm('getAgentById', async (db) => {
     const rows = await db
@@ -121,7 +121,7 @@ async function getAgentById(workspaceId: number, id: number): Promise<AgentConfi
   })
 }
 
-/** 按标识查代理（用于「同一工作区内 name 唯一」的前置校验，避免撞库唯一约束后报原始错误） */
+/** Look up an agent by name (pre-check for "name is unique within a workspace" to avoid raw unique-constraint errors) */
 async function getAgentByName(workspaceId: number, name: string): Promise<AgentConfigRow | null> {
   return withOrm('getAgentByName', async (db) => {
     const rows = await db
@@ -133,7 +133,7 @@ async function getAgentByName(workspaceId: number, name: string): Promise<AgentC
   })
 }
 
-/** 创建代理 */
+/** Create an agent */
 async function createAgent(input: AgentConfigInput): Promise<number> {
   return withOrm('createAgent', async (db) => {
     const rows = await db
@@ -158,10 +158,11 @@ async function createAgent(input: AgentConfigInput): Promise<number> {
 }
 
 /**
- * 更新代理（同时校验 workspace_id）。
+ * Update an agent (also validates workspace_id).
  *
- * `expectedRevision` 提供时走 CAS：版本不匹配返回 false（调用方转成可读冲突错误），
- * 与 Agent Teams 任务板的 revision 校验同一思路。每次成功更新 revision + 1。
+ * When `expectedRevision` is provided, this runs as a CAS: a revision mismatch returns false (the
+ * caller turns that into a readable conflict error), following the same idea as the revision check
+ * on the team task board. Every successful update increments revision by 1.
  */
 async function updateAgent(
   workspaceId: number,
@@ -186,7 +187,7 @@ async function updateAgent(
       return false
     }
 
-    // 版本与 updated_at 都走数据库侧：revision 用于 CAS/会话快照追溯
+    // Both revision and updated_at are handled database-side: revision for CAS/session snapshot tracing
     patch.revision = sql`${agent_config.revision} + 1`
     patch.updated_at = sql`now()`
     const updated = await db
@@ -208,7 +209,7 @@ async function updateAgent(
   })
 }
 
-/** 删除代理（同时校验 workspace_id） */
+/** Delete an agent (also validates workspace_id) */
 async function deleteAgent(workspaceId: number, id: number): Promise<boolean> {
   return withOrm('deleteAgent', async (db) => {
     const deleted = await db

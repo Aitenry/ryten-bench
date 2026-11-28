@@ -4,61 +4,65 @@ import type { ToolImageData } from '../../../shared/harness/types'
 export interface HarnessOptions {
   images?: string[]
   documents?: { fileName: string; filePath: string }[]
-  /** 话题 ID，HarnessService 内部会根据此 ID 从数据库加载历史对话 */
+  /** Topic ID; HarnessService loads conversation history from the database using it */
   topicId?: number
-  /** 用于取消流式输出的 AbortSignal */
+  /** AbortSignal used to cancel streaming output */
   signal?: AbortSignal
-  /** 本轮来源元信息（目标系统 authority 校验用；用户消息为空缺省，自动续跑轮由驱动器注入） */
+  /** Turn source metadata (for goal-system authority checks; absent for user messages, injected by the driver for auto-continuation turns) */
   turnMeta?: TurnMeta
-  /** 摘要压缩开始回调：历史超长触发 LLM 压缩时立即调用（前端展示「压缩中」过渡卡） */
+  /** Compaction start callback: called as soon as an over-long history triggers LLM compaction (the frontend shows a "compacting" transition card) */
   onCompactionStart?: () => void
-  /** 摘要压缩模型请求自动重试回调（第 attempt/retries 次；IPC 层据此推送「正在重试」过渡 chunk） */
+  /** Compaction model request auto-retry callback (attempt/retries; the IPC layer pushes a "retrying" transition chunk from it) */
   onCompactionRetry?: (attempt: number, retries: number) => void
-  /** 历史上下文字符预算（由当前模型上下文窗口换算，最小 60,000；缺省用默认值） */
+  /** History context character budget (derived from the current model's context window, minimum 60,000; defaults when absent) */
   contextBudget?: number
   /**
-   * 当前模型上下文窗口（token，供应商档案 metadata.context_window）。
+   * Current model context window (tokens, from provider profile metadata.context_window).
    *
-   * 压缩压力优先按**真实 token** 判定（上一轮模型调用实际用掉的上下文 ÷ 窗口 ≥ 79%，
-   * 见 runtime/harness/context-pressure.ts）；缺这个值时退回「字符 ÷ 预算」的启发式。
+   * Compaction pressure is judged first on **real tokens** (context actually used by the previous model call ÷
+   * window ≥ 79%, see runtime/harness/context-pressure.ts); without this value it falls back to the
+   * "chars ÷ budget" heuristic.
    */
   contextWindow?: number
   /**
-   * 回合内插话（steering）：图内每个工具节点执行前调用一次，把用户排队中点
-   * 「立即插话」的消息并入运行中的上下文（排在本次工具结果之后），模型下一步即可读到。
-   * 落库、段落切分与 steered chunk 下发都由这个回调内部一并完成（IPC 层提供）。
-   * 未配置 = 关闭插话注入（子代理与非流式路径不传）。
+   * In-turn steering: called before each tool node in the graph executes, merging a message the user flagged
+   * "steer now" while it was queued into the running context (placed after this tool result), so the model can
+   * read it on its next step. Persistence, segment splitting and sending the steered chunk are all handled inside
+   * this callback (provided by the IPC layer). Unset = steering injection disabled (subagents and non-streaming
+   * paths do not pass it).
    */
   drainInjections?: () => Promise<AgentInjection[] | null>
 }
 
-/** 一次「立即插话」注入的载荷（纯注入：只有正文，不落库、不产生对话内容） */
+/** Payload of one "steer now" injection (pure injection: body only, never persisted, produces no conversation content) */
 export interface AgentInjection {
-  /** 插话正文 */
+  /** Steering message body */
   text: string
 }
 
-/** 本轮来源元信息（经图 configurable 注入工具层，供目标工具做执行期权限校验） */
+/** Turn source metadata (injected into the tool layer via graph configurable, for execution-time permission checks in goal tools) */
 export interface TurnMeta {
   /**
-   * 来源：
-   * - user = 用户直接发起的轮次（缺省）；
-   * - goal-round = 目标自动续跑轮；
-   * - queue = 排队消息在上一轮结束后被主进程自动接续发出的轮次（前端无本地占位，
-   *   需靠流首的 `queueTurn` 标记挂载气泡）；
-   * - schedule = 定时任务到点后由主进程无头发起的轮次（消息照常落库）。
+   * Source:
+   * - user = a turn the user started directly (default);
+   * - goal-round = goal auto-continuation turn;
+   * - queue = a turn the main process started automatically for a queued message after the previous turn ended
+   *   (the frontend has no local placeholder, so it mounts the bubble from the `queueTurn` marker at the head of
+   *   the stream);
+   * - schedule = a turn started headlessly by the main process when a scheduled task fires (the message is
+   *   persisted as usual).
    */
   source?: 'user' | 'goal-round' | 'queue' | 'schedule'
-  /** schedule 轮次对应的任务（便于日志/排查，不参与权限判定） */
+  /** Task behind a schedule turn (for logging/troubleshooting, not used in permission checks) */
   scheduleId?: string
   scheduleTitle?: string
-  /** queue 轮次对应的排队条目 id（前端据此把队列行抹掉并挂用户气泡） */
+  /** Queued entry id behind a queue turn (the frontend removes the queue row and mounts the user bubble from it) */
   queueItemId?: string
-  /** goal-round 时携带的目标身份（精确匹配当前目标轮才有 complete/blocked 权威） */
+  /** Goal identity carried on goal-round turns (only an exact match with the current goal turn has complete/blocked authority) */
   goalId?: string
   goalRevision?: number
   goalRound?: number
-  /** goal-round 时的目标描述（前端横幅展示用） */
+  /** Goal objective for goal-round turns (shown in the frontend banner) */
   objective?: string
 }
 
@@ -67,64 +71,65 @@ export interface HarnessMessage {
   content: string
 }
 
-/** 工具卡片语义分类：决定前端图标、元信息与「点击后打开什么」 */
+/** Tool card semantic category: decides the frontend icon, metadata and "what opens on click" */
 export type ToolCardKind = 'file' | 'dir' | 'search' | 'command'
 
 /**
- * 工具定制化卡片数据（内置文件/命令工具专用）。
+ * Custom tool card data (for built-in file/command tools).
  *
- * 设计前提：这些工具的结果**不再随 IPC 下发、也不再落库**（见 service/tool-presentation.ts），
- * 前端只拿到这张卡片；要看内容就点卡片，去右侧面板打开真实文件或结果详情。
- * 因此卡片必须自带足够的元信息（路径、行数、条目数、退出码、失败原因）。
+ * Design premise: these tools' results are **no longer sent over IPC or persisted** (see
+ * service/tool-presentation.ts); the frontend only receives this card. To view content, click the card to open
+ * the real file or result details in the right-side panel. The card must therefore carry enough metadata (path,
+ * line count, item count, exit code, failure reason).
  */
 export interface ToolCard {
-  /** 卡片语义分类 */
+  /** Card semantic category */
   kind?: ToolCardKind
-  /** 文件/目录路径（read_file / write_file / edit_file / ls） */
+  /** File/directory path (read_file / write_file / edit_file / ls) */
   path?: string
-  /** 搜索模式（glob / grep） */
+  /** Search pattern (glob / grep) */
   pattern?: string
-  /** 结果数量（ls / glob / grep） */
+  /** Result count (ls / glob / grep) */
   count?: number
-  /** 执行命令（execute） */
+  /** Command executed (execute) */
   command?: string
-  /** 结果状态；error 时卡片显示失败原因 */
+  /** Result status; on error the card shows the failure reason */
   status?: 'ok' | 'error'
-  /** 失败原因 / 结果摘要（已截断，仅供单行展示） */
+  /** Failure reason / result summary (truncated, for single-line display only) */
   message?: string
-  /** read_file：文件总行数 */
+  /** read_file: total lines in the file */
   lines?: number
-  /** read_file / execute：结果字符数 */
+  /** read_file / execute: result character count */
   chars?: number
-  /** read_file：输出被内联上限截断（文件比这里显示的长） */
+  /** read_file: output was truncated by the inline limit (the file is longer than shown here) */
   truncated?: boolean
-  /** read_file：按 offset/limit 读取时的行区间（1 基，闭区间） */
+  /** read_file: line range when reading with offset/limit (1-based, inclusive) */
   range?: { start: number; end: number; total: number }
-  /** write_file：写入字节数 */
+  /** write_file: bytes written */
   bytes?: number
   /**
-   * write_file / edit_file：本次落盘新增的行数（差异规模；与改动记录同源）。
+   * write_file / edit_file: lines added on disk by this call (diff size; same source as the change record).
    *
-   * 用户在聊天里看到的必须是「这个文件到底变了多少」，而不只是「替换了几处」：
-   * 一次 replace_all 可能替换 3 处却动了 40 行。缺失 = 拿不到可靠数字（老数据、写失败），
-   * 卡片宁可什么都不显示，也不用 0 冒充。
+   * What the user sees in chat must be "how much this file actually changed", not just "how many replacements
+   * were made": a single replace_all may replace 3 places yet touch 40 lines. Missing = no reliable number
+   * (legacy data, failed write); the card shows nothing rather than pretending with 0.
    */
   added?: number
-  /** write_file / edit_file：本次落盘删除的行数 */
+  /** write_file / edit_file: lines deleted on disk by this call */
   removed?: number
-  /** ls：子目录数 */
+  /** ls: subdirectory count */
   dirs?: number
-  /** ls / glob：文件数 */
+  /** ls / glob: file count */
   files?: number
-  /** grep：命中的文件数（去重） */
+  /** grep: number of matched files (deduplicated) */
   fileCount?: number
-  /** execute：退出码 */
+  /** execute: exit code */
   exitCode?: number
-  /** execute：后台任务的 job id（run_in_background=true 时） */
+  /** execute: job id of the background task (with run_in_background=true) */
   jobId?: string
-  /** execute：这条调用只是把命令放到了后台，结果/退出码在后台任务里 */
+  /** execute: this call only moved the command to the background; results/exit code live in the background job */
   background?: boolean
-  /** 本次调用有完整结果详情，点卡片可在右侧面板打开 */
+  /** This call has full result details; clicking the card opens them in the right-side panel */
   detail?: boolean
 }
 
@@ -134,37 +139,37 @@ export interface ToolCallDetail {
   output: string
   status?: 'preparing' | 'executing' | 'completed'
   id?: string
-  /** 定制化卡片数据，仅 deepagent 内置工具设置 */
+  /** Custom card data, set only for built-in tools */
   card?: ToolCard
-  /** 工具结果携带的图像（read_image 等）：持久化到对话 blocks，供 UI 与历史回放使用 */
+  /** Images carried by tool results (read_image etc.): persisted into conversation blocks for the UI and history replay */
   images?: ToolImageData[]
 }
 
-/** 每轮注入系统提示词的热记忆内容（用于前端展示「注入记忆」） */
+/** Hot memory content injected into the system prompt each turn (shown by the frontend as "injected memory") */
 export interface MemoryInjection {
-  /** 用户画像条目（target=user） */
+  /** User profile entries (target=user) */
   user: string[]
-  /** 项目记忆条目（target=memory） */
+  /** Project memory entries (target=memory) */
   memory: string[]
-  /** 容量信息（user/memory 的 used/limit 展示串，如 "512/4096"） */
+  /** Capacity info (display strings for user/memory used/limit, e.g. "512/4096") */
   usage: { user: string; memory: string }
 }
 
-/** 本轮发生的早期对话摘要压缩（用于前端展示「上下文已压缩」卡片） */
+/** Early-conversation summary compaction that happened this turn (shown by the frontend as a "context compacted" card) */
 export interface HistoryCompaction {
-  /** 被压缩为 checkpoint 摘要的早期对话条数 */
+  /** Number of early messages compacted into the checkpoint summary */
   compressedCount: number
-  /** 保持原样的最近对话条数 */
+  /** Number of recent messages kept as-is */
   retainedCount: number
-  /** 压缩边界（被压缩段最后一条对话的 ID；边界推进才视为新的压缩事件） */
+  /** Compaction boundary (ID of the last message in the compacted segment; only a boundary advance counts as a new compaction event) */
   boundaryId: number
 }
 
-/** 模型请求失败后的自动重试进度（过渡信号：前端展示「正在重试（第 N/M 次）」，不落库） */
+/** Auto-retry progress after a failed model request (transition signal: the frontend shows "retrying (N/M)", never persisted) */
 export interface RetryInfo {
-  /** 当前第几次重试（从 1 开始，如 1/2、2/2） */
+  /** Current retry number (1-based, e.g. 1/2, 2/2) */
   attempt: number
-  /** 本轮最多重试次数 */
+  /** Maximum retries for this turn */
   retries: number
 }
 
@@ -173,127 +178,138 @@ export interface StructuredMessage {
   content?: string
   reasoning_content?: string
   /**
-   * 本段正文/推理是否属于这一轮的**最终答复**（协议层给结论，渲染端只读不猜）。
+   * Whether this segment of content/reasoning is this turn's **final answer** (the protocol layer gives the
+   * verdict, the renderer only reads it and never guesses).
    *
-   * - `true`：内容到达时该轮尚无工具/子代理活动，属于这一轮交付给用户的答复；
-   * - `false`：**撤回**此前的标记（本轮已出现工具/子代理活动，前面的内容是探索途中的话）；
-   * - 省略：本次 chunk 不表态（不是内容 chunk 时一律省略，渲染端不会被误清）。
+   * - `true`: when the content arrived the turn had no tool/subagent activity yet, so it is the answer delivered
+   *   to the user;
+   * - `false`: **revoke** the earlier mark (this turn has already seen tool/subagent activity, so the earlier
+   *   content was exploratory);
+   * - omitted: this chunk expresses no opinion (always omitted for non-content chunks, so the renderer is never
+   *   cleared by mistake).
    *
-   * 真源与判定见 service/answer-boundary.ts（`answerTrailingCount`），
-   * 随流结束的 `TurnFinal` 一起构成「最后一段任务里哪部分才是答复」的权威结论。
+   * The source of truth and the decision live in service/answer-boundary.ts (`answerTrailingCount`), which
+   * together with the `TurnFinal` sent at stream end forms the authoritative conclusion of "which part of the
+   * last task segment is the answer".
    */
   answer?: boolean
-  /** 智能体活动事件 */
+  /** Agent activity event */
   subAgent?: SubAgentEvent
-  /** 本轮注入的热记忆内容（Mnemon 启用且热记忆非空时，由流开头下发） */
+  /** Hot memory content injected this turn (sent at the head of the stream when Mnemon is enabled and hot memory is non-empty) */
   memoryInjected?: MemoryInjection
-  /** 本轮发生的早期对话摘要压缩（历史超长被压缩为 checkpoint 时，由流开头下发） */
+  /** Early-conversation summary compaction this turn (sent at the head of the stream when an over-long history is compacted into a checkpoint) */
   historyCompacted?: HistoryCompaction
-  /** 摘要压缩已开始（过渡信号：前端先显示「压缩中」，随后 historyCompacted 携带结果） */
+  /** Compaction has started (transition signal: the frontend shows "compacting" first, then historyCompacted carries the result) */
   historyCompacting?: boolean
-  /** 模型请求失败（尚无任何输出）后自动重试中（过渡信号：前端展示「正在重试」，不落库） */
+  /** Auto-retrying after a failed model request (no output yet) (transition signal: the frontend shows "retrying", never persisted) */
   retrying?: RetryInfo
-  /** 流式执行失败（部分输出后图执行失败时下发；IPC 层据此跳过把残缺回复落库） */
+  /** Streaming execution failed (sent when graph execution fails after partial output; the IPC layer uses it to skip persisting the incomplete reply) */
   streamError?: { message: string }
   /**
-   * 用户插话已并入当前回合（steering 回执）。**纯注入**：不落库、不在对话流里生成
-   * 新气泡，也不切分助手消息——前端只用它做一句瞬时反馈。
+   * The user's steering message has been merged into the current turn (steering receipt). **Pure injection**:
+   * never persisted, generates no new bubble in the conversation stream, and does not split the assistant
+   * message — the frontend only uses it for a brief transient acknowledgement.
    */
   steered?: {
-    /** 插话正文（仅供提示展示） */
+    /** Steering body (for display only) */
     text: string
   }
 }
 
-/** IPC 发送的流式 chunk（StructuredMessage + 主进程注入的 topicId / 回合 id） */
+/** Streaming chunk sent over IPC (StructuredMessage + topicId / turn id injected by the main process) */
 export interface StreamChunk extends StructuredMessage {
   __topicId?: number
   /**
-   * 本轮回合 id（`harnessQueue.beginTurn` 的值）。
+   * Turn id for this round (the value of `harnessQueue.beginTurn`).
    *
-   * 同一话题上有可能出现「上一轮的收尾事件与新一轮的流」在渲染端交错到达；
-   * 渲染端按这个 id 丢弃不属于当前回合的 chunk / done / error。
+   * On the same topic, the previous turn's teardown events and the new turn's stream may arrive interleaved at
+   * the renderer; the renderer uses this id to drop chunks / done / error that do not belong to the current turn.
    */
   __turnId?: number
-  /** 本轮终局标记（仅 `harness-stream-done` 载荷使用，见 service/answer-boundary.ts） */
+  /** Final marker for this turn (only used by the `harness-stream-done` payload, see service/answer-boundary.ts) */
   turnFinal?: TurnFinal
-  /** 目标自动续跑轮的起始标记（流首 chunk；前端据此挂载新的用户消息与助手占位） */
+  /** Start marker for a goal auto-continuation turn (first chunk of the stream; the frontend mounts the new user message and assistant placeholder from it) */
   goalRound?: { round: number; objective: string }
   /**
-   * 排队消息接续轮的起始标记（流首 chunk；前端据此挂载用户消息与助手占位）。
-   * 用户当时并没有点发送，本地没有占位，所以必须由主进程告知。
+   * Start marker for a queued-message continuation turn (first chunk of the stream; the frontend mounts the
+   * user message and assistant placeholder from it). The user did not press send at the time and has no local
+   * placeholder, so the main process must tell it.
    */
   queueTurn?: { itemId: string | null; text: string; attachments: string[] }
   /**
-   * 定时任务触发轮的起始标记（流首 chunk；前端据此挂载用户消息与助手占位）。
+   * Start marker for a scheduled-task turn (first chunk of the stream; the frontend mounts the user message
+   * and assistant placeholder from it).
    *
-   * 用户没有点发送，本地没有占位；`text` 是主进程实际投递的消息正文（含调度说明），
-   * 与落库内容一致，保证实时显示与刷新后的历史一致。
+   * The user did not press send, so there is no local placeholder; `text` is the message body actually delivered
+   * by the main process (including the schedule note) and matches what is persisted, keeping the live view
+   * consistent with history after refresh.
    */
   scheduleTurn?: { scheduleId: string | null; title: string; text: string }
 }
 
-/** 智能体定义 */
+/** Agent definition */
 export interface SubAgentConfig {
-  /** 唯一标识符，主代理通过 task() 工具调用时使用 */
+  /** Unique identifier used when the main agent calls it through the task() tool */
   name: string
-  /** 中文显示名（可选） */
+  /** Chinese display name (optional) */
   rename?: string
-  /** 描述智能体的功能，主代理用于决定何时委托 */
+  /** Describes the agent's function; the main agent uses it to decide when to delegate */
   description: string
-  /** 智能体的系统提示词 */
+  /** The agent's system prompt */
   systemPrompt: string
-  /** 智能体可用的工具名称列表（从主代理工具集中选取） */
+  /** Tool names available to the agent (selected from the main agent's tool set) */
   tools?: string[]
-  /** 可选：覆盖主代理的模型，格式 'provider:model' */
+  /** Optional: override the main agent's model, format 'provider:model' */
   model?: string
-  /** 可选：可用的技能 ID 列表（从技能目录中选取），留空则无技能 */
+  /** Optional: available skill IDs (selected from the skill catalog); empty means no skills */
   skills?: string[]
-  /** 配置版本（每次编辑 +1；会话/快照可追溯创建时的版本，DSH preset generation 的轻量对应物） */
+  /** Config revision (incremented on every edit; sessions/snapshots can trace the revision they were created with) */
   revision?: number
 }
 
 /**
- * 子代理会话创建时的主模型描述符（provider 行 id + 模型名）。
+ * Main model descriptor captured when a subagent session is created (provider row id + model name).
  *
- * 冷恢复用它回到"spawn 时使用的模型"，而不是始终使用当前默认供应商；provider 已删除/
- * 被禁用时回退默认模型（增强能力降级，不阻塞恢复）。
+ * Cold recovery uses it to return to "the model used at spawn time" instead of always using the current default
+ * provider; if the provider was deleted/disabled it falls back to the default model (degraded capability rather
+ * than blocking recovery).
  */
 export interface SubAgentMainModelDescriptor {
   providerId: number
   model: string
 }
 
-/** 智能体活动事件 */
+/** Agent activity event */
 export interface SubAgentEvent {
-  /** 智能体名称 */
+  /** Agent name */
   name: string
-  /** 派遣此智能体的 task 工具调用唯一 ID（用于区分同名智能体的多次调用） */
+  /** Unique ID of the task tool call that dispatched this agent (to distinguish multiple calls to agents with the same name) */
   causeId?: string
-  /** 事件类型；dispatched=后台任务已派发（轻量卡：仅名称+简述+会话 id，结果在顶部栏查看） */
+  /** Event type; dispatched = the background task has been dispatched (lightweight card: name + summary + session id only, results are viewed in the top bar) */
   status: 'started' | 'running' | 'dispatched' | 'completed' | 'error'
-  /** 智能体的输出内容（completed 时） */
+  /** Agent output content (on completed) */
   output?: string
-  /** 智能体执行过程中的消息 */
+  /** Message emitted during agent execution */
   message?: string
-  /** 错误信息 */
+  /** Error message */
   error?: string
-  /** 智能体流式输出的文本增量 */
+  /** Text delta streamed by the agent */
   content?: string
-  /** 智能体流式输出的推理内容增量 */
+  /** Reasoning content delta streamed by the agent */
   reasoning_content?: string
-  /** 智能体的工具调用 */
+  /** The agent's tool call */
   tool?: ToolCallDetail
-  /** task 工具调用时携带的任务描述（frontend / persistence 从 task 工具输入转换） */
+  /** Task description carried by the task tool call (converted by frontend / persistence from the task tool input) */
   taskDescription?: string
-  /** 后台派发（status='dispatched'）时的会话 ID（subagent-N），供对话轻量卡展示 */
+  /** Session ID for background dispatch (status='dispatched') (subagent-N), shown by the lightweight conversation card */
   subagentId?: string
 }
 
 /**
  * Available tool definition for the frontend dropdown.
  *
- * 定义已搬到宿主契约 `src/main/plugins/tool-contract.ts`（插件贡献工具时也要用它，
- * 放 harness 里会让插件反向 import harness），这里只做 re-export 保持既有 import 路径可用。
+ * The definition moved to the host contract `src/main/plugins/tool-contract.ts` (plugins contributing tools
+ * need it too; keeping it in harness would make plugins import harness backwards), so this is only a re-export
+ * to keep existing import paths working.
  */
 export type { ToolInfo } from '../../plugins/tool-contract'

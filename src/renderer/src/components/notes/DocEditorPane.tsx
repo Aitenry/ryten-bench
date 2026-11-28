@@ -21,15 +21,15 @@ import dayjs from 'dayjs'
 
 interface DocEditorPaneProps {
   docId: number
-  /** 保存成功后回调（用于更新列表标题等） */
+  /** Called after a successful save (e.g. to update the list title) */
   onSaved: (docId: number, title: string) => void
-  /** 元信息变化回调（驱动右侧属性面板） */
+  /** Meta change callback (drives the properties panel on the right) */
   onMetaChange: (meta: DocMeta | null) => void
-  /** 编辑器实例就绪（驱动右侧大纲） */
+  /** Editor instance ready (drives the outline on the right) */
   onEditorReady: (editor: Editor | null) => void
-  /** 正文滚动容器（驱动大纲滚动同步，由父级持有引用） */
+  /** Body scroll container (drives outline scroll sync; the parent holds the ref) */
   scrollRef: React.RefObject<HTMLDivElement | null>
-  /** 挂载后聚焦标题输入框（新建文档场景） */
+  /** Focus the title input after mount (new document case) */
   autofocusTitle?: boolean
 }
 
@@ -71,7 +71,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
   const titleInputRef = useRef<InputRef | null>(null)
   const titleFocusedRef = useRef(false)
 
-  /* 新建文档：加载完成后聚焦标题（全部选中便于直接改名） */
+  /* New document: focus the title once loading finishes (select all for direct renaming) */
   useEffect(() => {
     if (autofocusTitle && !loading && !notFound && !titleFocusedRef.current) {
       titleFocusedRef.current = true
@@ -83,13 +83,13 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     }
   }, [autofocusTitle, loading, notFound])
 
-  /* 回调 ref */
+  /* Callback refs */
   const onSavedRef = useRef(onSaved)
   onSavedRef.current = onSaved
   const onMetaChangeRef = useRef(onMetaChange)
   onMetaChangeRef.current = onMetaChange
 
-  /* 保存相关内容 ref（避免闭包过期） */
+  /* Save-related refs (avoid stale closures) */
   const docIdRef = useRef(docId)
   docIdRef.current = docId
   const titleRef = useRef(title)
@@ -101,7 +101,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savingRef = useRef(false)
 
-  /* ── 加载文档 ── */
+  /* ── Load document ── */
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -122,7 +122,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
         setTags(getTagsArray(doc.tags))
         setSummary(doc.summary)
         setImage(doc.image)
-        // created_at / updated_at 库列为可空（DEFAULT NOW()），缺失时按 undefined 处理
+        // created_at / updated_at columns are nullable (DEFAULT NOW()); missing → undefined
         setCreatedAt(doc.created_at ?? undefined)
         lastSavedRef.current = { title: doc.title ?? '', content: doc.content ?? '' }
         metaRef.current = {
@@ -141,11 +141,12 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     })()
     return () => {
       cancelled = true
-      /* 卸载（切换文档）时若还有未保存修改，立即冲刷一次 */
+      /* On unmount (switching documents), immediately flush any unsaved changes */
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       const flush = async (): Promise<void> => {
-        // 修复：此前冲刷与在途 doSave 并发双写（无版本号/序号，旧快照可能后到覆盖新内容）；
-        // 现在先等在途保存结束，再按最新内容补写；冲刷失败也提示
+        // Fix: the flush used to race an in-flight doSave and write twice (no version or sequence
+        // number, so an older snapshot could arrive later and overwrite newer content). Now we wait
+        // for the in-flight save to finish, then re-write the latest content; flush failures are reported
         while (savingRef.current) {
           await new Promise((resolve) => setTimeout(resolve, 50))
         }
@@ -160,7 +161,8 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
             })
           } catch (err) {
             console.error('Failed to flush doc on unmount:', err)
-            // 兑现注释里的承诺：冲刷失败必须让用户知道，否则切换文档会静默丢正文
+            // Honor the promise made in the comment above: a failed flush must be surfaced, otherwise
+            // switching documents silently loses the body text
             viewMessage('doc-flush-save', 'error', t('notes.doc.flushFailed'))
           }
         }
@@ -170,9 +172,11 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId])
 
-  /* ── 外部修改同步（修复：此前对工具写入完全无感知,继续编辑会把工具刚写入的内容整体覆盖）──
-     事件源是 harness 插件（它把主进程的「文档被 AI 改写」桥接成宿主事件总线的 doc:changed），
-     本组件只订阅本插件的模块级中转（../doc-changed）——不认识任何插件的通道名或 API。 */
+  /* ── External modification sync (fix: tool writes were previously ignored entirely, so continued
+      editing overwrote whatever the tool had just written).
+      The event source is the harness plugin (it bridges the main process's "document rewritten by AI"
+      to the host event bus as doc:changed); this component only subscribes to this plugin's
+      module-level relay (../doc-changed) — it knows no other plugin's channel names or API. */
   useEffect(() => {
     const unsubscribe = subscribeDocChanged((data) => {
       if (data.docId !== docIdRef.current) return
@@ -184,11 +188,12 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
       const dirty =
         last != null && (titleRef.current !== last.title || contentRef.current !== last.content)
       if (dirty) {
-        // 本地有未保存修改：不覆盖本地,仅提示（用户保存会覆盖工具写入,属已知取舍）
+        // Local edits are unsaved: do not overwrite local content, just warn (saving later overwrites
+        // the tool's write — a known tradeoff)
         console.warn(`Document [${data.docId}] was modified by a chat tool, keeping local content with unsaved edits`)
         return
       }
-      // 未修改：直接重载工具写入的最新内容
+      // No local edits: reload the latest content written by the tool
       void (async () => {
         try {
           const doc = await notesApi.docs.getById(data.docId)
@@ -204,7 +209,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     return unsubscribe
   }, [])
 
-  /* ── 保存 ── */
+  /* ── Save ── */
   const doSave = useCallback(async (): Promise<void> => {
     const id = docIdRef.current
     const nextTitle = titleRef.current
@@ -236,9 +241,9 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
       setSaveState('error')
     } finally {
       savingRef.current = false
-      // 修复：保存期间的新编辑此前被 savingRef 静默吞掉（timer 已消耗且无重排，
-      // 状态还被置回「已保存」而 DB 里根本没有这些编辑）——完成后若仍有未落库修改，
-      // 立即补排一次保存
+      // Fix: edits made during a save used to be silently swallowed by savingRef (the timer had
+      // already fired with no reschedule, and the state was set back to "saved" while those edits
+      // were never in the DB). After finishing, if unsaved changes remain, schedule another save
       const lastNow = lastSavedRef.current
       const cur = { title: titleRef.current, content: contentRef.current }
       if (lastNow && (cur.title !== lastNow.title || cur.content !== lastNow.content)) {
@@ -250,7 +255,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     }
   }, [t])
 
-  /* 内容/标题变化 → 标记未保存并启动自动保存 */
+  /* Content/title changed → mark unsaved and start auto-save */
   const markChanged = useCallback(() => {
     const last = lastSavedRef.current
     if (last && titleRef.current === last.title && contentRef.current === last.content) {
@@ -295,7 +300,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     [onEditorReady]
   )
 
-  /* ── 保存文档属性（标签/摘要/封面） ── */
+  /* ── Save document properties (tags/summary/cover) ── */
   const handlePropsSave = useCallback(
     async (data: {
       image: string | null
@@ -326,7 +331,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
     [viewMessage, t]
   )
 
-  /* 卸载时清理 onEditorReady */
+  /* Clear onEditorReady on unmount */
   useEffect(() => {
     return () => onEditorReady(null)
   }, [onEditorReady])
@@ -334,7 +339,8 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
   if (loading) {
     return (
       <PaneShell>
-        {/* 标题 / 元信息 / 段落先铺出来，文档到位后原地替换，避免整块空白 */}
+        {/* Render the title / meta / paragraphs up front, then replace in place once the doc
+            arrives, to avoid a full blank block */}
         <SkeletonDocPane />
       </PaneShell>
     )
@@ -398,7 +404,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
           margin: '0 auto'
         }}
       >
-        {/* 标题 + 元信息（不随正文滚动） */}
+        {/* Title + meta (does not scroll with the body) */}
         <div style={{ padding: '17px 17px 0', flexShrink: 0 }}>
           <Input
             ref={titleInputRef}
@@ -479,7 +485,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
           </div>
         </div>
 
-        {/* 编辑器（自带滚动；文档加载完成后才挂载，避免空内容闪烁） */}
+        {/* Editor (scrolls on its own; mounted only after the doc loads to avoid empty-content flicker) */}
         <div
           style={{
             flex: 1,
@@ -501,7 +507,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
           )}
         </div>
 
-        {/* 底部状态条 */}
+        {/* Bottom status bar */}
         <div
           style={{
             display: 'flex',
@@ -522,7 +528,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
         </div>
       </div>
 
-      {/* 文档属性小弹窗（标签/摘要/封面） */}
+      {/* Small doc-properties dialog (tags/summary/cover) */}
       <DocPropertiesModal
         open={propsOpen}
         doc={{ title, summary, tags: JSON.stringify(tags), image }}
@@ -533,7 +539,7 @@ const DocEditorPane: React.FC<DocEditorPaneProps> = ({
   )
 }
 
-/* ──────────── 外壳 ──────────── */
+/* ──────────── Shell ──────────── */
 
 const PaneShell: React.FC<{
   children: React.ReactNode
@@ -544,7 +550,7 @@ const PaneShell: React.FC<{
       minWidth: 0,
       minHeight: 0,
       display: 'flex',
-      /* 卡片外壳已由中间主区容器提供，这里只承担布局 */
+      /* The card shell is provided by the middle main-area container; this only handles layout */
       overflow: 'hidden'
     }}
   >

@@ -20,9 +20,10 @@ import { MdxBlock, MdxInline, setupMdxParse } from './mdx'
 import { Mermaid } from './mermaid'
 
 /* ────────────────────────────────────────────────────────────
-   下划线 / 高亮没有标准 Markdown 语法，序列化为 <u>/<mark> HTML，
-   Markdown 扩展开启 html 模式后经 markdown-it 解析可完整往返
-   （Underline/Highlight 的 parseHTML 已匹配 u / mark 标签）
+   Underline / highlight have no standard Markdown syntax, so they serialize to
+   <u>/<mark> HTML; with html mode enabled on the Markdown extension, markdown-it
+   parses it back and the round trip is complete
+   (the parseHTML of Underline/Highlight already matches the u / mark tags)
    ──────────────────────────────────────────────────────────── */
 const MarkdownUnderline = Underline.extend({
   addStorage() {
@@ -44,12 +45,12 @@ const MarkdownHighlight = Highlight.extend({
   }
 })
 
-/** 代码高亮语言集（lowlight 内置 37 种常用语言） */
+/** Syntax highlighting language set (lowlight ships 37 common languages) */
 const lowlight = createLowlight(common)
 
 /**
- * 任务列表解析替换：用自研插件（混排列表拆分）替代 tiptap-markdown
- * 内置的 markdown-it-task-lists；serialize 沿用默认 spec。
+ * Task list parse override: an in-house plugin (with mixed list splitting) replaces the
+ * markdown-it-task-lists bundled with tiptap-markdown; serialization uses the default spec.
  */
 const MarkdownTaskList = TaskList.extend({
   addStorage() {
@@ -71,8 +72,8 @@ const MarkdownTaskList = TaskList.extend({
 })
 
 /**
- * taskList 与 bulletList/orderedList 一样支持 tight 属性，
- * 使任务列表序列化时保持紧凑（不产生空行分隔）。
+ * taskList supports the tight attribute just like bulletList/orderedList, keeping task
+ * lists compact when serialized (without blank-line separators).
  */
 const MarkdownTightTaskLists = Extension.create({
   name: 'markdownTightTaskLists',
@@ -97,19 +98,19 @@ const MarkdownTightTaskLists = Extension.create({
 })
 
 /**
- * 键入 "- [ ] " / "- [x] " 自动转换为任务项。
- * TipTap v3 的 TaskItem 不再内置输入规则，这里补上：
- * 将光标所在 bulletList/listItem 原地转换为 taskList/taskItem，
- * 若列表还有其它普通项则拆分为兄弟列表（前段 + 任务列表 + 后段）。
- * 注：v3 输入规则协议要求 handler 修改 state.tr 后返回 null，
- * 由 inputRules 插件统一 dispatch（本规则导出便于测试）。
+ * Typing "- [ ] " / "- [x] " converts the line into a task item.
+ * TipTap v3 no longer bundles an input rule on TaskItem, so add one here: convert the
+ * bulletList/listItem at the cursor into taskList/taskItem in place, and if the list has
+ * other regular items, split it into sibling lists (leading part + task list + trailing part).
+ * Note: the v3 input rule protocol requires the handler to modify state.tr and return null,
+ * leaving dispatch to the inputRules plugin (this rule is exported for testing).
  */
 export const taskItemTypingRule = new InputRule({
   find: /^\s*\[( |x)\]\s$/,
   handler: ({ state, range, match }) => {
     const schema = state.schema
     const tr = state.tr
-    /* 先删掉 "[ ] " 文本，后续节点从更新后的文档上读取 */
+    /* Delete the "[ ] " text first; later nodes are read from the updated document */
     tr.delete(range.from, range.to)
     const $pos = tr.doc.resolve(range.from)
 
@@ -138,7 +139,8 @@ export const taskItemTypingRule = new InputRule({
     if (listNode.childCount === 1) {
       tr.replaceWith(listStart, listEnd, taskList)
     } else {
-      /* 按「子节点序号」切分前后项（注意 Fragment.cut 用的是字符偏移，不能直接用） */
+      /* Split the before/after items by child index (note that Fragment.cut works with a
+         character offset, so it cannot be used directly) */
       const index = tr.doc.resolve(liStart).index()
       const beforeNodes: PMNode[] = []
       const afterNodes: PMNode[] = []
@@ -158,7 +160,7 @@ export const taskItemTypingRule = new InputRule({
       }
       tr.replaceWith(listStart, listEnd, Fragment.fromArray(parts))
     }
-    /* v3 输入规则协议：handler 修改 state.tr 后返回 undefined，由插件统一 dispatch */
+    /* v3 input rule protocol: the handler modifies state.tr and returns undefined, and the plugin dispatches it */
     return undefined
   }
 })
@@ -171,8 +173,8 @@ const MarkdownTaskItemTyping = Extension.create({
 })
 
 /**
- * Markdown 解析期内容适配：KaTeX 数学（$..$ / $$..$$）与 MDX 源码保护。
- * setup 钩子在每次 parse 前被 tiptap-markdown 调用。
+ * Content adaptation during Markdown parsing: KaTeX math ($..$ / $$..$$) and MDX source
+ * protection. The setup hook is called by tiptap-markdown before every parse.
  */
 const MarkdownContentExtras = Extension.create({
   name: 'markdownContentExtras',
@@ -190,12 +192,11 @@ const MarkdownContentExtras = Extension.create({
   }
 })
 
-/** 构建所见即所得 Markdown 编辑器的扩展集 */
+/** Build the extension set for the WYSIWYG Markdown editor */
 export function buildMarkdownEditorExtensions(placeholder: string): Extensions {
   return [
-    /* 自定义块/行内节点须在 CodeBlockLowlight（pre code）之前注册，
-       parseDOM 按 schema 顺序匹配，保证 pre[data-mermaid] /
-       pre[data-mdx-src] 优先命中 */
+    /* Custom block/inline nodes must be registered before CodeBlockLowlight (pre code):
+       parseDOM matches in schema order, so pre[data-mermaid] / pre[data-mdx-src] are hit first */
     Mermaid,
     MdxBlock,
     MdxInline,
@@ -204,11 +205,11 @@ export function buildMarkdownEditorExtensions(placeholder: string): Extensions {
     MarkdownContentExtras,
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] },
-      // 代码块改用 CodeBlockLowlight（带语法高亮）
+      // Code blocks use CodeBlockLowlight (with syntax highlighting)
       codeBlock: false,
-      // StarterKit 已内置 Link/Underline：Link 直接配置；
-      // Underline 需要自定义 markdown 序列化（<u> 往返），
-      // 故禁用内置实例改用下方 MarkdownUnderline
+      // StarterKit bundles Link/Underline: Link is configured directly;
+      // Underline needs custom markdown serialization (<u> round trip),
+      // so the built-in instance is disabled in favor of MarkdownUnderline below
       link: {
         openOnClick: false,
         autolink: true,
@@ -234,7 +235,7 @@ export function buildMarkdownEditorExtensions(placeholder: string): Extensions {
       html: true,
       tightLists: true,
       bulletListMarker: '-',
-      // GFM 自动链接：解析裸 URL 为链接（与 Link 扩展 autolink 一致）
+      // GFM autolink: parse bare URLs as links (consistent with the Link extension's autolink)
       linkify: true,
       breaks: false,
       transformPastedText: true,
@@ -243,7 +244,7 @@ export function buildMarkdownEditorExtensions(placeholder: string): Extensions {
   ]
 }
 
-/** 序列化当前文档为 Markdown（失败时降级为纯文本，保证不抛错） */
+/** Serialize the current document as Markdown (falls back to plain text on failure so nothing throws) */
 export function getMarkdownSafe(editor: Editor): string {
   try {
     const storage = editor.storage as { markdown?: { getMarkdown?: () => string } }

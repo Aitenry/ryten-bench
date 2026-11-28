@@ -1,29 +1,29 @@
 name: Release
 
-# 正式版发布（用户口径 2026-10：「后续都是真实版本」）。
+# Stable releases (policy 2026-10: "everything from now on is a real version").
 #
-# - 只有 main 会出包；main 每推一次就是一次正式发版。
-# - 版本号不再拿「提交数量」拼（旧的 0.1.0-alpha.<提交数>.<重试数> 是假号），改由
-#   .github/scripts/resolve-version.mjs 算：上一个正式 tag + 本次提交类型
-#     · feat                → minor（0.1.1 → 0.2.0）
-#     · fix / 其余           → patch（0.1.0 → 0.1.1）
-#     · BREAKING CHANGE     → major（0.1.x → 1.0.0）
-#     · [release:major|minor|patch] → 提交信息里强制指定
-#   首个正式版直接取 package.json 的 0.1.0（历史 alpha tag 不参与比较）。
-# - tag 一律带 `v` 前缀（v0.1.0 / v0.1.1 / v1.0.0）：开发分支是按版本命名的
-#   （0.1.0、0.2.0 …），分支与 tag 同名时 git 会把裸名优先解析成 tag，
-#   在 main 上 `git merge 0.2.0` 会静默合不到东西。tag 带 v 后两者永不歧义。
-# - 构建前把算出来的版本写进 package.json：安装包文件名、app.getVersion()（设置页的版本号）
-#   都是这个真号，而不是仓库里过期的 0.1.0。
-# - 发布成功后再把这个版本回写到 main（`chore(release): … [skip ci]`）：仓库里的版本号
-#   始终等于刚发出去的那个。该提交不参与下一次 bump 计算。
-# - 已经在跑的这一次不会被新推送取消（cancel-in-progress: false）；两个推送挨得很近时
-#   它们会排队，后一次从新 tag 继续算版本。
+# - Only main produces builds; every push to main is one stable release.
+# - Version numbers are no longer assembled from "commit counts" (the old 0.1.0-alpha.<commit-count>.<retry> was fake);
+#   they are computed by .github/scripts/resolve-version.mjs from the previous stable tag + this batch's commit types:
+#     · feat                → minor (0.1.1 → 0.2.0)
+#     · fix / anything else → patch (0.1.0 → 0.1.1)
+#     · BREAKING CHANGE     → major (0.1.x → 1.0.0)
+#     · [release:major|minor|patch] → forced in the commit message
+#   The first stable release takes 0.1.0 directly from package.json (historical alpha tags do not participate).
+# - Tags always carry a `v` prefix (v0.1.0 / v0.1.1 / v1.0.0): development branches are named after versions
+#   (0.1.0, 0.2.0 …); when a branch and a tag share a name, git resolves the bare name to the tag first, and
+#   `git merge 0.2.0` on main silently merges nothing. With the `v` prefix the two are never ambiguous.
+# - Before building, write the computed version into package.json: the installer file name and app.getVersion() (the version number in settings)
+#   both use this real number, not the stale 0.1.0 in the repo.
+# - After a successful release, write this version back to main (`chore(release): … [skip ci]`): the version in the repo
+#   always equals the one just released. That commit does not participate in the next bump calculation.
+# - A run already in progress is not cancelled by a new push (cancel-in-progress: false); when two pushes are close together
+#   they queue, and the later one continues computing the version from the new tag.
 on:
   push:
     branches:
       - 'main'
-  # 只在「上次构建挂了、要重跑」时手动触发；版本已发布会自动跳过（should_release=false）
+  # Only trigger manually when "the last build failed and needs a rerun"; an already-released version is skipped automatically (should_release=false)
   workflow_dispatch:
 
 concurrency:
@@ -49,7 +49,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 全历史 + tag：要么按上一个正式 tag 算提交，要么一条都读不到
+          # Full history + tags: either compute commits from the previous stable tag, or read nothing at all
           fetch-depth: 0
           fetch-tags: true
 
@@ -102,8 +102,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # 版本号必须在打包**之前**写进去：electron-builder 用它命名安装包、写 app.asar 里的
-      # package.json（app.getVersion() 就返回它）。
+      # The version number must be written in **before** packaging: electron-builder uses it to name the installer and to write
+      # package.json inside app.asar (app.getVersion() returns it).
       - name: Stamp the release version
         shell: bash
         env:
@@ -122,18 +122,18 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 回归门禁：单元测试（tests/*.test.mts）已随仓库入库，发布前必须全绿，
-      # 否则「测试存在但拦不住发布」的问题会复发。
+      # Regression gate: unit tests (tests/*.test.mts) are tracked in the repo, so they must be all green before release,
+      # otherwise the "tests exist but cannot block a release" problem comes back.
       - name: Unit tests
         run: pnpm test:all
 
-      # 只拦 ESLint error（存量 prettier 格式告警不阻断发布）
+      # Only fail on ESLint errors (pre-existing prettier formatting warnings do not block release)
       - name: Lint (errors only)
         run: pnpm lint:errors
 
-      # 沙箱资产（resources/sandbox）由 build:sandbox 产出，而 build:win/mac/linux 的第一步就是它；
-      # 下面两步分别验证「资产构建成功」与「装进产物」，任何一步失败都让发布停下来
-      # ——否则会出现「装完即用」失效：后端缺失 → 命令被故障关闭、直接拒绝执行。
+      # Sandbox assets (resources/sandbox) are produced by build:sandbox, which is the first step of build:win/mac/linux;
+      # the next two steps verify "assets built successfully" and "packed into the artifact" respectively, and any failure stops the release
+      # — otherwise "works right out of the box" breaks: a missing backend → commands are disabled and rejected outright.
       - name: Build installer
         run: pnpm ${{ matrix.script }}
         env:
@@ -149,7 +149,7 @@ jobs:
               launcher=$(ls resources/sandbox/linux-*/ryten-landlock-launcher | head -n1)
               test -n "${launcher}"
               test -x "${launcher}"
-              # 真跑一次：证明这个内核上「自限 + exec」确实可用（不是只编出了个文件）
+              # Actually run it once: prove that "self-limit + exec" really works on this kernel (not just that a file was compiled)
               "${launcher}" --ro / --rw /dev -- true
               echo "Linux 启动器可用：${launcher}"
               ;;
@@ -159,9 +159,9 @@ jobs:
           esac
           ls -la resources/sandbox
 
-      # 真正的闸门：拿**打包产物**里的沙箱做一次真机自检（Windows 用产物里的 Electron
-      # 二进制跑 runner、Linux 跑自研启动器），含「工作区外写入必须被拒」与「对照组可写」。
-      # 这一步曾经不存在，于是「runner 在 Electron 里崩」这类只在打包后才暴露的问题没人拦。
+      # The real gate: run an on-device self-check with the sandbox from the **packaged artifact** (on Windows run the runner with the
+      # Electron binary from the artifact, on Linux run the custom launcher), including "writes outside the workspace must be rejected" and "the control group can write".
+      # This step used to be missing, so problems that only surface after packaging ("the runner crashes inside Electron") went uncaught.
       - name: Verify the packaged app carries a working sandbox
         run: node native/build-sandbox.mjs --selfcheck
 
@@ -184,7 +184,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 用事件里的那个提交：tag 与说明必须落在**实际被打包**的提交上
+          # Use the commit from the event: the tag and notes must point at the commit that was **actually packaged**
           ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
@@ -218,7 +218,7 @@ jobs:
           if [ -n "${PREVIOUS_TAG}" ]; then
             git log --no-merges --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..${SHA}" > all-changes.txt
           else
-            # 首个正式版：没有可对比的 tag，列出最近 40 条说明这一版装了什么
+            # First stable release: no tag to compare against, list the last 40 commits to show what this build contains
             git log --no-merges --pretty=format:'- %s (%h)' -n 40 "${SHA}" > all-changes.txt
           fi
           head -n 60 all-changes.txt > changes.txt || true
@@ -240,7 +240,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          # 标题只写版本号：tag 是 v0.1.0，但发布页读起来还是「0.1.0」
+          # Title only carries the version: the tag is v0.1.0, but the release page still reads "0.1.0"
           name: ${{ needs.version.outputs.version }}
           body_path: release-body.md
           files: |
@@ -249,13 +249,13 @@ jobs:
             release/macos/*.zip
             release/linux/*.AppImage
             release/linux/*.deb
-          # 缺任何一个平台的产物就不发：宁可这一次失败，也不要发一个只有一半文件的正式版
+          # Don't publish if any platform's artifact is missing: better to fail this run than ship a stable release with only half the files
           fail_on_unmatched_files: true
           prerelease: false
           make_latest: true
 
-  # 把刚发出去的版本记回仓库：此后 package.json 的版本 == 最新正式版，
-  # 下一位接手的人（或下一轮工作流）不会看到一个过期的 0.1.0。
+  # Record the just-released version back into the repo: from then on package.json's version == the latest stable release,
+  # so the next person picking this up (or the next workflow run) does not see a stale 0.1.0.
   stamp:
     name: Record ${{ needs.version.outputs.version }} in package.json
     needs: [version, release]
@@ -290,5 +290,5 @@ jobs:
           fi
           git add package.json
           git commit -m "chore(release): ${VERSION} [skip ci]"
-          # 发版期间若有人又推了 main，先 rebase 再推一次；仍失败就让这一步红着脸报错
+          # If someone pushed to main during the release, rebase first and push again; if it still fails, let this step fail loudly
           git push origin HEAD:main || { git pull --rebase origin main; git push origin HEAD:main; }

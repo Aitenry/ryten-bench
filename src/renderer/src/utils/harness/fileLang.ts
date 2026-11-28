@@ -1,15 +1,16 @@
 import type { Extension } from '@codemirror/state'
 
 /**
- * 文件路径 → CodeMirror 语言扩展。
+ * File path → CodeMirror language extension.
  *
- * 与 Monaco 时代的区别：语言**按需动态加载**（每个 import 一个独立 chunk）。
- * 之前的 monaco chunk 约 6MB，一次全量下载并在主线程求值；现在首屏只有编辑器内核，
- * 打开 .ts 才去取 TypeScript 语法，打开 .py 才去取 Python 语法。
- * 加载结果按语言缓存，同一个语言第二次打开零开销。
+ * Unlike the Monaco era: languages are **loaded dynamically on demand** (one separate chunk per
+ * import). The previous monaco chunk was about 6MB, downloaded in full and evaluated on the main
+ * thread; now the first screen only ships the editor core, and TypeScript syntax is fetched when
+ * a .ts file is opened, Python syntax when a .py file is opened. Load results are cached per
+ * language, so opening the same language a second time costs nothing.
  */
 
-/** 语言标识（状态栏展示用） */
+/** Language id (for display in the status bar) */
 const LANG_LABELS: Record<string, string> = {
   plaintext: 'Plain Text',
   javascript: 'JavaScript',
@@ -40,7 +41,7 @@ const LANG_LABELS: Record<string, string> = {
   dockerfile: 'Dockerfile'
 }
 
-/** 扩展名 → 语言标识 */
+/** Extension → language id */
 const EXT_LANG: Record<string, string> = {
   ts: 'typescript',
   mts: 'typescript',
@@ -93,7 +94,8 @@ const EXT_LANG: Record<string, string> = {
   svg: 'xml',
   plist: 'xml',
   dockerfile: 'dockerfile',
-  // 暂无对应语法包的语言一律按纯文本渲染（不做半吊子的假高亮）
+  // Languages with no matching syntax package are all rendered as plain text (no half-baked
+  // fake highlighting)
   cs: 'plaintext',
   graphql: 'plaintext',
   gql: 'plaintext',
@@ -103,7 +105,7 @@ const EXT_LANG: Record<string, string> = {
   txt: 'plaintext'
 }
 
-/** 文件名（无扩展名）→ 语言标识 */
+/** File name (no extension) → language id */
 const NAME_LANG: Record<string, string> = {
   dockerfile: 'dockerfile',
   '.gitignore': 'plaintext',
@@ -111,7 +113,7 @@ const NAME_LANG: Record<string, string> = {
   makefile: 'plaintext'
 }
 
-/** 取路径的语言标识 */
+/** Get the language id for a path */
 export function getLanguageId(filePath: string): string {
   const name = (filePath.split(/[\\/]/).pop() ?? '').toLowerCase()
   if (NAME_LANG[name]) return NAME_LANG[name]
@@ -119,12 +121,12 @@ export function getLanguageId(filePath: string): string {
   return EXT_LANG[ext] ?? 'plaintext'
 }
 
-/** 状态栏展示的语言名 */
+/** Language name for display in the status bar */
 export function getLanguageLabel(filePath: string): string {
   return LANG_LABELS[getLanguageId(filePath)] ?? 'Plain Text'
 }
 
-/** 语言扩展加载器（惰性：只有真正用到的语言才会被打包进下载的 chunk） */
+/** Language extension loaders (lazy: only languages actually used end up in a downloaded chunk) */
 const LOADERS: Record<string, () => Promise<Extension | null>> = {
   plaintext: async () => null,
   javascript: async () => (await import('@codemirror/lang-javascript')).javascript(),
@@ -205,10 +207,10 @@ const LOADERS: Record<string, () => Promise<Extension | null>> = {
   }
 }
 
-/** 已加载语言缓存（同一语言只加载一次） */
+/** Loaded-language cache (each language loads only once) */
 const cache = new Map<string, Promise<Extension | null>>()
 
-/** 取某路径对应语言扩展（异步；未知语言返回 null = 纯文本） */
+/** Get the language extension for a path (async; unknown languages return null = plain text) */
 export function loadLanguageExtension(filePath: string): Promise<Extension | null> {
   const id = getLanguageId(filePath)
   const loader = LOADERS[id]

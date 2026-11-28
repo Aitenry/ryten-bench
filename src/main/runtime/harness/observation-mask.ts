@@ -1,16 +1,18 @@
 /**
- * 观测清理（observation masking）策略 — 纯函数，无 IO / 无 electron 依赖，便于单测。
+ * Observation masking policy — pure functions, no IO / no electron dependency, easy to unit test.
  *
- * 行业结论（Anthropic context editing、Gemini CLI、JetBrains《The Complexity Trap》）：
- * 旧工具结果占历史 token 的绝大部分，但模型真正需要的是「做过什么、结论是什么」，
- * 不是原始字节。最安全、最便宜的压缩就是**保留工具调用结构、把旧结果内容换成占位符**
- * ——绝不删消息本身（`tool_calls` 与工具结果必须成对，删一侧直接 400）。
+ * Practical experience: old tool results account for the vast majority of history tokens, but
+ * what the model really needs is "what was done and what the conclusion was", not the raw bytes.
+ * The safest and cheapest compression is to **keep the tool-call structure and replace old
+ * result content with placeholders** — never delete messages themselves (`tool_calls` and tool
+ * results must stay paired; deleting one side returns 400).
  *
- * 本模块只回答一个问题：给定按时间排列的对话（含各自的工具调用），哪些工具结果可以清？
- * 具体替换成什么文本、怎么写回消息，由 history.ts 负责。
+ * This module answers one question: given a time-ordered conversation (including its tool
+ * calls), which tool results can be cleared? What text replaces them and how messages are
+ * written back is history.ts's job.
  */
 
-/** 可清理的工具：结果可重放/可复现，丢了还能再读一次 */
+/** Mutable tools: results are replayable/reproducible; losing them just means reading again */
 export const MASKABLE_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'grep',
@@ -21,11 +23,11 @@ export const MASKABLE_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 export interface ObservationMaskPolicy {
-  /** 最近这么多**工具调用**原样保留（Anthropic 平台默认 keep=3，工程上 8 更稳） */
+  /** The most recent this many **tool calls** are kept verbatim (8 is a stable practical value) */
   keepToolPairs: number
-  /** 最近这么多**用户回合**内的工具结果原样保留（同一任务链往往跨多轮） */
+  /** Tool results within the most recent this many **user turns** are kept verbatim (one task chain often spans several turns) */
   keepUserTurns: number
-  /** 小于这个字符数的结果不清：省不下多少，反而增加噪声 */
+  /** Results shorter than this many characters are not masked: little is saved and noise increases */
   minChars: number
 }
 
@@ -37,7 +39,7 @@ export const DEFAULT_OBSERVATION_POLICY: ObservationMaskPolicy = {
 
 export interface MaskableToolCall {
   name: string
-  /** 该工具结果的字符数（缺省/空结果传 0） */
+  /** Character count of this tool result (pass 0 for missing/empty results) */
   chars: number
 }
 
@@ -47,23 +49,25 @@ export interface MaskableDialogue {
 }
 
 export interface ObservationMaskPlan {
-  /** 对话下标 → 该对话内要清理的工具下标集合 */
+  /** Conversation index → set of tool indexes to mask within that conversation */
   masked: Map<number, Set<number>>
-  /** 被清理的结果条数 */
+  /** Number of masked results */
   maskedCount: number
-  /** 被清理结果的原始字符总数（不含占位符） */
+  /** Total original character count of masked results (excluding placeholders) */
   maskedChars: number
 }
 
 /**
- * 计算清理计划。
+ * Computes the mask plan.
  *
- * 保护边界：从最新一条对话往前累计，直到「用户回合数 ≥ keepUserTurns」且
- * 「工具调用数 ≥ keepToolPairs」同时满足；边界**含**该条对话（一起保留）。
- * 边界之前的对话里，属于 [`MASKABLE_TOOLS`] 且长度 ≥ `minChars` 的结果才清。
+ * Protection boundary: accumulate from the newest conversation backwards until both "user
+ * turns >= keepUserTurns" and "tool calls >= keepToolPairs" hold; the boundary **includes**
+ * that conversation (kept entirely). In conversations before the boundary, only results that
+ * belong to [`MASKABLE_TOOLS`] and are at least `minChars` long are masked.
  *
- * 为什么按「对话行」切而不是按消息切：在本项目的数据模型里，一条 assistant 对话行
- * 带着它自己的全部 tool_calls 与结果，行与行之间切永远不会拆散配对。
+ * Why slice by "conversation row" instead of by message: in this project's data model one
+ * assistant conversation row carries all of its own tool_calls and results, so slicing between
+ * rows never splits a pair.
  */
 export function planObservationMask(
   dialogues: MaskableDialogue[],

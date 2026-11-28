@@ -1,15 +1,20 @@
 /**
- * 「资料整理」统一工具（manage_materials）——把原先分散的 manage_docs / manage_todos /
- * manage_wikis / search_graph 四个工具归一到**一个入口**。
+ * "Materials organization" unified tool (manage_materials) — consolidates the previously separate
+ * manage_docs / manage_todos / manage_wikis / search_graph tools into **one entry point**.
  *
- * 为什么要归一（用户 2026-11 反馈）：
- * - 工具下拉里四个条目各管一段，用户/模型都要先猜「这件事该找哪个工具」；
- * - 文档编辑只有整篇 update，改一行也要重写全文，颗粒度不够；
- * - 图谱搜索只回名字、没有 ID，查到之后无法继续打开来源文档或看关系。
+ * Why consolidate (user feedback, 2026-11):
+ * - The four entries in the tool dropdown each owned a slice, so users and the model both had to
+ *   guess "which tool should handle this task";
+ * - Document editing only had whole-document update, so changing one line still required
+ *   rewriting the whole text — the granularity was too coarse;
+ * - Graph search returned only names, no IDs, so after a hit you could not open the source
+ *   document or inspect relations.
  *
- * 现在：一个工具、按命令分域；文档读出带行号和 revision，并支持按行 / 行内列区间 /
- * 文本片段精修，写操作可带 expectedRevision / expectedOld / dryRun。
- * 旧的工具名会被迁移到 manage_materials（见 shared/harness/mcp.ts 的 LEGACY_TOOL_ALIASES）。
+ * Now: one tool, domains split by command; document reads return line numbers and the revision,
+ * and support precise edits by line / in-line column range / text fragment, while writes can
+ * carry expectedRevision / expectedOld / dryRun.
+ * Old tool names are migrated to manage_materials (see LEGACY_TOOL_ALIASES in
+ * shared/harness/mcp.ts).
  */
 import { mainFormat } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
@@ -59,16 +64,16 @@ import {
 } from './wikis'
 import { getGraphEntityHandler, searchGraphHandler } from './graph'
 
-/** 统一工具名（旧名迁移见 shared/harness/mcp.ts） */
+/** Unified tool name (old-name migration: see shared/harness/mcp.ts) */
 export const MANAGE_MATERIALS_TOOL = 'manage_materials'
 
 const COMMANDS = [
-  // 文档读取
+  // Document reads
   'doc.search',
   'doc.toc',
   'doc.get',
   'doc.find',
-  // 文档写入
+  // Document writes
   'doc.create',
   'doc.update',
   'doc.delete',
@@ -79,14 +84,14 @@ const COMMANDS = [
   'doc.delete_lines',
   'doc.delete_range',
   'doc.patch',
-  // 待办
+  // To-dos
   'todo.list',
   'todo.get',
   'todo.add',
   'todo.update',
   'todo.bulk_update',
   'todo.delete',
-  // 知识库
+  // Knowledge bases
   'kb.list',
   'kb.get',
   'kb.directories',
@@ -100,7 +105,7 @@ const COMMANDS = [
   'kb.archive',
   'kb.remove_doc',
   'kb.move_doc',
-  // 图谱
+  // Graph
   'graph.search',
   'graph.entity'
 ] as const
@@ -248,7 +253,7 @@ const schema = z.object({
   entityId: z.number().int().positive().optional().describe('[graph.entity] Entity ID'),
   ids: z.array(z.number().int().positive()).optional().describe('[todo.bulk_update] Todo IDs'),
   docIds: z.array(z.number().int().positive()).optional().describe('[kb.archive] Document IDs'),
-  // ── 查询 / 分页 ──
+  // ── Queries / pagination ──
   query: z.string().optional().describe('[doc.search/doc.find/todo.list/graph.search] Search text'),
   page: z
     .number()
@@ -300,7 +305,7 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe('[doc.find/doc.replace_text] Case-sensitive search (default false)'),
-  // ── 文档内容 / 编辑 ──
+  // ── Document content / editing ──
   title: z
     .string()
     .optional()
@@ -377,7 +382,7 @@ const schema = z.object({
     .describe(
       '[doc.patch] Ordered edits (line numbers refer to the document after previous edits)'
     ),
-  // ── 待办 ──
+  // ── To-dos ──
   status: z
     .number()
     .int()
@@ -398,7 +403,7 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe('[todo.list] Include completed items (default true)'),
-  // ── 知识库 ──
+  // ── Knowledge bases ──
   name: z.string().optional().describe('[kb.create_dir/rename_dir] Directory name'),
   parentId: z.number().int().positive().optional().describe('[kb.create_dir] Parent directory ID'),
   fromDirectoryId: z
@@ -413,7 +418,7 @@ const schema = z.object({
     .positive()
     .optional()
     .describe('[kb.move_doc] Target directory ID (must be in the same wiki)'),
-  // ── 图谱 ──
+  // ── Graph ──
   type: z
     .string()
     .optional()
@@ -451,7 +456,7 @@ async function dispatch(params: MaterialParams): Promise<string> {
   const p: Record<string, unknown> = params
   const command = params.command
   switch (command) {
-    // ── 文档读取 ──
+    // ── Document reads ──
     case 'doc.search':
       return (
         missing(p, ['query']) ||
@@ -482,7 +487,7 @@ async function dispatch(params: MaterialParams): Promise<string> {
           contextLines: params.contextLines
         })
       )
-    // ── 文档写入 ──
+    // ── Document writes ──
     case 'doc.create':
       return (
         missing(p, ['title']) ||
@@ -599,7 +604,7 @@ async function dispatch(params: MaterialParams): Promise<string> {
           dryRun: params.dryRun
         })
       )
-    // ── 待办 ──
+    // ── To-dos ──
     case 'todo.list':
       return listTodosHandler({
         status: params.status,
@@ -649,7 +654,7 @@ async function dispatch(params: MaterialParams): Promise<string> {
       )
     case 'todo.delete':
       return missing(p, ['todoId']) || deleteTodoHandler({ todoId: params.todoId! })
-    // ── 知识库 ──
+    // ── Knowledge bases ──
     case 'kb.list':
       return listWikisHandler({ page: params.page, pageSize: params.pageSize })
     case 'kb.get':
@@ -714,7 +719,7 @@ async function dispatch(params: MaterialParams): Promise<string> {
           toDirectoryId: params.toDirectoryId!
         })
       )
-    // ── 图谱 ──
+    // ── Graph ──
     case 'graph.search':
       return (
         missing(p, ['query']) ||
@@ -747,7 +752,7 @@ export function buildManageMaterialsTool(): StructuredToolInterface {
   })
 }
 
-/** 本工具是 notes（资料库）提供给 AI 的唯一入口 */
+/** This tool is the only entry point the notes (materials) library provides to the AI */
 export const materialsToolContributions: PluginToolContribution[] = [
   {
     name: MANAGE_MATERIALS_TOOL,

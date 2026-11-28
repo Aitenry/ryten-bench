@@ -4,14 +4,16 @@ import type { harnessZhCN } from './locales/zh-CN/harness'
 import type { notesZhCN } from './locales/zh-CN/notes'
 
 /**
- * 为 i18next 注入资源类型：`t()` 的键路径由中文源语言推导，
- * 拼错键名或使用未定义的键会直接是 TS 编译错误。
+ * Injects resource types into i18next: `t()` key paths are derived from the Chinese source
+ * language, so a mistyped key name or an undefined key is a TS compile error.
  *
- * **内置**插件词条（notes / graph / graphSettings、harness / agentSettings / memorySettings /
- * skillsSettings）在运行期由插件 install 时注册，不在中央资源里，但它们的**源语言类型**仍是
- * `t()` 键校验的依据——所以这里按内置插件与中央资源的键空间求并集（两者键不重叠）。
- * 第三方插件（如 `task-planner` / `music-player`）不走这里：宿主不认识它们的键，
- * 它们在自己的仓库里校验自己的词条。
+ * **Built-in** plugin entries (notes / graph / graphSettings, harness / agentSettings /
+ * memorySettings / skillsSettings) are registered at runtime by the plugin's install and are not
+ * part of the central resources, but their **source-language types** are still what `t()` key
+ * checking relies on — so the key spaces of the built-in plugins and the central resources are
+ * unioned here (the two do not overlap).
+ * Third-party plugins (such as `task-planner` / `music-player`) do not go through here: the host
+ * does not know their keys, so they validate their own entries in their own repositories.
  */
 declare module 'i18next' {
   interface CustomTypeOptions {

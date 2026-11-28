@@ -37,13 +37,16 @@ export {
 } from './types'
 
 /**
- * 设置里三个存储路径发生变化时，把旧目录的数据迁到新目录。
+ * When one of the three storage paths in settings changes, migrate the data from the old directory
+ * to the new one.
  *
- * 触发点只有一个口径：`system-settings-update`（内存/技能由设置页直接写；
- * 插件存放路径另有 `workshop-set-root` 通道，那边走同一个搬迁内核）。
+ * There is a single trigger point: `system-settings-update` (memory and skills are written directly
+ * from the settings page; the plugin storage path has its own `workshop-set-root` channel, which uses
+ * the same migration core).
  *
- * 顺序有意义：**先搬文件，成功后才允许调用方落设置**。搬失败就抛错、设置保持原值，
- * 用户不会遇到「设置已经指向新目录、数据还在旧目录」的半成品状态。
+ * Order matters: **move the files first, and only let the caller persist the settings after success**.
+ * A failed move throws and leaves the settings unchanged, so users never end up with settings pointing
+ * at the new directory while the data is still in the old one.
  */
 export async function migrateChangedStoragePaths(
   previous: HarnessSettings,
@@ -59,10 +62,11 @@ export async function migrateChangedStoragePaths(
       if (activeHarnessStreams.size > 0) {
         throw new Error('有正在进行的对话，暂时不能迁移记忆存储目录：请等本轮结束再试')
       }
-      // 记忆目录里有 Mnemon 的 PGlite（进程内持有文件句柄）：先关掉，
-      // 否则 Windows 上目录搬不动（EBUSY/EPERM）；下一次访问会按新路径重新打开。
-      // 惰性 import：PGlite / 记忆栈只在真的要迁移记忆目录时才加载，
-      // 不让「改个设置」把整套记忆运行时拖进 core 的启动路径。
+      // The memory directory contains the memory runtime's PGlite database (file handles held by the
+      // process): close it first, otherwise the directory cannot be moved on Windows (EBUSY/EPERM);
+      // the next access reopens it at the new path.
+      // Lazy import: PGlite / the memory stack is loaded only when the memory directory actually has to
+      // be migrated, so a mere settings change does not drag the whole memory runtime into core startup.
       const { closeAllMnemon } = await import('../services/harness/mnemon-singleton')
       await closeAllMnemon()
     }

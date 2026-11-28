@@ -9,28 +9,30 @@ import type { ToolCardKind } from '../../../../shared/harness/types'
 import { harnessApi } from '../../api/harness'
 
 /**
- * 工具结果详情页签（右侧面板）。
+ * Tool result detail tab (right side panel).
  *
- * 内置工具（ls / glob / grep / execute）的结果不进 IPC、不落库，只按
- * (topicId, callId) 另存在主进程（见 runtime/tool-output-store.ts）。用户点开卡片时
- * 才把这份原文取回来，并按工具语义就地解析成可读视图：
- *  - execute → 终端式输出（退出码 + 等宽正文）
- *  - grep    → 命中行列表（路径:行号 + 内容，点击打开文件）
- *  - glob    → 路径列表（点击打开文件）
- *  - ls      → 目录条目（点击打开文件）
+ * Results of built-in tools (ls / glob / grep / execute) do not go through IPC or the database;
+ * they are stored separately in the main process by (topicId, callId) (see
+ * runtime/tool-output-store.ts). Only when the user opens a card is this raw text fetched back and
+ * parsed in place into a readable view according to the tool semantics:
+ *  - execute → terminal-style output (exit code + monospace body)
+ *  - grep    → list of matching lines (path:line + content, click to open the file)
+ *  - glob    → list of paths (click to open the file)
+ *  - ls      → directory entries (click to open the file)
  *
- * 解析失败（历史遗留或格式变化）时原样展示纯文本，绝不吞掉内容。
+ * When parsing fails (legacy data or a format change) the plain text is shown verbatim; content is
+ * never swallowed.
  */
 
 export interface ToolDetailTab {
-  /** 页签唯一键：`tool:<topicId>:<callId>` */
+  /** Unique tab key: `tool:<topicId>:<callId>` */
   key: string
-  /** 页签名（显示在页签栏） */
+  /** Tab name (shown in the tab bar) */
   name: string
   topicId: number
   callId: string
   kind: ToolCardKind
-  /** 页签内标题（命令 / 模式 / 目录路径） */
+  /** In-tab title (command / pattern / directory path) */
   title: string
   exitCode?: number
 }
@@ -42,9 +44,9 @@ interface ToolDetailStyle {
   colorTextTertiary: string
 }
 
-/** 发丝线（与面板其它分隔线同款） */
+/** Hairline (same as the panel's other dividers) */
 const hairline = (style: ToolDetailStyle): string => (style.isDarkMode ? '#1e1e1e' : '#e4e4e4')
-/** 极浅分隔/悬停底色 */
+/** Very faint divider/hover background */
 const faintFill = (style: ToolDetailStyle): string =>
   style.isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'
 
@@ -54,7 +56,7 @@ interface GrepMatch {
   content?: unknown
 }
 
-/** 目录条目 / 路径列表行：点击打开文件（有 bridge 时） */
+/** Directory entry / path list row: click to open the file (when a bridge exists) */
 const ListRow: React.FC<{
   style: ToolDetailStyle
   label: string
@@ -198,7 +200,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
 
   const body = (): React.ReactNode => {
     if (loading) {
-      /* 输出是等宽文本，按行铺骨架；配色跟这块面板自己的暗色皮肤走，不读 antd token */
+      /* Output is monospace text, so lay the skeleton out per line; colors follow this panel's own dark skin rather than antd tokens */
       return (
         <div className="p-3 h-full">
           <SkeletonTextLines lines={12} dark={style.isDarkMode} />
@@ -221,7 +223,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       parsed = null
     }
 
-    // 解析失败兜底：原样展示（等宽、可滚动、保留换行）
+    // Fallback when parsing fails: show verbatim (monospace, scrollable, preserves newlines)
     if (!parsed) {
       return (
         <pre
@@ -242,7 +244,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       )
     }
 
-    // ── execute：终端式输出 ──
+    // ── execute: terminal-style output ──
     if (tab.kind === 'command') {
       const stdout = typeof parsed.stdout === 'string' ? parsed.stdout : ''
       return (
@@ -264,7 +266,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       )
     }
 
-    // ── grep：命中行列表 ──
+    // ── grep: matching line list ──
     if (Array.isArray(parsed.matches)) {
       const matches = parsed.matches as GrepMatch[]
       if (matches.length === 0) {
@@ -325,9 +327,9 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       )
     }
 
-    // ── ls：目录条目（files/dirs 是名字，需与 path 拼成可打开路径）──
-    // 注意先判 dirs：ls 的输出同时含 files，若按 files 先判会把 glob 的路径表
-    // 误当作「目录下的文件名」再拼一次路径
+    // ── ls: directory entries (files/dirs are names and must be joined with path to be openable)──
+    // Check dirs first: ls output also contains files, and checking files first would misread
+    // glob's path list as "file names under a directory" and join the path a second time
     if (Array.isArray(parsed.dirs)) {
       const dirs = Array.isArray(parsed.dirs) ? (parsed.dirs as string[]) : []
       const files = Array.isArray(parsed.files) ? (parsed.files as string[]) : []
@@ -359,7 +361,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       )
     }
 
-    // ── glob：路径列表（末尾带 / 的是目录）──
+    // ── glob: path list (entries ending with / are directories) ──
     if (Array.isArray(parsed.files)) {
       const files = parsed.files as string[]
       if (files.length === 0) {
@@ -387,7 +389,7 @@ const ToolDetailView: React.FC<{ tab: ToolDetailTab; style: ToolDetailStyle }> =
       )
     }
 
-    // 兜底：未知结构原样展示
+    // Fallback: show unknown structures verbatim
     return (
       <pre
         className="harness-scrollbar"

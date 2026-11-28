@@ -24,37 +24,41 @@ import * as documentUtils from '@renderer/utils/document'
 import * as providerMeta from '@renderer/utils/providerMeta'
 
 /**
- * 渲染层**宿主 UI 表**（插件打包方案见 src/main/workshop/README.md）。
+ * Renderer-side **host UI table**.
  *
- * 背景：插件包（`userData/plugins/<id>/renderer.mjs`）不能各自再打一份 React / antd /
- * i18n —— 那会得到第二个 React 实例（hooks 直接崩）、与宿主不同的 antd 主题上下文、
- * 互不可见的 i18n 词条。因此打包时把插件源码里指向宿主 UI 的导入与第三方 vendor 都
- * 改写成 `plugin://host/ui.js?m=<key>`，由主进程的协议处理器动态生成 ESM 桥，
- * 桥里的每个导出都指向**宿主这里的同一份实例**。
+ * Background: plugin bundles (`userData/plugins/<id>/renderer.mjs`) must not each bundle another
+ * copy of React / antd / i18n — that would yield a second React instance (hooks crash outright), a
+ * different antd theme context from the host, and i18n resources invisible to each other. Packaging
+ * therefore rewrites plugin imports that point at host UI and third-party vendors to
+ * `plugin://host/ui.js?m=<key>`, and the main process's protocol handler generates the ESM bridge
+ * dynamically, with every export pointing at **the same instance here in the host**.
  *
- * 键的两种形态（与工坊构建产物一致）：
- * - `@host/renderer/<相对 src/renderer/src 的路径，无扩展名>`：宿主 UI 模块；
- * - `@host/vendor/<包名>`：宿主里的第三方 vendor 唯一实例。
+ * Two key shapes (same as workshop build output):
+ * - `@host/renderer/<path relative to src/renderer/src, no extension>`: a host UI module;
+ * - `@host/vendor/<package name>`: the single vendor instance in the host.
  *
- * **导出名必须显式列出，不能靠 `Object.keys(模块对象)` 猜**（2026-09-26 实测踩坑）：
- * `src/renderer/src/i18n/index.ts` 的默认导出是 i18next 实例，`import * as ns` 拿到的是
- * **实例对象**而不是模块命名空间 —— `Object.keys(ns)` 全是 i18next 自己的属性
- * （`t`/`use`/`init`…），`ns.useTranslation` 是 undefined。桥按这份名单生成
- * `export const X = m["X"]`，名单错了插件在运行期就拿到 undefined。
- * `assertHostUiShape()` 在启动时会核对名单，缺名字会在控制台点名（而不是等插件白屏）。
+ * **Export names must be listed explicitly, never guessed via `Object.keys(module object)`**
+ * (measured pitfall, 2026-09-26): the default export of `src/renderer/src/i18n/index.ts` is the
+ * i18next instance, and `import * as ns` yields **that instance object**, not the module namespace
+ * — `Object.keys(ns)` returns i18next's own properties (`t`/`use`/`init`…), and
+ * `ns.useTranslation` is undefined. The bridge generates `export const X = m["X"]` from this list,
+ * so a wrong list means plugins get undefined at runtime.
+ * `assertHostUiShape()` checks the list at startup and names missing exports in the console (rather
+ * than waiting for a plugin to go blank).
  *
- * vendor（react/antd/图标）是真正的打包产物命名空间，用 `Object.keys` 枚举是可靠的：
- * 它们由宿主打包器产出，键就是导出名。例外是 **dayjs**：它只有默认导出（见下表内的说明），
- * 因此和宿主 UI 模块一样显式写名单。
+ * Vendors (react/antd/icons) are genuine bundler namespaces, so `Object.keys` enumeration is
+ * reliable: the host bundler produces them and their keys are the export names. The exception is
+ * **dayjs**: it only has a default export (see the note in the table below), so it gets an
+ * explicit list like host UI modules.
  */
 export interface HostUiEntry {
-  /** 模块实例（插件的 import 最终取的就是这个对象） */
+  /** Module instance (what a plugin's import ultimately receives) */
   module: unknown
-  /** 该键允许插件具名导入的导出名（`default` 不需要列，桥会额外提供） */
+  /** Export names the plugin may import by name for this key (`default` need not be listed; the bridge adds it) */
   names: string[]
 }
 
-/** vendor 命名空间：键即导出名 */
+/** Vendor namespace: keys are the export names */
 const vendor = (mod: unknown): HostUiEntry => ({
   module: mod,
   names:
@@ -63,17 +67,17 @@ const vendor = (mod: unknown): HostUiEntry => ({
       : []
 })
 
-/** 宿主 UI 模块：显式列导出名（见上方注释） */
+/** Host UI module: exports listed explicitly (see the comment above) */
 const hostModule = (mod: unknown, names: string[]): HostUiEntry => ({ module: mod, names })
 
 /**
- * 宿主 UI / vendor 表。
+ * Host UI / vendor table.
  *
- * `react/jsx-runtime` 与 `react` 指向同一份 React（react-jsx-runtime 内部
- * `require('react')`），因此 `<div/>` 的自动 JSX 运行时与 `useState` 绝不会分裂。
+ * `react/jsx-runtime` and `react` point at the same React (react-jsx-runtime's internal
+ * `require('react')`), so the automatic JSX runtime for `<div/>` and `useState` never diverge.
  */
 export const HOST_UI: Record<string, HostUiEntry> = {
-  // ---------- 宿主 UI 模块 ----------
+  // ---------- Host UI modules ----------
   '@host/renderer/i18n': hostModule(i18n, [
     'i18n',
     'useTranslation',
@@ -150,15 +154,16 @@ export const HOST_UI: Record<string, HostUiEntry> = {
     []
   ),
   '@host/renderer/components/effects/ShinyText': hostModule(
-    // ShinyText 必须同时给具名与默认：harness 插件里是 `import { ShinyText, ShinyIcon }`，
-    // 只给 default 时桥里没有 `ShinyText` 这个绑定 → 运行期 undefined → JSX 直接抛
-    // 「Element type is invalid」（test/verify-plugin-host-ui-exports.mjs 就是防这一类）。
+    // ShinyText must provide both named and default: in the harness plugin it is
+    // `import { ShinyText, ShinyIcon }`; with only default the bridge has no `ShinyText` binding
+    // → undefined at runtime → JSX throws "Element type is invalid"
+    // (test/verify-plugin-host-ui-exports.mjs guards exactly this case).
     { default: ShinyText, ShinyText, ShinyIcon },
     ['ShinyText', 'ShinyIcon']
   ),
   '@host/renderer/components/provider/provider-mark': hostModule({ default: ProviderMark }, []),
 
-  // ---------- vendor（宿主里的唯一实例） ----------
+  // ---------- vendor (the single instances in the host) ----------
   '@host/vendor/react': vendor(React),
   '@host/vendor/react/jsx-runtime': vendor(ReactJsxRuntime),
   '@host/vendor/react-dom': vendor(ReactDom),
@@ -167,31 +172,36 @@ export const HOST_UI: Record<string, HostUiEntry> = {
   '@host/vendor/@remixicon/react': vendor(RemixIcons),
   '@host/vendor/@ant-design/icons': vendor(AntIcons),
   /**
-   * dayjs 只有**默认导出**（可调用对象，静态方法挂在它自己身上）。
+   * dayjs only has a **default export** (a callable object with its static methods on it).
    *
-   * 这里刻意不用 `vendor(dayjs)`：`vendor()` 用 `Object.keys` 枚举命名导出，而 dayjs 是函数、
-   * 拿到的是空名单（结果一样但语义含糊）。写成 `hostModule({ default: dayjs }, [])` 明说
-   * 「插件只能 `import dayjs from 'dayjs'`」，桥会生成 `export default m.default ?? m`。
+   * `vendor(dayjs)` is deliberately not used here: `vendor()` enumerates named exports via
+   * `Object.keys`, but dayjs is a function, so that yields an empty list (same result, fuzzier
+   * semantics). Writing `hostModule({ default: dayjs }, [])` states explicitly that "plugins may
+   * only `import dayjs from 'dayjs'`", and the bridge generates `export default m.default ?? m`.
    *
-   * 为什么必须走桥（P2 实测）：宿主 `@renderer/i18n` import 了 dayjs 并全局设过 locale；
-   * 插件自带第二份会得到另一个 Dayjs 类，`isDayjs()`、antd DatePicker 受控值与 locale 全部分裂。
+   * Why the bridge is required (measured in P2): the host's `@renderer/i18n` imports dayjs and sets
+   * the locale globally; a plugin shipping its own copy would get a different Dayjs class, splitting
+   * `isDayjs()`, antd DatePicker controlled values, and locale.
    */
   '@host/vendor/dayjs': hostModule({ default: dayjs }, [])
 }
 
-/** 宿主 UI 表里的全部模块键（渲染层 loader 据此判断哪些说明符该走桥） */
+/** All module keys in the host UI table (the renderer loader uses them to decide which specifiers go through the bridge) */
 export function hostUiKeys(): string[] {
   return Object.keys(HOST_UI)
 }
 
 /**
- * 宿主 vendored 实例（`ctx.require(name)` 那条老路径的表）。
+ * Host vendored instances (the table behind the legacy `ctx.require(name)` path).
  *
- * 第三方插件如果在自己的构建里把 react/antd 标成 external，就靠这张表拿到宿主**唯一**的那份实例，
- * 杜绝双重 React / antd 上下文分裂。P5 起四个内置插件都走 `@host/vendor/<spec>` 桥（同一批实例，
- * 见上表），这里保留是为了仍用 `ctx.require` 的老式第三方插件（兼容路径，仓内已无示例）。
+ * If a third-party plugin marks react/antd as external in its own build, it gets the host's
+ * **single** instance from this table, preventing duplicate React / split antd contexts. Since P5
+ * all four built-in plugins go through the `@host/vendor/<spec>` bridge (the same instances, see
+ * the table above); this is kept for old-style third-party plugins that still use `ctx.require`
+ * (compatibility path, no examples left in the repo).
  *
- * 与 HOST_UI 里 `@host/vendor/*` 指向的是**同一次 import**，因此两份表不会给出两个 React。
+ * These point at the **same import** as `@host/vendor/*` in HOST_UI, so the two tables never yield
+ * two Reacts.
  */
 export const vendorModules: Record<string, unknown> = {
   react: React,
@@ -200,9 +210,11 @@ export const vendorModules: Record<string, unknown> = {
 }
 
 /**
- * 核对表里声明的导出名是否真的存在于模块上（名单写错的早期发现手段）。
+ * Verify that the export names declared in the table really exist on the modules (early detection
+ * for wrong lists).
  *
- * 只告警不抛错：少一个名字最多让某个插件加载失败并报点名错误，不该连累宿主启动。
+ * Warn only, never throw: a missing name at worst makes one plugin fail to load with a named error,
+ * and should not take down host startup.
  */
 export function assertHostUiShape(): void {
   const problems: string[] = []
@@ -222,7 +234,8 @@ export function assertHostUiShape(): void {
 }
 
 /**
- * 挂表 + 把键与导出名报给主进程（协议处理器据此生成 ESM 桥）。
+ * Install the table + report keys and export names to the main process (the protocol handler
+ * generates the ESM bridge from them).
  */
 export function installHostUi(): void {
   assertHostUiShape()
@@ -233,7 +246,8 @@ export function installHostUi(): void {
   try {
     window.api.plugin.reportHostUi(names)
   } catch (err) {
-    // 不抛：宿主 UI 表本身已经可用（vendor 桥仍能工作），只是 host 桥会报可读错误
+    // Not thrown: the host UI table itself is already usable (the vendor bridge still works); only
+    // the host bridge reports a readable error
     console.warn('[plugin-host] Failed to report host UI export names (host bridge may be unavailable):', err)
   }
 }

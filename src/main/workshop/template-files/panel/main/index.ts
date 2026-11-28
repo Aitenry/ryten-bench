@@ -4,7 +4,7 @@ import * as path from 'path'
 import { PLUGIN_PURGE } from '@host/main/plugins/contributions'
 import type { MainPluginContext } from './context'
 
-/** 设置项落盘位置（userData 下，不污染用户的工作区） */
+/** Where settings are persisted (under userData, keeping the user's workspace clean) */
 let settingsFile = ''
 let cache: { enabled: boolean; note: string } = { enabled: false, note: '' }
 
@@ -16,7 +16,7 @@ export function install(ctx: MainPluginContext): void {
     try {
       cache = { ...cache, ...(JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as object) }
     } catch {
-      // 首次运行没有文件：用默认值
+      // No file on first run: keep the defaults
     }
     return () => {
       settingsFile = ''
@@ -35,7 +35,7 @@ export function install(ctx: MainPluginContext): void {
     }
   })
 
-  // 卸载时勾了「同时删除数据」才会跑到：清掉自己的设置文件
+  // Only reached when "delete data too" is checked on uninstall: remove this settings file
   ctx.contribute(PLUGIN_PURGE, {
     label: '本插件的设置（plugin-state/${vars.id}.json）',
     run: () => {

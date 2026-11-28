@@ -11,15 +11,18 @@ import { graphIpcHandlers } from '../ipc/notes/graph'
 import { notesToolContributions } from '../tools/notes'
 
 /**
- * 「资料库」主进程装配（系统级功能，不再是插件）。
+ * Main-process assembly for the library (system-level feature, no longer a plugin).
  *
- * - **通道表**：5 个域（todo / document / wiki / node-position / graph），
- *   一个域一个文件，通道名一律 `notes:*`；
- * - **AI 工具**：`manage_materials`（资料整理）一个入口覆盖文档 / 待办 / 知识库 /
- *   图谱（实现见 `tools/notes/**`），注册进 harness 的工具注册表，模型因此能读写资料库；
- *   与第三方插件走同一个 `harness.tool` 消费点，只是这里是随应用编译进来的内置来源；
- * - **图谱事件**：`notes:graph-build-{progress,complete,error}` 由主进程广播、
- *   渲染层 `BuildProgressProvider` 订阅，通道名前缀由 preload 系统桥放行。
+ * - **Channel table**: 5 domains (todo / document / wiki / node-position / graph), one file per
+ *   domain, all channel names prefixed with `notes:*`;
+ * - **AI tools**: `manage_materials` (material organization) is a single entry point covering
+ *   documents / todos / knowledge bases / graphs (implementation in `tools/notes/**`); it is
+ *   registered in the harness tool registry so the model can read and write the library. It uses
+ *   the same `harness.tool` consumption point as third-party plugins, but comes from a built-in
+ *   source compiled into the app;
+ * - **Graph events**: `notes:graph-build-{progress,complete,error}` are broadcast by the main
+ *   process and subscribed to by the renderer's `BuildProgressProvider`; the preload system
+ *   bridge allows the channel prefix.
  */
 let disposers: Array<() => void> = []
 let started = false
@@ -47,7 +50,7 @@ export function stopNotes(): void {
     try {
       dispose()
     } catch {
-      // 忽略：退出路径上不再抛错
+      // Ignored: no throwing on the shutdown path
     }
   }
   disposers = []

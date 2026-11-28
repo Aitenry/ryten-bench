@@ -1,10 +1,12 @@
 /**
- * 插件系统错误码（三端共用）。
+ * Plugin system error codes (shared by all three sides).
  *
- * 命名对应 Cordis 语义：
- * - UNDECLARED_ACCESS：未声明依赖却访问上下文键（论文 6.3 capability 模型）；
- * - MISSING_DEP：声明依赖在当前状态下无法满足（没有宿主键/没有已激活提供者）；
- * - CHANNEL_FORBIDDEN：通道未注册/插件未启用/前缀不匹配（主进程权威校验）。
+ * - UNDECLARED_ACCESS: accessing a context key without declaring the dependency
+ *   (the capability model);
+ * - MISSING_DEP: a declared dependency cannot be satisfied in the current state
+ *   (no host key / no active provider);
+ * - CHANNEL_FORBIDDEN: channel not registered / plugin not enabled / prefix mismatch
+ *   (authoritative check in the main process).
  */
 
 export const PLUGIN_ERROR = {
@@ -21,7 +23,7 @@ export const PLUGIN_ERROR = {
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR)[keyof typeof PLUGIN_ERROR]
 
-/** 插件系统错误类型 */
+/** Plugin system error type */
 export class PluginError extends Error {
   readonly code: PluginErrorCode
 

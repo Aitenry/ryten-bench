@@ -17,31 +17,36 @@ import { task_dependencies, todo_items } from '../../database/schema/notes/todo'
 import { wiki, wiki_directories } from '../../database/schema/notes/wiki'
 
 /**
- * notes 插件的**自清数据**实现（`plugin.purge` 贡献，契约见 `src/main/plugins/contributions.ts`）。
+ * **Self-purge data** implementation for the notes plugin (contributed via `plugin.purge`, contract in
+ * `src/main/plugins/contributions.ts`).
  *
- * 卸载插件且用户勾了「同时删除该插件的全部数据」时由宿主调用。本插件的用户数据是**用户自己写的东西**
- * （文档、待办、知识库、图谱），所以确认框必须把「会删什么」写清楚——这一条属于插件的
- * `label`/面板文案，实现上这里只负责删干净、且**只删自己的**：
+ * Called by the host when the plugin is uninstalled and the user checked "also delete all data for this
+ * plugin". This plugin's user data is **what the user wrote themselves** (documents, todos, knowledge bases,
+ * graphs), so the confirmation dialog must spell out what will be deleted — that belongs to the plugin's
+ * `label`/panel copy; this implementation is only responsible for deleting thoroughly and **only its own data**:
  *
- * 1. `graph_relations` → `graph_entities` → `graph_build_jobs`（挂在知识库下，知识库删了也会级联，
- *    但显式按「子 → 父」删，不依赖运行期外键）；
- * 2. `directory_documents`（目录 ↔ 文档的多对多关联）→ `documents_content`（正文，含配图外键）
- *    → `wiki_directories` → `documents` → `wiki`；
- * 3. `task_dependencies` → `todo_items`（待办与待办依赖）；
- * 4. `node_positions`：图谱画布节点坐标（core 的表，但**只有本插件读写**，见
- *    `main/db/mapper/node-position.ts`）；
- * 5. `images`：core 的图片表，这里只删**确实由本插件插入**的行（文档配图 / 知识库封面
- *    via `image_id`），不碰 music 的封面行；
- * 6. 设置键 `graph`（图谱构建参数）：唯一的编辑器是本插件的图谱设置页，core 在启动时
- *    发现缺失会用默认值补上（`loading-window.ts`），所以删掉等于「回到默认」。
+ * 1. `graph_relations` → `graph_entities` → `graph_build_jobs` (they hang off the knowledge base and would
+ *    cascade when it is deleted, but we delete explicitly from child → parent, without relying on runtime
+ *    foreign keys);
+ * 2. `directory_documents` (many-to-many directory ↔ document links) → `documents_content` (body, including the
+ *    image foreign key) → `wiki_directories` → `documents` → `wiki`;
+ * 3. `task_dependencies` → `todo_items` (todos and todo dependencies);
+ * 4. `node_positions`: graph canvas node coordinates (a core table, but **only this plugin reads/writes it**,
+ *    see `main/db/mapper/node-position.ts`);
+ * 5. `images`: the core image table; here only rows **actually inserted by this plugin** are deleted (document
+ *    images / knowledge base covers via `image_id`), music cover rows are untouched;
+ * 6. Settings key `graph` (graph build parameters): the only editor is this plugin's graph settings page, and
+ *    core fills in defaults at startup when it finds it missing (`loading-window.ts`), so deleting it means
+ *    "back to defaults".
  *
- * 表结构一律不动：迁移由 core 统一应用，卸载后迁移记录必须仍然一致。
- * 不删任何磁盘文件（本插件没有应用托管的目录，图片以 base64 存在 `images.data` 里）。
+ * Table schemas are never touched: migrations are applied centrally by core, and migration records must remain
+ * consistent after uninstall. No disk files are deleted (this plugin has no app-managed directory; images live
+ * as base64 in `images.data`).
  */
 export async function purgeHomeData(): Promise<void> {
   const counts = await withOrm('purgeHomeData.deleteRows', async (db) =>
     db.transaction(async (tx) => {
-      // ① 先取出要清理的图片 id（删行之后就查不到了）
+      // ① Collect the image ids to clean up first (they cannot be queried once the rows are deleted)
       const imageIds = new Set<string>()
       const docImages = await tx
         .select({ image_id: documents_content.image_id })
@@ -54,23 +59,23 @@ export async function purgeHomeData(): Promise<void> {
         .where(isNotNull(wiki.image_id))
       for (const row of wikiImages) if (row.image_id) imageIds.add(row.image_id)
 
-      // ② 图谱（挂在知识库下）
+      // ② Graph (hangs off the knowledge base)
       const relations = await tx.delete(graph_relations).returning({ id: graph_relations.id })
       const entities = await tx.delete(graph_entities).returning({ id: graph_entities.id })
       const jobs = await tx.delete(graph_build_jobs).returning({ id: graph_build_jobs.id })
 
-      // ③ 文档 / 目录 / 知识库
+      // ③ Documents / directories / knowledge bases
       const links = await tx.delete(directory_documents).returning({ id: directory_documents.id })
       const contents = await tx.delete(documents_content).returning({ id: documents_content.id })
       const directories = await tx.delete(wiki_directories).returning({ id: wiki_directories.id })
       const docs = await tx.delete(documents).returning({ id: documents.id })
       const wikis = await tx.delete(wiki).returning({ id: wiki.id })
 
-      // ④ 待办
+      // ④ Todos
       const deps = await tx.delete(task_dependencies).returning({ id: task_dependencies.id })
       const todos = await tx.delete(todo_items).returning({ id: todo_items.id })
 
-      // ⑤ 画布坐标 + 仅被本插件引用的图片行
+      // ⑤ Canvas positions + image rows referenced only by this plugin
       const positions = await tx
         .delete(node_positions)
         .returning({ node_id: node_positions.node_id })
@@ -99,7 +104,7 @@ export async function purgeHomeData(): Promise<void> {
     })
   )
 
-  // ⑥ 图谱设置回默认（core 下次启动会补默认值）
+  // ⑥ Reset graph settings to defaults (core fills in defaults on its next startup)
   settingsStore.delete('graph')
 
   logger.info(

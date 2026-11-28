@@ -1,8 +1,10 @@
 ﻿/**
- * 内置搜索适配器：DuckDuckGo HTML 端点（零配置、无需密钥，永远可用的兜底）。
+ * Built-in search adapter: the DuckDuckGo HTML endpoint (zero-config, no key required, always
+ * available as a fallback).
  *
- * 复用 `web_fetch` 已有的抓取与解析逻辑（`tools/harness/web-core`），保证内置搜索
- * 与之前的 `web_search` 行为一致（UA、超时、大小上限、结果解析都同源）。
+ * Reuses the existing fetch and parse logic of `web_fetch` (`tools/harness/web-core`) so built-in
+ * search behaves the same as the previous `web_search` (UA, timeouts, size caps and result parsing
+ * all share one source).
  */
 import { fetchReadable, parseDuckDuckGoResults } from '../tools/harness/web-core'
 import type { SearchOutcome, SearchProvider, SearchRequest } from './types'

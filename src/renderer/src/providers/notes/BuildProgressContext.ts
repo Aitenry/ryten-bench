@@ -3,7 +3,7 @@ import type { BuildProgressContextType } from './build-progress'
 
 export type { BuildProgressContextType }
 
-/** 图谱构建进度的上下文（Provider 与消费方都在 notes 插件内） */
+/** Graph build progress context (both the Provider and its consumers live in the notes plugin) */
 export const BuildProgressContext = React.createContext<BuildProgressContextType | undefined>(
   undefined
 )

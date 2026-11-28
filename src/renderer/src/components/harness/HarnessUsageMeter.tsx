@@ -10,31 +10,39 @@ import {
 } from '../../utils/harness/usage'
 
 /**
- * 输入框底栏右侧的用量状态条，两种形态：
+ * Usage status bar on the right of the input box footer, with two shapes:
  *
- * - **生成中**：`本轮 3 次调用 · 12.4k tok` —— 主进程每结束一次模型往返就推一条
- *   `harness-turn-usage`（本轮累计），这里直接显示；数字只增不减，不做插值。
- * - **空闲**：`2.5M tok · 缓存命中 98%  ◯ 8%` —— 累计 token → 缓存命中率 → 上下文占用圆环。
+ * - **Generating**: `3 calls this turn · 12.4k tok` — the main process pushes one
+ *   `harness-turn-usage` each time a model round trip ends (accumulated for the turn), shown
+ *   directly here; numbers only grow, no interpolation.
+ * - **Idle**: `2.5M tok · 98% cache hit  ◯ 8%` — cumulative tokens → cache hit rate → context
+ *   usage ring.
  *
- * 空闲形态的数值全部来自 `harness_dialogue_usage`（模型真实回传的 token，按话题整段累加）：
- * - 累计 token：各轮 total 之和；
- * - 缓存命中：缓存读取 / 输入 token；
- * - 圆环：最近一次模型调用的上下文规模 / 模型档案里的 `context_window`。
+ * Idle values all come from `harness_dialogue_usage` (tokens really reported by the model,
+ * accumulated over the whole topic):
+ * - cumulative tokens: the sum of every turn's total;
+ * - cache hit: cache reads / input tokens;
+ * - ring: context size of the most recent model call / the model profile's `context_window`.
  *
- * 任何一项拿不到就不画那一项（没有缓存明细 → 不显示「缓存命中」；模型档案没填
- * 上下文窗口 → 不画圆环；整段会话没有用量 → 整条不渲染），不做估算。
+ * A value that cannot be obtained is simply not drawn (no cache details → no "cache hit"; no
+ * context window in the model profile → no ring; no usage at all for the topic → the whole bar
+ * is not rendered). Nothing is estimated.
  *
- * 两种形态的切换点是一轮结束（`streaming` 变 false）：实时数字作废，重新读库里的账本
- * ——落库发生在 `harness-stream-done` 之前，所以这一拉拿到的就是刚跑完的那一轮。
+ * The two shapes swap at the end of a turn (`streaming` becomes false): the live numbers are
+ * discarded and the ledger is re-read from the database — the write lands before
+ * `harness-stream-done`, so this fetch already contains the turn that just ran.
  */
 
 /**
- * 圆环直径 / 线宽 / 光学偏移。
+ * Ring diameter / stroke width / optical offset.
  *
- * - 直径取 14（比文字 `1em` 略大）：8% 这种小占比只剩一小段弧，环越小越像"一个点"；
- * - 线宽 2.5（不是 2）：细环在浅色主题下几乎读不出"进度"，加粗后弧段才有分量；
- * - 光学偏移 +1px：flex 的 `align-items: center` 对齐的是**行盒**，而数字的视觉中心
- *   比行盒中心低约 1px（行盒含降部空间），不补偿的话圆环看起来比「8%」高半拍。
+ * - Diameter is 14 (slightly larger than the `1em` text): a small share such as 8% leaves only a
+ *   short arc, and the smaller the ring the more it looks like a single dot;
+ * - Stroke width is 2.5 (not 2): a thin ring hardly reads as "progress" in the light theme, and
+ *   the extra weight is what gives the arc presence;
+ * - Optical offset +1px: flex `align-items: center` aligns the **line box**, while digits sit
+ *   about 1px below its center (the box includes descender space), so without this compensation
+ *   the ring looks half a beat higher than "8%".
  */
 const RING_SIZE = 14
 const RING_STROKE = 2.5
@@ -61,7 +69,7 @@ const ContextRing: React.FC<{ percent: number; color: string; track: string }> =
         transform: `translateY(${RING_OPTICAL_OFFSET}px)`
       }}
     >
-      {/* 底环：整圈暗色轨道，表示窗口总量 */}
+      {/* Track ring: the full dark circle, standing for the whole window */}
       <circle
         cx={center}
         cy={center}
@@ -70,7 +78,7 @@ const ContextRing: React.FC<{ percent: number; color: string; track: string }> =
         stroke={track}
         strokeWidth={RING_STROKE}
       />
-      {/* 占用环：从 12 点方向顺时针画到 percent */}
+      {/* Usage ring: drawn clockwise from 12 o'clock up to percent */}
       {filled > 0 && (
         <circle
           cx={center}
@@ -89,11 +97,13 @@ const ContextRing: React.FC<{ percent: number; color: string; track: string }> =
 }
 
 interface HarnessUsageMeterProps {
-  /** 当前话题；null = 还没有会话（新对话第一轮），整条不显示 */
+  /** Current topic; null = no conversation yet (first turn of a new chat), nothing is shown */
   topicId: number | null
-  /** 当前模型的上下文窗口（供应商档案 metadata.context_window）；null = 未知 */
+  /** Context window of the current model (provider profile metadata.context_window); null =
+   * unknown */
   contextWindow: number | null
-  /** 生成中：显示本轮实时累计；结束（false）时切回库里的会话汇总 */
+  /** Generating: show the live turn accumulation; when it ends (false) fall back to the stored
+   * summary */
   streaming: boolean
 }
 
@@ -104,16 +114,19 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
 }) => {
   const { token } = theme.useToken()
   const { t } = useTranslation()
-  /** 汇总连同它属于哪个话题一起存：切话题时旧数值立刻失效，不会串到新会话上 */
+  /** Summary is stored together with the topic it belongs to: on a topic switch the old value dies
+   * at once and never leaks into a new conversation */
   const [snapshot, setSnapshot] = useState<{ topicId: number; summary: UsageSummary } | null>(null)
-  /** 生成中的本轮累计（主进程每次模型调用结束时推一条）；null = 这一轮还没有可显示的数字 */
+  /** Live accumulation for this turn (pushed by the main process when each model call ends); null =
+   * nothing to show for this turn yet */
   const [turnUsage, setTurnUsage] = useState<TurnUsageView | null>(null)
   /**
-   * 已经拉到（或确认拉空）汇总的话题。
+   * Topic whose summary has already been fetched (or confirmed empty).
    *
-   * 用它来区分「同一个话题在生成中」（保留旧数字，不重复拉）与「刚换到的话题在生成中」
-   * （必须立刻拉）——只按 `streaming` 拦截的话，切到一条后台正在跑的会话时，
-   * 整段生成期间底栏都会空着，哪怕它前面几轮早就有用量。
+   * It separates "same topic, still generating" (keep the old numbers, do not refetch) from
+   * "just switched to a generating topic" (must fetch right away) — gating only on `streaming`
+   * would leave the footer blank for the whole generation when switching to a conversation
+   * running in the background, even though its earlier turns already had usage.
    */
   const fetchedTopicRef = useRef<number | null>(null)
 
@@ -123,7 +136,8 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
       setSnapshot(null)
       return
     }
-    // 生成中且这个话题的账本已经拉过：保留上一轮的数字，等流结束再刷新（不闪空、也不多发请求）
+    // Generating and this topic's ledger was already fetched: keep the previous numbers and refresh
+    // when the stream ends (no flicker, no extra request)
     if (streaming && fetchedTopicRef.current === topicId) return
     let cancelled = false
     void harnessApi.harness
@@ -135,7 +149,8 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
         setSnapshot(summary ? { topicId, summary } : null)
       })
       .catch((err) => {
-        // 通道不可用（插件停用等）时静默：底栏少一行不影响输入框其余功能
+        // Stay silent when the channel is unavailable (plugin disabled, etc.): one missing footer
+        // line must not break the rest of the input box
         console.warn('[harness-usage-meter] load usage failed:', err)
       })
     return () => {
@@ -143,7 +158,8 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
     }
   }, [topicId, streaming])
 
-  // 生成中的实时进度：换话题先清空，之后只认当前话题的事件（同话题的后台轮次照常显示）
+  // Live progress while generating: clear on topic switch, then accept only the current topic's
+  // events (background turns of the same topic still show)
   useEffect(() => {
     setTurnUsage(null)
     if (topicId === null) return
@@ -153,18 +169,22 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
     })
   }, [topicId])
 
-  // 一轮结束：实时数字作废，下面的 effect 会重新拉库里的汇总（落库在 stream-done 之前完成）
+  // Turn finished: the live numbers are discarded and the effect below re-reads the summary from
+  // the database (persisted before stream-done)
   useEffect(() => {
     if (!streaming) setTurnUsage(null)
   }, [streaming])
 
-  // 切话题后旧快照不再作数（还没有新数就整条不画，宁可空一下也不显示别的会话的用量）
+  // The old snapshot stops counting after a topic switch (draw nothing until new numbers arrive: an
+  // empty bar beats another conversation's usage)
   const summary = snapshot && snapshot.topicId === topicId ? snapshot.summary : null
-  /** 生成中才显示实时数字；流一停就切回会话汇总 */
+  /** Show live numbers only while generating; switch back to the conversation summary as soon as
+   * the stream stops */
   const live = streaming && turnUsage && turnUsage.topicId === topicId ? turnUsage : null
   if (!live && !summary) return null
 
-  /** 缓存命中率按百分比四舍五入；个别协议的缓存字段口径会超过 100%，显示上封顶 */
+  /** Cache hit rate rounded to a whole percentage; some protocols report cache fields above 100%,
+   * so the display is capped */
   const cachePercent =
     summary && summary.cacheHitRate !== null
       ? Math.min(100, Math.max(0, Math.round(summary.cacheHitRate * 100)))
@@ -215,9 +235,10 @@ const HarnessUsageMeter: React.FC<HarnessUsageMeterProps> = ({
               })}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 2 }}
             >
-              {/* 轨道用 colorBorder、进度用 colorText：两档都不透明到「看不见」的程度，
-                  黑白主题下都读得出「用了多少」。原先 colorFillTertiary(≈4%) 在白底上
-                  几乎消失，只剩一小段弧，看着像凭空挂了个逗号。 */}
+              {/* Track uses colorBorder, progress uses colorText: both are opaque enough to be
+                  visible, so "how much is used" reads in light and dark themes alike. The former
+                  colorFillTertiary (≈4%) almost disappeared on white, leaving a short arc that
+                  looked like a stray comma. */}
               <ContextRing
                 percent={contextPercent}
                 color={token.colorText}

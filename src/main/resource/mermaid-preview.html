@@ -11,7 +11,7 @@
       font-family: system-ui, sans-serif;
     }
 
-    /* 与应用主窗口同款：圆角无边框自定义窗口 */
+    /* Rounded, borderless custom window */
     #app {
       height: 100vh;
       box-sizing: border-box;
@@ -179,7 +179,7 @@
   document.getElementById('hint').textContent = I18N.hint || ''
 </script>
 <script>
-  // 标题栏图标（与应用 TitleBar 同款）：最小化 / 最大化 / 还原 / 关闭 / 图表 / 居中
+  // Title bar icons: minimize / maximize / restore / close / chart / center
   var ICON_CENTER = 'M13 1L13.001 4.06201C16.6192 4.51365 19.4869 7.38163 19.9381 11L23 11V13L19.938 13.001C19.4864 16.6189 16.6189 19.4864 13.001 19.938L13 23H11L11 19.9381C7.38163 19.4869 4.51365 16.6192 4.06201 13.001L1 13V11L4.06189 11C4.51312 7.38129 7.38129 4.51312 11 4.06189L11 1H13ZM12 6C8.68629 6 6 8.68629 6 12C6 15.3137 8.68629 18 12 18C15.3137 18 18 15.3137 18 12C18 8.68629 15.3137 6 12 6ZM12 10C13.1046 10 14 10.8954 14 12C14 13.1046 13.1046 14 12 14C10.8954 14 10 13.1046 10 12C10 10.8954 10.8954 10 12 10Z'
   var ICON_MIN = 'M5 11V13H19V11H5Z'
   var ICON_MAX = 'M6.41421 5H10V3H3V10H5V6.41421L9.29289 10.7071L10.7071 9.29289L6.41421 5ZM21 14H19V17.5858L14.7071 13.2929L13.2929 14.7071L17.5858 19H14V21H21V14Z'
@@ -192,7 +192,7 @@
     return '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="currentColor" aria-hidden="true"><path d="' + d + '"/></svg>'
   }
 
-  // 注入图标
+  // Inject icons
   document.getElementById('title-icon').innerHTML = icon(ICON_FLOW, 14)
   document.getElementById('win-min').innerHTML = icon(ICON_MIN)
   document.getElementById('win-max').innerHTML = icon(ICON_MAX)
@@ -208,7 +208,7 @@
     viewport.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')'
   }
 
-  // 适配：把 SVG 等比缩小到窗口可见区域并居中（先量未缩放尺寸）
+  // Fit to view: scale the SVG down proportionally and center it (measure before scaling)
   function fit() {
     var svg = viewport.querySelector('svg')
     if (!svg) {
@@ -218,7 +218,7 @@
       apply()
       return
     }
-    // 按自然尺寸（viewBox）布局，覆盖 mermaid 输出的 width="100%"，避免拉伸
+    // Lay out at natural size (viewBox), overriding mermaid's width="100%" to avoid stretching
     if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width > 0) {
       svg.style.width = svg.viewBox.baseVal.width + 'px'
       svg.style.height = svg.viewBox.baseVal.height + 'px'
@@ -229,8 +229,8 @@
     var r = stage.getBoundingClientRect()
     var s = Math.min(1, (r.width - 48) / Math.max(1, w), (r.height - 48) / Math.max(1, h))
     scale = s
-    // svg 从 viewport padding 内左上起排，且 padding 偏移会随 scale 放大，
-    // 居中偏移需减 24*s 才能精确居中
+    // The SVG starts at the padding's top-left inside the viewport, and that padding offset
+    // scales with zoom, so centering must subtract 24*s for an exact result
     tx = (r.width - w * s) / 2 - 24 * s
     ty = (r.height - h * s) / 2 - 24 * s
     apply()
@@ -272,13 +272,13 @@
   window.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') window.api.window.close()
   })
-  // 窗口尺寸变化（拉伸/最大化）后重新适配居中
+  // Re-fit and re-center after the window is resized (drag or maximize)
   var resizeTimer = null
   window.addEventListener('resize', function() {
     if (resizeTimer) clearTimeout(resizeTimer)
     resizeTimer = setTimeout(fit, 120)
   })
-  // 标题栏窗口控制（复用主窗口 IPC，按发送方窗口生效）
+  // Title bar window controls; the shared main-window IPC applies to the calling window
   document.getElementById('win-min').onclick = function() {
     window.api.window.minimize()
   }

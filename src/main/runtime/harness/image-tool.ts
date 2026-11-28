@@ -1,38 +1,38 @@
 /**
- * 图片读取的纯逻辑（不依赖 electron / 数据库），供 `fs-backend` 的 `read_image` 工具与
- * 运行时工具节点共用。
+ * Pure logic for image reading (no electron / database dependency), shared by the `fs-backend`
+ * `read_image` tool and the runtime tool nodes.
  *
- * 为什么单独成模块：工具节点（agent.ts）要识别「文本 + 图像」这种工具结果，并把图像
- * 转成模型可看的内容块；而图片格式嗅探、尺寸解析是纯字节处理，抽出来才能被离线测试
- * 直接导入（tests/read-image.test.mts），不必启动 Electron。
+ * Why a separate module: tool nodes (agent.ts) must recognize the "text + image" tool result and
+ * turn images into content blocks the model can see; image format sniffing and dimension parsing are
+ * pure byte handling, so extracting them lets offline tests import them directly
+ * (tests/read-image.test.mts) without starting Electron.
  *
- * 与 DSH 的对应关系（对照 packages/fs/tool-fs 的 read_image）：DSH 把字节交给附件存储
- * 做规范化与内容寻址；本项目当前没有附件存储，所以这里直接产出 data URL（模型消息里
- * 用的就是这种形态），文件大小上限与格式白名单由本模块兜底。
+ * This project has no attachment storage yet, so this module produces data URLs directly (that is
+ * the form used in model messages); the file size limit and the format allowlist are enforced here.
  */
 import * as fs from 'fs'
 
-/** 单张图片读取上限（字节）。超过直接拒绝，避免把几十 MB 的图塞进上下文。 */
+/** Per-image read limit (bytes). Anything larger is rejected to avoid stuffing tens of MB into the context. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-/** 支持的图片 MIME 类型（与 read_image 的 schema 描述保持一致） */
+/** Supported image MIME types (consistent with the read_image schema description) */
 export type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 
-/** 一次工具调用返回的图像（data URL + 虚拟路径，路径供模型再次读取/引用） */
+/** An image returned by one tool call (data URL + virtual path, so the model can read/reference it again) */
 export interface ToolImage {
   /** `data:image/png;base64,...` */
   dataUrl: string
-  /** 虚拟路径（与调用参数一致，方便模型在后续轮次引用） */
+  /** Virtual path (same as the call argument, so the model can reference it in later rounds) */
   path: string
   mimeType: ImageMimeType
 }
 
 /**
- * 工具可以返回的「文本 + 图像」结果。
+ * The "text + image" result a tool may return.
  *
- * 约定：工具返回该对象时，运行时把 `text` 作为工具结果文本，把 `images` 追加成一条
- * 紧随其后的用户消息（图像内容块）——OpenAI 兼容协议的工具消息不能带图，而用户消息
- * 在所有 provider 上都能承载图片。
+ * Convention: when a tool returns this object, the runtime uses `text` as the tool result text and
+ * appends `images` as a user message (image content blocks) immediately after it — OpenAI-compatible
+ * tool messages cannot carry images, while user messages can carry images on every provider.
  */
 export interface ToolMediaResult {
   readonly __toolMedia: true
@@ -40,19 +40,19 @@ export interface ToolMediaResult {
   images: ToolImage[]
 }
 
-/** 判断工具返回值是否为「文本 + 图像」结果 */
+/** Whether a tool return value is a "text + image" result */
 export function isToolMediaResult(value: unknown): value is ToolMediaResult {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<ToolMediaResult>
   return candidate.__toolMedia === true && typeof candidate.text === 'string' && Array.isArray(candidate.images)
 }
 
-/** 构造媒体结果（工具侧唯一入口，保证标记字段不会写错） */
+/** Build a media result (the only tool-side entry point, so the marker field cannot be misspelled) */
 export function toolMedia(text: string, images: ToolImage[]): ToolMediaResult {
   return { __toolMedia: true, text, images }
 }
 
-/** 按魔数判断图片类型（不看扩展名：扩展名只是声明，字节才是事实） */
+/** Determine the image type from magic bytes (ignore the extension: the extension is only a claim, the bytes are the truth) */
 export function sniffImageMime(buf: Buffer): ImageMimeType | null {
   if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
     return 'image/png'
@@ -71,7 +71,7 @@ export function sniffImageMime(buf: Buffer): ImageMimeType | null {
   return null
 }
 
-/** 从字节里解析像素尺寸；无法解析时返回 undefined（不影响读取，只是少一条元信息） */
+/** Parse pixel dimensions from the bytes; returns undefined if unparsable (does not affect reading, just one less piece of metadata) */
 export function imageDimensions(
   buf: Buffer,
   mimeType: ImageMimeType
@@ -97,7 +97,7 @@ export function imageDimensions(
           continue
         }
         const marker = buf[offset + 1]
-        // SOF0..SOF15（跳过 DHT/JPG/DAC 等非 SOF 标记）
+        // SOF0..SOF15 (skip non-SOF markers such as DHT/JPG/DAC)
         const isSof =
           marker >= 0xc0 &&
           marker <= 0xcf &&
@@ -144,7 +144,7 @@ export function imageDimensions(
   return undefined
 }
 
-/** readImageFile 的失败原因（由调用方翻译成界面语言） */
+/** Failure codes of readImageFile (translated into UI language by the caller) */
 export type ReadImageFailureCode = 'not-file' | 'too-large' | 'unsupported' | 'read-failed'
 
 export type ReadImageResult =
@@ -159,9 +159,11 @@ export type ReadImageResult =
   | { ok: false; code: ReadImageFailureCode; message: string; bytes?: number }
 
 /**
- * 读取一张磁盘图片：先 stat 判大小（避免无界缓冲），再按魔数校验格式，最后产出 data URL。
+ * Read an image from disk: stat first to check the size (avoid unbounded buffering), then validate
+ * the format from the magic bytes, and finally produce a data URL.
  *
- * @param realPath 已解析过的真实路径（调用方负责虚拟路径 → 真实路径的越界校验）
+ * @param realPath Already-resolved real path (the caller is responsible for the virtual-path →
+ * real-path traversal check)
  */
 export function readImageFile(realPath: string, maxBytes = MAX_IMAGE_BYTES): ReadImageResult {
   let stat: fs.Stats

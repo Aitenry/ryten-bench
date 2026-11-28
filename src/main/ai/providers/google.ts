@@ -1,14 +1,16 @@
 /**
- * Google Gemini 实现（`generativelanguage.googleapis.com` / Vertex AI 共用同一套报文）。
+ * Google Gemini implementation (`generativelanguage.googleapis.com` / Vertex AI share the same
+ * payload format).
  *
- * 协议：`POST {base}/.../{model}:streamGenerateContent?alt=sse`
- * - 请求：contents（user/model 交替）/ systemInstruction / tools.functionDeclarations /
- *   generationConfig（含 thinkingConfig）；
- * - 流式：每个 SSE data 是一个 `GenerateContentResponse`，parts 里可能是 text、
- *   thought（推理）、functionCall（工具调用）；
- * - 工具结果：user 轮的 functionResponse（name 从历史里的 tool_call id 反查）。
+ * Protocol: `POST {base}/.../{model}:streamGenerateContent?alt=sse`
+ * - Request: contents (alternating user/model) / systemInstruction / tools.functionDeclarations /
+ *   generationConfig (including thinkingConfig);
+ * - Streaming: each SSE data item is a `GenerateContentResponse`; parts may contain text,
+ *   thought (reasoning), or functionCall (tool call);
+ * - Tool results: functionResponse in the user turn (name is looked up from the tool_call id in
+ *   history).
  *
- * Vertex 的差异只在 URL / 鉴权，见 vertexai.ts。
+ * Vertex differs only in URL / auth; see vertexai.ts.
  */
 import {
   AIMessage,
@@ -38,14 +40,14 @@ import { jsonSchemaOf, StructuredToolInterface } from '../tools'
 
 export interface GoogleFields {
   apiKey?: string
-  /** 自定义服务地址（Gemini：默认 https://generativelanguage.googleapis.com） */
+  /** Custom service address (Gemini: defaults to https://generativelanguage.googleapis.com) */
   baseUrl?: string
   baseURL?: string
   maxOutputTokens?: number
   temperature?: number
   topP?: number
   topK?: number
-  /** 思考配置（thinking-params 组装后经 fields 传入） */
+  /** Thinking config (assembled by thinking-params and passed in via fields) */
   thinkingConfig?: Record<string, unknown>
   safetySettings?: Array<Record<string, unknown>>
   timeout?: number
@@ -53,12 +55,12 @@ export interface GoogleFields {
   [key: string]: unknown
 }
 
-/** 模型名去掉 `models/` 前缀（URL 模板自己会拼） */
+/** Strip the `models/` prefix from the model name (the URL template adds it back) */
 function bareModelName(model: string): string {
   return model.replace(/^models\//, '')
 }
 
-/** Gemini 只接受 OpenAPI 子集：去掉它不认识的 JSON Schema 关键字 */
+/** Gemini only accepts a subset of OpenAPI: drop JSON Schema keywords it does not recognize */
 export function sanitizeSchemaForGemini(schema: Record<string, unknown>): Record<string, unknown> {
   const clone = removeUnsupportedKeys(schema)
   return clone
@@ -82,7 +84,7 @@ function removeUnsupportedKeys(value: unknown): Record<string, unknown> {
   return result
 }
 
-/** 图片块 → Gemini inlineData / fileData */
+/** Image block → Gemini inlineData / fileData */
 function toGeminiImagePart(block: MessageContentComplex): Record<string, unknown> | null {
   const raw =
     typeof block.image_url === 'string'
@@ -103,7 +105,7 @@ function toGeminiImagePart(block: MessageContentComplex): Record<string, unknown
   return { fileData: { mimeType: mime, fileUri: raw } }
 }
 
-/** 工具调用 id → 工具名（functionResponse 需要 name） */
+/** Tool call id → tool name (functionResponse requires a name) */
 function buildToolNameIndex(messages: BaseMessage[]): Map<string, string> {
   const index = new Map<string, string>()
   for (const message of messages) {
@@ -116,7 +118,7 @@ function buildToolNameIndex(messages: BaseMessage[]): Map<string, string> {
   return index
 }
 
-/** 消息序列 → Gemini contents + systemInstruction */
+/** Message sequence → Gemini contents + systemInstruction */
 export function toGeminiContents(messages: BaseMessage[]): {
   contents: Array<Record<string, unknown>>
   systemInstruction?: Record<string, unknown>
@@ -126,7 +128,7 @@ export function toGeminiContents(messages: BaseMessage[]): {
   const contents: Array<Record<string, unknown>> = []
   const toolNames = buildToolNameIndex(messages)
   const thoughtSignatures: string[] = []
-  // 推理签名：按工具调用顺序从 AIMessage.additional_kwargs 读回
+  // Reasoning signatures: read back from AIMessage.additional_kwargs in tool-call order
   const signatureQueue: string[] = []
 
   const append = (role: 'user' | 'model', parts: Array<Record<string, unknown>>): void => {
@@ -216,7 +218,7 @@ export function toGeminiContents(messages: BaseMessage[]): {
   }
 }
 
-/** 工具声明 */
+/** Tool declarations */
 function toGeminiTools(tools: StructuredToolInterface[]): Array<Record<string, unknown>> {
   return [
     {
@@ -230,8 +232,8 @@ function toGeminiTools(tools: StructuredToolInterface[]): Array<Record<string, u
 }
 
 /**
- * Gemini / Vertex 共用的 ChatModel 基类：报文与流式解析完全一致，
- * 子类只提供 URL 与鉴权头。
+ * ChatModel base class shared by Gemini / Vertex: payload and streaming parsing are identical,
+ * subclasses only provide the URL and auth headers.
  */
 export abstract class GoogleChatModelBase extends BaseChatModel {
   readonly model: string
@@ -244,7 +246,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
   protected readonly safetySettings?: Array<Record<string, unknown>>
   protected readonly timeoutMs?: number
   protected readonly modelKwargs?: Record<string, unknown>
-  /** 是否使用流式请求（extra_config 可显式关闭，或流式失败时自动降级） */
+  /** Whether streaming requests are used (can be disabled explicitly via extra_config, or degraded automatically when streaming fails) */
   protected readonly streaming: boolean
 
   constructor(model: string, fields: GoogleFields = {}) {
@@ -268,13 +270,13 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     return 'google'
   }
 
-  /** 子类：拼请求 URL（含鉴权参数） */
+  /** Subclass: build the request URL (including auth parameters) */
   protected abstract buildRequestUrl(streaming: boolean): Promise<string>
 
-  /** 子类：鉴权头 */
+  /** Subclass: auth headers */
   protected abstract buildRequestHeaders(): Promise<Record<string, string>>
 
-  /** 组装请求体 */
+  /** Assemble the request body */
   protected buildBody(
     messages: BaseMessage[],
     tools: StructuredToolInterface[]
@@ -297,7 +299,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     return body
   }
 
-  /** 处理一个 GenerateContentResponse（流式与非流式同形） */
+  /** Handle one GenerateContentResponse (streaming and non-streaming share the same shape) */
   private handleResponse(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector,
@@ -365,7 +367,8 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
         collector.toolDelta(index, {
           id: typeof functionCall.id === 'string' ? functionCall.id : undefined,
           name: functionCall.name,
-          // 少数网关把 args 直接给成 JSON 字符串：原样当参数文本，避免二次编码
+          // Some gateways return args as a raw JSON string: pass it through as argument text
+          // to avoid double encoding
           args:
             typeof functionCall.args === 'string'
               ? functionCall.args
@@ -375,7 +378,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     }
   }
 
-  /** 解析非流式 JSON（单对象或数组）→ 内容；返回错误报文里的状态码 */
+  /** Parse non-streaming JSON (single object or array) → content; returns the status code from an error payload */
   private consumeJsonResponse(
     text: string,
     collector: ModelStreamCollector,
@@ -397,7 +400,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     return inferStatusFromErrorPayload(parsed)
   }
 
-  /** 非流式兜底：`:generateContent`（部分网关只实现了非流式路径） */
+  /** Non-streaming fallback: `:generateContent` (some gateways only implement the non-streaming path) */
   private async requestNonStreaming(
     messages: BaseMessage[],
     tools: StructuredToolInterface[],
@@ -498,7 +501,8 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     try {
       return this.finalize(collector, state, { contentType })
     } catch (err) {
-      // 空流：换非流式请求继续（对齐 Spring AI 默认的 stream:false 行为）
+      // Empty stream: switch to a non-streaming request and continue (matching the default
+      // stream:false behavior)
       if (err instanceof ModelEmptyResponseError) {
         return await this.requestNonStreaming(
           messages,
@@ -511,7 +515,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
     }
   }
 
-  /** 收尾：把函数调用的思考签名挂回消息（下一轮工具结果回传时要用），并守卫空响应 */
+  /** Finalize: attach tool-call reasoning signatures back to the message (needed when tool results are sent back next turn) and guard against empty responses */
   private finalize(
     collector: ModelStreamCollector,
     state: { thoughtSignatures: string[] },
@@ -531,7 +535,7 @@ export abstract class GoogleChatModelBase extends BaseChatModel {
   }
 }
 
-/** Google Generative AI（Gemini 官方接口，API Key 鉴权） */
+/** Google Generative AI (Gemini official API, API key auth) */
 export class ChatGoogleGenerativeAI extends GoogleChatModelBase {
   private readonly apiKey?: string
 

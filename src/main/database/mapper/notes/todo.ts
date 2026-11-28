@@ -4,7 +4,7 @@ import logger from 'electron-log'
 import { withOrm } from '../../orm'
 import { todo_items } from '../../schema'
 
-/** 待办事项行（字段由 schema 推导） */
+/** Todo item row (fields inferred from schema) */
 export type TodoItemRow = typeof todo_items.$inferSelect
 
 export interface PaginatedResult<T> {
@@ -13,7 +13,7 @@ export interface PaginatedResult<T> {
   total: number
 }
 
-// --- 根据 id 查询 ---
+// --- Query by id ---
 async function getTodoItemById(id: number): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemById', async (db) => {
     const rows = await db.select().from(todo_items).where(eq(todo_items.id, id))
@@ -22,7 +22,7 @@ async function getTodoItemById(id: number): Promise<TodoItemRow[]> {
   })
 }
 
-// --- 根据 title 查询 ---
+// --- Query by title ---
 async function getTodoItemByTitle(title: string): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemByTitle', async (db) => {
     const rows = await db.select().from(todo_items).where(eq(todo_items.title, title))
@@ -31,7 +31,7 @@ async function getTodoItemByTitle(title: string): Promise<TodoItemRow[]> {
   })
 }
 
-// --- 根据 priority 查询 ---
+// --- Query by priority ---
 async function getTodoItemsByPriority(priority: number): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemsByPriority', async (db) => {
     const rows = await db
@@ -44,7 +44,7 @@ async function getTodoItemsByPriority(priority: number): Promise<TodoItemRow[]> 
   })
 }
 
-// --- 根据 status 查询 ---
+// --- Query by status ---
 async function getTodoItemsByStatus(status: number): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemsByStatus', async (db) => {
     const rows = await db
@@ -57,7 +57,7 @@ async function getTodoItemsByStatus(status: number): Promise<TodoItemRow[]> {
   })
 }
 
-// --- 获取所有待办事项 ---
+// --- Get all todo items ---
 async function getAllTodoItems(): Promise<TodoItemRow[]> {
   return withOrm('getAllTodoItems', async (db) => {
     const rows = await db
@@ -69,13 +69,13 @@ async function getAllTodoItems(): Promise<TodoItemRow[]> {
   })
 }
 
-// --- 分页获取待办事项（按 updated_at 降序） ---
+// --- Get todo items paginated (sorted by updated_at descending) ---
 async function getTodoItemsPaginated(
   page: number = 1,
   pageSize: number = 10
 ): Promise<PaginatedResult<TodoItemRow>> {
   return withOrm('getTodoItemsPaginated', async (db) => {
-    // 页码/页大小钳制（修复：pageSize 传 0/负数 → LIMIT 0 空页且 hasMore 恒真）
+    // Clamp page number/page size (fix: a pageSize of 0 or a negative number produced LIMIT 0 empty pages with hasMore always true)
     const safePage = Math.max(1, Number.isFinite(page) ? Math.floor(page) : 1)
     const safePageSize = Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 10)
     const offset = (safePage - 1) * safePageSize
@@ -102,7 +102,7 @@ async function getTodoItemsPaginated(
   })
 }
 
-// --- 根据 due_date 查询 ---
+// --- Query by due_date ---
 async function getTodoItemsByDueDate(dueDate: string): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemsByDueDate', async (db) => {
     const rows = await db
@@ -115,7 +115,7 @@ async function getTodoItemsByDueDate(dueDate: string): Promise<TodoItemRow[]> {
   })
 }
 
-// --- 根据 category 查询 ---
+// --- Query by category ---
 async function getTodoItemsByCategory(category: string): Promise<TodoItemRow[]> {
   return withOrm('getTodoItemsByCategory', async (db) => {
     const rows = await db
@@ -128,7 +128,7 @@ async function getTodoItemsByCategory(category: string): Promise<TodoItemRow[]> 
   })
 }
 
-// --- 添加待办事项 ---
+// --- Add a todo item ---
 async function addTodoItem(
   todoItem: Omit<TodoItemRow, 'id' | 'created_at' | 'updated_at'>
 ): Promise<number> {
@@ -144,13 +144,13 @@ async function addTodoItem(
   })
 }
 
-// --- 修改待办事项 ---
+// --- Update a todo item ---
 async function updateTodoItem(
   id: number,
   updates: Partial<Omit<TodoItemRow, 'id' | 'created_at'>>
 ): Promise<boolean> {
   return withOrm('updateTodoItem', async (db) => {
-    // PgUpdateSetSource 允许每个字段取字面值或 SQL 表达式（now() 等）
+    // PgUpdateSetSource allows each field to hold either a literal value or a SQL expression (e.g. now())
     const patch: PgUpdateSetSource<typeof todo_items> = {}
 
     if (updates.title !== undefined) patch.title = updates.title
@@ -159,8 +159,7 @@ async function updateTodoItem(
     if (updates.priority !== undefined) patch.priority = updates.priority
     if (updates.status !== undefined) {
       patch.status = updates.status
-      // 时间戳随状态推进/回退（修复：①status=1 时调用方若同传 started_at 会 SET 同列两次
-      // 导致整条 UPDATE 失败；②状态回退时时间戳残留，前端按时间戳判状态会错）
+      // Timestamps advance/roll back with status (fix: (1) when status=1, a caller passing started_at also set the same column, which made the whole UPDATE fail; (2) rolling the status back left stale timestamps, so the frontend's timestamp-based status check was wrong)
       if (updates.status === 2) {
         patch.completed_at = sql`now()`
       } else if (updates.completed_at === undefined) {
@@ -174,7 +173,7 @@ async function updateTodoItem(
     }
     if (updates.category !== undefined) patch.category = updates.category
     if (updates.started_at !== undefined) patch.started_at = updates.started_at
-    // 与原实现一致：updated_at 未显式给出时一律刷新（原实现的「无字段可更新」早退分支因此不可达）
+    // Same as the previous implementation: updated_at is always refreshed unless explicitly provided (which made the old "no fields to update" early-exit branch unreachable)
     patch.updated_at = updates.updated_at !== undefined ? updates.updated_at : sql`now()`
 
     const updated = await db
@@ -192,7 +191,7 @@ async function updateTodoItem(
   })
 }
 
-// --- 删除待办事项 ---
+// --- Delete a todo item ---
 async function deleteTodoItem(id: number): Promise<boolean> {
   return withOrm('deleteTodoItem', async (db) => {
     const deleted = await db

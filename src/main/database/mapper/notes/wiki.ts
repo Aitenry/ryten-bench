@@ -13,9 +13,9 @@ import {
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import logger from 'electron-log'
 import { withOrm } from '../../orm'
-// 迁移说明：core 的表统一经 core 的 schema 汇总入口取用。
-// 这里**只** import 本插件自己的表与宿主的共享表（images）——第三方插件的表（如音乐的歌单）
-// 既不该也不一定存在（插件没装时表都没有），封面清理因此改成「删不掉就留着」（见 deleteWiki）。
+// Migration note: tables from core are accessed through core's aggregated schema entry point.
+// Only import this plugin's own tables and the host's shared table (images) here — third-party plugin tables (e.g. a music plugin's playlists)
+// must not and may not even exist (they are absent when the plugin is not installed), so cover cleanup is now "keep it if it cannot be deleted" (see deleteWiki).
 import {
   directory_documents,
   documents,
@@ -28,7 +28,7 @@ import { saveImage } from './image'
 
 type WikiTableRow = typeof wiki.$inferSelect
 
-/** 知识库行（含封面图 data，来自 images 关联；doc_count 为派生字段） */
+/** Wiki row (includes cover image data from the images join; doc_count is a derived field) */
 export type WikiBaseRow = Pick<
   WikiTableRow,
   'id' | 'title' | 'summary' | 'tags' | 'created_at' | 'updated_at'
@@ -40,7 +40,7 @@ export type WikiRow = WikiBaseRow & {
   doc_count: number
 }
 
-/** 知识库目录行（字段由 schema 推导） */
+/** Wiki directory row (fields inferred from schema) */
 export type WikiDirectoryRow = typeof wiki_directories.$inferSelect
 
 export interface PaginatedResult<T> {
@@ -49,7 +49,7 @@ export interface PaginatedResult<T> {
   total: number
 }
 
-/** 知识库列表/详情共用的投影：封面 + 目录下去重文档数 */
+/** Projection shared by the wiki list/detail: cover image + distinct document count under the directories */
 const wikiListColumns = {
   id: wiki.id,
   title: wiki.title,
@@ -156,7 +156,7 @@ async function updateWiki(
 
 async function deleteWiki(id: number): Promise<boolean> {
   return withOrm('deleteWiki', async (db) => {
-    // 1. 查找知识库下所有文档 ID（通过目录关联）
+    // 1. Find all document IDs under the wiki (through directory links)
     const docIdRows = await db
       .selectDistinct({ doc_id: directory_documents.doc_id })
       .from(directory_documents)
@@ -164,15 +164,15 @@ async function deleteWiki(id: number): Promise<boolean> {
       .where(eq(wiki_directories.wiki_id, id))
     const docIds = docIdRows.map((r) => r.doc_id)
 
-    // 2. 记下封面 id（删库之后就查不到了），再在事务中删除文档与知识库
+    // 2. Record the cover image id (it is unreachable once the wiki is deleted), then delete the documents and the wiki in a transaction
     const wikiImageId =
       (await db.select({ image_id: wiki.image_id }).from(wiki).where(eq(wiki.id, id)).limit(1))[0]
         ?.image_id ?? null
 
     await db.transaction(async (tx) => {
       if (docIds.length > 0) {
-        // 修复：文档是工作区级实体、可被多个知识库目录共享——只删除不再被任何
-        // 知识库目录引用的文档（此前整行删除，连坐其他知识库静默丢文）
+        // Fix: documents are workspace-level entities that can be shared by multiple wiki directories — only delete
+        // documents no longer referenced by any wiki directory (previously the whole row was deleted, silently dropping docs used by other wikis)
         await tx.delete(documents).where(
           and(
             inArray(documents.id, docIds),
@@ -188,12 +188,12 @@ async function deleteWiki(id: number): Promise<boolean> {
       await tx.delete(wiki).where(eq(wiki.id, id))
     })
 
-    // 3. 封面（images 行）的清理放在事务之外，并**单独兜住外键错误**：
-    //    `images` 是宿主的共享表，除本插件外还有别的插件引用它（例如音乐插件的歌单封面）。
-    //    早先这里在事务内先数一遍 `music_folders` / `music_tracks` 的引用数再决定删不删——
-    //    那等于让 notes 认识第三方插件的表名，而且音乐插件没装（表不存在）时查询会直接报错。
-    //    现在只按**本插件自己的**引用数判断，然后尝试删一次；若仍被别的插件引用，外键会拒绝，
-    //    捕获取消即可（图片行留着无害，总比让「删除知识库」整体失败强）。
+    // 3. Clean up the cover (images row) outside the transaction and **catch foreign-key errors separately**:
+    //    `images` is the host's shared table, also referenced by other plugins (e.g. a music plugin's playlist cover).
+    //    Earlier this counted references in `music_folders` / `music_tracks` inside the transaction first —
+    //    that forced notes to know third-party plugin table names, and the query errored outright when the music plugin was not installed (tables absent).
+    //    Now it counts only **this plugin's own** references, then attempts one delete; if another plugin still references the image, the foreign key rejects it,
+    //    and we just swallow the error (keeping the image row is harmless, and far better than failing the whole "delete wiki" operation).
     if (wikiImageId) {
       const [inWiki, inDocContent] = [
         await db.select({ c: count() }).from(wiki).where(eq(wiki.image_id, wikiImageId)),
@@ -207,7 +207,7 @@ async function deleteWiki(id: number): Promise<boolean> {
         try {
           await db.delete(images).where(eq(images.id, wikiImageId))
         } catch (err) {
-          // 仍被别的插件（如音乐的封面）引用：外键拒绝删除，留这条图片行即可
+          // Still referenced by another plugin (e.g. a music plugin's cover): the foreign key rejects deletion, so keep this image row
           logger.info(
             `[notes] Cover ${wikiImageId} still referenced by other plugins, kept (not deleted)`,
             err
@@ -231,7 +231,7 @@ async function getDirectoriesByWikiId(wikiId: number): Promise<WikiDirectoryRow[
   })
 }
 
-/** 按 ID 取目录（移动文档时校验源/目标目录存在且同库） */
+/** Get a directory by ID (validates that the source/target directory exists and belongs to the same wiki when moving documents) */
 async function getDirectoryById(id: number): Promise<WikiDirectoryRow | null> {
   return withOrm('getDirectoryById', async (db) => {
     const rows = await db

@@ -1,10 +1,10 @@
-﻿/**
- * 定时任务数据库 mapper（PGlite / Drizzle）。
+/**
+ * Scheduled task database mapper (PGlite / Drizzle).
  *
- * 约定：所有时间列在数据库里是 `timestamp`，读出后统一归一化为 **ISO 字符串**
- * （`new Date(value).toISOString()`），业务层只处理 ISO；写入时也传 ISO。
- * 规则列拆成 `when_kind` + `when_json`，这里负责序列化/反序列化，非法规则按 null 跳过
- * （一条坏数据不能让整个列表挂掉）。
+ * Conventions: every time column is a `timestamp` in the database and is normalized to an **ISO string**
+ * after reading (`new Date(value).toISOString()`); the business layer only handles ISO and writes ISO too.
+ * The rule column is split into `when_kind` + `when_json`; this mapper serializes/deserializes it and skips
+ * invalid rules as null (one bad row must not break the whole list).
  */
 import { desc, eq, sql } from 'drizzle-orm'
 import { withOrm } from '../orm'
@@ -19,19 +19,19 @@ import type {
 } from '../../runtime/harness/schedule-types'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
 
-/** 时间列 → ISO（兼容 PG 的 'YYYY-MM-DD HH:MM:SS+00' 与已有 ISO） */
+/** Time column → ISO (accepts PG's 'YYYY-MM-DD HH:MM:SS+00' as well as existing ISO strings) */
 function toIso(value: string | null | undefined): string | null {
   if (!value) return null
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
-/** 规则序列化 */
+/** Serialize a rule */
 function serializeWhen(when: ScheduleWhen): { kind: ScheduleWhen['kind']; json: string } {
   return { kind: when.kind, json: JSON.stringify(when) }
 }
 
-/** 规则反序列化（形状不对返回 null） */
+/** Deserialize a rule (returns null when the shape is wrong) */
 function parseWhen(kind: string, json: string): ScheduleWhen | null {
   try {
     const parsed: unknown = JSON.parse(json)
@@ -54,7 +54,7 @@ function parseWhen(kind: string, json: string): ScheduleWhen | null {
 
 type TaskRow = typeof scheduled_tasks.$inferSelect
 
-/** JSON 列 → 任务级运行选择（非法按 null） */
+/** JSON column → task-level agent selection (invalid data becomes null) */
 function parseAgentConfig(raw: string | null): AgentSelection | null {
   if (!raw) return null
   try {
@@ -64,14 +64,14 @@ function parseAgentConfig(raw: string | null): AgentSelection | null {
   }
 }
 
-/** 任务级运行选择 → JSON 列（null 存 null） */
+/** Task-level agent selection → JSON column (null is stored as null) */
 function serializeAgentConfig(selection: AgentSelection | null | undefined): string | null {
   if (!selection) return null
   return JSON.stringify(selection)
 }
 type RunRow = typeof scheduled_task_runs.$inferSelect
 
-/** 行 → 领域对象（规则非法时返回 null） */
+/** Row → domain object (returns null when the rule is invalid) */
 function toTask(row: TaskRow): ScheduledTask | null {
   const when = parseWhen(row.when_kind, row.when_json)
   if (!when) return null
@@ -96,7 +96,7 @@ function toTask(row: TaskRow): ScheduledTask | null {
   }
 }
 
-/** 列出全部任务（新建在前；非法规则的行跳过） */
+/** List all tasks (newest first; rows with invalid rules are skipped) */
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   return withOrm('listScheduledTasks', async (db) => {
     const rows = await db
@@ -107,7 +107,7 @@ export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   })
 }
 
-/** 按 id 读取一条任务 */
+/** Read one task by id */
 export async function getScheduledTask(id: string): Promise<ScheduledTask | undefined> {
   return withOrm('getScheduledTask', async (db) => {
     const rows = await db.select().from(scheduled_tasks).where(eq(scheduled_tasks.id, id))
@@ -116,7 +116,7 @@ export async function getScheduledTask(id: string): Promise<ScheduledTask | unde
   })
 }
 
-/** 任务总数（创建前的上限检查） */
+/** Total task count (limit check before creating) */
 export async function countScheduledTasks(): Promise<number> {
   return withOrm('countScheduledTasks', async (db) => {
     const rows = await db.select({ value: sql<number>`count(*)::int` }).from(scheduled_tasks)
@@ -124,7 +124,7 @@ export async function countScheduledTasks(): Promise<number> {
   })
 }
 
-/** 创建任务（id 由调用方生成，便于在写库前返回稳定 id） */
+/** Create a task (the caller generates the id so a stable id is available before writing) */
 export async function createScheduledTask(
   input: ScheduleCreateInput & { id: string }
 ): Promise<ScheduledTask> {
@@ -155,7 +155,7 @@ export async function createScheduledTask(
   })
 }
 
-/** 更新任务；不存在返回 undefined */
+/** Update a task; returns undefined when it does not exist */
 export async function updateScheduledTask(
   id: string,
   patch: ScheduledTaskPatch
@@ -188,7 +188,7 @@ export async function updateScheduledTask(
   })
 }
 
-/** 删除任务（执行记录随外键级联删除）；返回是否真的删掉 */
+/** Delete a task (run records cascade via the foreign key); returns whether anything was actually deleted */
 export async function deleteScheduledTask(id: string): Promise<boolean> {
   return withOrm('deleteScheduledTask', async (db) => {
     const rows = await db.delete(scheduled_tasks).where(eq(scheduled_tasks.id, id)).returning({
@@ -199,9 +199,9 @@ export async function deleteScheduledTask(id: string): Promise<boolean> {
 }
 
 /**
- * 记录一次执行：更新任务状态 + 追加永久执行记录（同一事务）。
+ * Record one run: update the task status and append a permanent run record (same transaction).
  *
- * `nextRunAt = null` 表示不再触发；`enabled` 缺省按 nextRunAt 推导。
+ * `nextRunAt = null` means no further trigger; `enabled` defaults to being derived from nextRunAt.
  */
 export async function markScheduledTaskRun(args: {
   taskId: string
@@ -236,7 +236,7 @@ export async function markScheduledTaskRun(args: {
   })
 }
 
-/** 读取执行记录（倒序分页；永久保存，不裁剪） */
+/** Read run records (reverse-order pagination; kept permanently, never trimmed) */
 export async function listScheduledTaskRuns(
   taskId: string,
   limit = 20,
@@ -258,7 +258,7 @@ export async function listScheduledTaskRuns(
   })
 }
 
-/** 执行记录总数（分页组件用） */
+/** Total run record count (used by the pagination component) */
 export async function countScheduledTaskRuns(taskId: string): Promise<number> {
   return withOrm('countScheduledTaskRuns', async (db) => {
     const rows = await db
@@ -269,7 +269,7 @@ export async function countScheduledTaskRuns(taskId: string): Promise<number> {
   })
 }
 
-/** 旧 JSON 数据导入：逐条插入并跳过已存在的 id */
+/** Import legacy JSON data: insert row by row and skip ids that already exist */
 export async function importScheduledTasks(
   tasks: Array<{
     id: string

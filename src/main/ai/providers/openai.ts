@@ -1,13 +1,16 @@
 /**
- * OpenAI 兼容协议的 ChatModel 实现（`POST {baseURL}/chat/completions` + SSE）。
+ * ChatModel implementation of the OpenAI-compatible protocol (`POST {baseURL}/chat/completions` +
+ * SSE).
  *
- * 一次性覆盖 OpenAI / DeepSeek / xAI / OpenRouter / Mistral 以及「自定义 OpenAI 兼容端点」：
- * 差异只在 baseURL、API Key 环境变量名与少量请求头，协议本身完全相同。
+ * Covers OpenAI / DeepSeek / xAI / OpenRouter / Mistral and "custom OpenAI-compatible endpoints"
+ * in one place: differences are only the baseURL, the API key env var name, and a few headers;
+ * the protocol itself is identical.
  *
- * 行为对齐项目既有约定：
- * - `invoke()` 内部走流式请求（逐 token 回调；调用方不传回调时也安全）；
- * - 不内置重试（重试预算归 harness/model-recovery）；
- * - 非 2xx 抛 `ModelHttpError(status)`，上层按状态码分类处理。
+ * Behavior follows the project's existing conventions:
+ * - `invoke()` performs a streaming request internally (token-by-token callbacks; safe when the
+ *   caller passes no callback);
+ * - no built-in retries (the retry budget belongs to harness/model-recovery);
+ * - non-2xx responses throw `ModelHttpError(status)`; the upper layer handles them by status code.
  */
 import { AIMessage } from '../messages'
 import {
@@ -31,36 +34,36 @@ import {
 import type { StructuredToolInterface } from '../tools'
 import { normalizeUsage, toOpenAIMessages, toOpenAITools } from './converters'
 
-/** 供应商构造字段（与旧实现同名；`...extra` 允许用户自定义字段直接透传到请求体） */
+/** Provider construction fields (field names kept for compatibility; `...extra` lets user-defined fields pass straight through to the request body) */
 export interface OpenAICompatibleFields {
   model?: string
   apiKey?: string
-  /** OpenAI SDK 风格的配置对象 */
+  /** OpenAI SDK style configuration object */
   configuration?: {
     baseURL?: string
     defaultHeaders?: Record<string, string>
     [key: string]: unknown
   }
-  /** 直接给 baseURL（旧 ChatOpenAI 也接受） */
+  /** Supply baseURL directly */
   baseURL?: string
   baseUrl?: string
   defaultHeaders?: Record<string, string>
-  /** 输出上限；-1 表示不限制 */
+  /** Output limit; -1 means unlimited */
   maxTokens?: number
   temperature?: number
   topP?: number
   stop?: string | string[]
-  /** 是否请求 usage（部分网关不认识 stream_options，会自动降级） */
+  /** Whether to request usage (some gateways do not understand stream_options and drop it automatically) */
   streamUsage?: boolean
-  /** 请求超时（毫秒；缺省不设） */
+  /** Request timeout (milliseconds; unset by default) */
   timeout?: number
-  /** 直接并入请求体的额外参数（思考/推理等级等） */
+  /** Extra parameters merged directly into the request body (thinking / reasoning level, etc.) */
   modelKwargs?: Record<string, unknown>
   organization?: string
   [key: string]: unknown
 }
 
-/** 可直接透传到请求体的字段名（用户 extra_config 常见的 OpenAI 参数） */
+/** Field names passed straight through to the request body (common OpenAI parameters in user extra_config) */
 const PASSTHROUGH_BODY_KEYS = [
   'tool_choice',
   'parallel_tool_calls',
@@ -76,10 +79,10 @@ const PASSTHROUGH_BODY_KEYS = [
   'stop'
 ] as const
 
-/** 网关「不支持流式」时常见的 4xx（HTTP 200 里的同义错误码也按这个集合判断） */
+/** 4xx statuses commonly seen when a gateway "does not support streaming" (equivalent error codes inside HTTP 200 also use this set) */
 const STREAM_INCOMPATIBLE_STATUSES = new Set([400, 405, 415, 422, 501])
 
-/** OpenAI 兼容 ChatModel 基类 */
+/** OpenAI-compatible ChatModel base class */
 export class OpenAICompatibleChatModel extends BaseChatModel {
   readonly model: string
   protected readonly fields: OpenAICompatibleFields
@@ -94,9 +97,10 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
   protected readonly modelKwargs?: Record<string, unknown>
   protected readonly defaultHeaders: Record<string, string>
   /**
-   * 是否使用流式请求。
-   * 服务层默认 true；用户 extra_config 里显式写 `streaming: false` 时直接走非流式
-   * （部分自建网关只实现了 /chat/completions 的非流式语义）。
+   * Whether streaming requests are used.
+   * The service layer defaults to true; when the user explicitly sets `streaming: false` in
+   * extra_config, non-streaming is used directly (some self-hosted gateways only implement the
+   * non-streaming semantics of /chat/completions).
    */
   protected readonly streaming: boolean
 
@@ -122,27 +126,27 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     }
   }
 
-  /** 供应商默认 baseURL（子类覆盖） */
+  /** Provider default baseURL (overridden by subclasses) */
   protected get defaultBaseURL(): string {
     return 'https://api.openai.com/v1'
   }
 
-  /** API Key 环境变量名（按顺序取第一个非空） */
+  /** API key env var names (the first non-empty one wins) */
   protected get apiKeyEnvNames(): string[] {
     return ['OPENAI_API_KEY']
   }
 
-  /** 供应商协议名（日志用） */
+  /** Provider protocol name (for logging) */
   get provider(): string {
     return 'openai'
   }
 
-  /** 额外请求头（OpenRouter 的站点归属等） */
+  /** Extra request headers (OpenRouter site attribution, etc.) */
   protected extraHeaders(): Record<string, string> {
     return {}
   }
 
-  /** 消息转换（Mistral 等需要改写 id 的子类覆盖） */
+  /** Message conversion (overridden by subclasses such as Mistral that need to rewrite ids) */
   protected convertMessages(
     messages: Parameters<typeof toOpenAIMessages>[0]
   ): Array<Record<string, unknown>> {
@@ -157,17 +161,18 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     return undefined
   }
 
-  /** 是否推理模型（o 系列 / gpt-5：用 max_completion_tokens，且不支持 temperature/top_p） */
+  /** Whether this is a reasoning model (o series / gpt-5: use max_completion_tokens, and no temperature/top_p support) */
   protected isReasoningModel(): boolean {
     return /^(o\d|gpt-5)/i.test(this.model)
   }
 
   /**
-   * 组装请求体。
+   * Assemble the request body.
    *
-   * `compatibility=true` 生成「最小请求体」：只带标准字段，丢掉 `stream_options`、
-   * `modelKwargs`（thinking / reasoning_effort / enable_thinking…）与 extra_config 透传字段。
-   * 用于网关 400 明确拒绝这些可选参数时的兼容重试（Spring AI 的请求就只带标准字段）。
+   * `compatibility=true` produces a "minimal request body": only standard fields, dropping
+   * `stream_options`, `modelKwargs` (thinking / reasoning_effort / enable_thinking…) and
+   * extra_config passthrough fields. Used for the compatibility retry when a gateway returns 400
+   * explicitly rejecting these optional parameters (the standard-field-only request shape).
    */
   protected buildBody(
     messages: Parameters<typeof toOpenAIMessages>[0],
@@ -203,7 +208,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     return body
   }
 
-  /** 请求头（非流式兜底时 Accept 用 application/json，部分网关按它决定返回形态） */
+  /** Request headers (Accept is application/json for the non-streaming fallback; some gateways decide the response shape from it) */
   protected buildHeaders(streaming: boolean = this.streaming): Record<string, string> {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
@@ -219,7 +224,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
   }
 
   /**
-   * 处理一个流式 chunk（`choices[0].delta`），也兼容非流式 `choices[0].message`。
+   * Handle one streaming chunk (`choices[0].delta`); also supports non-streaming `choices[0].message`.
    */
   protected handleChunk(payload: Record<string, unknown>, collector: ModelStreamCollector): void {
     const usage = payload.usage
@@ -229,7 +234,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     if (typeof payload.model === 'string') collector.metadata({ model_name: payload.model })
     const choices = payload.choices
     if (!Array.isArray(choices) || choices.length === 0) {
-      // 少数网关在流里直接给顶层 content/response（没有 choices 包装）
+      // Some gateways put top-level content/response directly in the stream (no choices wrapper)
       const topLevelText =
         typeof payload.content === 'string'
           ? payload.content
@@ -243,12 +248,12 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     if (typeof choice.finish_reason === 'string') {
       collector.metadata({ finish_reason: choice.finish_reason })
     }
-    // completion 风格（choices[0].text）也接受
+    // Also accept the completion style (choices[0].text)
     if (typeof choice.text === 'string') collector.text(choice.text)
     const delta = (choice.delta ?? choice.message) as Record<string, unknown> | undefined
     if (!delta) return
 
-    // 模型拒答（OpenAI 的 refusal 字段）：按文本展示，避免被当成「空响应」
+    // Model refusal (OpenAI's refusal field): show it as text so it is not treated as an "empty response"
     if (typeof delta.refusal === 'string' && delta.refusal) collector.text(delta.refusal)
 
     const content = delta.content
@@ -262,10 +267,10 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
       const nested = (content as Record<string, unknown>).text
       if (typeof nested === 'string') collector.text(nested)
     }
-    // 少数网关用 delta.text 而不是 delta.content
+    // Some gateways use delta.text instead of delta.content
     if (typeof delta.text === 'string') collector.text(delta.text)
 
-    // DeepSeek / vLLM 系用 reasoning_content；OpenRouter 用 reasoning（可能是字符串或对象）
+    // DeepSeek / vLLM use reasoning_content; OpenRouter uses reasoning (may be a string or an object)
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (typeof reasoning === 'string') {
       collector.reasoning(reasoning)
@@ -290,7 +295,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
         })
       })
     }
-    // 旧版 function_call 流式形态（无 id）：按第一个工具处理
+    // Legacy function_call streaming shape (no id): treat it as the first tool
     const legacyFunctionCall = delta.function_call as Record<string, unknown> | undefined
     if (legacyFunctionCall) {
       const legacyArgs = legacyFunctionCall.arguments
@@ -306,7 +311,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     }
   }
 
-  /** 从响应值里找出第一个错误对象（对象或数组都兜住） */
+  /** Find the first error object in a response value (handles both objects and arrays) */
   private findErrorPayload(value: unknown): unknown | undefined {
     if (Array.isArray(value)) {
       for (const item of value) {
@@ -320,7 +325,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     return record.error ? record : undefined
   }
 
-  /** 解析 JSON 文本（失败不抛错） */
+  /** Parse JSON text (does not throw on failure) */
   private static tryParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
     try {
       return { ok: true, value: JSON.parse(text) as unknown }
@@ -329,7 +334,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     }
   }
 
-  /** 消费一个完整响应值（对象 / 数组 / 多个 choice 都兜住） */
+  /** Consume one complete response value (handles objects / arrays / multiple choices) */
   private consumePayloadValue(value: unknown, collector: ModelStreamCollector): void {
     if (Array.isArray(value)) {
       for (const item of value) this.consumePayloadValue(item, collector)
@@ -342,8 +347,9 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
   }
 
   /**
-   * 消费「非流式」响应文本：整包 JSON / JSON 数组 / SSE / NDJSON 都接受。
-   * 返回从错误报文里解析出的状态码（正常响应为 undefined）。
+   * Consume a "non-streaming" response text: whole-package JSON / JSON array / SSE / NDJSON are
+   * all accepted.
+   * Returns the status code parsed from an error payload (undefined for a normal response).
    */
   private consumeResponseText(text: string, collector: ModelStreamCollector): number | undefined {
     const trimmed = text.trim()
@@ -355,7 +361,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
       this.consumePayloadValue(whole.value, collector)
       return status
     }
-    // 兼容被标成 JSON 的 SSE / NDJSON：逐行解析
+    // Accept SSE / NDJSON mislabeled as JSON: parse line by line
     for (const rawLine of trimmed.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line || line === '[DONE]' || line.startsWith(':')) continue
@@ -369,10 +375,11 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
   }
 
   /**
-   * 非流式请求（对齐 Spring AI 默认的 `stream: false` 调用方式）。
+   * Non-streaming request (the default `stream: false` call style).
    *
-   * 既用于用户显式 `streaming: false`，也用于流式响应为空/损坏时的兜底。
-   * 拿到整包 JSON 后按同一套聚合器解析，工具调用 / 推理内容 / 用量与流式路径完全一致。
+   * Used both when the user explicitly sets `streaming: false` and as a fallback when the streaming
+   * response is empty/corrupt. Once the whole JSON package is received it is parsed by the same
+   * aggregator, so tool calls / reasoning content / usage are identical to the streaming path.
    */
   private async requestNonStreaming(
     endpoint: string,
@@ -383,7 +390,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     compatibility = false
   ): Promise<AIMessage> {
     const collector = new ModelStreamCollector(options.onModelChunk)
-    // 网关拒绝可选参数时（400/422），用最小请求体重试一次（Spring AI 的请求形态）
+    // When the gateway rejects optional parameters (400/422), retry once with a minimal request body
     let usedCompatibility = compatibility
     let body = JSON.stringify(this.buildBody(messages, tools, false, usedCompatibility))
     let response: Response
@@ -419,7 +426,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     return this.withCompatibilityNote(message, usedCompatibility)
   }
 
-  /** 兼容重试成功后的标记（排查用，不影响 UI） */
+  /** Marker after a successful compatibility retry (for diagnostics only, does not affect the UI) */
   private withCompatibilityNote(message: AIMessage, used: boolean): AIMessage {
     if (used) {
       message.response_metadata = {
@@ -430,7 +437,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     return message
   }
 
-  /** 在指定 endpoint 上执行一次完整的流式尝试（空流/协议异常时自动换非流式） */
+  /** Perform one complete streaming attempt on the given endpoint (automatically switches to non-streaming on an empty stream / protocol error) */
   private async attemptStreaming(
     endpoint: string,
     messages: Parameters<typeof toOpenAIMessages>[0],
@@ -453,14 +460,14 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
         })
         break
       } catch (err) {
-        // 网关拒绝可选参数（thinking / reasoning_effort / stream_options / 透传字段）：
-        // 用最小请求体重试一次（Spring AI 的请求形态），避免直接失败
+        // The gateway rejects optional parameters (thinking / reasoning_effort / stream_options /
+        // passthrough fields): retry once with a minimal request body to avoid failing outright
         if (!usedCompatibility && isParameterCompatibilityError(err)) {
           usedCompatibility = true
           body = this.buildBody(messages, tools, true, true)
           continue
         }
-        // 网关直接拒绝流式参数（400/405/…）：换非流式再试一次
+        // The gateway rejects streaming parameters outright (400/405/…): retry non-streaming
         if (shouldTryNonStreamingFallback(err)) {
           const reason = err instanceof Error ? err.message : String(err)
           return await this.requestNonStreaming(
@@ -478,14 +485,14 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
 
     const contentType = response.headers.get('content-type') ?? ''
     if (contentType.includes('application/json')) {
-      // 兼容「stream=true 但返回整包 JSON」的网关
+      // Support gateways that return a whole JSON package despite stream=true
       const text = await safeReadText(response)
       const parsed = OpenAICompatibleChatModel.tryParseJson(text)
       if (parsed.ok) {
         const errorPayload = this.findErrorPayload(parsed.value)
         if (errorPayload) {
           const status = inferStatusFromErrorPayload(errorPayload)
-          // 网关把「不支持流式」包成 HTTP 200 错误体：换非流式通常能成功
+          // The gateway wraps "streaming not supported" in an HTTP 200 error body: switching to non-streaming usually succeeds
           if (status == null || STREAM_INCOMPATIBLE_STATUSES.has(status)) {
             return await this.requestNonStreaming(
               endpoint,
@@ -504,7 +511,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
       if (hasMeaningfulOutput(message)) {
         return this.withCompatibilityNote(message, usedCompatibility)
       }
-      // 整包 JSON 却没有任何内容：可能是网关抖动，换一次非流式请求兜底
+      // Whole JSON package but no content at all: possibly a gateway hiccup, fall back to one non-streaming request
       return await this.requestNonStreaming(
         endpoint,
         messages,
@@ -522,7 +529,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
         const data = event.data.trim()
         if (!data) continue
         if (data === '[DONE]') break
-        // 单个事件里可能是：一个 JSON、一个 JSON 数组，或多行 JSON（都接受）
+        // A single event may contain: one JSON, one JSON array, or multiple lines of JSON (all accepted)
         const values: unknown[] = []
         const whole = OpenAICompatibleChatModel.tryParseJson(data)
         if (whole.ok) {
@@ -539,7 +546,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
           if (errorPayload) {
             const status = inferStatusFromErrorPayload(errorPayload)
             const alreadyHasOutput = hasMeaningfulOutput(collector.finalize())
-            // 已经流出内容就不再换形态重放（避免重复）；错误码像「不支持流式」时才兜底
+            // Do not replay in another shape once content has streamed (to avoid duplicates); only fall back when the error code looks like "streaming not supported"
             if (!alreadyHasOutput && (status == null || STREAM_INCOMPATIBLE_STATUSES.has(status))) {
               return await this.requestNonStreaming(
                 endpoint,
@@ -573,7 +580,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
     if (hasMeaningfulOutput(streamed)) {
       return this.withCompatibilityNote(streamed, usedCompatibility)
     }
-    // 空流（网关流式实现异常的典型表现）：自动换非流式继续，不再直接判失败
+    // Empty stream (typical symptom of a gateway's broken streaming implementation): automatically continue non-streaming instead of failing outright
     return await this.requestNonStreaming(
       endpoint,
       messages,
@@ -620,7 +627,7 @@ export class OpenAICompatibleChatModel extends BaseChatModel {
   }
 }
 
-/** 400/422 且报文明确指向「不认识/不支持的可选参数」时才做最小请求体重试 */
+/** Only retry with a minimal request body on 400/422 whose payload explicitly points to unknown/unsupported optional parameters */
 function isParameterCompatibilityError(err: unknown): boolean {
   if (!(err instanceof ModelHttpError) || ![400, 422].includes(err.status)) return false
   return /stream[_-]?options|thinking|reasoning|top[_-]?k|unknown|unsupported|not supported|unrecognized|extra (fields|inputs)|additional propert|invalid (parameter|field)/i.test(
@@ -629,13 +636,16 @@ function isParameterCompatibilityError(err: unknown): boolean {
 }
 
 /**
- * 候选 chat completions 端点。
+ * Candidate chat completions endpoints.
  *
- * OpenAI SDK / LangChain 的约定是 baseURL 后面直接拼 `/chat/completions`（baseURL 通常自带 `/v1`）；
- * Spring AI 的约定是 baseURL 是服务根、固定拼 `/v1/chat/completions`。两种配置都要能用：
- * - baseURL 已带版本段（/v1、/v2beta…）→ 只拼 `/chat/completions`；
- * - baseURL 是纯域名（无路径）→ 先试 Spring AI 的 `/v1/chat/completions`，再退回 `/chat/completions`；
- * - baseURL 带自定义路径（/api、/openai…）→ 先按原语义拼，再退回加 `/v1` 的写法。
+ * One convention appends `/chat/completions` directly after baseURL (baseURL usually includes
+ * `/v1`); another treats baseURL as the service root and always appends `/v1/chat/completions`.
+ * Both configurations must work:
+ * - baseURL already has a version segment (/v1, /v2beta…) → append only `/chat/completions`;
+ * - baseURL is a bare domain (no path) → try `/v1/chat/completions` first, then fall back to
+ *   `/chat/completions`;
+ * - baseURL has a custom path (/api, /openai…) → append according to the original semantics first,
+ *   then fall back to the `/v1` form.
  */
 function resolveChatCompletionsEndpoints(baseURL: string): string[] {
   const base = baseURL.trim().replace(/\/+$/, '')
@@ -653,14 +663,14 @@ function resolveChatCompletionsEndpoints(baseURL: string): string[] {
   return isRoot ? [springStyle, plain] : [plain, springStyle]
 }
 
-/** 这个错误是否可能只是「端点路径不对」（换一个候选路径值得再试） */
+/** Whether this error may be only "wrong endpoint path" (worth retrying with another candidate path) */
 function isEndpointMismatchError(err: unknown): boolean {
   if (err instanceof ModelHttpError) return [404, 405, 415, 501].includes(err.status)
-  // 空响应也可能是错误路径返回了 HTML/空体（HTTP 200）
+  // An empty response may also be HTML / an empty body returned by a wrong path (HTTP 200)
   return err instanceof ModelEmptyResponseError
 }
 
-/** 两个端点都失败时合并诊断（保留两边的原始报文/错误信息） */
+/** Merge diagnostics when both endpoints fail (keeping the raw payloads / error messages from both sides) */
 function combineEndpointErrors(
   provider: string,
   model: string,
@@ -700,7 +710,7 @@ function combineEndpointErrors(
   return currentError
 }
 
-/** OpenAI（官方接口） */
+/** OpenAI (official API) */
 export class ChatOpenAI extends OpenAICompatibleChatModel {
   protected get defaultBaseURL(): string {
     return 'https://api.openai.com/v1'

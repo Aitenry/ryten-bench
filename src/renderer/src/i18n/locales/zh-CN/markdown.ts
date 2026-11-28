@@ -1,11 +1,11 @@
-/* 「markdown」模块词条（编辑器 / 只读预览 / 斜杠菜单 / Mermaid / 数学公式）。
-   命名约定：t('markdown.<group>.<key>')，键名一律 camelCase，不写中文。
-   键名对应源代码里的字面量键联合类型（slash-menu.ts / TipTapMarkdownEditor.tsx），
-   改名时须同步收窄类型，否则 t() 编译报错。 */
+/* "markdown" module entries (editor / read-only preview / slash menu / Mermaid / math).
+   Naming convention: t('markdown.<group>.<key>'); keys are always camelCase and contain no Chinese.
+   Keys match the literal-key union types in the source (slash-menu.ts / TipTapMarkdownEditor.tsx),
+   so renames must narrow the type too, otherwise t() fails to compile. */
 export const zhCNMarkdown = {
   editor: {
     placeholder: '输入内容，支持 Markdown 语法（# 标题、**加粗**、- 列表、``` 代码块…）',
-    /* <mono> 只包数字：等宽族缺中文字形，中文落进去会回退成宋体 */
+    /* <mono> wraps numbers only: monospace fonts lack Chinese glyphs, so Chinese inside it falls back to a serif face */
     charCount_one: '<mono>{{count}}</mono> 字',
     charCount_other: '<mono>{{count}}</mono> 字',
     linkPlaceholder: '粘贴链接地址（留空则移除链接）'
@@ -75,13 +75,13 @@ export const zhCNMarkdown = {
     blockMathDescription: '$$…$$ 独立 LaTeX 公式块',
     mermaid: '图表',
     mermaidDescription: 'Mermaid 流程图 / 时序图 / 甘特图',
-    /* 插入到文档里的起始模板，跟随界面语言 */
+    /* Initial template inserted into the document; follows the UI language */
     mermaidTemplate: 'graph TD\n  A[开始] --> B[结束]',
     table: '表格',
     tableDescription: '3×3 表格（含表头）',
     horizontalRule: '分割线',
     horizontalRuleDescription: '--- 水平分割线',
-    /* 斜杠菜单检索词（空格分隔）：属界面词条，随语言切换 */
+    /* Slash-menu search terms (space separated): UI entries that switch with the language */
     keywords: {
       paragraph: '正文 文本 text paragraph',
       heading1: '标题1 标题一 h1 heading heading1 title',

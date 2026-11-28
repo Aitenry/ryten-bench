@@ -6,17 +6,20 @@ import { Trans } from '@renderer/i18n'
 import type { TodoItem } from '../../../../shared/harness/types'
 import { harnessApi } from '../../api/harness'
 
-/** 数字等宽字体：计数里的数字用等宽字形，避免位数变化时整行抖动 */
+/** Monospace digits: counts use monospace glyphs so the row does not jitter as digit counts change */
 const MONO_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
 /**
- * 进行中任务卡片 — 输入框上方展示「模型在对话中制定的计划」
+ * In-progress task card — shows above the input the plan the model made during the conversation
  *
- * 数据源：write_todos 工具写入的对话待办清单（主进程进程级单例、按 topicId 隔离），
- * 写入即广播 harness-todos-updated 事件，本组件实时监听。
- * - 仅显示当前对话（topicId 匹配）的清单；任务全部完成后**保留显示**（6/6 已完成），
- *   用户开启新一轮问答（发送新消息 / 切话题 / 新对话）时才消失；
- * - 标题栏可点击折叠/展开；已完成任务置灰（保留在清单中参与统计）。
+ * Data source: the conversation todo list written by the write_todos tool (a process-level
+ * singleton in the main process, isolated by topicId); each write broadcasts a
+ * harness-todos-updated event, which this component listens to live.
+ * - Only the list of the current conversation (matching topicId) is shown; once all tasks are done
+ *   the card **stays visible** (6/6 completed) and disappears only when the user starts a new
+ *   round (sends a new message / switches topic / starts a new conversation);
+ * - The header can be clicked to collapse/expand; completed tasks are grayed out (kept in the list
+ *   for counting).
  */
 const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ currentTopicId }) => {
   const {
@@ -35,26 +38,27 @@ const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ current
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [expanded, setExpanded] = useState(true)
 
-  // 用 ref 持有当前 topicId，避免每次变化重新订阅
+  // Hold the current topicId in a ref so changes do not resubscribe
   const currentTopicIdRef = useRef(currentTopicId)
   currentTopicIdRef.current = currentTopicId
 
   useEffect(() => {
-    // 话题切换：清空旧清单，等待新话题的写入事件
+    // Topic switch: clear the old list and wait for the new topic's write events
     setTodos([])
     const unsubscribe = harnessApi.harness.onHarnessTodosUpdated((data) => {
       if (data.topicId === currentTopicIdRef.current) {
         setTodos(data.todos)
       }
     })
-    // 主动拉一次当前话题的清单：卡片在切页 / 切话题后是重新挂载的，
-    // 只订阅「写入选广播」会一直空着，直到模型下一次 write_todos（表现为卡片消失）
+    // Fetch the current topic's list once: the card is remounted after page/topic switches, and
+    // subscribing only to "write broadcasts" would leave it empty until the model's next
+    // write_todos (the card would appear to vanish)
     if (currentTopicId !== null) {
       let cancelled = false
       void harnessApi.harness
         .getHarnessTodos(currentTopicId)
         .then((todos) => {
-          // 期间又切了话题就丢弃（以最新话题的清单为准）
+          // Discard if the topic changed meanwhile (the latest topic's list wins)
           if (!cancelled && currentTopicIdRef.current === currentTopicId) setTodos(todos)
         })
         .catch((error) => console.error('Failed to load harness todos:', error))
@@ -66,14 +70,14 @@ const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ current
     return unsubscribe
   }, [currentTopicId])
 
-  // 新一轮问答（用户发送新消息）：清空清单，等待模型重新规划
+  // New round (user sends a new message): clear the list and wait for the model to re-plan
   useEffect(() => {
     const onSendStarted = (): void => setTodos([])
     window.addEventListener('harness-send-started', onSendStarted)
     return () => window.removeEventListener('harness-send-started', onSendStarted)
   }, [])
 
-  // 清单存在即展示（含全部完成态）
+  // Show the card whenever a list exists (including the all-completed state)
   const completedCount = todos.filter((t) => t.status === 'completed').length
   const inProgressCount = todos.filter((t) => t.status === 'in_progress').length
   if (todos.length === 0) return null
@@ -88,13 +92,13 @@ const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ current
         overflow: 'hidden'
       }}
     >
-      {/* 进行中状态：细圆环转圈动画（主色顶弧 + 平滑旋转） */}
+      {/* In-progress state: a thin ring spinner (primary-colored top arc, smooth rotation) */}
       <style>{`
         @keyframes task-card-spin {
           to { transform: rotate(360deg); }
         }
       `}</style>
-      {/* 标题栏：点击折叠/展开 */}
+      {/* Header bar: click to collapse/expand */}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -138,7 +142,7 @@ const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ current
         />
       </button>
 
-      {/* 任务列表 */}
+      {/* Task list */}
       {expanded && (
         <div
           className="custom-scrollbar"
@@ -151,7 +155,7 @@ const TaskProgressCard: React.FC<{ currentTopicId: number | null }> = ({ current
                 {done ? (
                   <RiCheckboxCircleFill
                     size={16}
-                    // 已完成 = 绿（与消息区段头/清单同一套语义，此前是主色蓝）
+                    // Completed = green (same semantics as message-area section headers / lists; previously primary blue)
                     style={{ color: colorSuccess, marginTop: 2, flexShrink: 0 }}
                   />
                 ) : t.status === 'in_progress' ? (

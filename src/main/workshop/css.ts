@@ -2,32 +2,37 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 /**
- * 插件样式表（`plugin.css`）的生成与覆盖检查。
+ * Generation of the plugin stylesheet (`plugin.css`) and its coverage check.
  *
- * 为什么需要这一块（2026-09-26 的事故）：宿主自己的 Tailwind 是**构建期**扫宿主源码
- * 生成的，运行期才装进来的插件源码不在扫描范围里，于是插件用到的类名有近四成在宿主 CSS
- * 里没有任何规则 —— 界面直接变形。
- * 契约因此是「插件自带 plugin.css」，工坊把它自动化成两步：
+ * Why this exists (the 2026-09-26 incident): the host's own Tailwind is generated at **build
+ * time** by scanning host sources, so plugin sources installed at runtime are out of that scan
+ * range, and nearly 40% of the class names used by plugins had no rule at all in the host CSS —
+ * the UI broke outright. The contract is therefore "each plugin ships its own plugin.css", and
+ * the workshop automates it in two steps:
  *
- * 1. **生成**（`auto` 模式）：扫草稿源码里的类名，用 Tailwind 的 **JS 编译 API**
- *    （`tailwindcss` 包导出 `compile`，纯 JS，不依赖 oxide 原生扫描器）编出
- *    theme + utilities 两层、**不含 preflight** 的 CSS —— 手工做法的等价物；
- * 2. **检查**：把 `className` 位置用到的类名逐个到最终 CSS 里找规则，缺的名单进验收报告
- *    （`style.coverage`）。类名拼错、动态拼接扫不到，都在这里被点名。
+ * 1. **Generate** (`auto` mode): scan the draft sources for class names and use Tailwind's
+ *    **JS compile API** (the `tailwindcss` package exports `compile`; pure JS, no oxide native
+ *    scanner) to emit the theme + utilities layers without preflight — the equivalent of doing
+ *    it by hand;
+ * 2. **Check**: look up every class name used in `className` positions against the final CSS and
+ *    put the missing ones in the acceptance report (`style.coverage`). Typos and dynamically
+ *    concatenated names that cannot be scanned get named there as well.
  *
- * 两类候选要分开（血的教训）：
- * - **strict（className 位置）**：`className="p-4 flex"`、`className={cn('mt-2', x && 'hidden')}`
- *   —— 这些必须真的有规则，缺一条就是缺样式；
- * - **loose（其它字符串字面量）**：只用来**喂给 Tailwind 生成**（`const cls = 'flex p-2'` 这种
- *   间接写法要能编出来），**不参与覆盖判定** —— 否则 `useState`、`plugin:demo:state-get`
- *   这类字符串会被误报成缺失类名，把报告淹掉。
+ * The two candidate kinds must stay separate (a hard-learned lesson):
+ * - **strict (className positions)**: `className="p-4 flex"`,
+ *   `className={cn('mt-2', x && 'hidden')}` — these must really have rules; one missing rule is
+ *   one missing style;
+ * - **loose (other string literals)**: only used to **feed Tailwind generation** (so indirect
+ *   forms like `const cls = 'flex p-2'` can be compiled), **not part of the coverage check** —
+ *   otherwise strings like `useState` or `plugin:demo:state-get` would be reported as missing
+ *   class names and drown the report.
  */
 
-/** Tailwind 入口：只取 theme + utilities 两层（不含 preflight，注入宿主文档才不会重置宿主样式） */
+/** Tailwind entry: only the theme + utilities layers (no preflight, so injecting into the host document does not reset host styles) */
 const TAILWIND_ENTRY =
   '@import "tailwindcss/theme" layer(theme);\n@import "tailwindcss/utilities" layer(utilities);\n'
 
-/** Tailwind 已知的变体前缀（决定 `hover:bg-red-500` 这类候选是否可信） */
+/** Known Tailwind variant prefixes (decides whether candidates like `hover:bg-red-500` are plausible) */
 const VARIANT_PREFIXES = new Set([
   'hover',
   'focus',
@@ -63,15 +68,16 @@ const VARIANT_PREFIXES = new Set([
   'open'
 ])
 
-/** 单个候选的形状约束 */
+/** Shape constraint for a single candidate */
 const TOKEN_RE = /^[A-Za-z0-9!@%_:\-./[\]()#,>+~*=&$]+$/
 
 /**
- * 候选是否「像 Tailwind 类名」。
+ * Whether a candidate "looks like a Tailwind class name".
  *
- * 这道筛子只服务生成（loose 候选）与最后的兜底过滤：
- * - 排除 URL / 路径 / 正则 / 中文 / 长句；
- * - 带 `:` 的必须是已知变体链（`plugin:demo:state-set` 这种通道名要被排除）。
+ * This filter only serves generation (loose candidates) and the final fallback filtering:
+ * - exclude URLs / paths / regexes / CJK text / long sentences;
+ * - anything containing `:` must be a known variant chain (channel names like
+ *   `plugin:demo:state-set` must be excluded).
  */
 export function looksLikeClassName(token: string): boolean {
   if (token.length < 2 || token.length > 64) return false
@@ -80,23 +86,24 @@ export function looksLikeClassName(token: string): boolean {
   if (token.includes('//') || token.includes('\\')) return false
   const segments = token.split(':')
   if (segments.length > 1) {
-    // 最后一段是工具类，前面每段都得是已知变体（可以是 hover:focus 这类组合）
+    // The last segment is the utility; every preceding segment must be a known variant
+    // (combinations such as hover:focus are allowed)
     const prefixes = segments.slice(0, -1)
     if (!prefixes.every((p) => VARIANT_PREFIXES.has(p) || p === '')) return false
   }
-  if (/^[A-Z]/.test(token)) return false // 组件名 / 类型名
-  if (/^[a-z]+[A-Z]/.test(token)) return false // camelCase 标识符
+  if (/^[A-Z]/.test(token)) return false // Component / type names
+  if (/^[a-z]+[A-Z]/.test(token)) return false // camelCase identifiers
   return true
 }
 
-/** 把一段类名文本切成候选（空白分隔，逐段过筛） */
+/** Split a class-name text into candidates (whitespace-separated, filtered token by token) */
 function splitTokens(text: string, into: Set<string>): void {
   for (const token of text.split(/\s+/)) {
     if (looksLikeClassName(token)) into.add(token)
   }
 }
 
-/** 字符串字面量里的内容（生成用：间接写法也要能扫到） */
+/** Contents of string literals (for generation: indirect forms must be scannable too) */
 function literalContents(source: string): string[] {
   const out: string[] = []
   const re = /(['"`])((?:\\.|(?!\1)[^\\])*)\1/g
@@ -109,10 +116,11 @@ function literalContents(source: string): string[] {
 }
 
 /**
- * `className` / `class` 位置的字面量（覆盖判定用）。
+ * Literals in `className` / `class` positions (used for the coverage check).
  *
- * 三种形态都收：`className="a b"`、`className={'a b'}`、`className={cn('a', x && 'b')}`
- * —— 后者按括号配对取出整个表达式，再抽出其中的字符串字面量。
+ * All three forms are collected: `className="a b"`, `className={'a b'}`,
+ * `className={cn('a', x && 'b')}` — for the last one the whole expression is taken by matching
+ * braces, then the string literals inside are extracted.
  */
 function classNameExpressions(source: string): string[] {
   const out: string[] = []
@@ -129,7 +137,8 @@ function classNameExpressions(source: string): string[] {
       continue
     }
     if (quote !== '{') continue
-    // 括号配对取整个表达式（允许嵌套与模板字面量里的反引号）
+    // Take the whole expression by matching braces (nesting and backticks in template literals
+    // are allowed)
     let depth = 0
     let cursor = index
     while (cursor < source.length) {
@@ -148,18 +157,18 @@ function classNameExpressions(source: string): string[] {
   return out
 }
 
-/** 从一份源码里抽出两类候选 */
+/** Extract both kinds of candidates from one source file */
 export function extractCandidates(source: string): { strict: string[]; loose: string[] } {
   const strict = new Set<string>()
   const loose = new Set<string>()
   for (const expr of classNameExpressions(source)) splitTokens(expr, strict)
   for (const literal of literalContents(source)) splitTokens(literal, loose)
-  // strict 的成员同时也是生成输入，因此从 loose 里去掉重复
+  // strict members are also generation inputs, so drop duplicates from loose
   for (const token of strict) loose.delete(token)
   return { strict: [...strict], loose: [...loose] }
 }
 
-/** 扫草稿源码（renderer/**、main/** 的 ts/tsx/js/jsx/mjs/cjs/html），累加两类候选 */
+/** Scan draft sources (ts/tsx/js/jsx/mjs/cjs/html under renderer/** and main/**) and accumulate both candidate kinds */
 export function scanDraftCandidates(draftDir: string): { strict: string[]; all: string[] } {
   const strict = new Set<string>()
   const loose = new Set<string>()
@@ -184,7 +193,7 @@ export function scanDraftCandidates(draftDir: string): { strict: string[]; all: 
         for (const token of found.strict) strict.add(token)
         for (const token of found.loose) loose.add(token)
       } catch {
-        // 读不到就跳过（不影响构建）
+        // Skip unreadable files (does not affect the build)
       }
     }
   }
@@ -192,12 +201,12 @@ export function scanDraftCandidates(draftDir: string): { strict: string[]; all: 
   return { strict: [...strict], all: [...new Set([...strict, ...loose])] }
 }
 
-/** CSS 里的类名要转义（`w-[280px]` → `.w-\[280px\]`，`hover:scale-105` → `.hover\:scale-105`） */
+/** Class names must be escaped in CSS (`w-[280px]` → `.w-\[280px\]`, `hover:scale-105` → `.hover\:scale-105`) */
 export function cssEscapeClass(className: string): string {
   return className.replace(/[^A-Za-z0-9_-]/g, (ch) => `\\${ch}`)
 }
 
-/** CSS 里是否有该类的规则（用「转义选择器 + 非类名字符」判定，避免 `.flex` 命中 `.flex-1`） */
+/** Whether the CSS has a rule for this class (escaped selector followed by a non-class-name char, so `.flex` does not match `.flex-1`) */
 export function cssHasRule(css: string, className: string): boolean {
   const selector = `.${cssEscapeClass(className)}`
   let index = css.indexOf(selector)
@@ -210,7 +219,7 @@ export function cssHasRule(css: string, className: string): boolean {
   return false
 }
 
-/** strict 候选里没有规则的类名（最多返回 limit 条，避免报告里塞几百个名字） */
+/** Class names among the strict candidates that have no rule (at most `limit` entries, so the report is not stuffed with hundreds of names) */
 export function missingClasses(css: string, strict: string[], limit = 24): string[] {
   const missing: string[] = []
   for (const candidate of [...strict].sort((a, b) => a.localeCompare(b, 'en'))) {
@@ -222,25 +231,27 @@ export function missingClasses(css: string, strict: string[], limit = 24): strin
 }
 
 /**
- * 模块加载器（由 service 注入）。
+ * Module loader (injected by the service).
  *
- * 为什么注入而不是在本模块 `import`：构建要用 esbuild、样式要用 tailwindcss，
- * 两者都不该被静态打进插件包，且**离线工装要能用仓库里那一份**。
- * `resolve` 用于 Tailwind 内部的 `tailwindcss/theme` 这类子路径样式表。
+ * Why injection instead of a local `import`: the build needs esbuild and styles need
+ * tailwindcss; neither should be statically bundled into the plugin package, and **offline
+ * tooling must be able to use the copy in the repo**. `resolve` is used for subpath stylesheets
+ * inside Tailwind such as `tailwindcss/theme`.
  */
 export interface ModuleLoader {
   require: (id: string) => unknown
   resolve: (id: string) => string
 }
 
-/** Tailwind 编译器句柄（延迟加载：装不上时报可读错误，由调用方降级） */
+/** Tailwind compiler handle (lazily loaded: report a readable error when unavailable, letting the caller degrade) */
 type TailwindCompiler = { build: (candidates: string[]) => string }
 
 /**
- * 用 Tailwind 的 JS API 编译插件样式表。
+ * Compile the plugin stylesheet with Tailwind's JS API.
  *
- * 关键点：**候选由我们自己给**（`build(candidates)`），因此完全不触发 Tailwind 的文件扫描
- * —— `@tailwindcss/oxide`（原生模块）在打包后的应用里未必可用，而这条路径不需要它。
+ * Key point: **we supply the candidates ourselves** (`build(candidates)`), so Tailwind's file
+ * scanning is never triggered — `@tailwindcss/oxide` (a native module) may not be available in
+ * the packaged app, and this path does not need it.
  */
 export async function compilePluginCss(
   candidates: string[],
@@ -280,13 +291,13 @@ export async function compilePluginCss(
   return compiler.build(candidates)
 }
 
-/** 解析 Tailwind 内部的样式表导入（`tailwindcss/theme`、`tailwindcss/utilities`） */
+/** Resolve Tailwind's internal stylesheet imports (`tailwindcss/theme`, `tailwindcss/utilities`) */
 function resolveTailwindCss(id: string, loader: ModuleLoader): string {
   for (const candidate of [id, `${id}/index.css`, `${id}.css`]) {
     try {
       return loader.resolve(candidate)
     } catch {
-      // 换下一个候选
+      // Try the next candidate
     }
   }
   throw new Error(`找不到 Tailwind 内部样式表：${id}`)

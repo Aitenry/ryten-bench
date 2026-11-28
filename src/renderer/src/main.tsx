@@ -9,23 +9,26 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { installHostUi } from './plugin-host/host-ui'
 
 /**
- * 宿主 UI 表（插件渲染包的 `@host/**` 与 react/antd 等 vendor 都从这里取实例，
- * 见 src/main/workshop/README.md）。必须**在任何插件渲染模块被 fetch 之前**挂上：
- * 插件是异步加载的（PluginStateBridge 的 effect），而桥模块的生成依赖这里上报的
- * 「键 → 导出名」，所以放在模块求值期（早于 React 渲染）最稳。
+ * Host UI table (plugin render bundles take `@host/**` and vendor instances such as react/antd
+ * from here). It must be installed **before any plugin render module is fetched**: plugins load
+ * asynchronously (in the PluginStateBridge effect) and the generated bridge module depends on the
+ * key → export names reported here, so installing it at module evaluation time (before React
+ * renders) is the most reliable place.
  */
 installHostUi()
 
 /**
- * 未捕获错误 / 未处理的 Promise 拒绝：把**栈**打进 console。
+ * Uncaught errors / unhandled Promise rejections: print the **stack** to the console.
  *
- * 为什么需要（2026-09-19）：Electron 的 `console-message` 只带首行消息，渲染进程此前也没有任何
- * 全局处理器，日志里于是只剩一句 `Uncaught TypeError: Cannot read properties of undefined
- * (reading 'startTime')`——没有文件、没有行号、没有栈，静态排查（把 renderer 源码、antd/rc、
- * react-dom 全扫过）又排除了所有已知读取点，只能干瞪眼。这条处理器让下一次出现自带上文。
+ * Why this is needed (2026-09-19): Electron's `console-message` only carries the first line of
+ * the message and the renderer had no global handler, so the log was left with a bare
+ * `Uncaught TypeError: Cannot read properties of undefined (reading 'startTime')` — no file, no
+ * line number, no stack — while a static sweep (renderer sources, antd/rc, react-dom) ruled out
+ * every known read site. This handler makes the next occurrence carry its own context.
  *
- * 只上报、不 `preventDefault`：默认行为（DevTools 里的红字、错误边界等）完全不变。
- * 同一条错误在一个会话里最多上报 5 次，避免异常循环把日志刷爆。
+ * Report only, never `preventDefault`: the default behaviour (red text in DevTools, error
+ * boundaries, etc.) is completely unchanged. The same error is reported at most 5 times per
+ * session so an exception loop cannot flood the log.
  */
 const reportedUncaught = new Set<string>()
 const UNCAUGHT_REPORT_LIMIT = 5
@@ -48,7 +51,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {/* 语言在最外层：主题（antd locale）与 dayjs 都跟随它 */}
+    {/* Language sits outermost: both the theme (antd locale) and dayjs follow it */}
     <LanguageProvider>
       <ThemeProvider>
         <AntApp>

@@ -15,7 +15,7 @@ import { useBackgroundJobs } from '../../hooks/harness/useBackgroundJobs'
 import type { SubagentSessionRow } from '../../../../shared/harness/types'
 import type { TFunction } from 'i18next'
 
-/** 顶部栏面包屑里的子代理状态文案（与后台代理列表同一套口径） */
+/** Subagent status text for the top bar breadcrumb (same wording as the background agent list) */
 const headerSubagentStatusText = (t: TFunction, breadcrumb: HeaderSubagentBreadcrumb): string => {
   if (breadcrumb.status === 'running') return t('harness.backgroundAgents.running')
   if (breadcrumb.status === 'inactive') return t('harness.backgroundAgents.inactive')
@@ -24,7 +24,7 @@ const headerSubagentStatusText = (t: TFunction, breadcrumb: HeaderSubagentBreadc
   return t('harness.backgroundAgents.completed')
 }
 
-/** 顶部栏面包屑里的子代理状态色（暗色/亮色同一套语义色，与后台代理列表一致） */
+/** Subagent status color for the top bar breadcrumb (one semantic palette for dark/light, matching the background agent list) */
 const headerSubagentStatusColor = (breadcrumb: HeaderSubagentBreadcrumb): string => {
   if (breadcrumb.status === 'running') return '#1677ff'
   if (breadcrumb.status === 'inactive') return '#8c8c8c'
@@ -33,7 +33,7 @@ const headerSubagentStatusColor = (breadcrumb: HeaderSubagentBreadcrumb): string
   return '#52c41a'
 }
 
-/** 正在查看的后台子代理（面包屑放进顶部栏，不额外占一行高度） */
+/** Background subagent currently being viewed (its breadcrumb sits in the top bar and takes no extra row) */
 export interface HeaderSubagentBreadcrumb {
   agentId: string
   name: string
@@ -43,37 +43,43 @@ export interface HeaderSubagentBreadcrumb {
 }
 
 interface HarnessHeaderProps {
-  /** 右侧「开始」面板是否打开（顶部按钮带激活态） */
+  /** Whether the "Start" panel on the right is open (the top button shows an active state) */
   startOpen: boolean
-  /** 顶部按钮：打开/收起右侧「开始」工具面�� */
+  /** Top button: open/collapse the "Start" tool panel on the right */
   onToggleStart: () => void
   colorBorderSecondary: string
   currentTopicId: number | null
-  /** 点顶部栏后台子代理：主对话区切换到该子代理的流式会话（见 SubagentConversationView） */
+  /** Clicking a background subagent in the top bar: the main conversation area switches to that subagent's streaming session (see SubagentConversationView) */
   onSelectSubagent?: (agent: SubagentSessionRow) => void
-  /** 当前正在查看的子代理（入口列表里高亮；切回主对话时为 null） */
+  /** Subagent currently being viewed (highlighted in the entry list; null when back on the main conversation) */
   activeSubagentId?: string | null
   /**
-   * 当前正在查看的子智能体：非空时顶部栏左侧变成
-   * 「← 返回主智能体 ｜ 主智能体 › 子代理名」的面包屑（用户 2026-11-26 口径：
-   * 面包屑内容放在顶部栏里，且子代理名称字号与主智能体一致）。
+   * The subagent currently being viewed: when non-null, the left side of the top bar becomes
+   * the breadcrumb "← Back to main agent | Main agent › Subagent name" (user requirement of
+   * 2026-11-26: the breadcrumb content goes in the top bar, and the subagent name uses the same
+   * font size as the main agent).
    */
   subagentBreadcrumb?: HeaderSubagentBreadcrumb | null
   onBackToMainAgent?: () => void
 }
 
 /**
- * 对话消息区顶部栏。
+ * Top bar above the conversation message area.
  *
- * 只放视角相关的操作（后台智能体入口 / 后台任务入口 / 工作区面板开关），**不显示会话标题**——
- * 会话已在左侧系统侧栏里高亮选中（用户 2026-11-19 口径：顶部不要显示标题；随后又明确
- * 「面板按钮要放在对话消息的顶部，搞一个顶部栏，不要放在输入框里面」）。
- * 空白会话没有消息，不渲染这条栏，输入框与欢迎语一起居中（见 Index 的 isWelcomeMode）。
+ * Only view-related actions live here (background agent entry / background job entry / workspace
+ * panel toggle); the **conversation title is not shown** — the conversation is already
+ * highlighted in the system sidebar on the left (user requirement of 2026-11-19: no title at the
+ * top; later clarified as "the panel buttons must sit at the top of the conversation messages,
+ * make a top bar, don't put them inside the input box").
+ * A blank conversation has no messages, so this bar is not rendered and the input box and
+ * welcome text are centered together (see isWelcomeMode in Index).
  *
- * 2026-11-26：后台任务（execute run_in_background）入口按用户圈定的位置放在**左侧**，
- * 后台智能体与面板开关仍在右侧——左侧的圈就是原话里「圈中的区域」。
- * 同日后半段按用户确认的设计改成「顶部内联托盘」：点击按钮在标题栏下方展开任务行，
- * 每行左侧折叠输出、右侧停止，不再使用 Popover / Modal。
+ * 2026-11-26: the background jobs (execute run_in_background) entry sits on the **left** at the
+ * position marked by the user, while background agents and the panel toggle remain on the
+ * right — the circled area on the left is the "circled region" mentioned originally.
+ * Later that same day, per the design confirmed by the user, it changed to an "inline top tray":
+ * clicking the button expands job rows below the title bar, each row with collapsible output on
+ * the left and a stop action on the right, no longer using Popover / Modal.
  */
 const HarnessHeader: React.FC<HarnessHeaderProps> = ({
   startOpen,
@@ -90,12 +96,12 @@ const HarnessHeader: React.FC<HarnessHeaderProps> = ({
   const { jobs, refresh, stopJob, peekOutput } = useBackgroundJobs(currentTopicId)
   const [jobsOpen, setJobsOpen] = useState(false)
 
-  // 切话题：托盘收起（任务按 topicId 隔离，不在新话题上显示旧任务）
+  // Switching topics: collapse the tray (jobs are isolated per topicId, so old jobs must not show on a new topic)
   useEffect(() => {
     setJobsOpen(false)
   }, [currentTopicId])
 
-  // 任务被清理干净（例如话题删除）：托盘不能留着一个空壳
+  // All jobs were cleared (e.g. the topic was deleted): the tray must not remain as an empty shell
   useEffect(() => {
     if (jobs.length === 0) setJobsOpen(false)
   }, [jobs.length])
@@ -151,7 +157,7 @@ const HarnessHeader: React.FC<HarnessHeaderProps> = ({
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
-                    /* 与「主智能体」同字号、同字重（用户口径：子智能体标题不能比前面突兀） */
+                    /* Same font size and weight as "Main Agent" (user requirement: the subagent title must not look out of place next to it) */
                     fontSize: 12,
                     fontWeight: 400,
                     color: token.colorText
@@ -204,7 +210,7 @@ const HarnessHeader: React.FC<HarnessHeaderProps> = ({
           <BackgroundJobsButton jobs={jobs} open={jobsOpen} onToggle={toggleJobs} />
         </div>
         <div className="flex items-center gap-2.5">
-          {/* 合并后的「协作」入口：后台子代理 + 共享任务板（方案 A，2026-11-26 用户选定） */}
+          {/* Merged "Collaborate" entry: background subagents + shared task board (option A, chosen by the user on 2026-11-26) */}
           <CollabButton
             currentTopicId={currentTopicId}
             onSelectAgent={onSelectSubagent}

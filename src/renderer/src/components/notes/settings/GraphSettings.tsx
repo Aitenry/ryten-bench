@@ -79,7 +79,7 @@ const GraphSettings: React.FC = () => {
         description={t('graphSettings.pageDescription')}
       />
 
-      {/* 图谱构建参数 */}
+      {/* Graph build parameters */}
       <SettingsSection title={t('graphSettings.build.sectionTitle')} bodyPadding={0}>
         <SettingRow
           title={t('graphSettings.build.maxConcurrencyTitle')}
@@ -134,7 +134,7 @@ const GraphSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 默认模型 */}
+      {/* Default models */}
       <SettingsSection title={t('graphSettings.model.sectionTitle')}>
         <SettingRow
           title={t('graphSettings.model.graphModelTitle')}

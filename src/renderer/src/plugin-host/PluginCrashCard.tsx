@@ -4,7 +4,7 @@ import { RiErrorWarningLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import { usePlugins } from './PluginHostContext'
 
-/** 出错的是插件占的哪一块界面（日志与卡片上都用它定位） */
+/** Which part of the UI the plugin occupies that failed (used to locate it in logs and on the card) */
 export type PluginSurface = 'route' | 'settings' | 'provider' | 'bottomBar' | 'global'
 
 export interface PluginCrashCardProps {
@@ -15,11 +15,12 @@ export interface PluginCrashCardProps {
 }
 
 /**
- * **插件崩溃卡片**：只写「哪个插件、什么错、能做什么」，不做装饰。
+ * **Plugin crash card**: states only "which plugin, what error, what can be done", no decoration.
  *
- * 为什么单独一个文件、而不是留在 PluginBoundary.tsx 里做局部组件：那个文件导出的是边界本身，
- * 再放一个局部组件会让它的 fast refresh 退化成整文件重载
- * （`react-refresh/only-export-components`）。卡片只服务这个边界，没有第二个使用方。
+ * Why a separate file instead of a local component inside PluginBoundary.tsx: that file exports the
+ * boundary itself, and adding another local component would degrade its fast refresh into a
+ * full-file reload (`react-refresh/only-export-components`). The card serves only this boundary and
+ * has no second consumer.
  */
 const PluginCrashCard: React.FC<PluginCrashCardProps> = ({ pluginId, surface, error, onRetry }) => {
   const { token } = theme.useToken()

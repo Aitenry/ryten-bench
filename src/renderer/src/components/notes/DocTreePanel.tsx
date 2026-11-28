@@ -39,34 +39,35 @@ import type {
 } from '../../../../shared/notes/types'
 import type { Selection } from '../../types/notes'
 
-/* ──────────── 内部类型 ──────────── */
+/* ──────────── Internal types ──────────── */
 
 interface WikiTreeData {
   dirs: WikiDirectoryRow[]
-  /** 目录下的文档 id 列表（标题渲染时从 docs 实时取，保存后自动更新） */
+  /** Document ids under a directory (titles are resolved live from docs and update after saving) */
   notesByDir: Map<number, number[]>
 }
 
-/** 待办状态只用于取色；展示名走词条（notes.status.*） */
+/** Todo status is only used for colors; display names come from i18n keys (notes.status.*) */
 const TODO_STATUS_META: Record<number, { color: string }> = {
   0: { color: '#1677ff' },
   1: { color: '#fa8c16' },
   2: { color: '#52c41a' }
 }
 
-/* ──────────── 缩进网格 ──────────── */
+/* ──────────── Indent grid ──────────── */
 
-/** 每级缩进（px） */
+/** Indent per level (px) */
 const INDENT_STEP = 16
-/** 行首箭头列宽 18 + 行内间距 6：有箭头（或箭头占位）的行，图标都落在「行左内边距 + 24」这一列 */
+/** Lead arrow slot 18 + inline gap 6: rows with an arrow (or arrow placeholder) place icons in the
+ *  column at "row left padding + 24" */
 const LEAD_SLOT = 24
 
 /* ──────────── Props ──────────── */
 
 export interface DocTreePanelProps {
-  /** 未归档文档（文档库分区展示） */
+  /** Unarchived documents (shown in the document-library section) */
   docs: DocListItem[]
-  /** 全部文档（树内标题解析与搜索） */
+  /** All documents (title resolution and search inside the tree) */
   allDocs: DocListItem[]
   todos: TodoItemRow[]
   wikis: WikiRow[]
@@ -75,43 +76,44 @@ export interface DocTreePanelProps {
   onCreateDoc: () => void
   onCreateTodo: () => void
   onCreateWiki: () => void
-  /** 编辑知识库（⋯ 菜单） */
+  /** Edit a wiki (⋯ menu) */
   onEditWiki: (wiki: WikiRow) => void
-  /** 删除知识库（⋯ 菜单） */
+  /** Delete a wiki (⋯ menu) */
   onDeleteWiki: (wiki: WikiRow) => void
-  /** 打开知识库图谱视图（⋯ 菜单） */
+  /** Open the wiki graph view (⋯ menu) */
   onOpenGraph: (wiki: WikiRow) => void
-  /** 打开单篇文档的图谱子图（⋯ 菜单） */
+  /** Open the graph subgraph of a single document (⋯ menu) */
   onOpenDocGraph: (wikiId: number, docId: number) => void
-  /** 删除文档（⋯ 菜单） */
+  /** Delete a document (⋯ menu) */
   onDeleteDoc: (doc: DocListItem) => void
-  /** 编辑待办元信息（待办行 ⋯ 菜单 → 弹窗） */
+  /** Edit todo metadata (todo row ⋯ menu → dialog) */
   onEditTodo: (todo: TodoItemRow) => void
-  /** 删除待办（待办行 ⋯ 菜单） */
+  /** Delete a todo (todo row ⋯ menu) */
   onDeleteTodo: (todo: TodoItemRow) => void
-  /** 待办状态流转（待办行 ⋯ 菜单：开始 / 完成 / 重新激活） */
+  /** Todo status transition (todo row ⋯ menu: start / complete / reactivate) */
   onSetTodoStatus: (todo: TodoItemRow, status: number) => void
-  /** 归档文档（⋯ 菜单） */
+  /** Archive a document (⋯ menu) */
   onArchiveDoc: (doc: DocListItem) => void
-  /** 在目录中新建文档（⋯ 菜单） */
+  /** Create a document inside a directory (⋯ menu) */
   onCreateDocInDirectory: (
     directoryId: number,
     context?: { wikiId: number; dirName: string }
   ) => void
-  /** 从本地文件导入文档到目录（⋯ 菜单） */
+  /** Import a local file as a document into a directory (⋯ menu) */
   onImportDocToDirectory?: (
     directoryId: number,
     context?: { wikiId: number; dirName: string }
   ) => void
-  /** 目录/文档关联关系变化（删除目录、从目录移除）后通知父级刷新文档列表 */
+  /** Notify the parent to refresh the document list after directory/document links change
+   *  (directory deleted, document removed from directory) */
   onDocsChanged?: () => void
-  /** 数据变更后自增，用于刷新已展开知识库的树（保留展开状态） */
+  /** Incremented after data changes; refreshes expanded wiki trees while keeping expansion state */
   refreshKey?: number
-  /** 面板宽度（可拖拽调整） */
+  /** Panel width (drag-resizable) */
   width?: number
 }
 
-/* ──────────── 组件 ──────────── */
+/* ──────────── Component ──────────── */
 
 const DocTreePanel: React.FC<DocTreePanelProps> = ({
   docs,
@@ -155,7 +157,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
   const [treeCache, setTreeCache] = useState<Record<number, WikiTreeData>>({})
   const [loadingWikis, setLoadingWikis] = useState<Set<number>>(new Set())
 
-  /* ── 目录编辑弹窗 ── */
+  /* ── Directory edit dialog ── */
   const [dirModalOpen, setDirModalOpen] = useState(false)
   const [dirModalTitle, setDirModalTitle] = useState(t('notes.dir.create'))
   const [dirName, setDirName] = useState(t('notes.dir.defaultName'))
@@ -172,16 +174,18 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     [allDocs, t]
   )
 
-  /* ── 加载 / 刷新知识库目录树 ── */
+  /* ── Load / refresh the wiki directory tree ── */
   const treeCacheRef = useRef(treeCache)
   treeCacheRef.current = treeCache
-  /** 加载中收到的 force 刷新请求（当前加载完成后自动补发,防被 loading 守卫静默吞掉） */
+  /** Force-refresh requests received while loading (auto-replayed after the current load finishes,
+   *  so they are not silently swallowed by the loading guard) */
   const pendingForceRef = useRef(new Set<number>())
   const loadWikiTree = useCallback(
     async (wikiId: number, force = false) => {
       if (treeCache[wikiId] && !force) return
       if (loadingWikis.has(wikiId)) {
-        // 修复：加载中收到 force 刷新（新建/重命名目录后）被静默丢弃——记录待重试
+        // Fix: a force refresh received while loading (after creating/renaming a directory) used to be
+        // silently dropped — record it for retry
         if (force) pendingForceRef.current.add(wikiId)
         return
       }
@@ -196,7 +200,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
             notes.map((n) => n.doc_id)
           )
         }
-        /* 首次加载：展开全部目录；刷新：仅展开新增目录，保留用户折叠状态 */
+        /* First load: expand all directories; refresh: expand only newly added directories,
+           preserving the user's collapse state */
         const oldIds = new Set((treeCacheRef.current[wikiId]?.dirs ?? []).map((d) => d.id))
         const newIds = dirs.filter((d) => !oldIds.has(d.id)).map((d) => d.id)
         setTreeCache((prev) => ({ ...prev, [wikiId]: { dirs, notesByDir } }))
@@ -223,10 +228,10 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     [treeCache, loadingWikis]
   )
 
-  /* 数据变更：仅重载仍然存在的已展开知识库。
-     注意：effect 只依赖 refreshKey，绝不可依赖 loadWikiTree——
-     否则 treeCache 每次更新都会重建 loadWikiTree 导致 effect 反复触发，
-     与 force 重载形成无限请求循环，把界面卡死。 */
+  /* Data changed: reload only the expanded wikis that still exist.
+     Note: this effect must depend only on refreshKey, never on loadWikiTree —
+     otherwise every treeCache update rebuilds loadWikiTree, retriggering the effect and forming an
+     infinite request loop with the force reloads that freezes the UI. */
   const loadWikiTreeRef = useRef(loadWikiTree)
   loadWikiTreeRef.current = loadWikiTree
   const expandedWikisRef = useRef<Set<number>>(new Set())
@@ -234,7 +239,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
   useEffect(() => {
     if (refreshKey <= 0) return
     const aliveIds = new Set(wikis.map((w) => w.id))
-    /* 清掉已删除知识库的残留展开状态 */
+    /* Drop leftover expansion state for deleted wikis */
     setExpandedWikis((prev) => {
       const next = new Set([...prev].filter((id) => aliveIds.has(id)))
       return next.size === prev.size ? prev : next
@@ -249,8 +254,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
 
   const toggleWiki = useCallback(
     (wikiId: number) => {
-      // 修复：网络加载移出 setState updater（updater 应保持纯函数,
-      // StrictMode 双调用会触发两次 loadWikiTree 造成重复请求）
+      // Fix: network loading was moved out of the setState updater (updaters must stay pure;
+      // StrictMode's double invocation triggered loadWikiTree twice, causing duplicate requests)
       const willExpand = !expandedWikisRef.current.has(wikiId)
       setExpandedWikis((prev) => {
         const next = new Set(prev)
@@ -277,7 +282,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     })
   }, [])
 
-  /* ── 目录 CRUD ── */
+  /* ── Directory CRUD ── */
   const openCreateDir = useCallback(
     (wikiId: number, parent: WikiDirectoryRow | null) => {
       setEditingDir(null)
@@ -318,7 +323,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
           parent_id: dirTarget.parent?.id ?? null,
           name: dirName,
           sort_order: 0,
-          // level 库列为可空（DEFAULT 0），null 按 0 处理
+          // level column is nullable (DEFAULT 0); treat null as 0
           level: dirTarget.parent ? (dirTarget.parent.level ?? 0) + 1 : 0
         })
         viewMessage(messageKey, 'success', t('notes.dir.createSuccess'), 2)
@@ -348,7 +353,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
             await notesApi.wikis.deleteDirectory(dir.id)
             viewMessage(messageKey, 'success', t('notes.dir.deleteSuccess'), 2)
             await loadWikiTree(dir.wiki_id, true)
-            /* 目录删除后其中的文档解除关联回到文档库，通知父级刷新列表 */
+            /* Documents in a deleted directory become unlinked and return to the document library;
+               notify the parent to refresh the list */
             onDocsChanged?.()
           } catch (error) {
             console.error('Failed to delete directory:', error)
@@ -374,7 +380,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
             await notesApi.wikis.removeNoteFromDirectory(dir.id, docId)
             viewMessage(messageKey, 'success', t('notes.dir.removed'), 2)
             await loadWikiTree(wikiId, true)
-            /* 文档解除关联后回到文档库，通知父级刷新列表 */
+            /* After unlinking the document returns to the document library; notify the parent to
+               refresh the list */
             onDocsChanged?.()
           } catch (error) {
             console.error('Failed to remove doc from directory:', error)
@@ -386,7 +393,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     [viewMessage, loadWikiTree, onDocsChanged, modal, t]
   )
 
-  /* ── 数据分组（时间字段运行时可能是 Date/number，统一转字符串比较） ── */
+  /* ── Data grouping (time fields may be Date/number at runtime; convert to strings for comparison) ── */
   const sortedDocs = useMemo(
     () =>
       [...docs].sort((a, b) =>
@@ -409,7 +416,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
 
   const searchLower = search.trim().toLowerCase()
 
-  /* ── 行样式 ── */
+  /* ── Row styles ── */
   const rowStyle = (selected: boolean, indent = 0, isDoc = false): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
@@ -418,7 +425,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     padding: `0 7px 0 ${8 + indent * INDENT_STEP}px`,
     borderRadius: 6,
     cursor: 'pointer',
-    /* 面板统一字号：分区标题 / 分组标题 / 树行同为 12.5，层级靠字重与颜色拉开 */
+    /* Unified panel font size: section titles / group titles / tree rows are all 12.5; hierarchy
+       comes from weight and color */
     fontSize: 12.5,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -442,7 +450,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
       />
     ) : null
 
-  /* ── 折叠箭头（行首，独立点击区） ── */
+  /* ── Collapse arrow (row lead, independent click area) ── */
   const toggleArrow = (open: boolean, onToggle: () => void): React.ReactNode => (
     <span
       style={{
@@ -474,25 +482,29 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     </span>
   )
 
-  /** 占位（文档行无箭头，保持图标对齐） */
+  /** Placeholder (document rows have no arrow; keeps icons aligned) */
   const arrowPlaceholder = <span style={{ width: 18, height: 18, flexShrink: 0 }} aria-hidden />
 
-  /** 待办行：待办分区里没有箭头列，用内边距把状态图标直接落在次级图标列
-   *  （8 + 16 缩进 + 24 箭头列 = 48px）。此前靠 18px 空占位 span 撑位，
-   *  等于多出一个死节点，行首还会和分组标签的左边界错开 */
+  /** Todo rows: the todo section has no arrow column, so padding places the status icon directly in
+   *  the secondary icon column (8 + 16 indent + 24 arrow slot = 48px). Previously an 18px empty
+   *  placeholder span held the space, which added a dead node and misaligned the row lead against
+   *  the group label's left edge */
   const todoRowStyle = (selected: boolean): React.CSSProperties => ({
     ...rowStyle(selected, 1),
     padding: `0 7px 0 ${8 + INDENT_STEP + LEAD_SLOT}px`
   })
 
-  /** 该待办是否正是当前选中项（树内高亮 + 左侧强调条，与文档行一致） */
+  /** Whether this todo is the current selection (highlighted in the tree with a left accent bar,
+   *  matching document rows) */
   const isTodoSelected = (todoId: number): boolean =>
     selection?.kind === 'todo' && selection.todoId === todoId
 
-  /* ── 分组标题 ──
-   *  横向网格与分区标题共用：左侧 14px 起放 6px 状态圆点（圆心 17px = 折叠箭头列中心），
-   *  圆点后接状态图标 + 组名（图标列 32px / 文字列 50px，与分区标题的图标、文字同列）；
-   *  右侧发丝线把整组横向划开，计数以浅底小胶囊靠右收口 */
+  /* ── Group headers ──
+   *  Shares the horizontal grid with section headers: a 6px status dot starts at 14px from the left
+   *  (center at 17px = the center of the collapse arrow column), followed by the status icon + group
+   *  name (icon column 32px / text column 50px, same columns as the section header icon and text);
+   *  a hairline on the right divides the whole group horizontally, and the count sits at the right as
+   *  a small pill on a light background */
   const renderGroupHeader = (
     color: string,
     icon: React.ReactNode,
@@ -532,12 +544,12 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     </div>
   )
 
-  /* ── 待办行尾「⋯」：待办的全部操作都收在这里，
-   *   页面里只保留内容编辑，不再摆一排按钮 ── */
+  /* ── Todo row-end "⋯": all todo actions are collected here,
+   *   the page keeps only content editing and no longer shows a row of buttons ── */
   const todoMenu = (todo: TodoItemRow): React.ReactNode => {
     const status = todo.status ?? 0
-    /** 状态动作一步一格，同一时刻只出现一个：
-     *  待办 —开始任务→ 进行中 —标记完成→ 已完成 —重新激活→ 待办 */
+    /** One status action per step, only one shown at a time:
+     *  todo —start→ in progress —complete→ done —reactivate→ todo */
     const step =
       status === 0
         ? {
@@ -585,7 +597,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     return rowMenu(items)
   }
 
-  /* ── 行尾「⋯」操作菜单 ── */
+  /* ── Row-end "⋯" action menu ── */
   const rowMenu = (items: MenuProps['items']): React.ReactNode => (
     <Dropdown
       trigger={['click']}
@@ -625,7 +637,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     </Dropdown>
   )
 
-  /* ── 分区标题 ── */
+  /* ── Section headers ── */
   const renderSectionHeader = (
     key: string,
     icon: React.ReactNode,
@@ -641,14 +653,15 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
           alignItems: 'center',
           gap: 6,
           height: 30,
-          /* 与树行 rowStyle(indent=0) 的左侧内边距一致，保证箭头/图标/文字水平对齐 */
+          /* Same left padding as the tree row rowStyle(indent=0) so arrows/icons/text align
+             horizontally */
           padding: '0 6px 0 8px',
           cursor: 'pointer',
           userSelect: 'none'
         }}
         onClick={() => setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] }))}
       >
-        {/* 复用树行同款折叠箭头（18px 容器），对齐下方行首箭头 */}
+        {/* Reuse the tree row's collapse arrow (18px container) so it aligns with the row leads below */}
         {toggleArrow(open, () => setSectionOpen((prev) => ({ ...prev, [key]: !prev[key] })))}
         <span
           style={{
@@ -665,8 +678,9 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
         </span>
         <span style={{ marginLeft: 2, fontSize: 11, color: token.colorTextTertiary }}>{count}</span>
         <span style={{ flex: 1 }} />
-        {/* 提示朝右弹（用户 2026-09-26）：这个 + 在左栏树里，朝上会压住同一栏上一行的
-            分区标题/计数，朝右则落在右侧主区上，不遮本栏内容 */}
+        {/* Tooltip opens to the right (user 2026-09-26): this + sits in the left tree column, and
+            opening upward would cover the section header/count of the row above in the same column,
+            while right-opening lands on the main area and hides nothing here */}
         <Tooltip title={t('notes.tree.createNamed', { name: label })} placement="right">
           <button
             style={{
@@ -701,7 +715,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     )
   }
 
-  /* ── 知识库子树 ── */
+  /* ── Wiki subtree ── */
   const renderWikiChildren = (wikiId: number, tree: WikiTreeData): React.ReactNode => {
     const wikiTitle = wikis.find((w) => w.id === wikiId)?.title
     const dirsByParent = new Map<number | null, WikiDirectoryRow[]>()
@@ -711,7 +725,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
       dirsByParent.set(d.parent_id, list)
     })
     const renderDirs = (parentId: number | null, depth: number): React.ReactNode[] => {
-      // sort_order 库列为可空（DEFAULT 0），null 按默认值参与排序
+      // sort_order column is nullable (DEFAULT 0); null participates in sorting as the default
       const dirs = (dirsByParent.get(parentId) ?? []).sort(
         (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
       )
@@ -858,7 +872,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
                     label: t('notes.doc.archiveToOtherDir'),
                     icon: <RiInboxArchiveLine size={14} />,
                     onClick: () => {
-                      /* 目录内文档不在 docs（未归档列表）里，必须从 allDocs 查 */
+                      /* Documents inside a directory are not in docs (the unarchived list), so they
+                         must be looked up from allDocs */
                       const doc = allDocs.find((d) => d.id === noteId)
                       if (doc) onArchiveDoc(doc)
                     }
@@ -870,7 +885,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
                     danger: true,
                     icon: <RiDeleteBinLine size={14} />,
                     onClick: () => {
-                      /* 目录内文档不在 docs（未归档列表）里，必须从 allDocs 查 */
+                      /* Documents inside a directory are not in docs (the unarchived list), so they
+                         must be looked up from allDocs */
                       const doc = allDocs.find((d) => d.id === noteId)
                       if (doc) onDeleteDoc(doc)
                     }
@@ -886,7 +902,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
     return renderDirs(null, 0)
   }
 
-  /* ── 搜索模式 ── */
+  /* ── Search mode ── */
   const renderSearchResults = (): React.ReactNode => {
     const matchedDocs = [...allDocs]
       .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
@@ -1000,8 +1016,9 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
               matchedWikis.length
             )}
             {matchedWikis.map((w) => {
-              // 修复：搜索视图不渲染知识库子树,点行/箭头只有状态翻转与网络请求而无任何
-              // 可见反馈——改为退出搜索并展开该知识库（正常树中可见）
+              // Fix: the search view does not render the wiki subtree, so clicking a row/arrow only
+              // flipped state and fired network requests with no visible feedback — instead, exit
+              // search and expand that wiki (visible in the normal tree)
               const openWikiFromSearch = (): void => {
                 setSearch('')
                 if (!expandedWikis.has(w.id)) {
@@ -1050,12 +1067,13 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
         flexDirection: 'column',
         minHeight: 0,
         background: token.colorBgContainer,
-        /* 贴边面板：左上/左下直角，右缘保留圆角与中间主区呼应（参考 Harness 侧边栏） */
+        /* Edge-flush panel: square top-left/bottom-left corners; the right edge keeps its radius to
+           match the middle main area */
         borderRadius: '12px 0 0 12px',
         overflow: 'hidden'
       }}
     >
-      {/* 搜索：与侧栏品牌区同高（33px）的顶行 */}
+      {/* Search: top row at the same height (33px) as the sidebar brand area */}
       <div className="shell-topbar" style={{ display: 'grid', padding: '9px 6px 3px 9px' }}>
         <div
           style={{
@@ -1091,7 +1109,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
         </div>
       </div>
 
-      {/* 树区域 */}
+      {/* Tree area */}
       <div
         className="custom-scrollbar"
         style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px' }}
@@ -1256,7 +1274,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
                               minWidth: 0,
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
-                              /* 已完成置灰：状态已由分组说明，行内不再加删除线，只降一档亮度 */
+                              /* Completed todos are dimmed: the group already conveys the status, so
+                                 no strikethrough in the row — just one level less brightness */
                               color:
                                 t.status === 2 && !isTodoSelected(t.id)
                                   ? token.colorTextTertiary
@@ -1333,7 +1352,8 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
                           {w.title}
                         </span>
                         {isLoading ? (
-                          /* 行尾就是「…」菜单的位置：占位块与它同宽同高，树不会因载入而抖 */
+                          /* Row end is exactly where the "…" menu sits: the placeholder is the same
+                             width and height, so the tree does not jitter while loading */
                           <SkeletonBlock w={26} h={13} r={4} />
                         ) : (
                           rowMenu([
@@ -1375,7 +1395,7 @@ const DocTreePanel: React.FC<DocTreePanelProps> = ({
         )}
       </div>
 
-      {/* 目录编辑弹窗 */}
+      {/* Directory edit dialog */}
       <Modal
         title={dirModalTitle}
         open={dirModalOpen}

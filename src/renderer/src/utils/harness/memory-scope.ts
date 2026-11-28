@@ -7,28 +7,31 @@ import {
 import { harnessApi } from '../../api/harness'
 
 /**
- * 当前会话的记忆作用域（渲染层共享的极简 store）。
+ * Memory scope of the current session (a minimal store shared by the renderer).
  *
- * 为什么放在模块级单例里而不是走 props / Context：同一个作用域有**两个读取方**——
- * 侧栏底部的「记忆」块（在 HarnessProvider 之下，拿得到 props）和 设置 → 记忆页
- * （由宿主的设置弹窗渲染，不在插件 Provider 之下，拿不到任何 props）。两边必须显示同一份
- * 记忆，所以值放在这里，各自订阅（用户口径 2026-09-28「插件的记忆，并没有像工作里面的
- * 记忆一样显示在侧边栏」+「设置 → 记忆页跟着同一个作用域」）。
+ * Why a module-level singleton instead of props / Context: the same scope has **two readers** —
+ * the "Memory" block at the bottom of the sidebar (under HarnessProvider, so it gets props) and
+ * Settings → Memory page (rendered by the host's settings modal, not under the plugin Provider,
+ * so it gets no props at all). Both must show the same memory, so the value lives here and each
+ * side subscribes on its own (user quote 2026-09-28: "the plugin's memory isn't shown in the
+ * sidebar like the workspace memory" + "the Settings → Memory page should follow the same
+ * scope").
  *
- * 值的口径与主进程完全一致：`harness_topic.memory_scope` 的字符串形态
- * （`plugin:<插件 id>` / `chat`），null = 跟当前工作区走（见 shared/memory-scope.ts）。
- * 写入方是 useHarnessHandlers：切会话 → 用话题行上存的作用域；插件行 /「对话」模式点 ＋
- * （还没有话题）→ 用挂起的作用域。
+ * The value has exactly the same shape as in the main process: the string form of
+ * `harness_topic.memory_scope` (`plugin:<plugin id>` / `chat`), null = follow the current
+ * workspace (see shared/memory-scope.ts).
+ * The writer is useHarnessHandlers: switching sessions → use the scope stored on the topic row;
+ * plugin row / "chat" mode plus button (no topic yet) → use the pending scope.
  */
 let scope: string | null = null
 const listeners = new Set<() => void>()
 
-/** 当前会话的记忆作用域（供非 React 场景/回调里读） */
+/** Memory scope of the current session (for reading in non-React code / callbacks) */
 export function getMemoryScope(): string | null {
   return scope
 }
 
-/** 设置当前会话的记忆作用域（非法值 / 插件 id 为空一律归零 = 工作区） */
+/** Set the memory scope of the current session (invalid values / empty plugin id fall back to null = workspace) */
 export function setMemoryScope(next: string | null): void {
   const normalized = normalizeMemoryScope(next)
   if (normalized === scope) return
@@ -43,31 +46,33 @@ function subscribeScope(listener: () => void): () => void {
   }
 }
 
-/** 订阅当前会话的记忆作用域 */
+/** Subscribe to the memory scope of the current session */
 export function useMemoryScope(): string | null {
   return useSyncExternalStore(subscribeScope, getMemoryScope)
 }
 
-/** 当前作用域指向的插件 id（工作区作用域 / 「对话」模式 = null） */
+/** Plugin id the current scope points at (workspace scope / "chat" mode = null) */
 export function useMemoryPluginId(): string | null {
   return pluginIdOfMemoryScope(useMemoryScope())
 }
 
-/** 当前作用域是不是「对话」模式的（设置 → 记忆页据此标注） */
+/** Whether the current scope is "chat" mode (the Settings → Memory page labels it based on this) */
 export function useIsChatScope(): boolean {
   return isChatScope(useMemoryScope())
 }
 
 /**
- * 当前作用域的**显示名**：
- * - 插件作用域 → 插件草稿的展示名（拿不到就退回 id）；
- * - 「对话」模式 → `chatName`（调用方给译文，见 设置 → 记忆页）；
- * - 工作区作用域 → null。
+ * **Display name** of the current scope:
+ * - plugin scope → the display name of the plugin draft (falls back to the id when unavailable);
+ * - "chat" mode → `chatName` (the caller supplies translated text, see Settings → Memory page);
+ * - workspace scope → null.
  *
- * 只有 设置 → 记忆页 用它（侧栏那一行**不标作用域**：用户口径 2026-09-28「不需要
- * （记忆 · 个人记账台账）这个内容」——那块本来就在会话侧，读哪一套由当前会话决定）。
- * 名字一律取插件自己的名字（用户口径 2026-09-26「要用 mcp 的名称」同一套：条目/选项/分组
- * 都用真实名称，不写笼统的类别名）。草稿改名（workshop-changed 广播）后跟着刷新。
+ * Only the Settings → Memory page uses it (the sidebar row **doesn't label the scope**: user
+ * quote 2026-09-28 "this (Memory · personal ledger) content isn't needed" — that block is
+ * already on the session side, and which set it reads is decided by the current session).
+ * The name is always the plugin's own name (same convention as the user quote 2026-09-26 "use
+ * the MCP name": entries / options / groups all use real names, never generic category names).
+ * It refreshes after a draft rename (the workshop-changed broadcast).
  */
 export function useMemoryScopeName(chatName: string): string | null {
   const pluginId = useMemoryPluginId()
@@ -84,7 +89,8 @@ export function useMemoryScopeName(chatName: string): string | null {
         const drafts = await harnessApi.workshop.list()
         if (alive) setName(drafts.find((draft) => draft.id === pluginId)?.title ?? pluginId)
       } catch {
-        // 工坊没接线（例如插件刚停用）：退回 id，至少让人知道这份记忆属于谁
+        // workshop isn't wired (e.g. the plugin was just disabled): fall back to the id so it is
+        // at least clear whose memory this is
         if (alive) setName(pluginId)
       }
     }
@@ -96,6 +102,7 @@ export function useMemoryScopeName(chatName: string): string | null {
     }
   }, [pluginId])
 
-  // 「对话」模式的记忆是**整个模式共用**的一份，没有名字可取，用调用方给的译文
+  // "Chat" mode memory is **one document shared by the whole mode** and has no name, so use the
+  // caller-provided translated text
   return useIsChatScope() ? chatName : name
 }

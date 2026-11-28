@@ -12,74 +12,79 @@ import type { WorkspaceRow } from '../../../database/mapper/harness/harness'
 import { isSameFsPath } from '../../../../shared/harness/workshop'
 
 /**
- * 「对话」模式的**工作目录**：该模式没有工作区概念，但模型的文件工具需要一个可写根目录
- * （虚拟 `/` 挂的就是它），否则 read/write/edit 一调就是越界，资源管理器也没根可显示。
+ * The **working directory** of "chat" mode: the mode has no workspace concept, but the model's
+ * file tools need a writable root directory (the virtual `/` mounts it), otherwise read/write/edit
+ * immediately go out of bounds and the explorer has no root to display.
  *
- * 目录布局（按操作系统自动解析，不需要用户配置）：
+ * Directory layout (resolved per OS, no user configuration needed):
  *
  * ```
- * <userData>/chat/            ← 对话模式的工作区根（workspace 行 kind='chat'）
- *   └── <会话 id>/            ← 每个会话一个子目录，就是这条会话的工作目录
+ * <userData>/chat/            ← chat-mode workspace root (workspace row kind='chat')
+ *   └── <session id>/          ← one subdirectory per session; it is that session's working directory
  * ```
  *
- * 为什么放 `userData` 而不是「文档」目录：应用**刻意不自动创建用户可见的目录**
- * （历史上那个 Documents 下的「RytenBench 工作区」已被 workspace-migration 回滚掉），
- * 对话模式的目录是应用的运行数据，跟着数据库/日志一起待在应用数据目录里最合适；
- * 用户想看文件就从右侧资源管理器面板打开，或点「打开目录」。
+ * Why under `userData` and not "Documents": the app **deliberately does not auto-create
+ * user-visible directories** (the historical "RytenBench workspace" under Documents was rolled
+ * back by workspace-migration); chat-mode directories are runtime data of the app, and living in
+ * the app data directory next to the database/logs is the most appropriate; users who want to see
+ * the files can open them from the explorer panel on the right, or click "open directory".
  *
- * 为什么做成真正的工作区行：与插件工作区同一个理由（见 workshop/workspace.ts）——
- * AI 工作目录（Runtime 的 workspacePath）、资源管理器根、文件 IPC 边界（`assertInsideWorkspace`）、
- * 文件改动审查、按工作区隔离的记忆，全都只认 `harness.workspacePath` + `activeWorkspaceId`。
- * 让活动工作区真的指向这个目录，整条链路一行都不用改。
+ * Why make it a real workspace row: same reason as plugin workspaces (see workshop/workspace.ts) —
+ * the AI working directory (Runtime's workspacePath), explorer root, file IPC boundary
+ * (`assertInsideWorkspace`), file change review and per-workspace isolated memory all read only
+ * `harness.workspacePath` + `activeWorkspaceId`. Pointing the active workspace at this directory
+ * makes the whole chain work without a single line changed.
  *
- * 这些行**不算用户的工作区**：侧栏「工作」列表按 `kind` 把它们滤掉，
- * 它们只出现在「对话」那一侧（`kind='chat'`）。
+ * These rows **do not count as user workspaces**: the sidebar "work" list filters them out by
+ * `kind`; they appear only on the "chat" side (`kind='chat'`).
  */
 
-/** 对话模式的目录名（`<userData>/chat/`） */
+/** Directory name for chat mode (`<userData>/chat/`) */
 const CHAT_DIR_NAME = 'chat'
 
 /**
- * 对话模式的根目录（按系统解析）。
+ * Chat-mode root directory (resolved by OS).
  *
- * `app.getPath('userData')` 在各平台分别是
- * `%APPDATA%\ryten-bench`（Win）/ `~/Library/Application Support/ryten-bench`（mac）/
- * `~/.config/ryten-bench`（Linux）——本函数是这条规则的**唯一**出口，别处一律用它，
- * 免得渲染层/工装各拼一份路径。开发态目录名是 `ryten-bench-dev`（规则见
- * `src/main/environment/`），所以 dev 的对话目录不会和打包版混在一起。
+ * `app.getPath('userData')` is, per platform,
+ * `%APPDATA%\ryten-bench` (Win) / `~/Library/Application Support/ryten-bench` (mac) /
+ * `~/.config/ryten-bench` (Linux) — this function is the **single** outlet of that rule; use it
+ * everywhere else so the renderer/tooling does not each assemble their own path. In dev the
+ * directory name is `ryten-bench-dev` (rule in `src/main/environment/`), so the dev chat
+ * directory never mixes with the packaged build.
  */
 export function chatWorkspaceRoot(): string {
   return path.join(app.getPath('userData'), CHAT_DIR_NAME)
 }
 
-/** 某条会话的工作目录（话题 id；0 = 还没有话题的空白会话 → 就用根目录） */
+/** Working directory of a session (topic id; 0 = blank session with no topic yet → use the root directory) */
 export function chatTopicDir(topicId: number): string {
   const root = chatWorkspaceRoot()
   return topicId > 0 ? path.join(root, String(topicId)) : root
 }
 
-/** 确保目录存在（幂等；模型/资源管理器一进来就能用） */
+/** Ensure the directory exists (idempotent; usable as soon as the model/explorer arrives) */
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true })
 }
 
-/** 已存在的对话工作区行（没有则 null，不创建） */
+/** Existing chat workspace row (null if absent; does not create one) */
 export async function findChatWorkspace(): Promise<WorkspaceRow | null> {
   const rows = await getWorkspacesByKind('chat')
   return rows[0] ?? null
 }
 
-/** 当前所有对话工作区 id（侧栏据此把「对话」的行从「工作」列表里滤掉、并认出自己的那一行） */
+/** IDs of all current chat workspaces (the sidebar uses them to filter "chat" rows out of the "work" list and to recognize its own row) */
 export async function listChatWorkspaceIds(): Promise<number[]> {
   return (await getWorkspacesByKind('chat')).map((row) => row.id)
 }
 
 /**
- * 取（必要时创建）对话模式的根工作区。
+ * Get (creating if necessary) the chat-mode root workspace.
  *
- * 幂等：`<userData>/chat` 这个路径永远只对应一行（表上 `workspace_path_key` 唯一）。
- * 路径被占但种类不对（理论上不会发生：这个路径只有这里会建）就地改成 'chat'，
- * 而不是再插一行——插会撞唯一约束。
+ * Idempotent: the path `<userData>/chat` always maps to exactly one row (`workspace_path_key` is
+ * unique on the table). If the path is occupied by the wrong kind (should not happen: only this
+ * place creates it), change it in place to 'chat' instead of inserting another row — inserting
+ * would violate the unique constraint.
  */
 export async function ensureChatWorkspace(): Promise<WorkspaceRow> {
   const root = chatWorkspaceRoot()
@@ -93,7 +98,8 @@ export async function ensureChatWorkspace(): Promise<WorkspaceRow> {
   const id = await createWorkspace(name, root, 'chat')
   const created = await findWorkspaceByPath(root)
   if (!created) {
-    // 刚建完必然查得到；查不到说明库出了别的问题，如实抛出去而不是编一行假数据
+    // It is always readable right after creation; if not, something else is wrong with the
+    // database, so throw it as-is rather than fabricating a fake row
     throw new Error(`对话工作区创建后读不回来（id=${id}，path=${root}）`)
   }
   logger.info(`[Chat] created chat workspace id=${id} at ${root}`)
@@ -101,12 +107,13 @@ export async function ensureChatWorkspace(): Promise<WorkspaceRow> {
 }
 
 /**
- * 某条会话的工作目录（取（必要时创建）它的子目录）。
+ * Working directory of a session (get (creating if necessary) its subdirectory).
  *
- * 话题 id 为准而不是话题标题：标题会被模型改、也可能重名，目录名必须稳定且**已经过校验**
- * （id 是自增整数，天然不含路径分隔符）。
+ * The topic id is authoritative rather than the topic title: titles can be changed by the model
+ * and may collide, while the directory name must be stable and **already validated** (ids are
+ * auto-increment integers that never contain path separators).
  *
- * @param topicId 话题 id；≤0 = 还没有话题 → 返回根目录本身（新建的空白会话先用它）
+ * @param topicId Topic id; ≤0 = no topic yet → returns the root directory itself (a new blank session uses it first)
  */
 export async function ensureChatTopicDir(topicId: number): Promise<string> {
   const dir = chatTopicDir(topicId)
@@ -115,12 +122,12 @@ export async function ensureChatTopicDir(topicId: number): Promise<string> {
 }
 
 /**
- * 删除一条对话会话的目录（删话题时顺手清理）。
+ * Delete a chat session's directory (cleaned up when the topic is deleted).
  *
- * 两道闸，任何一道不满足就什么都不做——
- * 这函数带 `recursive: true`，路径算错就是删用户目录：
- * ① 目标必须是**对话根目录的直接子目录**（且不是根目录本身）；
- * ② 名字必须是纯数字（话题 id）。
+ * Two gates, and nothing happens if either fails — this function uses `recursive: true`, so one
+ * miscalculated path deletes user directories:
+ * ① The target must be a **direct subdirectory of the chat root** (and not the root itself);
+ * ② The name must be all digits (topic id).
  */
 export function removeChatTopicDir(topicId: number): boolean {
   if (!(topicId > 0)) return false
@@ -145,13 +152,17 @@ export function removeChatTopicDir(topicId: number): boolean {
 }
 
 /**
- * 启动时的**兜底分类**：把历史上那批插件工作区从默认的 'user' 认成 'plugin'。
+ * **Fallback classification** at startup: recognize the historical batch of plugin workspaces as
+ * 'plugin' instead of the default 'user'.
  *
- * 0010 之前没有 kind 列，老库里的插件工作区全是默认值；认不出来它们就会漏进「工作」列表
- * （2026-09-28 用户明确要求「插件目录不进『工作』列表」）。判据与 listPluginWorkspaces 一致：
- * 路径是插件存放路径的**直接子目录**。只动 kind='user' 的行，不动名字与路径，也不刷 updated_at。
+ * Before 0010 there was no kind column, so plugin workspaces in old databases all hold the
+ * default value; if they are not recognized they leak into the "work" list (on 2026-09-28 the
+ * user explicitly requested that plugin directories stay out of the "work" list). The criterion
+ * is the same as listPluginWorkspaces: the path is a **direct subdirectory** of the plugin
+ * storage path. Only rows with kind='user' are touched; name and path are left alone, and
+ * updated_at is not refreshed.
  *
- * 对话工作区不必在这里分类：它由 ensureChatWorkspace 自己写 'chat'。
+ * Chat workspaces need no classification here: ensureChatWorkspace writes 'chat' itself.
  */
 export async function classifyLegacyPluginWorkspaces(
   pluginsRoot: string | undefined

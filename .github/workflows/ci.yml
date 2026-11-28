@@ -1,13 +1,13 @@
 name: CI
 
-# 日常质量门禁（PR / 非 main 分支推送）。
+# Daily quality gate (PRs / pushes to non-main branches).
 #
-# 与 release.yml 的分工：
-# - release.yml 只在 main 推送时跑「发版链路」（版本解析 → 三平台打包 → 发布）；
-# - 本工作流负责在合入前拦回归：typecheck + 全量单元测试。
+# Division of labor with release.yml:
+# - release.yml runs the release pipeline only on pushes to main (version resolution → three-platform packaging → publish);
+# - this workflow blocks regressions before merge: typecheck + full unit test suite.
 #
-# 注意：lint 暂不进 CI——仓库存在 4 万+ 条 prettier/CRLF 存量告警（见
-# docs/audit-2026-11/04-complexity-style.md C23），先做格式化治理再启用。
+# Note: lint is not in CI yet — the repository carries 40k+ outstanding prettier/CRLF warnings;
+# enable it after a formatting cleanup pass.
 on:
   pull_request:
   push:
@@ -47,7 +47,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 只拦 error（prettier 格式告警是存量，见 docs/audit-2026-11；--quiet 不报 warning）
+      # Only fail on errors (prettier formatting warnings are pre-existing; --quiet suppresses warnings)
       - name: Lint (errors only)
         run: pnpm lint:errors
 

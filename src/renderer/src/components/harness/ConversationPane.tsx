@@ -3,24 +3,28 @@ import HarnessMessageArea from './HarnessMessageArea'
 import type { Message } from '../../types/harness/types'
 
 /**
- * 对话主区（消息窗口 + 底部输入区）—— 主智能体与后台子智能体的**共用外壳**。
+ * Conversation main region (message window + bottom input area) — the **shared shell** for the
+ * main agent and background subagents.
  *
- * 背景（用户 2026-11-26）："消息区域也复用之前的" —— 之前子代理会话视图自己挂了一份
- * `HarnessMessageArea`，虽然组件同源，但外层布局/输入区是另起的，视觉与行为都不一致。
- * 现在把 Harness 页里的"消息区 + 输入区"抽成这个组件：
- * - 主对话传自己的 messages / handlers / inputArea；
- * - 子代理会话传 useSubagentConversation 的 messages / no-op handlers / 续聊输入框。
- * 两者在页面里是同一个组件位置，目标切换时 React 复用同一棵消息窗口（滚动位置 /
- * 折叠状态等内部状态延续），只把数据源换掉——与 DSH 的「conversation rebind」一致。
+ * Background (2026-11-26): the subagent conversation view used to mount its own
+ * `HarnessMessageArea`; the component was the same, but the outer layout and input area were
+ * separate, so visuals and behavior diverged. The "message area + input area" from the Harness
+ * page is now extracted into this component:
+ * - the main conversation passes its own messages / handlers / inputArea;
+ * - subagent sessions pass messages / no-op handlers / the continue-chat input from
+ *   useSubagentConversation.
+ * Both occupy the same component position on the page, so on target switch React reuses the same
+ * message window tree (scroll position, fold state and other internal state carry over) and only
+ * the data source is swapped — the conversation is effectively rebound in place.
  */
 interface ConversationPaneProps {
-  /** 消息（主对话或子代理会话，结构完全同构） */
+  /** Messages (main conversation or subagent session; structurally identical) */
   messages: Message[]
-  /** 是否正在流式输出（驱动贴底跟随与生成中的光圈） */
+  /** Whether output is streaming (drives stick-to-bottom following and the generating glow) */
   streaming: boolean
-  /** 当前话题 id（主对话 / 子代理的父话题；用量与工具详情归属用） */
+  /** Current topic id (parent topic for subagents; used for usage and tool-detail attribution) */
   currentTopicId: number | null
-  /** 只读会话（归档的主对话 / 子代理会话） */
+  /** Read-only conversation (archived main conversation / subagent session) */
   readOnly?: boolean
   isDarkMode: boolean
   colorText: string
@@ -42,16 +46,16 @@ interface ConversationPaneProps {
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   pendingByPath?: Map<string, number>
   onOpenChangedFile?: (path: string) => void
-  /** 会话检索命中后要定位的对话行 id（主对话用；子代理会话不传） */
+  /** Dialogue row id to jump to after a session-search hit (main conversation only; not passed for subagents) */
   jumpToDialogueId?: number | null
-  /** 定位消费完成（父级清空待定位目标） */
+  /** Jump target consumed (the parent clears the pending target) */
   onJumpToDialogueConsumed?: () => void
   /**
-   * 无消息时的占位（子代理会话用：加载中 / 空 / 会话不存在）。
-   * 主对话的非空会话不会走到这里；空白会话仍由 Harness 页的欢迎布局处理。
+   * Placeholder when there are no messages (subagent sessions: loading / empty / missing conversation).
+   * Non-empty main conversations never reach this; empty conversations are still handled by the Harness page's welcome layout.
    */
   empty?: React.ReactNode
-  /** 底部输入区（主对话是完整输入区，子代理是续聊输入框） */
+  /** Bottom input area (full input area for the main conversation, continue-chat input for subagents) */
   footer: React.ReactNode
 }
 

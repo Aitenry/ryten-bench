@@ -2,24 +2,24 @@ import type { WebContents } from 'electron'
 import logger from 'electron-log'
 
 /**
- * 主进程 → 渲染进程安全发送工具。
+ * Safe main-process → renderer send helper.
  *
- * 背景（Electron 43 实测结论，2026-08-29 修复）：
- * 渲染进程崩溃或窗口关闭时，「渲染帧」先于「WebContents 对象」销毁，存在一段
- * 帧已失效但 `webContents.isDestroyed()` 仍为 false 的窗口期。此时调用
- * `webContents.send()` 不会抛异常——Electron 内部（WebFrameMain.send 的
- * _renderFrameDisposed 守卫）只会静默打印：
+ * Background (measured on Electron 43; fixed 2026-08-29):
+ * When the renderer process crashes or the window closes, the render frame is destroyed before
+ * the WebContents object, leaving a window where the frame is gone but
+ * `webContents.isDestroyed()` is still false. Calling `webContents.send()` then does not throw —
+ * Electron's internals (the _renderFrameDisposed guard in WebFrameMain.send) only silently print:
  *   Error sending from webFrameMain: Render frame was disposed before
  *   WebFrameMain could be accessed
- * 并返回。因此 try/catch 与 isDestroyed() 都无法拦截，流式循环会持续向死帧
- * 发送，主进程日志刷屏，且 LLM 还在为空转的流烧 token。
- * 可靠检测手段：监听 webContents 的 render-process-gone（渲染进程崩溃/被杀）
- * 与 destroyed 事件，把失效的 WebContents 记入黑名单。
+ * and return. Neither try/catch nor isDestroyed() can catch that, so a streaming loop keeps
+ * sending to a dead frame, floods the main-process log, and the LLM keeps burning tokens on an
+ * idle stream. The reliable check: listen for render-process-gone (renderer crashed/killed) and
+ * destroyed on the webContents and blacklist the dead ones.
  */
 
-// 已注册监听的 WebContents（WeakSet，随对象回收，无泄漏）
+// WebContents already being watched (WeakSet, collected with the object, no leak)
 const watched = new WeakSet<WebContents>()
-// 已被判死的 WebContents（渲染进程消失或对象销毁，之后不可再发送）
+// WebContents marked dead (renderer process gone or object destroyed; never send again)
 const dead = new WeakSet<WebContents>()
 
 function watchLiveness(wc: WebContents): void {
@@ -32,10 +32,10 @@ function watchLiveness(wc: WebContents): void {
   wc.once('destroyed', markDead)
 }
 
-/** 判断 WebContents 是否仍可安全发送（对象存活且帧未被判死） */
+/** Whether the WebContents can still be sent to safely (object alive and frame not marked dead) */
 export function isSenderAlive(wc: WebContents | null | undefined): boolean {
   if (!wc || wc.isDestroyed() || dead.has(wc)) return false
-  // 兜底：部分 Electron 版本在帧失效时访问 mainFrame 会抛错
+  // Fallback: some Electron versions throw when mainFrame is accessed after the frame is gone
   try {
     return !!wc.mainFrame
   } catch {
@@ -44,8 +44,9 @@ export function isSenderAlive(wc: WebContents | null | undefined): boolean {
 }
 
 /**
- * 安全发送：目标不可用时静默返回 false。
- * 不抛错、不触发 Electron 内部刷屏日志，供主进程所有广播/推送使用。
+ * Safe send: silently returns false when the target is unavailable.
+ * Never throws and never triggers Electron's log flooding, so all main-process broadcasts and
+ * pushes can use it.
  */
 export function safeSend(
   wc: WebContents | null | undefined,

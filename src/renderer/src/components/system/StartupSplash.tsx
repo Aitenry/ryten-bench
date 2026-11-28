@@ -5,27 +5,29 @@ import { useTheme } from '@renderer/hooks/useTheme'
 import logo from '@renderer/assets/logo.png'
 
 /**
- * 主窗口内的启动页（用户 2026-11-20 口径）。
+ * Startup splash inside the main window (per user direction, 2026-11-20).
  *
- * 背景：原先是一个独立的「加载窗口」在初始化时显示，初始化完成后再交接主窗口。
- * 现在把启动页搬进主窗口：主窗口先显示（盖着这一页），所有初始化任务
- * （数据库 / 迁移 / 工作区 / 插件预取）完成、主界面首帧就绪后，这里淡出进入主界面。
+ * Background: initialization used to show a separate loading window, then hand over to the main
+ * window. The splash now lives in the main window: the main window shows first (with this page on
+ * top), and once all init tasks (database / migrations / workspace / plugin prefetch) are done and
+ * the first main-UI frame is ready, this page fades out to reveal the main UI.
  *
- * 2026-11-21 调整（用户口径）：去掉吉祥物 GIF、标语（标题）和进度条，
- * 整页只留 logo —— logo 淡入后缓慢浮动，表面周期性扫过一道高光（亮片），
- * 四周点缀星芒；背景是漂移的暖色柔光 + 点阵 + 浮尘。
- * 默认最短展示 2s；初始化失败时才在 logo 下方补一行错误信息。
+ * 2026-11-21 revision (per user direction): drop the mascot GIF, tagline (title) and progress bar;
+ * the page keeps only the logo — it fades in, then floats slowly while a highlight periodically
+ * sweeps across it, with sparkles around it; the background is drifting warm soft glows + a dot
+ * grid + floating dust.
+ * Default minimum display is 2s; only on init failure is a single error line added below the logo.
  */
 interface StartupSplashProps {
-  /** 淡出结束后通知根组件移除启动页 */
+  /** Notify the root component to remove the splash once the fade-out finishes */
   onDone: () => void
 }
 
-/** 启动页最短展示时间：默认 2s（初始化再快也完整看一轮 logo 动画；要调整改这里） */
+/** Minimum splash display time: 2s by default (the full logo animation plays even if init is fast; adjust here) */
 const MIN_SPLASH_MS = 2000
-/** 淡出动画时长（与 main.css 里的 transition 一致） */
+/** Fade-out animation duration (matches the transition in main.css) */
 const LEAVE_MS = 420
-/** 完成后再停留一小会儿，让淡出衔接得自然些 */
+/** Brief hold after completion so the fade-out transition feels natural */
 const FINAL_HOLD_MS = 160
 
 const StartupSplash: React.FC<StartupSplashProps> = ({ onDone }) => {
@@ -38,7 +40,7 @@ const StartupSplash: React.FC<StartupSplashProps> = ({ onDone }) => {
   const mountedAtRef = useRef(performance.now())
   const finishedRef = useRef(false)
 
-  /** 启动页配色跟随应用主题：亮色是奶油底 + 暖金星光，暗色是深底 + 更亮的金 */
+  /** Splash palette follows the app theme: cream base + warm gold sparks in light, dark base + brighter gold in dark */
   const splashVars = useMemo(
     () =>
       ({
@@ -49,7 +51,7 @@ const StartupSplash: React.FC<StartupSplashProps> = ({ onDone }) => {
         '--startup-spark-glow': isDark ? 'rgba(255, 200, 110, 0.65)' : 'rgba(217, 160, 31, 0.5)',
         '--startup-shadow': isDark ? 'rgba(0, 0, 0, 0.6)' : 'rgba(28, 24, 18, 0.22)',
         '--startup-logo-ring': isDark ? 'rgba(255, 236, 196, 0.16)' : 'rgba(28, 24, 18, 0.06)',
-        // 背景：三团柔光色块（金 / 品牌红 / 暖白）+ 点阵
+        // Background: three soft glow blobs (gold / brand red / warm white) + a dot grid
         '--startup-orb-a': isDark ? 'rgba(255, 178, 92, 0.24)' : 'rgba(246, 198, 118, 0.45)',
         '--startup-orb-b': isDark ? 'rgba(206, 72, 60, 0.22)' : 'rgba(228, 124, 108, 0.3)',
         '--startup-orb-c': isDark ? 'rgba(255, 240, 214, 0.1)' : 'rgba(255, 253, 247, 0.9)',
@@ -84,7 +86,7 @@ const StartupSplash: React.FC<StartupSplashProps> = ({ onDone }) => {
     const offError = loading.onInitError((message) => {
       if (!disposed) setError(message)
     })
-    // 启动页可能晚于初始化开始（极端情况下甚至已完成）：先取一次快照
+    // The splash may mount after init started (or even after it finished in rare cases): take one snapshot first
     void loading
       .getInitState()
       .then((snapshot) => {

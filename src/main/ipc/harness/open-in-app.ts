@@ -6,14 +6,18 @@ import { getWorkspaceById } from '../../database/mapper/harness/harness'
 import { listOpenInAppTargets, openPathInApp } from '../../services/harness/open-in-app'
 
 /**
- * 「在应用中打开」IPC（会话 ⋯ 菜单的子菜单）。
+ * "Open in app" IPC (the submenu of the session ⋯ menu).
  *
- * 两个通道：
- * - `harness:open-in-app-targets`：本机装了哪些可以打开工作区的应用（文件资源管理器永远在内）；
- * - `harness:open-workspace-in-app`：按**工作区 id**（不是路径）解析出目录再用指定应用打开。
+ * Two channels:
+ * - `harness:open-in-app-targets`: which apps installed on this machine can open the workspace
+ *   (File Explorer is always included);
+ * - `harness:open-workspace-in-app`: resolves the directory by **workspace id** (not path) and
+ *   opens it with the given app.
  *
- * 为什么仍然按 id 解析：工作区目录是用户自选的任意目录，不能给渲染层一条「传路径就能拉起程序」
- * 的通道；目录被删/被挪走时也给可读原因，而不是把 OS 的英文失败串丢到界面上。
+ * Why still resolve by id: the workspace directory is any directory the user picked, so the
+ * renderer must not get a channel where "passing a path launches a program"; and when the
+ * directory was deleted/moved we return a readable reason instead of dumping the OS's English
+ * failure string into the UI.
  */
 export function openInAppIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}

@@ -37,20 +37,25 @@ import AssistantSidebar from './AssistantSidebar'
 import ShellTitleBar from './ShellTitleBar'
 
 /**
- * 新系统外壳。
+ * The new system shell.
  *
- * 结构上分三层：
- * - 自绘标题栏（Windows / macOS）：左侧应用菜单（应用 / 编辑），右侧是**系统绘制**的
- *   最小化/最大化/关闭（Window Controls Overlay，见 main-window.ts）；
- * - 系统侧栏：品牌 → 资料库 / 插件仓库 / 更多内容 → harness 的胶囊侧栏（对话/工作/插件）
- *   → 记忆（在 AssistantSidebar 内部）→ 用户区；
- * - 主内容区：当前系统页面（对话 / 资料库 / 插件仓库 / 更多内容）。
+ * Structurally three layers:
+ * - Custom title bar (Windows / macOS): app menu (App / Edit) on the left, and on the right the
+ *   **system-drawn** minimize/maximize/close (Window Controls Overlay, see main-window.ts);
+ * - System sidebar: brand → library / plugin repository / more content → harness capsule sidebar
+ *   (conversation/work/plugins) → memory (inside AssistantSidebar) → user area;
+ * - Main content area: the current system page (conversation / library / plugin repository / more
+ *   content).
  *
- * Linux 没有 WCO：主进程回退系统原生边框，这里不渲染标题栏，避免出现两条标题条。
- * 所有颜色都从 antd 主题 token 派生，亮色/暗色设置切换时整个外壳一起变化。
- * 原来的 CustomFrame / TitleBar / RightBar / BottomBar 已移除；外壳不再由插件注册表驱动。
+ * Linux has no WCO: the main process falls back to the native system frame and no title bar is
+ * rendered here, avoiding two title strips. All colors are derived from antd theme tokens, so the
+ * whole shell changes together when the light/dark setting switches. The former CustomFrame /
+ * TitleBar / RightBar / BottomBar are removed; the shell is no longer driven by a plugin registry.
  */
-/** 已知角色的展示文案；未知角色原样显示（不瞎猜成「成员」，避免误导） */
+/**
+ * Display copy for known roles; unknown roles are shown as-is (do not guess "member", to avoid
+ * misleading)
+ */
 const ROLE_LABEL_KEYS = {
   admin: 'lattice.account.roleAdmin',
   owner: 'lattice.account.roleAdmin',
@@ -71,21 +76,27 @@ const ShellUserArea: React.FC = () => {
   const navigate = useNavigate()
   const { available, ready, status, loggedIn, user, avatar, role, syncing, sync, logout } =
     useLattice()
-  /** 铃铛 + 消息面板同属一个定位容器：面板浮在用户区之上、左侧对齐、宽度 = 侧边栏宽度 */
+  /**
+   * Bell + notification panel share one positioning container: the panel floats above the user
+   * area, left-aligned, width = sidebar width
+   */
   const dockRef = useRef<HTMLDivElement>(null)
   const handleSettings = useCallback(() => {
     setNotifOpen(false)
     openSettingsModal()
   }, [])
 
-  /** 设置按钮右侧的明暗快捷切换：月亮 / 太阳一个按钮来回切（自动模式仍在设置里可选） */
+  /**
+   * Quick light/dark toggle to the right of the settings button: one button flips between moon /
+   * sun (auto mode is still selectable in settings)
+   */
   const isDark = effectiveTheme === 'dark'
   const toggleTheme = useCallback(() => {
-    // 自动模式下点击任意一次 → 落到显式的另一种主题
+    // Clicking once in auto mode → land on the explicit opposite theme
     void setThemeMode(isDark ? 'light' : 'dark')
   }, [isDark, setThemeMode])
 
-  // 面板打开时：点击面板/铃铛之外的任何地方、或按 Esc 关闭
+  // When the panel is open: clicking anywhere outside the panel/bell, or pressing Esc, closes it
   useEffect(() => {
     if (!notifOpen) return
     const onPointerDown = (e: MouseEvent): void => {
@@ -102,7 +113,10 @@ const ShellUserArea: React.FC = () => {
     }
   }, [notifOpen])
 
-  /** 账号区展示数据全部来自真实登录态（原写死的 E / Eddie / 本地工作区已删除） */
+  /**
+   * Account area display data all comes from the real login state (the former hard-coded E /
+   * Eddie / local workspace is removed)
+   */
   const displayName = user?.display_name?.trim() || user?.username?.trim() || ''
   const conflicts = status.sync?.conflicts ?? 0
   const syncError = status.sync?.error
@@ -126,7 +140,8 @@ const ShellUserArea: React.FC = () => {
     const autoInstalled = result.autoInstall?.installed.length ?? 0
     const autoFailed = result.autoInstall?.failed.length ?? 0
     if (autoFailed > 0) {
-      // 有插件没补齐：提示数量，点提示去插件仓库的「同步详情」看每条失败原因（不静默）
+      // Some plugins were not installed: report the count, and clicking the notice goes to the
+      // plugin repository's "sync details" for each failure reason (never silent)
       message.warning({
         content:
           autoInstalled > 0
@@ -211,13 +226,15 @@ const ShellUserArea: React.FC = () => {
   )
 
   /**
-   * 账号信息弹窗的字段行。头像 / display_name / username / role 在弹窗顶部身份卡里展示，
-   * 这里只留其余诊断字段（避免同一信息重复两遍）。
+   * Field rows of the account info modal. Avatar / display_name / username / role are shown in the
+   * identity card at the top of the modal; only the remaining diagnostic fields are kept here (to
+   * avoid showing the same information twice).
    */
   const accountRows: Array<[string, string]> = [
     [t('lattice.account.userId'), user?.id || '—'],
     [t('lattice.account.server'), status.baseUrl || '—'],
-    /* 值是右侧一列，标签里不能再塞 {{time}} / {{n}} 占位符（t() 不做插值就会原样显示） */
+    /* The value is the right column; labels must not contain {{time}} / {{n}} placeholders (t()
+       shows them verbatim without interpolation) */
     [t('lattice.account.lastSync'), lastSyncLabel],
     [t('lattice.account.conflicts'), String(conflicts)]
   ]
@@ -316,8 +333,10 @@ const ShellUserArea: React.FC = () => {
             </span>
             <span className="shell-user-copy">
               <span className="shell-user-name">{guestName}</span>
-              {/* 用户 2026-11-21：未登录态只留「未登录」，不再显示「点击登录」这行文本；
-                  整行仍是按钮，悬停 title 提示可登录。桥不可用是异常态，保留提示。 */}
+              {/* User 2026-11-21: in the logged-out state keep only "not logged in" and no longer
+                  show the "click to log in" line; the whole row is still a button, and the hover
+                  title hints that login is possible. The bridge being unavailable is an abnormal
+                  state, so keep the hint. */}
               {!available && (
                 <span className="shell-user-sub">{t('lattice.account.bridgeHint')}</span>
               )}
@@ -352,9 +371,10 @@ const ShellUserArea: React.FC = () => {
         </div>
       </div>
 
-      {/* 账号信息弹窗：只读展示真实登录态。用户 2026-11-21：去掉底部「关闭 / 退出登录」
-          ——右上角 X 就是关闭，退出登录在账号菜单里已经有入口，弹窗里重复一遍反而碍眼。
-          头像只读展示，这里不放修改入口。 */}
+      {/* Account info modal: read-only display of the real login state. User 2026-11-21: remove
+          the bottom "Close / Log out" — the X in the top right already closes it, and log out is
+          available in the account menu; repeating it in the modal is just noise. The avatar is
+          read-only here; no edit entry is placed in this modal. */}
       <Modal
         open={accountOpen}
         onCancel={() => setAccountOpen(false)}
@@ -364,7 +384,8 @@ const ShellUserArea: React.FC = () => {
         footer={null}
       >
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {/* 身份卡：头像 + display_name + username + role（账号区同一份真实登录态） */}
+          {/* Identity card: avatar + display_name + username + role (the same real login state as
+              the account area) */}
           <div
             style={{
               display: 'flex',
@@ -436,11 +457,12 @@ const ShellUserArea: React.FC = () => {
 }
 
 /**
- * 让**系统绘制的原生标题栏/窗口边框**跟随应用主题。
+ * Make the **system-drawn native title bar / window frame** follow the app theme.
  *
- * Windows 现在用系统原生标题栏（用户 2026-11-20：放弃自绘标题栏 + WCO），
- * 它的明暗由系统的 per-window 深色模式属性决定：Electron 侧只认 nativeTheme.themeSource。
- * 在 layout effect（绘制前）里同步，界面重画时标题栏也已经是目标明暗。
+ * Windows now uses the native system title bar (user 2026-11-20: drop the custom title bar + WCO).
+ * Its light/dark appearance is determined by the system's per-window dark mode property: on the
+ * Electron side only nativeTheme.themeSource is honored. Syncing in a layout effect (before paint)
+ * means the title bar already has the target appearance when the UI repaints.
  */
 const NativeThemeSync: React.FC = () => {
   const { effectiveTheme } = useTheme()
@@ -448,7 +470,7 @@ const NativeThemeSync: React.FC = () => {
     try {
       ;window.api.window.setNativeTheme(effectiveTheme)
     } catch {
-      // 平台不支持时忽略（Linux 等）
+      // Ignore when the platform does not support it (Linux etc.)
     }
   }, [effectiveTheme])
   return null
@@ -463,8 +485,9 @@ const AppShell: React.FC = () => {
   const plugins = usePlugins()
 
   /**
-   * 版本号取主进程的真实版本（`app-version` IPC），不再写死。
-   * 读到之前不渲染这段文字，避免先闪一个错的版本号。
+   * The version number comes from the real version in the main process (`app-version` IPC), no
+   * longer hard-coded. The text is not rendered before it is read, to avoid flashing a wrong
+   * version first.
    */
   const [appVersion, setAppVersion] = useState('')
   useEffect(() => {
@@ -477,7 +500,7 @@ const AppShell: React.FC = () => {
         if (!cancelled) setAppVersion(version)
       })
       .catch(() => {
-        // 读不到就不显示版本号：宁缺勿错
+        // If it cannot be read, do not show a version number: better absent than wrong
       })
     return () => {
       cancelled = true
@@ -485,15 +508,16 @@ const AppShell: React.FC = () => {
   }, [])
 
   /**
-   * 原生窗口标题：按当前页面/插件/模式算成 `xxx - RytenBench`。
+   * Native window title: computed as `xxx - RytenBench` from the current page/plugin/mode.
    *
-   * - 资料库 / 插件仓库 / 更多内容：固定页面名；
-   * - 对话页（/harness）：交给 harness 侧栏按「对话/工作/插件」模式写入；
-   * - 第三方插件路由：用插件 manifest 里的名称。
+   * - Library / plugin repository / more content: fixed page names;
+   * - Conversation page (/harness): written by the harness sidebar according to the
+   *   "conversation/work/plugins" mode;
+   * - Third-party plugin routes: the name from the plugin manifest.
    */
   useEffect(() => {
     const path = location.pathname
-    // 登录页：`登录 - RytenBench`（窗口标题机制与其它系统页面一致）
+    // Login page: `Login - RytenBench` (window title mechanism same as other system pages)
     if (path === '/login') {
       setWindowTitleSource('route', t('login.windowTitle'))
       return
@@ -511,8 +535,9 @@ const AppShell: React.FC = () => {
       return
     }
     if (path === '/more' || path.startsWith('/more/')) {
-      // 「更多」是助手设置的容器：窗口标题用具体页名（智能体 / 技能 / …），
-      // 没有 tab 或 tab 不认识时退回容器名。
+      // "More" is the container for assistant settings: the window title uses the specific page
+      // name (agents / skills / …), falling back to the container name when there is no tab or it
+      // is unknown.
       const tab = path.split('/')[2]
       const label =
         tab && ['agents', 'skills', 'memory', 'mcp'].includes(tab)
@@ -533,11 +558,13 @@ const AppShell: React.FC = () => {
   }, [location.pathname, pluginRoutes, plugins, t])
 
   /**
-   * 记住登录页要回的那一页（见 utils/login-return.ts）。
+   * Remember the page the login page should return to (see utils/login-return.ts).
    *
-   * 登录页是整窗独立布局，但它仍是同一次运行里的普通路由：从哪一页点进登录，返回时就回
-   * 哪一页（对话页回来仍是那条会话，插件仓库回来仍是插件仓库）。登录页自身不记录，
-   * 否则「返回工作台」会又停在登录页。
+   * The login page is a full-window standalone layout, but it is still an ordinary route in the
+   * same run: whichever page login was entered from, returning goes back to that page (coming back
+   * to the conversation page still shows that session, coming back to the plugin repository still
+   * shows the plugin repository). The login page itself does not record this, otherwise "back to
+   * workspace" would stop at the login page again.
    */
   useEffect(() => {
     if (location.pathname === '/login') return
@@ -545,18 +572,23 @@ const AppShell: React.FC = () => {
   }, [location.pathname, location.search, location.hash])
 
   /**
-   * 全局「打开设置」事件：
-   * - `scope=assistant` 的助手设置走「更多」独立页面；
-   * - 其余（标题栏应用菜单、对话页「去配置模型」等）仍打开设置弹窗。
+   * Global "open settings" event:
+   * - assistant settings with `scope=assistant` go to the standalone "more" page;
+   * - everything else (title bar app menu, "configure model" on the conversation page, etc.) still
+   *   opens the settings modal.
    */
   useEffect(() => {
-    /** 「更多」独立页支持的四项；其余页签（如插件工坊 workshop）仍属于设置弹窗。 */
+    /**
+     * The four items supported by the standalone "more" page; other tabs (e.g. the plugin workshop)
+     * still belong to the settings modal.
+     */
     const MORE_TABS = ['agents', 'skills', 'memory', 'mcp']
     const handler = (e: Event): void => {
       const detail = (e as CustomEvent).detail as { tab?: string; scope?: string } | undefined
       if (detail?.scope === 'assistant') {
-        // 只有这四个是真的「更多内容」页；未知页签直接打开设置弹窗对应页签，
-        // 不把用户导到 /more/<unknown>（那会回落到智能体页并卡住地址栏）。
+        // Only these four are real "more content" pages; an unknown tab opens the corresponding
+        // tab of the settings modal directly, rather than sending the user to /more/<unknown>
+        // (which would fall back to the agents page and get the address bar stuck).
         if (!detail.tab || MORE_TABS.includes(detail.tab)) {
           navigate(detail.tab ? `/more/${detail.tab}` : '/more')
         } else {
@@ -570,7 +602,7 @@ const AppShell: React.FC = () => {
     return () => window.removeEventListener('open-system-settings', handler)
   }, [navigate])
 
-  /** 侧栏「更多」下拉：只放助手设置（用户 2026-11-20「只要助手的」） */
+  /** Sidebar "More" dropdown: only assistant settings (user 2026-11-20: "only the assistant's") */
   const assistantSettingsItems: MenuProps['items'] = [
     { key: 'agents', icon: <RiAiAgentLine size={15} />, label: t('settings.nav.agents') },
     { key: 'skills', icon: <RiFileAi2Line size={15} />, label: t('settings.nav.skills') },
@@ -589,17 +621,21 @@ const AppShell: React.FC = () => {
     '--shell-text-tertiary': token.colorTextTertiary,
     '--shell-hover': token.colorFillQuaternary,
     '--shell-active': token.colorFillTertiary,
-    /* 账号区的「点击登录」链接色与已登录头像渐变都用主色，跟随主题 */
+    /* The "click to log in" link color in the account area and the logged-in avatar gradient both
+       use the primary color, following the theme */
     '--shell-primary': token.colorPrimary
   } as React.CSSProperties
 
   const platform = window.api.platform
-  // Windows 改用系统原生标题栏（不再渲染自绘标题条）；macOS 仍保留自绘条 + 交通灯留白
+  // Windows uses the native system title bar (the custom title strip is no longer rendered);
+  // macOS still keeps the custom strip + traffic-light spacing
   const showTitleBar = platform === 'darwin'
 
   /**
-   * 登录页是**整窗独立布局**：不渲染侧栏、用户区与标题条，只保留主题同步与路由内容。
-   * 这样 `/login` 仍是 MainRoutes 里的普通路由，但视觉上不套外壳（左右分栏占满窗口）。
+   * The login page is a **full-window standalone layout**: no sidebar, user area or title strip is
+   * rendered; only theme sync and the route content remain. Thus `/login` is still an ordinary
+   * route in MainRoutes, but visually not wrapped by the shell (a two-column split filling the
+   * window).
    */
   if (location.pathname === '/login') {
     return (
@@ -647,7 +683,8 @@ const AppShell: React.FC = () => {
               <RiCalendar2Line size={16} />
               {t('shell.nav.schedules')}
             </NavLink>
-            {/* 助手设置收在「更多」下拉里（插件仓库下面）：选一项 → 整页显示它的内容 */}
+            {/* Assistant settings are collected in the "More" dropdown (below the plugin
+                repository): pick one → the whole page shows its content */}
             <Dropdown
               menu={{
                 items: assistantSettingsItems,

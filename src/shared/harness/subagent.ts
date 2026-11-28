@@ -1,55 +1,58 @@
 /**
- * 子代理（智能体）配置的共享契约。
+ * Shared contract for subagent (agent) configuration.
  *
- * 为什么放在 `shared/`：
- * - 设置页（渲染层）与主进程的 IPC 写入、以及「主智能体委派构建子代理」的工具
- *   （`agent_create`）都必须用**同一套**命名/长度/工具名规则，否则会出现
- *   「界面能存、模型工具拒收」或反过来；
- * - 这里只放纯函数与常量，不碰数据库/electron，渲染层与主进程都能直接 import，
- *   也方便 `tests/subagent-draft.test.mts` 这类 node 回归直接覆盖。
+ * Why it lives in `shared/`:
+ * - the settings page (renderer), the main process's IPC writes, and the tool that has the main
+ *   agent delegate construction of a subagent (`agent_create`) must all follow **the same**
+ *   naming / length / tool-name rules, otherwise you get "the UI can save it but the model tool
+ *   rejects it" or the other way round;
+ * - only pure functions and constants live here, no database/electron, so the renderer and the
+ *   main process can import it directly, and node regressions such as
+ *   `tests/subagent-draft.test.mts` can cover it directly.
  *
- * 数据落库形态见 `src/main/database/schema/harness/agent.ts`；运行时形态
- * `SubAgentConfig` 见 `src/main/services/harness/types.ts`。
+ * For the persisted shape see `src/main/database/schema/harness/agent.ts`; for the runtime shape
+ * `SubAgentConfig` see `src/main/services/harness/types.ts`.
  */
 
-/** 子代理标识（`task.subagent_type` 的取值）：与设置页表单规则一致 */
+/** Subagent identifier (the value of `task.subagent_type`): same rule as the settings page form */
 export const SUBAGENT_NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
-/** 标识长度上限（数据库是 text，但工具 schema/提示词里太长没有意义） */
+/** Identifier length cap (the database column is text, but longer is meaningless in tool schemas/prompts) */
 export const SUBAGENT_NAME_MAX_LENGTH = 32
-/** 功能描述上限：会拼进 `task` 工具说明，过长会挤占主提示词 */
+/** Description cap: spliced into the `task` tool description, too long crowds out the main prompt */
 export const SUBAGENT_DESCRIPTION_MAX_LENGTH = 200
-/** 系统提示词上限：子代理图每次请求都会带，太长会拖慢每一轮 */
+/** System prompt cap: the subagent graph carries it on every request, too long slows every turn */
 export const SUBAGENT_PROMPT_MAX_LENGTH = 8000
-/** 工具选择数量上限：子代理工具集按名字从注册表构建，过多没有意义 */
+/** Tool count cap: the subagent tool set is built from the registry by name, more is meaningless */
 export const SUBAGENT_TOOLS_MAX_LENGTH = 64
 
-/** `provider:model` 覆盖模型（可选）；与运行时 `resolveSubAgentModel` 的解析口径一致 */
+/** `provider:model` model override (optional); matches the runtime `resolveSubAgentModel` parsing convention */
 export const SUBAGENT_MODEL_PATTERN = /^[^:\s]+:\S+$/
 
-/** 草稿（设置页表单 / `agent_create` 工具参数归一后的共同形态） */
+/** Draft (the common shape after normalizing the settings form / `agent_create` tool arguments) */
 export interface SubAgentDraft {
-  /** 唯一标识（同工作区内唯一），也是 `task.subagent_type` */
+  /** Unique identifier (unique within the workspace), also `task.subagent_type` */
   name: string
-  /** 界面显示名（可选；设置页叫「中文名」） */
+  /** UI display name (optional; the settings page labels it "display name") */
   displayName?: string
-  /** 功能描述：用于 `task` 工具里的能力清单 */
+  /** Description: used in the capability list of the `task` tool */
   description: string
-  /** 系统提示词 */
+  /** System prompt */
   systemPrompt: string
-  /** 可用工具名（可选；缺省由调用方决定继承范围） */
+  /** Available tool names (optional; when omitted the caller decides the inheritance scope) */
   tools?: string[]
-  /** 可选覆盖模型 `provider:model` */
+  /** Optional model override `provider:model` */
   model?: string
-  /** 启用的技能 id（可选） */
+  /** Enabled skill ids (optional) */
   skills?: string[]
 }
 
 /**
- * 校验草稿的**纯格式规则**（不查数据库、不查工具注册表）。
+ * Validate the **pure format rules** of a draft (no database, no tool registry).
  *
- * 返回人类可读的错误列表（空数组 = 通过）。设置页可以直接把第一条挂在表单上；
- * 主进程的 `agent_create` 工具把这些错误原样回给模型，让它自己纠正参数。
+ * Returns a human-readable error list (empty array = pass). The settings page can show the first
+ * entry on the form directly; the main process's `agent_create` tool returns these errors to the
+ * model as-is so it can correct its arguments.
  */
 export function validateSubAgentDraft(draft: SubAgentDraft): string[] {
   const errors: string[] = []

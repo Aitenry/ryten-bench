@@ -1,17 +1,18 @@
 /**
- * 登录 / 账号 / Lattice 插件中心 / 同步 词条。
+ * Login / account / Lattice plugin hub / sync entries.
  *
- * 命名空间按产品区域拆开（不在组件里写死任何文案）：
- * - `login.*`：独立登录页（品牌面板 + 登录卡片 + 高级服务器地址）；
- * - `lattice.*`：侧栏账号区、桥接状态、发布上传；
- * - `plugins.hub.*`：插件仓库页 / 插件详情页（平台目录、版本与源码、发布、导入本地目录）；
- * - `sync.*`：同步状态条、账号菜单里的同步动作与结果提示。
+ * Namespaces are split by product area (no copy is hard-coded in components):
+ * - `login.*`: standalone login page (brand panel + login card + advanced server address);
+ * - `lattice.*`: sidebar account area, bridge status, publish and upload;
+ * - `plugins.hub.*`: plugin repository page / plugin detail page (platform catalog, versions and
+ *   source, publishing, importing a local directory);
+ * - `sync.*`: sync status bar, sync actions and result messages in the account menu.
  *
- * 插件仓库只有平台一个远程来源，因此这里没有 `sourceLattice` / `sourceGithub`
- * 之类的数据源切换词条。
+ * The plugin repository has only one remote source, the platform, so there are no data-source
+ * switching entries such as `sourceLattice` / `sourceGithub` here.
  *
- * 计数类文案统一用 `{{n}}` 而不是 i18next 的 `count`：插件中心这些数字不需要复数规则，
- * 避免为两种语言各写一套 `_one/_other` 词条。
+ * Count messages use `{{n}}` rather than i18next's `count`: the numbers in the plugin hub need no
+ * plural rules, which avoids writing a separate `_one/_other` set per language.
  */
 export const zhCNLattice = {
   login: {
@@ -62,7 +63,7 @@ export const zhCNLattice = {
       userId: '用户 ID',
       role: '角色',
       server: '服务器',
-      /* 账号信息弹窗里的两行同步信息：值单独占右侧一列，标签里不要再带 {{time}} / {{n}} 占位符 */
+      /* Two sync lines in the account info dialog: the value takes its own right-hand column, so the labels must not contain {{time}} / {{n}} placeholders */
       lastSync: '最近同步',
       conflicts: '数据冲突',
       roleAdmin: '管理员',
@@ -118,7 +119,7 @@ export const zhCNLattice = {
       upload: '上传',
       uploadZipHint: '上传 .zip 安装包',
       uploadWithSourceHint: '发布安装包 + 源码目录（两份分开的 zip）',
-      /** 顶栏「发布」下拉：三种发布方式 + 导入本机目录收进一个菜单（不再并排 4 个按钮） */
+      /** Top-bar "Publish" dropdown: three publish modes + import local directory in one menu (no longer 4 buttons side by side) */
       publishMenu: '发布',
       publishMenuTitle: '发布插件到插件中心',
       publishDir: '发布插件目录…',
@@ -163,9 +164,9 @@ export const zhCNLattice = {
       owner: '作者',
       installDisabled: '该插件暂不可安装',
       openDetail: '打开插件详情',
-      /** 当前主进程还没实现契约 v2 的某个通道时的通用提示 */
+      /** Generic message shown when the current main process has not implemented a channel of contract v2 yet */
       v2Unsupported: '当前主进程版本暂不支持该能力（请重启更新后的应用）',
-      /** 源码包（契约 v2：每个平台版本 = 安装包 + 可选源码包） */
+      /** Source package (contract v2: each platform version = install package + optional source package) */
       source: {
         badge: '源码',
         hasSource: '含源码',
@@ -176,14 +177,14 @@ export const zhCNLattice = {
         downloadFailed: '安装包已装好，但源码下载失败：{{reason}}',
         backedUp: '本机源码有改动，更新前已备份到：{{path}}'
       },
-      /** 本机已安装但还没发布到插件中心的插件（本地上传装的） */
+      /** Plugins installed on this machine but not yet published to the plugin hub (installed via local upload) */
       local: {
         badge: '本地安装',
         desc: '通过本地上传安装，尚未发布到插件中心',
         detail: '查看详情',
         empty: '没有本地安装的插件'
       },
-      /** 插件详情页的版本历史表 */
+      /** Version history table on the plugin detail page */
       versionTable: {
         title: '版本历史',
         version: '版本',
@@ -226,7 +227,7 @@ export const zhCNLattice = {
         workflowDesc:
           '安装时会把源码一起下载到本机；在对话中改完源码后，用「发布新版本」上传新的安装包与源码。'
       },
-      /** 详情页「发布新版本」Modal */
+      /** "Publish new version" modal on the detail page */
       publish: {
         title: '发布新版本',
         version: '版本号',
@@ -241,7 +242,7 @@ export const zhCNLattice = {
         submitted: '已提交 v{{version}}，等待管理员审核通过',
         fail: '发布失败：{{reason}}'
       },
-      /** 详情页/卡片「打开源码」 */
+      /** "Open source" on the detail page / cards */
       openSource: {
         success: '已打开插件源码，可在对话中让模型修改',
         folderFallback: '已在文件管理器打开源码（未能自动创建对话）',
@@ -249,14 +250,14 @@ export const zhCNLattice = {
         unsupported: '当前主进程版本不支持打开源码（请重启更新后的应用）',
         noSource: '该版本没有源码包，无法打开'
       },
-      /** 版本表里的下载动作（主进程弹保存框） */
+      /** Download actions in the version table (the main process shows a save dialog) */
       download: {
         success: '已保存到 {{path}}',
         canceled: '已取消下载',
         fail: '下载失败：{{reason}}',
         unsupported: '当前主进程版本不支持下载（请重启更新后的应用）'
       },
-      /** 顶栏「导入本地插件目录」批量发布 */
+      /** Top-bar "Import local plugin directory" bulk publish */
       import: {
         success: '导入完成：成功 {{imported}} 个，跳过 {{skipped}} 个',
         empty: '所选目录里没有找到包含 plugin.json 的插件',
@@ -272,15 +273,15 @@ export const zhCNLattice = {
     now: '立即同步',
     merge: {
       button: '合并云端数据',
-      /** 和「sync.success」同构的一句话：插件数 / 同步条数，不再逐插件罗列 */
+      /** Same shape as "sync.success": plugin count / synced row count, without listing each plugin */
       success: '合并完成：{{merged}} 个插件 / {{rows}} 条数据',
-      /** 部分插件失败：成功的照常报数，失败的只报个数（原因进日志 / 同步详情） */
+      /** Some plugins failed: successful ones are reported as usual, failed ones are only counted (reasons go to the log / sync details) */
       partial: '合并完成：{{merged}} 个插件 / {{rows}} 条数据，{{failed}} 个失败',
       failed: '合并失败：{{failed}} 个插件的数据没并进来',
-      /** 两边都改过：不做自动并集，明确让用户去冲突弹窗选择 */
+      /** Changed on both sides: no automatic union; the user is explicitly sent to the conflict dialog */
       conflicts:
         '已对齐 {{merged}} 个插件 / {{rows}} 条数据；{{conflicts}} 个插件两边都有改动，请到「解决冲突」选择（没有覆盖任何一边）',
-      /** 缺少 merge base（升级后第一次）：提示先同步一次，避免笼统的「合并失败」 */
+      /** Missing merge base (first time after an upgrade): prompts to sync once first instead of a vague "merge failed" */
       blocked:
         '还有 {{blocked}} 个插件缺少合并基线，请先「立即同步」一次再合并（本次没有改动任何数据）',
       empty: '没有可合并的数据（没有安装快照插件，或云端还没有它们的快照）',
@@ -295,8 +296,9 @@ export const zhCNLattice = {
     error: '同步失败：{{reason}}',
     justNow: '刚刚',
     /**
-     * PL-18 换机自动补齐：pull 时「平台有安装记录、本机没有插件包」的记录自动重新安装。
-     * 默认开启；失败逐条可见（不静默），明细进「同步详情」。
+     * Automatic reinstall when switching machines: on pull, records where the platform has an
+     * install record but the local machine has no plugin package are reinstalled automatically.
+     * Enabled by default; failures are visible one by one (not silent), with details in "Sync details".
      */
     autoInstall: {
       toggle: '自动补齐插件',

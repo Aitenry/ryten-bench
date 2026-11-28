@@ -1,7 +1,11 @@
 import type { ${vars.pascal}ZhCN } from './zh-CN'
 
 /**
- * ${vars.title} 的英文词条：**逐键对齐** zh-CN（类型就是那么来的，少键/多键都编译不过）。
+ * English entries for ${vars.title}: **aligned key for key** with zh-CN (that is where the type
+ * comes from; a missing or extra key fails to compile).
+ *
+ * Wording follows the same "label + what it affects" pattern: do not paste the Chinese in just to
+ * match keys, or it reads wrong once the UI switches to English.
  */
 export const ${vars.pascal}EnUS: typeof ${vars.pascal}ZhCN = {
   '${vars.id}': {
@@ -11,10 +15,12 @@ export const ${vars.pascal}EnUS: typeof ${vars.pascal}ZhCN = {
       title: ${vars.titleJson},
       add: 'New',
       empty: 'Nothing here yet - hit "New" to add one.',
+      emptyFiltered: 'Nothing left to do.',
       deleteConfirm: 'Delete this record?',
       moreItems: '{{count}} more (widen the window to see them)',
-      on: 'Enabled',
-      off: 'Disabled',
+      overview: 'Overview',
+      records: 'Records',
+      pending: 'Pending',
       loading: 'Loading…'
     },
     form: {
@@ -26,11 +32,13 @@ export const ${vars.pascal}EnUS: typeof ${vars.pascal}ZhCN = {
       notePlaceholder: 'optional'
     },
     settingsPage: {
-      intro:
-        'This page is registered by the plugin itself (settingsSection); disabling the plugin removes it.',
-      enabledLabel: 'Example switch',
-      noteLabel: 'Note (persisted on save)',
-      save: 'Save',
+      section: { list: 'List' },
+      hideDoneLabel: 'Hide completed',
+      hideDoneHint: 'Only affects the list; records are not deleted.',
+      noteLabel: 'Page note',
+      notePlaceholder: 'A short note to yourself',
+      noteHint: 'Shown in the overview panel on the page; leave empty to hide it.',
+      saveFailed: 'Could not save. Try again.',
       storageHint: 'Records live in the app database; settings live under plugin-state in userData.'
     }
   }

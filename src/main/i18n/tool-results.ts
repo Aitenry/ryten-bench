@@ -1,24 +1,26 @@
 /**
- * 工具执行结果的文案（**会显示在聊天的工具结果卡片上**，因此必须跟随界面语言）。
+ * Texts for tool execution results (**shown on the chat tool-result cards**, so they must follow
+ * the UI language).
  *
- * 与 `messages.ts` 的分工：那边是操作系统层面的界面（托盘/对话框/启动页），
- * 这边是「工具把手里的结果告诉用户」的话术。
- * 模型会读到同样的内容——这是刻意的：卡片上显示什么，模型就看到什么。
+ * Split with `messages.ts`: that side covers OS-level UI (tray/dialogs/startup page), this side is
+ * the wording that tells the user what the tool holds.
+ * The model reads the same content -- deliberately: whatever the card shows is what the model sees.
  *
- * 中文是源语言，`enUS` 用 `typeof zhCN` 约束，缺键/多键都是编译期错误。
+ * Chinese is the source language; `enUS` is constrained by `typeof zhCN`, so missing or extra keys
+ * are compile errors.
  *
- * 记忆空间的默认名只是创建时的初始展示文案：业务逻辑按结构化 `role` 查找归档空间，
- * 不再依赖任何名称字面量。
+ * The default Memory Space names are only the initial display text at creation time: business
+ * logic looks up the archive space by structured `role`, never by name literals.
  */
 export const zhCNToolResults = {
   mnemon: {
-    /** 热记忆写入目标（target=user / memory）在卡片上的说法 */
+    /** How the hot-memory write target (target=user / memory) is phrased on the card */
     targets: {
       user: '用户画像',
       memory: '项目记忆'
     },
 
-    /** 记忆空间的默认展示名（仅新建时使用；查找归档空间靠 role，不靠名称） */
+    /** Default display names for Memory Spaces (creation only; archive lookup uses role, not name) */
     defaultNames: {
       archiveSpace: '热记忆归档',
       archiveSpaceDescription: 'MEMORY 热记忆溢出的自动归档目标；内容为项目长期事实与经验。',
@@ -27,8 +29,8 @@ export const zhCNToolResults = {
       discoveredSpaceDescription: '磁盘发现的记忆空间'
     },
 
-    // ----- mnemon_runtime_memory：工具层拼装的成功文案 -----
-    /* 条数短语单独抽出来做单复数：中文不变，英文 1 entry / n entries */
+    // ----- mnemon_runtime_memory: success texts assembled by the tool layer -----
+    /* The count phrase is pulled out for pluralization: unchanged in Chinese, 1 entry / n entries in English */
     entryCount_one: '{{count}} 条',
     entryCount_other: '{{count}} 条',
     added: '已添加到{{target}}（{{used}}/{{limit}} 字节，共 {{entryCount}}）。',
@@ -37,7 +39,7 @@ export const zhCNToolResults = {
     replaced: '已替换记忆条目。',
     removed: '已移除记忆条目。',
 
-    /** RuntimeMemoryController.mutate 的结果 message（失败时由工具原样返回） */
+    /** RuntimeMemoryController.mutate result message (returned verbatim by the tool on failure) */
     runtimeMemory: {
       added: '已添加记忆',
       addedWithArchive: '已添加记忆（触发长期归档 {{entryCount}}）',
@@ -76,11 +78,12 @@ export const zhCNToolResults = {
     mergeBodiesFailed: '合并失败: {{error}}',
 
     /**
-     * 校验与失败消息：服务层/存储层抛出，经工具 catch 后原样返回卡片，
-     * 或由工具运行时以「工具错误」形式显示，因此同样跟随界面语言。
+     * Validation and failure messages: thrown by the service/storage layer, caught by the tool and
+     * returned verbatim to the card, or shown by the tool runtime as a tool error, so they follow
+     * the UI language as well.
      */
     errors: {
-      // 热记忆
+      // Hot memory
       contentRequired: '内容不能为空',
       entryTooLarge: '单条记忆超过上限 {{limit}} 字节',
       entryExists: '该记忆已存在（内容完全相同），无需重复添加',
@@ -93,12 +96,12 @@ export const zhCNToolResults = {
         'USER 热记忆容量不足（上限 {{limit}} 字节），且没有可合并的低优先级条目。请先移除或合并部分记忆。',
       unknownAction: '未知操作: {{action}}',
 
-      // 归档钩子
+      // Archive hook
       archiveHookMissing: '未配置归档钩子',
       nothingToArchive: '没有可归档的记忆条目',
       hookArchivedNothing: '归档钩子未归档任何条目',
 
-      // 长期记忆写入
+      // Long-term memory writes
       categoryInvalid: '类别必须为 {{values}}',
       sourceInvalid: '来源必须为 {{values}}',
       relationTypeInvalid: '关系类型必须为 {{values}}',
@@ -106,13 +109,13 @@ export const zhCNToolResults = {
       insightExists: '该记忆已存在（内容完全相同），如需更新请先 forget 旧条目',
       insightNotFound: '未找到记忆 {{id}}（可能已删除）',
 
-      // 记忆空间
+      // Memory Spaces
       spaceNotActivated: '以下记忆空间未激活或不存在，不能读取: {{spaces}}',
       noActiveSpace: '没有已激活的记忆空间，请先创建或激活一个记忆空间',
       spaceNotFound: '记忆空间不存在: {{id}}',
       targetSpaceNotFound: '目标记忆空间不存在: {{id}}',
 
-      // 项目档案
+      // Project documents
       documentTooLarge: '单份文档超过上限 {{limit}} 字节',
       documentCapacityExceeded:
         '文档容量不足：active 总量上限 {{limit}} 字节（当前 {{current}}，需 {{needed}}）。请先归档部分文档。',
@@ -123,7 +126,7 @@ export const zhCNToolResults = {
       documentNotActive: '文档 {{id}} 不是 active 状态'
     },
 
-    /** 召回为空时的提示 */
+    /** Hint when recall comes back empty */
     hint: {
       noMatchInActiveSpaces: '未在已激活记忆空间中找到匹配内容'
     }

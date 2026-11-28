@@ -36,35 +36,41 @@ import {
 import { workshopHost } from '../../workshop/host'
 
 /**
- * 插件工坊的 IPC（harness 插件的第 6 个域）。
+ * Plugin Workshop IPC (the 6th domain of the harness plugin).
  *
- * 通道名一律 `harness:workshop-*`：停用「AI 助手」时工坊的设置页与全部动作一起消失
- * （与既有的 5 个域同一套生命周期语义）。
+ * Channel names are always `harness:workshop-*`: when the "AI assistant" is disabled, the
+ * workshop settings page and all its actions disappear together (the same lifecycle semantics
+ * as the existing 5 domains).
  *
- * 两条设计约束：
- * - **动作不抛错**：面板要能把「构建失败 / 验收未过 / 装不上」的原话显示给用户，
- *   因此统一返回 `{ ok, error?, data? }`（`workshop-probe-result` 例外：它是渲染层回话，返回 boolean）；
- * - **任何变更后广播 `workshop-changed`**：AI 在对话里改草稿/构建/发布时，正开着设置页的
- *   用户要能立刻看到状态变化，而不是手动刷新。
+ * Two design constraints:
+ * - **Actions don't throw**: the panel must be able to show the user the exact wording of
+ *   "build failed / verification failed / install failed", so everything returns
+ *   `{ ok, error?, data? }` (`workshop-probe-result` is the exception: it is a renderer reply
+ *   and returns a boolean);
+ * - **broadcast `workshop-changed` after any change**: when the AI edits a draft / builds /
+ *   publishes in a conversation, a user with the settings page open must see the status change
+ *   immediately instead of refreshing manually.
  *
- * 工坊的 4 个 AI 工具**不在这里**挂载：它们随工具注册表走，用户在
- * 「设置 → 智能体 → 工具」里勾选（应用里所有工具都是这一条路径，工坊不搞特殊入口）。
+ * The workshop's 4 AI tools are **not mounted here**: they go through the tool registry, and
+ * users check them in "Settings → Agent → Tools" (all tools in the app follow this path; the
+ * workshop gets no special entry point).
  */
 
 /**
- * 主进程 → 渲染层的事件通道（只有发送方）：`harness:workshop-changed`（面板重拉清单）
- * 与 `harness:workshop-probe`（渲染层实时探针，见 workshop/probe.ts）。
- * 渲染层经 preload 的系统桥订阅，不需要再登记白名单。
+ * Main process → renderer event channels (sender only): `harness:workshop-changed` (the panel
+ * refetches its lists) and `harness:workshop-probe` (renderer real-time probe, see
+ * workshop/probe.ts). The renderer subscribes through the preload system bridge, so no
+ * whitelist registration is needed.
  */
 
-/** 广播「工坊状态变了」（渲染层可能要重新 fetch 插件模块/样式） */
+/** Broadcast "workshop state changed" (the renderer may need to re-fetch plugin modules/styles) */
 export function broadcastWorkshopChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     safeSend(win.webContents, 'harness:workshop-changed', { at: Date.now() })
   }
 }
 
-/** 统一的结果包装（失败不抛错，面板显示 error 原文） */
+/** Unified result wrapper (failures don't throw; the panel shows the raw error text) */
 async function act<T>(
   run: () => Promise<T> | T
 ): Promise<{ ok: boolean; error?: string; data?: T }> {
@@ -79,31 +85,32 @@ async function act<T>(
 
 export function workshopIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：本插件的命名空间前缀只在这里出现 */
+  /** Channel receiver: the plugin's namespace prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
 
   /**
-   * 工坊状态（面板标题：可用性 + 根目录 + 草稿数）。
-   * 另附**插件工作区清单**（插件 id → 工作区行）：侧栏靠它把插件行和它自己的会话对上，
-   * 并把插件工作区从「工作」列表里滤掉（见 main/workshop/workspace.ts）。
+   * Workshop state (panel title: availability + root directory + draft count).
+   * Also includes the **plugin workspace list** (plugin id → workspace row): the sidebar uses
+   * it to match plugin rows with their own sessions and to filter plugin workspaces out of the
+   * "Workspaces" list (see main/workshop/workspace.ts).
    */
   handle('workshop-state', async () => ({
     ...workshopState(),
     pluginWorkspaces: await listPluginWorkspaces()
   }))
 
-  /** 全部草稿（含构建/安装/最近验收摘要） */
+  /** All drafts (including build/install/latest verification summaries) */
   handle('workshop-list', () => listDraftSummaries())
 
-  /** 单个草稿详情（文件树 + 清单 + 目录） */
+  /** Single draft details (file tree + manifest + directory) */
   handle('workshop-detail', (id: string) => draftDetail(id))
 
-  /** 草稿文件内容（面板只读预览） */
+  /** Draft file content (panel read-only preview) */
   handle('workshop-read-file', (id: string, relPath: string) => readFile(id, relPath))
 
-  /** 最近一次验收报告 */
+  /** Latest verification report */
   handle('workshop-report', (id: string) => lastReport(id))
 
   handle(
@@ -136,13 +143,13 @@ export function workshopIpcHandlers(): IpcHandlerMap {
       })
   )
 
-  /** 重命名插件（改展示名：草稿 title + 清单 name；目录名/id 不动） */
+  /** Rename plugin (changes the display name: draft title + manifest name; directory name/id unchanged) */
   handle(
     'workshop-rename',
     async (id: string, title: string) =>
       await act(async () => {
         const summary = renameDraft(id, title)
-        // 插件会话的工作目录（插件工作区）名字跟着插件走
+        // The plugin session's working directory (plugin workspace) name follows the plugin
         await syncPluginWorkspaceName(id, summary.title)
         broadcastWorkshopChanged()
         return summary
@@ -150,20 +157,23 @@ export function workshopIpcHandlers(): IpcHandlerMap {
   )
 
   /**
-   * 取（必要时创建）某份插件的**插件工作区**——插件会话的工作目录就是它的源码目录
-   * （`<插件存放路径>/<插件 id>/`，见 main/workshop/workspace.ts）。
+   * Get (creating if needed) a plugin's **plugin workspace** — a plugin session's working
+   * directory is its source directory (`<plugin storage path>/<plugin id>/`, see
+   * main/workshop/workspace.ts).
    *
-   * 侧栏在「插件行 ＋ 新建会话」时调它，然后像切换普通工作区一样切过去：AI 工作目录、
-   * 资源管理器、文件边界全都跟着这个工作区走（用户口径 2026-09-28「在插件模式下新建会话，
-   * 其工作区还是之前工作模式下选中的工作区，资源管理器也一样」）。
+   * The sidebar calls it on "plugin row + new session" and then switches over like a normal
+   * workspace: the AI working directory, the file explorer and the file boundary all follow
+   * this workspace (user wording 2026-09-28: "creating a session in plugin mode still uses the
+   * workspace selected in work mode, and the file explorer too").
    */
   handle(
     'workshop-ensure-workspace',
     async (id: string) =>
       await act(async () => {
         const workspace = await ensurePluginWorkspace(id)
-        // 工作区清单变了（可能刚建出来）：广播给渲染层，侧栏才知道这个插件行现在有会话可展开、
-        // 并且要把这个工作区从「工作」列表里滤掉
+        // The workspace list changed (one may have just been created): broadcast to the renderer
+        // so the sidebar knows this plugin row now has a session to expand and should filter
+        // this workspace out of the "Workspaces" list
         broadcastWorkshopChanged()
         return workspace
       })
@@ -196,7 +206,8 @@ export function workshopIpcHandlers(): IpcHandlerMap {
         const result = createDraftFromTemplate({
           id: input?.id,
           title: input?.title,
-          // 不传就是默认的 'full'（全部内容）：模板选择只在助手侧按需使用
+          // Omitted = default 'full' (all content): template selection is only used on demand by
+          // the assistant side
           template: input?.template as never,
           description: input?.description
         })
@@ -206,9 +217,11 @@ export function workshopIpcHandlers(): IpcHandlerMap {
   )
 
   /**
-   * 弹系统选择框配置**插件存放路径**（所有插件的源码根目录；首次启动已按安装目录预置）。
+   * Open a system picker to configure the **plugin storage path** (the source root of all
+   * plugins; preset to the install directory on first launch).
    *
-   * 这个原生框没法被自动化点击，工装因此走 `workshop-set-root`（显式路径）。
+   * This native dialog can't be clicked by automation, so tooling goes through
+   * `workshop-set-root` (explicit path) instead.
    */
   handle(
     'workshop-pick-root',
@@ -230,7 +243,7 @@ export function workshopIpcHandlers(): IpcHandlerMap {
       })
   )
 
-  /** 按显式路径配置插件存放路径（面板/工装用；`dir` 为空 = 清除配置） */
+  /** Configure the plugin storage path by explicit path (panel/tooling use; empty `dir` = clear the config) */
   handle(
     'workshop-set-root',
     async (dir: string) =>
@@ -254,18 +267,22 @@ export function workshopIpcHandlers(): IpcHandlerMap {
     'workshop-remove',
     async (id: string) =>
       await act(async () => {
-        // 先记下目录：删完再取 draftDir 仍可算，但活动工作区的复位要以被删目录为准
+        // Record the directory first: draftDir can still be computed after removal, but
+        // resetting the active workspace must be based on the removed directory
         let removedDir = ''
         try {
           removedDir = dirOf(id)
         } catch {
-          // 未配置插件存放路径：removeDraft 自己会返回「没删」，这里没有活动目录要复位
+          // Plugin storage path not configured: removeDraft reports "nothing removed" itself,
+          // so there is no active directory to reset here
         }
         removeDraft(id)
-        // 删的正是当前活动工作区（插件模式打开着它的源码）：清空活动工作区，
-        // 否则 AI 文件工具/资源管理器还指着一个不存在的目录。
+        // Removing exactly the current active workspace (plugin mode has its source open): clear
+        // the active workspace, otherwise AI file tools / the file explorer still point at a
+        // nonexistent directory.
         if (removedDir) clearActiveWorkspaceIfRemoved(removedDir)
-        // 无论是不是活动工作区，都别让「插件模式上次看的那条内容」继续指向它
+        // Whether or not it is the active workspace, don't let "the last content viewed in
+        // plugin mode" keep pointing at it
         clearRememberedPluginContent(id)
         broadcastWorkshopChanged()
         return true
@@ -274,7 +291,7 @@ export function workshopIpcHandlers(): IpcHandlerMap {
 
   handle('workshop-export', async (id: string) => await act(async () => await exportZip(id)))
 
-  /** 在系统文件管理器里打开草稿目录（面板「打开目录」） */
+  /** Open the draft directory in the system file manager (panel "Open directory") */
   handle(
     'workshop-open-dir',
     async (id: string) =>
@@ -286,7 +303,7 @@ export function workshopIpcHandlers(): IpcHandlerMap {
       })
   )
 
-  /** 渲染层探针的回话（见 workshop/probe.ts；返回 false = 已超时的迟到结果） */
+  /** Reply from the renderer probe (see workshop/probe.ts; returns false for a late result after timeout) */
   handle('workshop-probe-result', (payload: unknown) => {
     const accepted = resolveProbeResult(payload as WorkshopRendererProbe & { probeId?: string })
     if (!accepted) {

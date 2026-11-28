@@ -1,7 +1,8 @@
 /**
- * 文件改动视图类型。
+ * File change view types.
  *
- * 真源在主进程（`src/main/workspace/file-history.ts`），这里只做一次转发，
- * 避免前端另起一套定义后与主进程漂移；跨进程 DTO 的归口是 `shared/types.ts`。
+ * The source of truth lives in the main process (`src/main/workspace/file-history.ts`); this module
+ * only forwards them, so the renderer does not keep a second definition that drifts from the main
+ * process; cross-process DTOs are centralized in `shared/types.ts`.
  */
 export type { FileChangeView, FileChangeContent } from '../../../../shared/harness/types'

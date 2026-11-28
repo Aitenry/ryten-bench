@@ -1,47 +1,47 @@
 /**
- * 知识图谱 Zod 数据模式 —— 定义所有 LLM 输出的结构化契约
- * 配合 StructuredOutputParser 使用，实现 JSON 输出的强制校验
+ * Knowledge graph Zod data schemas — define the structured contracts for all LLM output
+ * Used together with StructuredOutputParser to enforce JSON output validation
  */
 import { z } from 'zod/v3'
 
-/** 实体类型枚举值（按领域分组，覆盖全行业） */
+/** Entity type enum values (grouped by domain, covering all industries) */
 const ENTITY_TYPES = [
-  // 通用
-  'person', // 人物
-  'organization', // 组织
-  'concept', // 概念/理论
-  'event', // 事件
-  'location', // 地点
-  'other', // 其他
-  // 技术/IT
-  'technology', // 技术/工具
-  'product', // 产品/项目
-  'system', // 体系/平台/系统（管理体系、IT系统、业务平台）
-  // 法规/合规
-  'document', // 文档/证照（合同、许可证、证书、报告、法律文书）
-  'standard', // 标准/法规/政策（技术标准、行业规范、法律法规、政策文件）
-  // 制造/工程
-  'facility', // 设施/装备（核设施、生产设备、建筑、基础设施）
-  'substance', // 物质/材料（化学物质、放射性核素、原材料、药品）
-  'process', // 流程/工序/方法（工作流程、操作步骤、制造工序）
-  // 人力资源
-  'role', // 角色/职位/岗位
-  'skill', // 技能/能力
-  // 数据/分析
-  'measure', // 指标/度量/参数（KPI、技术指标、监测数据）
-  // 叙事/小说
-  'artifact', // 物品/装备
-  'creature', // 生物/物种
-  'realm' // 等级/位阶
+  // General
+  'person', // person
+  'organization', // organization
+  'concept', // concept/theory
+  'event', // event
+  'location', // location
+  'other', // other
+  // Technology/IT
+  'technology', // technology/tool
+  'product', // product/project
+  'system', // framework/platform/system (management system, IT system, business platform)
+  // Regulation/compliance
+  'document', // document/license (contract, license, certificate, report, legal instrument)
+  'standard', // standard/regulation/policy (technical standard, industry code, law, policy document)
+  // Manufacturing/engineering
+  'facility', // facility/equipment (nuclear facility, production equipment, building, infrastructure)
+  'substance', // substance/material (chemical, radionuclide, raw material, drug)
+  'process', // process/step/method (workflow, operating steps, manufacturing process)
+  // Human resources
+  'role', // role/position/job title
+  'skill', // skill/ability
+  // Data/analysis
+  'measure', // measure/metric/parameter (KPI, technical indicator, monitoring data)
+  // Narrative/fiction
+  'artifact', // item/equipment
+  'creature', // creature/species
+  'realm' // rank/tier
 ] as const
 
-/** 允许的实体类型集合（用于后处理过滤，O(1) 查找） */
+/** Set of allowed entity types (for post-processing filtering, O(1) lookup) */
 export const ALLOWED_ENTITY_TYPES: ReadonlySet<string> = new Set(ENTITY_TYPES)
 
 /**
- * 单个实体（宽松化：type/confidence 的非法值由抽取后处理逐条兜底——
- * 修复：此前严格 enum/min-max 校验,一条非法即整块 JSON parse 失败,整块抽取静默丢弃,
- * 而后续的逐条过滤逻辑永远执行不到）
+ * A single entity (relaxed: invalid type/confidence values are backstopped item by item in extraction post-processing —
+ * fix: strict enum/min-max validation made the whole JSON block fail to parse on a single invalid item, so the whole
+ * extraction was silently discarded and the subsequent per-item filtering logic never ran)
  */
 export const EntitySchema = z.object({
   name: z.string().describe('canonical full name of the entity'),
@@ -53,10 +53,10 @@ export const EntitySchema = z.object({
     .describe('confidence from 0 to 1, indicating how certain the entity extraction is')
 })
 
-/** 实体数组 —— 实体抽取 & Gleaning 使用 */
+/** Array of entities — used by entity extraction & gleaning */
 export const EntitiesArraySchema = z.array(EntitySchema)
 
-/** 合并后的实体（含别名等元信息） */
+/** Merged entity (with metadata such as aliases) */
 export const MergedEntitySchema = z.object({
   name: z.string().describe('canonical name'),
   type: z.string().describe('entity type'),
@@ -66,51 +66,51 @@ export const MergedEntitySchema = z.object({
   source_doc_ids: z.array(z.number()).optional().describe('list of source document IDs')
 })
 
-/** 实体消歧合并结果 */
+/** Result of entity disambiguation and merging */
 export const EntityMergingResultSchema = z.object({
   merged: z.array(MergedEntitySchema).describe('list of merged entities'),
   removed_names: z.array(z.string()).describe('list of names that were merged away')
 })
 
-/** 关系类型枚举值（按场景分组，覆盖全行业） */
+/** Relation type enum values (grouped by scenario, covering all industries) */
 const RELATION_TYPES = [
-  // 结构与层次
-  'contains', // A 包含 B
-  'part_of', // A 是 B 的一部分
-  'is_a', // A 是 B 的一种（继承/实例）
-  'located_in', // A 位于 B
-  // 依赖与因果
-  'depends_on', // A 依赖 B
-  'related_to', // A 与 B 相关（通用关联）
-  'leads_to', // A 导致/产生 B
-  // 生产与使用
-  'uses', // A 使用/采用 B
-  'creates', // A 创造/开发了 B
-  'produces', // A 生产/制造/产出 B
-  'operates', // A 运营/操作/运行 B
-  // 所有与控制
-  'owns', // A 拥有/持有 B
-  'acquires', // A 获得/得到 B
-  'belongs_to', // A 归属/属于 B（组织、团体、阵营）
-  // 管理与监督
-  'governs', // A 管辖/监管/治理 B
-  'monitors', // A 监测/监控/监督 B
-  // 人力与培训
-  'employs', // A 雇用/聘用 B
-  'mentors', // A 指导/教导/培训 B
-  // 叙事/小说专用
-  'friend_of', // A 与 B 是朋友/盟友
-  'enemy_of', // A 与 B 是敌人/对手
-  'loves', // A 爱慕/喜欢 B
-  'family_of', // A 与 B 是亲属
-  'fights', // A 与 B 交战/冲突/对抗
-  'kills' // A 杀死/击败/淘汰 B
+  // Structure and hierarchy
+  'contains', // A contains B
+  'part_of', // A is part of B
+  'is_a', // A is a kind of B (inheritance/instance)
+  'located_in', // A is located in B
+  // Dependency and causality
+  'depends_on', // A depends on B
+  'related_to', // A is related to B (generic association)
+  'leads_to', // A leads to/produces B
+  // Production and use
+  'uses', // A uses/adopts B
+  'creates', // A created/developed B
+  'produces', // A produces/manufactures/outputs B
+  'operates', // A operates/runs B
+  // Ownership and control
+  'owns', // A owns/holds B
+  'acquires', // A acquires/obtains B
+  'belongs_to', // A belongs to B (organization, group, faction)
+  // Management and supervision
+  'governs', // A governs/regulates/administer B
+  'monitors', // A monitors/surveils/supervises B
+  // Staffing and training
+  'employs', // A employs/hires B
+  'mentors', // A mentors/teaches/trains B
+  // Narrative/fiction specific
+  'friend_of', // A and B are friends/allies
+  'enemy_of', // A and B are enemies/opponents
+  'loves', // A loves/likes B
+  'family_of', // A and B are relatives
+  'fights', // A and B fight/conflict/oppose each other
+  'kills' // A kills/defeats/eliminates B
 ] as const
 
-/** 允许的关系类型集合（用于后处理过滤，O(1) 查找） */
+/** Set of allowed relation types (for post-processing filtering, O(1) lookup) */
 export const ALLOWED_RELATION_TYPES: ReadonlySet<string> = new Set(RELATION_TYPES)
 
-/** 单个关系（宽松化：relation_type 非法值由后处理过滤,不再整块 parse 失败） */
+/** A single relation (relaxed: invalid relation_type values are filtered in post-processing instead of failing the whole parse) */
 export const RelationSchema = z.object({
   source: z.string().describe('source entity name'),
   target: z.string().describe('target entity name'),
@@ -118,16 +118,16 @@ export const RelationSchema = z.object({
   description: z.string().optional().describe('a short relation description (≤ 15 words)')
 })
 
-/** 关系数组 —— 关系抽取使用 */
+/** Array of relations — used by relation extraction */
 export const RelationsArraySchema = z.array(RelationSchema)
 
-/** 统一抽取结果（实体+关系同时输出） */
+/** Unified extraction result (entities and relations output together) */
 export const UnifiedExtractionSchema = z.object({
   entities: z.array(EntitySchema).describe('list of extracted entities'),
   relations: z.array(RelationSchema).describe('list of extracted relations')
 })
 
-// ========== 类型推导 ==========
+// ========== Type inference ==========
 export type EntityOutput = z.infer<typeof EntitySchema>
 export type EntitiesArrayOutput = z.infer<typeof EntitiesArraySchema>
 export type MergedEntityOutput = z.infer<typeof MergedEntitySchema>

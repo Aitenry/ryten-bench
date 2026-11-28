@@ -1,10 +1,12 @@
 /**
- * Ollama 实现（`POST {baseUrl}/api/chat`，NDJSON 流式）。
+ * Ollama implementation (`POST {baseUrl}/api/chat`, NDJSON streaming).
  *
- * 与 OpenAI 协议的区别：
- * - 流式响应是「一行一个 JSON」而不是 SSE；
- * - 工具调用不带 id（这里按出现顺序合成，工具结果回传时用 `tool_name` 关联）；
- * - 采样参数在 `options` 里（num_predict / top_k …），思考开关是顶层 `think`。
+ * Differences from the OpenAI protocol:
+ * - The streaming response is "one JSON per line" rather than SSE;
+ * - Tool calls carry no id (one is synthesized here in order of appearance, and tool results are
+ *   correlated via `tool_name`);
+ * - Sampling parameters live in `options` (num_predict / top_k …), and the thinking switch is the
+ *   top-level `think`.
  */
 import { AIMessage, BaseMessage, contentToBlocks, contentToText, parseDataUrl } from '../messages'
 import {
@@ -32,7 +34,7 @@ export interface OllamaFields {
   temperature?: number
   topP?: number
   topK?: number
-  /** 思考开关：true/false 或 'low' | 'medium' | 'high' */
+  /** Thinking switch: true/false or 'low' | 'medium' | 'high' */
   think?: boolean | string
   stop?: string[]
   timeout?: number
@@ -40,7 +42,7 @@ export interface OllamaFields {
   [key: string]: unknown
 }
 
-/** 工具调用 id → 工具名 */
+/** Tool call id → tool name */
 function toolNameIndex(messages: BaseMessage[]): Map<string, string> {
   const index = new Map<string, string>()
   for (const message of messages) {
@@ -52,7 +54,7 @@ function toolNameIndex(messages: BaseMessage[]): Map<string, string> {
   return index
 }
 
-/** 消息数组 → Ollama /api/chat 的 messages */
+/** Message array → the `messages` of Ollama /api/chat */
 export function toOllamaMessages(messages: BaseMessage[]): Array<Record<string, unknown>> {
   const result: Array<Record<string, unknown>> = []
   const toolNames = toolNameIndex(messages)
@@ -123,7 +125,7 @@ export class ChatOllama extends BaseChatModel {
   private readonly think?: boolean | string
   private readonly timeoutMs?: number
   private readonly modelKwargs?: Record<string, unknown>
-  /** 是否使用流式请求（extra_config 可显式关闭，或流式失败时自动降级） */
+  /** Whether streaming requests are used (can be disabled explicitly via extra_config, or degraded automatically when streaming fails) */
   private readonly streaming: boolean
 
   constructor(fields: OllamaFields) {
@@ -176,7 +178,7 @@ export class ChatOllama extends BaseChatModel {
     return body
   }
 
-  /** 处理一行 NDJSON；返回 true 表示流结束 */
+  /** Handle one NDJSON line; returns true when the stream is finished */
   private handleLine(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector,
@@ -223,7 +225,7 @@ export class ChatOllama extends BaseChatModel {
     return false
   }
 
-  /** 非流式兜底：Ollama 的 stream:false 返回单个 JSON 对象 */
+  /** Non-streaming fallback: Ollama returns a single JSON object for stream:false */
   private async requestNonStreaming(
     messages: BaseMessage[],
     tools: StructuredToolInterface[],
@@ -307,12 +309,12 @@ export class ChatOllama extends BaseChatModel {
     }
     const streamed = collector.finalize()
     if (hasMeaningfulOutput(streamed)) return streamed
-    // 空流（网关流式实现异常的典型表现）：自动换非流式继续
+    // Empty stream (typical symptom of a gateway's broken streaming implementation): automatically continue non-streaming
     return await this.requestNonStreaming(messages, tools, options, collector.fallbackSnapshot())
   }
 }
 
-/** 解析单个 JSON 对象（非流式响应体） */
+/** Parse a single JSON object (non-streaming response body) */
 function parseSingleJson(text: string): Record<string, unknown> | undefined {
   const trimmed = text.trim()
   if (!trimmed) return undefined

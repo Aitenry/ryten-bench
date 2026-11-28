@@ -1,55 +1,64 @@
 /**
- * 工具结果事实登记（callId → 结构化事实）。
+ * Tool result fact registry (callId → structured facts).
  *
- * 为什么需要这条旁路：内置文件工具把结果**以纯文本返回给模型**
- * （read_file 返回文件原文、execute 返回 JSON、写改工具返回本地化确认文本），
- * 文本里没有可靠的结构化信号——失败原因与界面语言相关，替换处数/字节数更是
- * 只存在于工具函数内部的局部变量里。但前端的定制卡片需要这些事实：
- * 失败要显示原因、写入要显示字节、编辑要显示替换处数、读取要显示总行数。
+ * Why this side channel is needed: built-in file tools return results **to the model as plain
+ * text** (read_file returns the raw file, execute returns JSON, write/edit tools return localized
+ * confirmation text), and that text carries no reliable structured signal — failure reasons depend
+ * on the UI language, and replacement counts/byte counts only exist as local variables inside the
+ * tool functions. But the frontend's custom cards need these facts: failures show a reason, writes
+ * show bytes, edits show replacement counts, reads show the total line count.
  *
- * 于是让工具在执行期把事实登记到这张表（键 = 本次调用的 toolCallId，
- * 由 agent.ts 注入到 `config.configurable.toolCallId`），流生产者按 callId 取走
- * 并合成卡片。表是进程内、有界的（防长会话泄漏）；取走即删除，缺省不影响任何行为。
+ * So tools register the facts into this table at execution time (key = this call's toolCallId,
+ * injected by agent.ts into `config.configurable.toolCallId`), and the stream producers take them
+ * by callId and compose the card. The table is in-process and bounded (prevents long-session
+ * leaks); taking an entry deletes it, and a missing entry affects no behavior.
  */
 
 export interface ToolResultFacts {
-  /** 失败原因（工具返回值是本地化文本，结构化信号只在这里） */
+  /**
+   * Failure reason (the tool's return value is localized text; the structured signal lives only
+   * here)
+   */
   error?: string
-  /** write_file：写入字节数 */
+  /** write_file: number of bytes written */
   bytes?: number
-  /** edit_file：替换处数 */
+  /** edit_file: number of replacements */
   replacements?: number
   /**
-   * write_file / edit_file：本次落盘新增 / 删除的行数（差异规模）。
+   * write_file / edit_file: number of lines added / removed by this write (diff size).
    *
-   * 与改动记录（file_change 表）**同源**：都由 workspace/line-diff.ts 的 changeStats
-   * 算一次（工具算完既登记事实、又传给记录层），所以卡片上的「+N −M」和资源管理器徽标、
-   * 差异视图里的统计永远说同一件事。
+   * **Same source** as the change log (the file_change table): both are computed once by
+   * changeStats in workspace/line-diff.ts (the tool registers the facts and also passes them to
+   * the record layer), so the card's "+N −M", the explorer badge and the diff view statistics
+   * always tell the same story.
    */
   added?: number
   removed?: number
-  /** read_file：文件总行数 */
+  /** read_file: total number of file lines */
   lines?: number
-  /** read_file：输出是否被内联上限截断 */
+  /** read_file: whether the output was truncated by the inline limit */
   truncated?: boolean
-  /** read_file：按 offset/limit 读取时的行区间（1 基，闭区间） */
+  /** read_file: line range when reading with offset/limit (1-based, inclusive) */
   range?: { start: number; end: number; total: number }
-  /** read_image：本次结果是一张图片（卡片据此渲染缩略图/画廊） */
+  /** read_image: this result is an image (the card renders a thumbnail/gallery from it) */
   image?: boolean
-  /** read_image：图片 MIME 与像素尺寸（解析不出时省略） */
+  /** read_image: image MIME type and pixel dimensions (omitted when they cannot be parsed) */
   mimeType?: string
   width?: number
   height?: number
-  /** apply_patch：本次补丁涉及的文件数 */
+  /** apply_patch: number of files touched by this patch */
   files?: number
 }
 
-/** 登记表容量上限：超出时丢弃最早的条目（正常流不会达到） */
+/**
+ * Registry capacity cap: the oldest entries are dropped when exceeded (normal streams never
+ * reach it)
+ */
 const MAX_ENTRIES = 512
 
 const factsByCallId = new Map<string, ToolResultFacts>()
 
-/** 登记（合并）一次工具调用的结果事实；callId 缺失时静默忽略 */
+/** Register (merge) the result facts of one tool call; silently ignored when callId is missing */
 export function recordToolFacts(callId: string | undefined, patch: ToolResultFacts): void {
   if (!callId) return
   const prev = factsByCallId.get(callId)
@@ -66,12 +75,12 @@ export function recordToolFacts(callId: string | undefined, patch: ToolResultFac
   }
 }
 
-/** 读取（不删除）一次工具调用的结果事实 */
+/** Read (without deleting) the result facts of one tool call */
 export function peekToolFacts(callId: string | undefined): ToolResultFacts | undefined {
   return callId ? factsByCallId.get(callId) : undefined
 }
 
-/** 取走并删除（工具调用收尾时调用，避免长会话堆积） */
+/** Take and delete (called when a tool call wraps up, preventing accumulation in long sessions) */
 export function takeToolFacts(callId: string | undefined): ToolResultFacts | undefined {
   if (!callId) return undefined
   const facts = factsByCallId.get(callId)
@@ -79,7 +88,7 @@ export function takeToolFacts(callId: string | undefined): ToolResultFacts | und
   return facts
 }
 
-/** 测试辅助：清空登记表 */
+/** Test helper: clear the registry */
 export function clearToolFacts(): void {
   factsByCallId.clear()
 }

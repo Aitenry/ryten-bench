@@ -1,7 +1,8 @@
 /**
- * OpenAI 兼容协议的报文转换（OpenAI / DeepSeek / xAI / OpenRouter / Mistral / 自定义端点共用）。
+ * Payload conversion for the OpenAI-compatible protocol (shared by OpenAI / DeepSeek / xAI /
+ * OpenRouter / Mistral / custom endpoints).
  *
- * 这一层只做「消息 / 工具 / 用量」的形态转换，不做任何供应商判断。
+ * This layer only converts the shape of messages / tools / usage and makes no provider decisions.
  */
 import {
   BaseMessage,
@@ -12,7 +13,7 @@ import {
 } from '../messages'
 import { jsonSchemaOf, StructuredToolInterface } from '../tools'
 
-/** OpenAI 兼容协议的 function 工具声明 */
+/** function tool declaration for the OpenAI-compatible protocol */
 export interface OpenAIToolDefinition {
   type: 'function'
   function: {
@@ -22,7 +23,7 @@ export interface OpenAIToolDefinition {
   }
 }
 
-/** 工具声明：name/description/schema → OpenAI function 工具 */
+/** Tool declaration: name/description/schema → OpenAI function tool */
 export function toOpenAITools(tools: StructuredToolInterface[]): OpenAIToolDefinition[] {
   return tools.map((tool) => ({
     type: 'function',
@@ -34,7 +35,7 @@ export function toOpenAITools(tools: StructuredToolInterface[]): OpenAIToolDefin
   }))
 }
 
-/** human 消息的内容块转换（文本 + 图片） */
+/** Content-block conversion for human messages (text + images) */
 function humanContentToOpenAI(content: BaseMessage['content']): string | MessageContentComplex[] {
   if (typeof content === 'string') return content
   const blocks = contentToBlocks(content).map((block) => {
@@ -46,13 +47,13 @@ function humanContentToOpenAI(content: BaseMessage['content']): string | Message
       return imageUrl ? { type: 'image_url', image_url: { url: imageUrl } } : null
     }
     if (block.type === 'text') return { type: 'text', text: block.text ?? '' }
-    // 其它块（file 等）原样透传，兼容自定义网关
+    // Other blocks (file, etc.) pass through unchanged for compatibility with custom gateways
     return block
   })
   return blocks.filter((block): block is MessageContentComplex => block !== null)
 }
 
-/** AI 消息的 tool_calls → OpenAI tool_calls */
+/** AI message tool_calls → OpenAI tool_calls */
 function aiToolCallsToOpenAI(toolCalls: ToolCall[]): Array<Record<string, unknown>> {
   return toolCalls.map((call) => ({
     id: call.id ?? '',
@@ -64,7 +65,7 @@ function aiToolCallsToOpenAI(toolCalls: ToolCall[]): Array<Record<string, unknow
   }))
 }
 
-/** 消息数组 → OpenAI chat.completions 的 messages */
+/** Message array → OpenAI chat.completions messages */
 export function toOpenAIMessages(messages: BaseMessage[]): Array<Record<string, unknown>> {
   const result: Array<Record<string, unknown>> = []
   for (const message of messages) {
@@ -109,7 +110,7 @@ export function toOpenAIMessages(messages: BaseMessage[]): Array<Record<string, 
   return result
 }
 
-/** 用量字段归一（prompt_tokens/completion_tokens → input_tokens/output_tokens） */
+/** Normalize usage fields (prompt_tokens/completion_tokens → input_tokens/output_tokens) */
 export function normalizeUsage(
   usage: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
@@ -128,7 +129,8 @@ export function normalizeUsage(
   if (output != null) result.output_tokens = output
   result.total_tokens = total ?? (input ?? 0) + (output ?? 0)
 
-  // 缓存 / 推理明细：与旧实现同形（前端用量面板按这些键展示）
+  // Cache / reasoning details: same shape as the legacy implementation (the frontend usage panel
+  // displays these keys)
   const inputDetails = (usage.prompt_tokens_details ?? usage.input_token_details) as
     Record<string, unknown> | undefined
   const cacheRead = pickNumber(inputDetails ?? {}, ['cached_tokens', 'cache_read', 'cacheRead'])
@@ -147,7 +149,8 @@ export function normalizeUsage(
   if (audioOutput != null) canonicalOutput.audio = audioOutput
   if (Object.keys(canonicalOutput).length > 0) result.output_token_details = canonicalOutput
 
-  // 原始字段一并保留：历史面板/旧数据按这些键读取，不能只留规范字段
+  // Keep the original fields as well: the history panel / old data read these keys, so canonical
+  // fields alone are not enough
   for (const key of [
     'prompt_tokens',
     'completion_tokens',
@@ -170,7 +173,7 @@ function pickNumber(source: Record<string, unknown>, keys: string[]): number | n
   return null
 }
 
-/** Mistral 要求工具调用 id 恰好是 9 位字母数字；其它形态按其算法稳定映射 */
+/** Mistral requires tool call ids to be exactly 9 alphanumeric chars; other shapes are stably mapped by the algorithm below */
 export function mistralToolCallId(toolCallId: string): string {
   if (/^[a-zA-Z0-9]{9}$/.test(toolCallId)) return toolCallId
   const base62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -190,7 +193,7 @@ export function mistralToolCallId(toolCallId: string): string {
   return encoded.length >= 9 ? encoded.slice(0, 9) : encoded.padStart(9, '0')
 }
 
-/** Mistral 消息转换：与 OpenAI 同形，但工具调用 id 要标准化 */
+/** Mistral message conversion: same shape as OpenAI, but tool call ids must be normalized */
 export function toMistralMessages(messages: BaseMessage[]): Array<Record<string, unknown>> {
   const converted = toOpenAIMessages(messages)
   for (const entry of converted) {

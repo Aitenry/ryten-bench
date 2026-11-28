@@ -1,14 +1,18 @@
 import type { LatticeApi } from './types'
 
 /**
- * `window.api.lattice` 的安全访问层。
+ * Safe access layer for `window.api.lattice`.
  *
- * preload 已提供 `api.lattice` 的类型（`src/preload/index.d.ts`，DTO 真源是
- * `src/main/lattice/types.ts`）。这里仍然做**运行时探测**而不是直接读：
+ * preload already provides the types for `api.lattice` (`src/preload/index.d.ts`; the DTO source of
+ * truth is `src/main/lattice/types.ts`). Even so, this performs a **runtime probe** instead of
+ * reading it directly:
  *
- * - 主进程可能尚未注册 `lattice:*` 通道（开发期/旧版本主进程）；
- * - 单元测试/纯浏览器预览环境没有 preload，`window.api` 可能是 undefined；
- * - 探测到桥不存在时返回 null，所有 UI 安全降级（账号区显示「插件中心未就绪」）。
+ * - the main process may not have registered the `lattice:*` channels yet (development / older
+ *   main process);
+ * - unit tests / plain-browser preview environments have no preload, so `window.api` may be
+ *   undefined;
+ * - when the probe finds no bridge it returns null, and every UI degrades safely (the account area
+ *   shows "plugin center not ready").
  */
 interface LatticeBridgeHost {
   api?: {
@@ -16,17 +20,18 @@ interface LatticeBridgeHost {
   }
 }
 
-/** 取主进程暴露的插件中心桥；主进程未注册通道时返回 null（调用方必须降级） */
+/** Get the plugin-center bridge exposed by the main process; returns null when the main process has not registered the channels (callers must degrade) */
 export function getLatticeBridge(): LatticeApi | null {
   try {
     const host = window as unknown as LatticeBridgeHost
     const bridge = host.api?.lattice
     if (!bridge) return null
-    // 只校验一个核心方法：主进程注册了通道就一定能 status()，避免半初始化对象被当成可用桥
+    // Only check one core method: if the main process registered the channels, status() must exist;
+    // this keeps a half-initialized object from being treated as a usable bridge
     if (typeof bridge.status !== 'function') return null
     return bridge as LatticeApi
   } catch {
-    // 非浏览器 / 受限环境：当作没有桥处理
+    // Non-browser / restricted environment: treat as no bridge
     return null
   }
 }
@@ -35,7 +40,7 @@ export function isLatticeBridgeAvailable(): boolean {
   return getLatticeBridge() !== null
 }
 
-/** 把任意异常归一成可展示的一句话（主进程 IPC 抛出的错误常常是 Error 或字符串） */
+/** Normalize any exception into a single displayable sentence (errors thrown over main-process IPC are often Error objects or strings) */
 export function latticeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
@@ -50,5 +55,5 @@ export function latticeErrorMessage(error: unknown): string {
   }
 }
 
-/** 主进程通道缺失时统一返回的错误文案（组件不会直接展示它，UI 会先按 available 降级） */
+/** Error text returned uniformly when the main-process channels are missing (components never display it directly; the UI degrades on `available` first) */
 export const LATTICE_BRIDGE_MISSING = 'lattice bridge unavailable'

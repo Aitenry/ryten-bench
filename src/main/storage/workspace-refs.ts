@@ -8,17 +8,22 @@ import type { HarnessSettings } from '../types/settings'
 import { isPathInside } from './migration'
 
 /**
- * 插件存放路径整体搬迁后，把**工作区行与活动工作区**里的旧路径一起改到新根下。
+ * After the plugin storage path is moved wholesale, point the old paths in the **workspace rows
+ * and the active workspace** at the new root as well.
  *
- * 为什么需要它：插件会话的工作目录就是 `<pluginsPath>/<插件 id>/`（见
- * `workshop/workspace.ts`）。源码被搬到新根后，数据库里还留着旧路径的 workspace 行，
- * 直接打开旧会话就会去一个已经不存在的目录（文件工具 / 文件监听全报 ENOENT），
- * 而插件里「＋ 新建会话」又会另建一条新路径的行——同一个插件出现两条工作区。
+ * Why it is needed: a plugin session's working directory is `<pluginsPath>/<plugin id>/` (see
+ * `workshop/workspace.ts`). Once the sources are moved to the new root, the database still holds
+ * workspace rows with the old paths, so opening an old session goes to a directory that no
+ * longer exists (file tools / file watchers all report ENOENT), while "+ New session" in the
+ * plugin creates another row with the new path — the same plugin ends up with two workspaces.
  *
- * 边界：
- * - 只改**位于旧根之下**（含旧根本身）的行，用户放在别处的普通工作区一律不动；
- * - 目标路径已被另一行占用（唯一约束）时跳过并告警，绝不合并两行数据；
- * - 数据库不可用 / 改行失败只告警，**不否决已经成功的文件搬迁**（数据在盘上，路径可手工修）。
+ * Boundaries:
+ * - Only rows **under the old root** (including the old root itself) are changed; ordinary
+ *   workspaces kept elsewhere are left untouched.
+ * - If the target path is already taken by another row (unique constraint), skip it and warn;
+ *   never merge the data of two rows.
+ * - If the database is unavailable / a row update fails, only warn — **do not veto a file move
+ *   that already succeeded** (the data is on disk and the path can be fixed by hand).
  */
 export async function remapWorkspacePathsUnderRoot(
   oldRootRaw: string,
@@ -60,8 +65,10 @@ export async function remapWorkspacePathsUnderRoot(
     logger.warn('[Storage] Failed to remap workspace rows (storage files were already moved):', err)
   }
 
-  // 当前活动工作区如果正落在旧根下，设置里的路径也要跟着换；否则界面还指着不存在的目录。
-  // 这一段与数据库改动分开 try：库暂时打不开时，至少活动目录的指向还能修对。
+  // If the active workspace currently sits under the old root, the path in settings must change
+  // too; otherwise the UI still points at a directory that no longer exists. This block has its
+  // own try, separate from the database changes: when the database cannot be opened for a
+  // moment, at least the active directory pointer can still be corrected.
   try {
     const rawHarness = settingsStore.get('harness')
     const harness =

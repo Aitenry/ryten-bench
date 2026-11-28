@@ -10,11 +10,13 @@ import type {
 } from '../../../../shared/harness/types'
 
 /**
- * 权限授权面板（内联）— 从输入区展开，覆盖目标/计划 + 输入框。
+ * Permission approval panel (inline) — expands from the input area and covers the goal/plan banner
+ * plus the input box.
  *
- * 替代原来的全屏 Modal：审批出现时，输入区上方与输入框整体让位给这块面板，
- * 消息区仍可查看；决定回写后原样恢复输入区。
- * 语义仍是 DSH 同款：只有「允许一次 / 拒绝」，没有永久放行。
+ * Replaces the old full-screen Modal: when an approval appears, the area above the input and the
+ * input box itself give way to this panel, while the message area stays viewable; after the decision
+ * is written back, the input area is restored as it was.
+ * The semantics remain the same: only "allow once / deny", with no permanent allow.
  */
 interface PermissionApprovalPanelProps {
   pending: ApprovalRequestView

@@ -16,7 +16,7 @@ interface ArchiveDocModalProps {
 }
 
 /**
- * 归档文档到知识库目录（从旧画布流程移植，改为独立弹窗）
+ * Archive a document into a knowledge-base directory (standalone modal).
  */
 const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
   open,
@@ -46,10 +46,11 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
   const [directories, setDirectories] = useState<WikiDirectoryRow[]>([])
   const [selectedDirId, setSelectedDirId] = useState<number | null>(null)
   const [dirsLoading, setDirsLoading] = useState(false)
-  /* 请求序号：只接受最新一次请求的响应（修复：快速切换知识库时慢响应覆盖新列表） */
+  /* Request sequence: only accept the response of the latest request (fixes slow responses
+     overwriting the newer list when switching knowledge bases quickly) */
   const dirsReqSeqRef = useRef(0)
 
-  /* 重置 */
+  /* Reset */
   useEffect(() => {
     if (open) {
       setSelectedWikiId(null)
@@ -66,7 +67,8 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
     setDirsLoading(true)
     try {
       const dirs = await notesApi.wikis.getDirectories(wikiId)
-      // 过期响应丢弃（修复：先点 A 慢、再点 B 快时,A 的目录列表覆盖 B）
+      // Drop stale responses (fixes the case where A is clicked first with a slow response and
+      // B quickly, and then A's directory list overwrites B's)
       if (dirsReqSeqRef.current !== reqSeq) return
       setDirectories(dirs)
     } catch (error) {
@@ -103,7 +105,7 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
       width={520}
     >
       <div style={{ display: 'flex', gap: 12, height: 300 }}>
-        {/* 知识库列表 */}
+        {/* Knowledge base list */}
         <div
           className="custom-scrollbar"
           style={{
@@ -144,7 +146,7 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
             })
           )}
         </div>
-        {/* 目录列表 */}
+        {/* Directory list */}
         <div className="custom-scrollbar app-modal-scroll" style={{ flex: 1, overflowY: 'auto' }}>
           <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
             {t('notes.archive.stepDirectory')}
@@ -154,7 +156,8 @@ const ArchiveDocModal: React.FC<ArchiveDocModalProps> = ({
               {t('notes.archive.selectWikiFirst')}
             </div>
           ) : dirsLoading ? (
-            /* 目录行与最终列表同高，读盘期间不再出现「居中转圈 → 突然长出列表」的跳动 */
+            /* Directory rows match the final list height, so there is no jump from a centered
+               spinner to a suddenly appearing list while loading */
             <SkeletonListRows rows={4} icon />
           ) : directories.length === 0 ? (
             <div style={{ color: token.colorTextTertiary, fontSize: 12.5 }}>

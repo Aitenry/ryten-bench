@@ -12,8 +12,9 @@ export type RouteSkeletonVariant = string
 
 const MONO_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
-/* 骨架块本身的脉动与取色在 components/system/Skeleton.tsx（组件级骨架共用同一套），
-   这里只剩路由级专有的右下角等宽标签 */
+/* The skeleton block's own pulse and palette live in components/system/Skeleton.tsx (shared
+   with component-level skeletons); only the route-level monospace label in the bottom-right
+   corner remains here */
 const TAG_CSS = `
 .rb-skel-tag {
   position: absolute;
@@ -41,13 +42,16 @@ const TAG_CSS = `
 `
 
 /**
- * 路由级骨架屏：切页时若目标页面 chunk 尚未加载完成，立即呈现对应页面的
- * 骨架结构（话题栏 / 甘特图 / 歌单），替代原来的居中转圈与「卡在上一页」。
- * 颜色取自 antd token，浅色 / 深色主题自动适配；右下角一枚等宽「LOADING」
- * 标签呼应编辑部的等宽标签语言。
+ * Route-level skeleton: when navigating while the target page's chunk is still loading, show
+ * that page's skeleton structure right away (topic sidebar / gantt chart / playlist) instead of
+ * the old centered spinner and "stuck on the previous page".
+ * Colors come from antd tokens, adapting automatically to light and dark themes; the monospace
+ * "LOADING" label in the bottom-right corner echoes the monospace label styling used throughout
+ * the UI.
  *
- * 页面内部的「数据加载」也可以复用它占位（如 planner 载入任务树），
- * 那种场景传 `showTag={false}`——标签文案是路由语义，别用在数据加载上。
+ * Page-internal data loading can also reuse it as a placeholder (e.g. planner loading its task
+ * tree); in that case pass `showTag={false}` — the label text is route semantics, so do not use
+ * it for data loading.
  */
 const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean }> = ({
   variant,
@@ -73,7 +77,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
   if (variant === 'harness') {
     content = (
       <div className="flex h-full w-full min-h-0" style={{ background: colorBgContainer }}>
-        {/* 话题侧栏 */}
+        {/* Topic sidebar */}
         <div
           className="flex flex-col gap-3 px-3 py-4"
           style={{ width: 230, flexShrink: 0, borderRight: `1px solid ${colorBorderSecondary}` }}
@@ -90,7 +94,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
             </div>
           ))}
         </div>
-        {/* 主区：头部 + 消息区 + 输入框 */}
+        {/* Main area: header + message area + input box */}
         <div className="flex min-w-0 flex-1 flex-col">
           <div
             className="flex items-center gap-3 px-4"
@@ -120,7 +124,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
   } else if (variant === 'planner') {
     content = (
       <div className="flex h-full w-full flex-col" style={{ background: colorBgContainer }}>
-        {/* 顶部工具栏 */}
+        {/* Top toolbar */}
         <div
           className="flex items-center gap-2.5 px-4"
           style={{ height: 56, flexShrink: 0, borderBottom: `1px solid ${colorBorderSecondary}` }}
@@ -131,7 +135,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
           {block(64, 30, 8)}
         </div>
         <div className="flex min-h-0 flex-1">
-          {/* 任务树 */}
+          {/* Task tree */}
           <div
             className="flex flex-col gap-2.5 p-4"
             style={{ width: 240, flexShrink: 0, borderRight: `1px solid ${colorBorderSecondary}` }}
@@ -143,7 +147,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
               </div>
             ))}
           </div>
-          {/* 甘特图 */}
+          {/* Gantt chart */}
           <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
             {block('100%', 10)}
             {[0, 1, 2, 3, 4, 5, 6].map((i) => (
@@ -158,7 +162,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
                     overflow: 'hidden'
                   }}
                 >
-                  {/* 甘特条用强调色点缀，呼应单色强调的设计语言 */}
+                  {/* Gantt bars use the accent color, echoing the monochrome accent design language */}
                   <div
                     className="rb-skel-block"
                     style={{
@@ -178,7 +182,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
   } else if (variant === 'music') {
     content = (
       <div className="flex h-full w-full gap-2.5 p-2.5" style={{ background: colorBgLayout }}>
-        {/* 歌单侧栏 */}
+        {/* Playlist sidebar */}
         <div
           className="flex flex-col gap-2.5 p-3"
           style={{ width: 200, flexShrink: 0, background: colorBgContainer, borderRadius: 10 }}
@@ -191,7 +195,7 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
             </div>
           ))}
         </div>
-        {/* 主区：正在播放 + 列表 + 播放控制条 */}
+        {/* Main area: now playing + list + playback controls */}
         <div
           className="flex min-w-0 flex-1 flex-col"
           style={{ background: colorBgContainer, borderRadius: 10, overflow: 'hidden' }}
@@ -236,7 +240,8 @@ const RouteSkeleton: React.FC<{ variant: RouteSkeletonVariant; showTag?: boolean
       </div>
     )
   } else {
-    // 通用骨架兜底：未知 variant（如外部插件路由）给一个居中的简单骨架
+    // Generic fallback: give an unknown variant (e.g. an external plugin route) a simple centered
+    // skeleton
     content = (
       <div
         className="flex h-full w-full flex-col items-center justify-center gap-4 p-8"

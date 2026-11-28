@@ -50,15 +50,16 @@ import {
 import type { HarnessTopicRow, HarnessDialogueRow } from '../../database/mapper/harness/harness'
 
 /**
- * Harness 工作区 / 话题 / 对话记录 CRUD IPC（AI 助手的第 2 个域）。
+ * Harness workspace / topic / dialogue record CRUD IPC (the 2nd domain of the AI assistant).
  *
- * 通道名一律 `harness:<原扁平名>`（原 `src/main/ipc/harness-topic.ts` 的 16 个扁平
- * 通道逐个改名：4 个工作区 + 6 个话题 + 6 个对话/用量，参数与返回类型不变），
- * 由 `src/main/system/harness.ts` 在启动时注册，退出时一并摘除。
+ * Channel names are uniformly `harness:<original flat name>` (the 16 flat channels of the former
+ * `src/main/ipc/harness-topic.ts` were renamed one by one: 4 workspaces + 6 topics + 6
+ * dialogue/usage; parameters and return types are unchanged), registered at startup by
+ * `src/main/system/harness.ts` and removed together on exit.
  */
 export function harnessTopicIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：`harness:` 前缀只在这里出现 */
+  /** Inbound channel: the `harness:` prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
@@ -76,9 +77,10 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
 
   handle('workspace-create', async (name: string, path: string) => {
     try {
-      // 信任来源收敛（安全审计 S03）：工作区目录必须来自「用户经系统对话框亲手选择」
-      // 或已登记的工作区行。只校验字符串路径的话，渲染层被注入后可以把任意盘符
-      // 变成工作区根，随后所有文件类 IPC 的 assertInsideWorkspace 都会指向它。
+      // Trust-source hardening (security audit S03): the workspace directory must come from a
+      // folder the user picked via the system dialog, or from an already registered workspace
+      // row. If only the string were validated, an injected renderer could turn any drive into
+      // a workspace root, and every file IPC's assertInsideWorkspace would then target it.
       if (typeof path !== 'string' || !path.trim()) {
         throw new Error(mainMessages().error.invalidPathAbsolute)
       }
@@ -108,12 +110,15 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 在系统文件管理器里打开工作区目录（侧栏工作区行「⋯ → 在文件夹中显示」）。
+   * Open the workspace directory in the system file manager (sidebar workspace row
+   * "⋯ → Show in Folder").
    *
-   * 入参是**工作区 id 而不是路径**：目录由主进程按行查出来再打开，渲染层没法借这条通道
-   * 打开任意路径（工作区目录是用户自选的，可能在 AI 工作区根之外，不能复用
-   * `assertInsideWorkspace` 那套边界）。跳转前先看一眼目录还在不在：被删/被挪走时给出
-   * 可读原因，而不是把 `shell.openPath` 的英文失败串直接丢到界面上。
+   * The input is the **workspace id, not a path**: the main process looks up the directory by
+   * row and opens it, so the renderer cannot use this channel to open an arbitrary path (a
+   * workspace directory is user-selected and may sit outside the AI workspace root, so the
+   * `assertInsideWorkspace` boundary does not apply). Check first that the directory still
+   * exists: when it was deleted or moved, return a readable reason instead of surfacing the raw
+   * failure string from `shell.openPath` in the UI.
    */
   handle('workspace-open-dir', async (id: number) => {
     try {
@@ -165,7 +170,7 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  /** 所有工作区里已归档的会话（侧栏底部「已归档」分组；按归档时间倒序） */
+  /** Archived sessions across all workspaces ("Archived" sidebar group; newest first) */
   handle('harness-topic-get-archived', async () => {
     try {
       return await getArchivedTopics()
@@ -191,20 +196,30 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
       title: string,
       model?: string,
       selectedTools?: string,
-      /** 记忆作用域（`plugin:<插件 id>` / `chat`；空 = 按工作区种类兜底，见 resolveTopicMemoryScope） */
-      memoryScope?: string | null
+      /** Memory scope (`plugin:<plugin id>` / `chat`; empty = fall back by workspace kind) */
+      memoryScope?: string | null,
+      /**
+       * Team collaboration toggle (Agent Teams): a blank session's draft is persisted along with
+       * the topic; omitted = off
+       */
+      teamMode?: boolean
     ) => {
       try {
         clearTopicCache()
-        // 作用域的单一真源：显式值优先，没给就按工作区种类兜底（对话 / 插件工作区不会因为
-        // 渲染层那个挂起值为空就悄悄掉回工作区记忆）。见 main/topic-scope.ts。
+        // Single source of truth for scope: an explicit value wins; otherwise fall back by
+        // workspace kind (chat / plugin workspaces must not silently drop back to workspace
+        // memory just because the renderer's pending value is empty).
         const scope = await resolveTopicMemoryScope(workspaceId, memoryScope)
-        const topicId = await createTopic(workspaceId, title, model, selectedTools, scope)
-        // 「对话」模式的每条会话都有自己的工作目录：话题一建好就把活动目录切过去。
-        // **在这里做**（而不是只靠渲染层）：新建会话的第一条消息、分支会话、以及任何别的
-        // 建话题路径都走这条通道，模型的文件工具才不会在「根目录」里乱放文件、之后换会话
-        // 又找不到（2026-10-11 实测：第一轮写的文件落在 chat/，切回来变成 chat/<id>/ 就空了）。
-        // 切换失败不能影响建话题本身：只记日志，下一轮/点开会话时还会再切一次。
+        const topicId = await createTopic(workspaceId, title, model, selectedTools, scope, teamMode)
+        // Each session in "Chat" mode has its own working directory: switch the active
+        // directory as soon as the topic is created.
+        // Do it **here** (not only in the renderer): the first message of a new session, forked
+        // sessions, and any other topic-creation path all go through this channel, so the
+        // model's file tools do not scatter files into the "root" directory and then fail to
+        // find them after switching sessions (observed 2026-10-11: files written in the first
+        // round landed in chat/ and were gone after switching to chat/<id>/).
+        // A failed switch must not affect topic creation: log it and retry on the next turn or
+        // when the session is opened.
         if (isChatScope(scope)) {
           try {
             await activateChatTopic(topicId)
@@ -239,7 +254,7 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  /** 置顶 / 取消置顶（只改 pinned_at，不碰 updated_at：取消后回到原来的活跃位置） */
+  /** Pin / unpin (only touches pinned_at, not updated_at, so it keeps its active slot) */
   handle('harness-topic-set-pinned', async (id: number, pinned: boolean) => {
     try {
       clearTopicCache()
@@ -250,7 +265,7 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  /** 归档 / 取消归档（同理不碰 updated_at） */
+  /** Archive / unarchive (likewise leaves updated_at untouched) */
   handle('harness-topic-set-archived', async (id: number, archived: boolean) => {
     try {
       clearTopicCache()
@@ -262,10 +277,12 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 分叉会话：复制「话题行 + 全部对话」成一条新的独立会话，返回新行。
+   * Fork a session: copy the topic row and all dialogues into a new independent session, and
+   * return the new row.
    *
-   * 标题由渲染层给（`原标题（分叉）`，跟着界面语言走）；主进程只认数据，不做文案。
-   * 返回整行而不是 id：界面拿它立刻插进列表并打开（不用再查一次）。
+   * The title comes from the renderer (e.g. `Original title (fork)`, following the UI
+   * language); the main process only handles data, not copy. Return the whole row rather than
+   * the id: the UI inserts it into the list and opens it immediately without another query.
    */
   handle('harness-topic-fork', async (id: number, title: string) => {
     try {
@@ -280,25 +297,26 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
   handle('harness-topic-delete', async (id: number) => {
     try {
       clearTopicCache()
-      // 清理该话题的对话计划清单（进程级 todoStore）
+      // Clear the topic's todo list (process-level todoStore)
       todoStore.clear(id)
-      // 清理该话题的对话目标（goalStore：缓存 + 数据库行）
+      // Clear the topic's goals (goalStore: cache + database row)
       await goalStore.delete(id)
-      // 计划模式：行随笔话题级联删除，这里只丢内存缓存
+      // Plan mode: rows cascade with the topic, so only drop the in-memory cache here
       planModeStore.forget(id)
       teamModeStore.forget(id)
-      // 清理该话题的后台任务（全部 kill）
+      // Clear the topic's background jobs (kill them all)
       jobsRegistry.clearTopic(id)
-      // 清理该话题的子代理续接会话（全部中断）
+      // Clear the topic's subagent resume sessions (interrupt them all)
       subagentSessions.clearTopic(id)
-      // 清理该话题的共享任务板（Agent Teams：任务按 topicId 归属）
+      // Clear the topic's shared task board (Agent Teams: tasks are owned by topicId)
       teamStore.clearTopic(id)
-      // 清理该话题的摘要压缩 checkpoint（topic_compactions 表）
+      // Clear the topic's compaction checkpoints (topic_compactions table)
       await deleteCompactionByTopic(id)
-      // 清理该话题的工具结果溢出文件（spill 目录）
-      // 落点按**这条会话的作用域**算：工作会话在 <memoryPath>/workspace-<id>/spill/，
-      // 插件会话在 <memoryPath>/plugin-<id>/spill/（与 Runtime 的 memoryPath 同一口径，
-      // 否则删了话题、溢出文件还留在那个作用域目录里）
+      // Clear the topic's tool-result spill files (spill directory)
+      // The location is derived from **this session's scope**: workspace sessions use
+      // <memoryPath>/workspace-<id>/spill/, plugin sessions use <memoryPath>/plugin-<id>/spill/
+      // (same convention as the Runtime memoryPath; otherwise the topic is deleted but the spill
+      // files stay behind in that scope directory).
       const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
       const topicRows = await getTopicById(id).catch(() => [])
       const topicRow = topicRows[0]
@@ -310,13 +328,15 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
         ),
         id
       )
-      // 清理该话题的工具结果详情（聊天卡片点开的 ls/glob/grep/execute 结果）
+      // Clear the topic's tool-result details (ls/glob/grep/execute results opened from cards)
       getToolOutputStore()?.removeTopic(id)
-      // 清理该话题的插话队列（含待注入缓冲：那条插话已随话题一起消失）
+      // Clear the topic's interjection queue (including the pending-injection buffer: that
+      // interjection disappeared along with the topic)
       harnessQueue.clear(id)
-      // 该话题挂起的提问 / 审批：按「已取消 / 拒绝」结算。
-      // 不结算的话，删掉这条会话后那次调用永远等不到回答（工具卡片一直「执行中…」、
-      // 主进程还挂着一个 promise）——提问/审批按会话隔离，这一条会话没了就该一起收尾
+      // Pending questions / approvals for the topic are settled as "cancelled / rejected".
+      // Otherwise, once this session is deleted, that call would never get an answer (the tool
+      // card stays in "running…" and the main process keeps a hanging promise) — questions and
+      // approvals are isolated per session, so they must be closed out together with it.
       questionService.abortTopic(id)
       permissionGate.abortTopic(id)
       return await deleteTopic(id)
@@ -349,7 +369,7 @@ export function harnessTopicIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  // 对话真实用量（harness_dialogue_usage）：渲染层按 dialogue_id 回填到各条助手消息
+  // Actual dialogue usage (harness_dialogue_usage): renderer backfills it by dialogue_id
   handle('harness-usage-get-by-topic', async (topicId: number) => {
     try {
       return await getUsageByTopic(topicId)

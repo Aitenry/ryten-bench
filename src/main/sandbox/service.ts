@@ -20,56 +20,59 @@ import {
 } from './types'
 
 /**
- * 沙箱服务 —— 档位 → 真正的 OS 隔离原语的唯一入口。
+ * Sandbox service — the single entry point from mode to the real OS isolation primitive.
  *
- * 平台链（先探测、后选用，**拿不到就故障关闭**，绝不退回「不受限地跑」）：
- *  - win32  → `windows-restricted-token`：自研受限令牌 runner（不用管理员、不建账户）；
- *  - linux  → `linux-bwrap`（系统装了 bubblewrap 时优先）→ `linux-landlock`（自研启动器，
- *             用内核 Landlock，不需要 root、不需要装任何包）；
- *  - darwin → `macos-seatbelt`：系统自带的 sandbox-exec + 自研 SBPL 配置。
+ * Platform chain (probe first, then select, **fail closed if nothing is available**; never fall
+ * back to running unconfined):
+ *  - win32  → `windows-restricted-token`: in-house restricted-token runner (no admin, no accounts);
+ *  - linux  → `linux-bwrap` (preferred when bubblewrap is installed) → `linux-landlock` (in-house
+ *             launcher using the kernel Landlock, no root, no packages required);
+ *  - darwin → `macos-seatbelt`: the system sandbox-exec plus an in-house SBPL profile.
  *
- * 为什么探测要跑真命令：能装不代表能用（内核没开 Landlock、工作区在 exFAT 上、企业策略
- * 禁用受限令牌……）。探针跑一次真调用并缓存结论；探测失败 = 不可用 = 拒绝执行。
+ * Why probing must run real commands: being installed does not mean it works (kernel without
+ * Landlock, workspace on exFAT, enterprise policy disabling restricted tokens...). The probe runs
+ * one real call and caches the verdict; probe failure = unavailable = refuse to execute.
  *
- * 本文件不 import electron：平台、路径、探针执行器全部经 deps 注入，
- * 因此可以脱离 Electron 用 node 直接加载（离线回归 + 真机验证工装都靠它）。
+ * This file does not import electron: platform, paths and the probe executor are all injected via
+ * deps, so it can be loaded directly with node outside Electron (both the offline regression and
+ * the on-device verification harness rely on it).
  */
 
-/** 探测结论 */
+/** Probe verdict */
 export interface SandboxStatus {
   platform: string
-  /** 可用后端（不可用时为 null） */
+  /** Available backend (null when unavailable) */
   backend: SandboxBackendName | null
   enforcement: SandboxEnforcement | null
   usable: boolean
-  /** 不可用原因（诊断与界面提示用） */
+  /** Reason for unavailability (for diagnostics and UI hints) */
   reason?: string
 }
 
 export interface SandboxServiceDeps {
-  /** 覆盖平台（工装用来在任意主机上验证各平台链） */
+  /** Override the platform (the harness uses it to verify each platform chain on any host) */
   platform?: string
-  /** Windows runner 脚本路径（resources/sandbox/win32-sandbox-runner.cjs） */
+  /** Windows runner script path (resources/sandbox/win32-sandbox-runner.cjs) */
   windowsRunnerPath?: string
-  /** 运行 runner 的 node/electron 可执行文件（Electron 下是 process.execPath） */
+  /** node/electron executable used to run the runner (process.execPath under Electron) */
   nodePath?: string
-  /** 应用根（打包态是 resources/app.asar）：runner 用它解析 koffi */
+  /** App root (resources/app.asar when packaged): the runner uses it to resolve koffi */
   appRoot?: string
-  /** 自研 Landlock 启动器路径 */
+  /** In-house Landlock launcher path */
   landlockLauncherPath?: string
-  /** bubblewrap 可执行文件（默认 'bwrap'，按 PATH 查找） */
+  /** bubblewrap executable (default 'bwrap', looked up on PATH) */
   bwrapPath?: string
-  /** macOS 的 sandbox-exec（默认 'sandbox-exec'） */
+  /** macOS sandbox-exec (default 'sandbox-exec') */
   seatbeltPath?: string
-  /** 私有临时目录根（默认系统临时目录） */
+  /** Private temp directory root (defaults to the system temp directory) */
   tempRoot?: string
-  /** 探针执行器（默认 spawnSync；工装可注入确定性实现） */
+  /** Probe executor (default spawnSync; the harness can inject a deterministic implementation) */
   runProbe?: (argv: string[], env?: Record<string, string>) => { ok: boolean; detail?: string }
-  /** 探针超时（毫秒，必须为正；0 在 Node 里表示「无限等」，这里显式拒绝） */
+  /** Probe timeout (ms, must be positive; 0 means "wait forever" in Node, so it is explicitly rejected here) */
   probeTimeoutMs?: number
 }
 
-/** 探测结论缓存：一次进程生命周期内只探一次 */
+/** Verdict cache: probe only once per process lifetime */
 type Verdict =
   { backend: SandboxBackendName; enforcement: SandboxEnforcement } | { unavailable: string }
 
@@ -81,13 +84,13 @@ export class SandboxService {
     this.deps = deps
   }
 
-  /** 接线/覆盖配置（插件 install 时把真实路径注入进来；变更后重新探测） */
+  /** Wire in/override config (the plugin injects real paths on install; re-probe after changes) */
   configure(deps: Partial<SandboxServiceDeps>): void {
     this.deps = { ...this.deps, ...deps }
     this.verdict = undefined
   }
 
-  /** 当前实际使用的路径与平台（诊断用） */
+  /** Paths and platform actually in use (for diagnostics) */
   describe(): {
     platform: string
     tempRoot: string
@@ -102,7 +105,7 @@ export class SandboxService {
     }
   }
 
-  /** 沙箱状态（惰性探测 + 缓存） */
+  /** Sandbox status (lazy probe + cache) */
   status(): SandboxStatus {
     const verdict = this.resolve()
     if ('unavailable' in verdict) {
@@ -122,15 +125,15 @@ export class SandboxService {
     }
   }
 
-  /** 清掉探测缓存（设置变更 / 工装重复验证用） */
+  /** Clear the probe cache (for settings changes / repeated harness verification) */
   reset(): void {
     this.verdict = undefined
   }
 
   /**
-   * 把一条命令包装成受限调用。
+   * Wrap a command into a confined invocation.
    *
-   * @throws SandboxUnavailableError 该平台没有可用后端（调用方必须拒绝执行）
+   * @throws SandboxUnavailableError no backend is available on this platform (the caller must refuse to execute)
    */
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
     if (policy.mode === 'danger-full-access') {
@@ -167,7 +170,7 @@ export class SandboxService {
     }
   }
 
-  /** 撤销工作区上的常驻 ACE（卸载/清理；仅 Windows 后端有这个概念） */
+  /** Revoke the persistent ACE on the workspace (uninstall/cleanup; only the Windows backend has this concept) */
   cleanupWorkspace(policy: SandboxPolicy): boolean {
     if (this.platform() !== 'win32') return false
     const runnerPath = this.deps.windowsRunnerPath
@@ -184,7 +187,7 @@ export class SandboxService {
     return true
   }
 
-  /* ────────────────────────── 内部 ────────────────────────── */
+  /* ────────────────────────── Internals ────────────────────────── */
 
   private platform(): string {
     return this.deps.platform ?? process.platform
@@ -198,7 +201,7 @@ export class SandboxService {
     return this.deps.nodePath ?? process.execPath
   }
 
-  /** 解析一次平台链并缓存结论 */
+  /** Resolve the platform chain once and cache the verdict */
   private resolve(): Verdict {
     if (this.verdict !== undefined) return this.verdict
     this.verdict = this.probeChain()
@@ -213,7 +216,7 @@ export class SandboxService {
     return verdict
   }
 
-  /** 平台链：按顺序探测，第一个通过的就是本进程要用的后端 */
+  /** Platform chain: probe in order; the first that passes is the backend this process will use */
   private probeChain(): Verdict {
     let lastDetail = ''
     for (const candidate of this.candidates()) {
@@ -227,7 +230,7 @@ export class SandboxService {
     return { unavailable: lastDetail || `no sandbox backend for platform ${this.platform()}` }
   }
 
-  /** 本平台的候选后端（顺序即优先级） */
+  /** Candidate backends for this platform (order is priority) */
   private candidates(): {
     backend: SandboxBackendName
     enforcement: SandboxEnforcement
@@ -249,7 +252,7 @@ export class SandboxService {
           backend: 'macos-seatbelt',
           enforcement: 'full',
           probe: () => {
-            // 用最宽松的配置起一个真进程：sandbox-exec 拒绝配置时会非零退出
+            // Start a real process with the most permissive profile: sandbox-exec exits non-zero when it rejects the profile
             const result = this.probe(
               ['-p', '(version 1)(allow default)', '--', 'true'],
               undefined,
@@ -260,7 +263,7 @@ export class SandboxService {
         }
       ]
     }
-    // linux（含其它 Unix 兜底）
+    // linux (and other Unix as a fallback)
     return [
       {
         backend: 'linux-bwrap',
@@ -286,15 +289,15 @@ export class SandboxService {
       },
       {
         backend: 'linux-landlock',
-        // partial：Landlock 只接受目录级写规则，因此 /dev 目录的写权限被放开
-        // （保证 `> /dev/null` 可用；原因见 profiles.ts 的 linuxLandlockArgs 注释）
+        // partial: Landlock only accepts directory-level write rules, so write permission on the
+        // /dev directory is opened (to keep `> /dev/null` working; see linuxLandlockArgs in profiles.ts)
         enforcement: 'partial',
         probe: () => {
           const launcher = this.deps.landlockLauncherPath
           if (!launcher) return { ok: false, detail: 'landlock launcher not configured' }
           if (!existsSync(launcher))
             return { ok: false, detail: `landlock launcher missing: ${launcher}` }
-          // 探针参数与真正下发的形态一致（目录级 --rw /dev + 一次真实 exec）
+          // Probe arguments match the real invocation shape (directory-level --rw /dev plus one real exec)
           return this.probe(['--ro', '/', '--rw', '/dev', '--', 'true'], undefined, launcher)
         }
       }
@@ -302,10 +305,11 @@ export class SandboxService {
   }
 
   /**
-   * Windows runner 探针：在一个临时目录里跑 `cmd /c exit 0`。
+   * Windows runner probe: run `cmd /c exit 0` in a temporary directory.
    *
-   * 这一跑就把「koffi 能加载、令牌能造、ACL 能改（非 NTFS 会在这里失败）、进程能起」
-   * 全部验证了——探针过了才认为后端可用。
+   * That single run verifies everything — "koffi loads, the token can be created, the ACL can be
+   * changed (fails here on non-NTFS), the process starts" — and only a passing probe counts the
+   * backend as available.
    */
   private probeWindowsRunner(): { ok: boolean; detail?: string } {
     const runnerPath = this.deps.windowsRunnerPath
@@ -319,7 +323,7 @@ export class SandboxService {
         { nodePath: this.nodePath(), runnerPath, appRoot: this.deps.appRoot },
         ['cmd', '/d', '/s', '/c', 'exit 0']
       )
-      // 探针只验证「受限进程能起」：不写任何东西，因此用 read-only（零授权、零 ACL 改动）
+      // The probe only verifies "a confined process can start": it writes nothing, hence read-only (zero grants, zero ACL changes)
       return this.probe(confined.argv, confined.env)
     } finally {
       try {
@@ -330,7 +334,7 @@ export class SandboxService {
     }
   }
 
-  /** 真跑一次命令看后端能不能用（默认 spawnSync；超时必须为正） */
+  /** Actually run a command to see whether the backend works (default spawnSync; the timeout must be positive) */
   private probe(
     argv: readonly string[],
     env?: Record<string, string>,
@@ -338,9 +342,10 @@ export class SandboxService {
   ): { ok: boolean; detail?: string } {
     const [head] = argv
     if (!head) return { ok: false, detail: 'empty argv' }
-    // 有 executableOverride 时，argv 整体是**参数**（程序另给）；
-    // 没有时 argv[0] 就是程序。曾经写反过：带 override 时把 argv[0] 当程序名丢掉，
-    // 于是三个非 Windows 探针都在用错误的参数跑（真机验证抓到的 bug）。
+    // With executableOverride, all of argv is **arguments** (the program is given separately);
+    // without it, argv[0] is the program. This was once reversed: with an override, argv[0] was
+    // dropped as the program name, so all three non-Windows probes ran with wrong arguments
+    // (a bug caught by on-device verification).
     const program = executableOverride ?? head
     const args = executableOverride ? [...argv] : argv.slice(1)
     if (this.deps.runProbe) return this.deps.runProbe([program, ...args], env)
@@ -363,7 +368,7 @@ export class SandboxService {
   }
 }
 
-/** 解析 resources/sandbox 下的自带资产路径（开发态与打包态都要能找到） */
+/** Resolve a bundled asset path under resources/sandbox (must work in both dev and packaged mode) */
 export function resolveSandboxAsset(
   fileName: string,
   candidates: { devRoot: string; resourcesPath: string }
@@ -376,31 +381,31 @@ export function resolveSandboxAsset(
     try {
       if (statSync(candidate).isFile()) return candidate
     } catch {
-      // 试下一个候选
+      // Try the next candidate
     }
   }
   return undefined
 }
 
-/** 让自研的 Linux 启动器带上可执行位（打包/解包可能丢权限位） */
+/** Give the in-house Linux launcher its executable bit (packing/unpacking can drop permission bits) */
 export function ensureExecutable(path: string): void {
   if (process.platform === 'win32') return
   try {
     const mode = statSync(path).mode
-    // windowsHide 对非 Windows 无副作用；带上它只是为了守住「任何子进程都不闪控制台窗口」这条规矩
+    // windowsHide has no effect outside Windows; it is passed only to uphold the rule that no child process flashes a console window
     if ((mode & 0o111) === 0) execFileSync('chmod', ['+x', path], { windowsHide: true })
   } catch (error) {
     sandboxLog.warn(`[Sandbox] Failed to make ${path} executable:`, error)
   }
 }
 
-/** 进程级单例（路径由插件 install 时注入） */
+/** Process-level singleton (paths are injected when the plugin installs) */
 export const sandboxService = new SandboxService()
 
-/** 供工装构造独立实例（不污染单例） */
+/** Let the harness construct an independent instance (without polluting the singleton) */
 export function createSandboxService(deps: SandboxServiceDeps): SandboxService {
   return new SandboxService(deps)
 }
 
-/** 档位别名：让调用方少 import 一个模块 */
+/** Mode re-exports: saves callers an extra module import */
 export type { SandboxMode, SandboxPolicy }

@@ -1,7 +1,9 @@
 ﻿/**
- * 联网搜索统一入口：解析全局设置 → 调用对应 adapter → 失败按设置回退到内置搜索。
+ * Unified web search entry: resolve global settings -> call the corresponding adapter -> fall back to
+ * builtin search on failure according to settings.
  *
- * 所有搜索（`web_search` 工具、设置页「测试」按钮）都从这里走，UI 与工具只拿归一化结果。
+ * All searches (`web_search` tool, the settings page "Test" button) go through here; UI and tools only
+ * receive normalized results.
  */
 import { builtinSearchProvider } from './builtin'
 import { deepseekSearchProvider } from './deepseek'
@@ -21,7 +23,7 @@ import {
   clipText
 } from './types'
 
-/** adapter 表（新增服务只在这里加一行 + 一个 adapter 文件） */
+/** Adapter table (adding a service only needs one line here + one adapter file) */
 export const SEARCH_PROVIDERS: Record<SearchProviderId, SearchProvider> = {
   builtin: builtinSearchProvider,
   deepseek: deepseekSearchProvider,
@@ -34,7 +36,7 @@ export interface SearchWebOptions {
   includeContent?: boolean
 }
 
-/** 规范化请求（query 截断、条数收敛） */
+/** Normalize the request (truncate query, clamp result count) */
 function normalizeRequest(
   query: string,
   maxResults: number | undefined,
@@ -50,10 +52,11 @@ function normalizeRequest(
 }
 
 /**
- * 统一搜索入口。
+ * Unified search entry.
  *
- * 回退规则：默认服务失败/未配置且 `autoFallback` 开启时，改用内置搜索一次；
- * 成功结果带 `fallbackFrom` 标记，UI/工具可提示「已回退」。
+ * Fallback rule: when the default service fails or is not configured and `autoFallback` is enabled,
+ * retry once with builtin search; successful results carry a `fallbackFrom` marker so UI/tools can
+ * indicate that a fallback happened.
  */
 export async function searchWeb(options: SearchWebOptions): Promise<SearchOutcome> {
   const settings = await getSearchSettingsRow()
@@ -88,7 +91,7 @@ export async function searchWeb(options: SearchWebOptions): Promise<SearchOutcom
       return outcome
     }
     if (!firstFailure) firstFailure = outcome
-    // 未开启自动回退：直接失败；开启则继续尝试内置搜索
+    // Auto fallback off: fail immediately; on: keep trying builtin search
     if (!settings.autoFallback) return outcome
   }
   return (
@@ -101,7 +104,7 @@ export async function searchWeb(options: SearchWebOptions): Promise<SearchOutcom
   )
 }
 
-/** 给 adapter 再加一层硬超时（避免 SDK 内部超时失效拖住整轮） */
+/** Add another hard timeout layer around the adapter (so a broken SDK timeout cannot stall the turn) */
 async function withTimeout(promise: Promise<SearchOutcome>, timeoutMs: number): Promise<SearchOutcome> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<SearchOutcome>((resolve) => {
@@ -117,7 +120,7 @@ async function withTimeout(promise: Promise<SearchOutcome>, timeoutMs: number): 
   }
 }
 
-/** 设置页「测试」：用已存 Key 发一次最小搜索，只返回结论 */
+/** Settings page "Test": send one minimal search with the stored key and return only the outcome */
 export async function testSearchProvider(providerId: SearchProviderId): Promise<{
   ok: boolean
   provider: SearchProviderId

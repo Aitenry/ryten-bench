@@ -7,50 +7,55 @@ import type { Message } from '../../types/harness/types'
 
 interface MessageLocatorProps {
   messages: Message[]
-  /** 消息滚动容器（量高度、监听滚动） */
+  /** Message scroll container (measures height, listens for scrolling) */
   scrollRef: React.RefObject<HTMLDivElement | null>
-  /** 滚动容器里的内容容器（量每轮提问在内容中的位置） */
+  /** Content container inside the scroll container (measures each turn's question offset) */
   contentRef: React.RefObject<HTMLDivElement | null>
-  /** 点击刻度：跳转到该条消息（是否恢复贴底跟随由父级决定） */
+  /** Tick click: jump to that message (restoring bottom-follow is up to the parent) */
   onJumpTo: (index: number) => void
 }
 
-/* ──────────── 视觉规格 ──────────── */
+/* ──────────── Visual spec ──────────── */
 
-/** 相邻刻度的自然间距（参考实现里 --turn-natural-position 每档 10px） */
+/** Natural spacing between adjacent ticks (--turn-natural-position steps by 10px) */
 const PITCH = 10
-/** 刻度宽（普通 / 当前）与高 */
+/** Tick width (normal / current) and height */
 const TICK_W = 8
 const TICK_W_ACTIVE = 14
 const TICK_H = 2
-/** 距容器右边缘：让开 6px 滚动条 + 4px 外边距 */
+/** Distance from the container's right edge: clears the 6px scrollbar + 4px margin */
 const RAIL_INSET = 20
-/** 轨道上下留白（用于判断可容纳多少刻度） */
+/** Vertical padding of the rail (used to decide how many ticks fit) */
 const PAD_Y = 8
-/** 判定「当前轮次」时向下的容差（px） */
+/** Downward tolerance (px) when deciding the "current turn" */
 const PROBE_OFFSET = 24
-/** 悬停卡：宽度、回答区最多显示的行数与行高 */
+/** Hover card: width, maximum answer lines shown and line height */
 const CARD_W = 300
 const ANSWER_LINES = 3
 const ANSWER_LINE_H = 20
-/** 命中区高度（2px 的线太细，指不准） */
+/** Hit area height (a 2px line is too thin to point at) */
 const HIT_H = TICK_H + 6
 
 interface Turn {
-  /** 该轮提问在 messages 里的下标 */
+  /** Index of this turn's question in messages */
   index: number
-  /** 提问文本（标题） */
+  /** Question text (title) */
   question: string
   /**
-   * 该轮**结论**（各助手消息的最终答复，顺序拼接；一段 = 一条助手消息）。
+   * The turn's **conclusion** (the final answer of each assistant message joined in order;
+   * one part = one assistant message).
    *
-   * 一轮里助手消息不止一条：插话/停止后「继续」会切段，目标自动续跑也各占一条。
-   * 每条消息只贡献自己的最终答复——夹在工具调用之间的过程叙述不进卡片。
+   * A turn usually has more than one assistant message: an interjection or a stop followed by
+   * "continue" splits it, and goal auto-continuation adds one per round as well. Each message
+   * contributes only its own final answer — narration between tool calls stays out of the card.
    */
   answer: string
 }
 
-/** Markdown 摘成一行纯文本：预览卡里不需要语法符号（非组件函数：译文由调用方传入 t） */
+/**
+ * Flatten Markdown into a single plain-text line: the preview card needs no syntax marks
+ * (not a component function, since the caller passes its own t in)
+ */
 const plainTextRaw = (t: TFunction, raw: string | null | undefined): string =>
   (raw ?? '')
     .replace(/```[\s\S]*?```/g, t('harness.messageLocator.codePlaceholder'))
@@ -63,13 +68,15 @@ const plainTextRaw = (t: TFunction, raw: string | null | undefined): string =>
     .trim()
 
 /**
- * 纯文本转换缓存（渲染进程内存/CPU 保护）。
+ * Plain-text conversion cache (renderer memory/CPU protection).
  *
- * 上面这串正则在长回复上是实打实的开销，而 `turns` 每次 messages 变化都会全量重算——
- * 流式期间每批 chunk 都触发一次，等于每批都把全部历史回复重新正则一遍（历史回复往往是
- * 几十上百 KB）。缓存按「语言 + 原始字符串」记结果：历史消息的 content 字符串是同一份
- * 引用，命中后直接返回；流式中的那条每批都是新字符串，由容量上限按 LRU 淘汰。
- * 键里带语言，切语言后不会命中上一种语言的旧译文。
+ * The regex chain above is real work on long replies, and `turns` is fully recomputed whenever
+ * messages change — during streaming that fires on every chunk batch, effectively running every
+ * historical reply (often tens to hundreds of KB) through the regexes again each time. The cache
+ * key is "language + raw string": historical messages' content strings are the same reference, so
+ * a hit returns at once; the streaming message gets a new string every batch and is evicted by
+ * the capacity limit in LRU order. The language in the key keeps the other language's cached
+ * translations from being hit after a language switch.
  */
 const PLAIN_TEXT_CACHE_MAX = 80
 const plainTextCache = new Map<string, string>()
@@ -80,7 +87,7 @@ const plainText = (t: TFunction, lang: string, raw: string | null | undefined): 
   const key = `${lang}\u0000${text}`
   const cached = plainTextCache.get(key)
   if (cached !== undefined) {
-    // 命中即刷新为「最近使用」（Map 保持插入序，配合下方淘汰即 LRU）
+    // A hit refreshes "most recently used" (Map keeps insertion order, matching the eviction below)
     plainTextCache.delete(key)
     plainTextCache.set(key, cached)
     return cached
@@ -95,20 +102,24 @@ const plainText = (t: TFunction, lang: string, raw: string | null | undefined): 
 }
 
 /**
- * 一条助手消息里的**结论**正文（本轮交付给用户的最终答复）。
+ * The **conclusion** body of one assistant message (the final answer delivered this turn).
  *
- * 为什么不直接用 `message.content`：它是这条消息**全部**正文的累积，夹在工具调用之间的
- * 过程叙述（「让我先看一下…」「现在开始改…」）也在里面，预览卡于是变成一整篇流水账。
- * 边界取协议层真源（见 main/harness/service/answer-boundary.ts）：
- *   - `Set`：这些块是本轮答复（下标就指本条消息的 blocks）；
- *   - `null`：明确没有答复（中止 / 只有工具与思考）；
- *   - `undefined`：主进程没给结论（流式进行中 / 历史消息 / 老版本），退回与聊天区同款的
- *     反向扫描（tailContentIndices：末尾连续的「思考 + 正文」，至少含一段正文才算结论）。
- * 只取 text 块：思考是答复的来源，但不是结论本身，预览卡里不铺开。
+ * Why not use `message.content` directly: it accumulates the message's **entire** body, including
+ * the narration between tool calls ("let me take a look first…", "now I'll make the change…"), so
+ * the preview card would degenerate into a running log. The boundary comes from the protocol
+ * layer (see main/harness/service/answer-boundary.ts):
+ *   - `Set`: these blocks are this turn's answer (indices refer to this message's blocks);
+ *   - `null`: explicitly no answer (aborted / tools and thinking only);
+ *   - `undefined`: the main process gave no conclusion (streaming in progress / historical
+ *     message / older version), so fall back to the reverse scan the chat area uses
+ *     (tailContentIndices: the trailing run of "thinking + text", requiring at least one text
+ *     block to count as a conclusion).
+ * Only text blocks are taken: thinking is where the answer came from but is not the conclusion
+ * itself, so the preview card does not expand it.
  */
 const answerTextOf = (t: TFunction, lang: string, message: Message): string => {
   const blocks = message.blocks
-  // 无块消息（历史/异常路径）：整条正文就是唯一可用的内容
+  // Block-less message (history / abnormal path): the whole body is the only usable content
   if (blocks.length === 0) return plainText(t, lang, message.content)
   if (message.answer === null) return ''
   const indices =
@@ -127,15 +138,19 @@ const answerTextOf = (t: TFunction, lang: string, message: Message): string => {
 }
 
 /**
- * 轮次导航（对话消息定位）。
+ * Turn navigation (locating messages in the conversation).
  *
- * - 一个刻度 = 一轮提问（**只标用户消息**），等距聚合成一条短列表，整体在消息区里垂直居中；
- * - 刻度多了就地压缩间距，永远不超出可视高度；
- * - 「当前轮次」= 视口顶部往上最近的那条提问，刻度变白加长（滚动时只比偏移，不重量 DOM）；
- * - 悬停出卡片：标题是这一轮的提问，内容是该轮各助手消息的**结论**（最终答复）按顺序
- *   拼起来的正文——过程叙述、工具调用、思考都不进卡片（3 行，超出可滚动；空行分段，
- *   便于看出这轮被切过几次）；
- * - 点击平滑滚到该轮提问处。
+ * - One tick = one question (**user messages only**), aggregated into an evenly spaced short list
+ *   that is vertically centered in the message area;
+ * - when there are many ticks the spacing is compressed in place, never exceeding the visible
+ *   height;
+ * - "current turn" = the nearest question above the viewport top; its tick turns white and grows
+ *   longer (scrolling only compares offsets, it does not measure the DOM);
+ * - hovering opens a card: the title is this turn's question and the body is the **conclusions**
+ *   (final answers) of the turn's assistant messages concatenated in order — narration, tool
+ *   calls and thinking stay out of the card (3 lines, scrollable when longer; blank lines carry
+ *   the paragraph breaks so it is visible how often the turn was split);
+ * - clicking smoothly scrolls to that turn's question.
  */
 const MessageLocator: React.FC<MessageLocatorProps> = ({
   messages,
@@ -149,25 +164,28 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
   const [railHeight, setRailHeight] = useState(0)
   const [activeIndex, setActiveIndex] = useState(-1)
   const [hovered, setHovered] = useState<number | null>(null)
-  /** 每轮提问在内容里的绝对偏移，滚动时只做比较 */
+  /** Absolute offset of each turn's question in the content, only compared while scrolling */
   const offsetsRef = useRef<{ index: number; offset: number }[]>([])
   const frameRef = useRef<number | null>(null)
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
-   * 一轮 = 一条用户消息 + 紧随其后、直到下一个提问之前的每一条助手消息。
+   * One turn = one user message plus every assistant message after it, up to the next question.
    *
-   * 每条助手消息只贡献自己的**结论**（answerTextOf）：只留过程叙述会变成流水账，
-   * 只留最后一条又会把这轮先前的结论丢掉。多条按顺序拼接（不是覆盖）——插话切段、
-   * 停止后继续会让一轮里出现多条助手消息，后一条往往是前一条答复的续写。
-   * 拼接前逐条走 plainText——按「单条结论」缓存，流式追加新段落时前面的段落仍命中缓存，
-   * 不会因为整段字符串变了而把历史长文重新正则一遍。
+   * Each assistant message contributes only its own **conclusion** (answerTextOf): keeping only
+   * narration would read like a log, keeping only the last message would drop the turn's earlier
+   * conclusions. Multiple parts are concatenated in order (not overwritten) — an interjection
+   * splits the turn and resuming after a stop adds another assistant message, whose answer often
+   * continues the previous one. Each part goes through plainText first, cached per "single
+   * conclusion", so appending a paragraph while streaming still hits the cache for the earlier
+   * ones instead of re-regexing the whole historical text.
    */
   const turns = useMemo<Turn[]>(() => {
     const list: Turn[] = []
     messages.forEach((message, index) => {
       if (message.role !== 'user') return
-      // 目标自动续跑的横幅不是「提问」（它渲染成批次横幅、由左右切换查看），不占标尺刻度
+      // The goal auto-continuation banner is not a "question" (it renders as a batch banner
+      // browsed with the arrows), so it takes no tick
       if (message.blocks.some((b) => b.type === 'goalRound')) return
       const parts: string[] = []
       for (let i = index + 1; i < messages.length; i++) {
@@ -180,14 +198,15 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
       list.push({
         index,
         question: plainText(t, lang, message.content),
-        // 空行分段：悬停卡是 whiteSpace: pre-wrap，段与段之间会断开，不会粘成一句
+        // Blank-line separated: the hover card uses whiteSpace: pre-wrap, so parts break apart
+        // instead of gluing together
         answer: parts.join('\n\n')
       })
     })
     return list
   }, [messages, t, lang])
 
-  /** 按滚动位置刷新「当前轮次」 */
+  /** Refresh the "current turn" from the scroll position */
   const syncActive = useCallback((): void => {
     const el = scrollRef.current
     if (!el) return
@@ -201,7 +220,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     setActiveIndex((prev) => (prev === index ? prev : index))
   }, [scrollRef])
 
-  /** 量一轮提问的位置（rAF 合并，流式期间每帧最多一次） */
+  /** Measure each turn's question position (rAF-coalesced, at most once per frame) */
   const measure = useCallback((): void => {
     const el = scrollRef.current
     const inner = contentRef.current
@@ -226,7 +245,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     })
   }, [measure])
 
-  /* 轮次变化 / 容器或内容尺寸变化（流式长高）→ 重量 */
+  /* Turns changed / container or content size changed (streaming growth) → re-measure */
   useEffect(() => {
     scheduleMeasure()
     const el = scrollRef.current
@@ -243,7 +262,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     }
   }, [scheduleMeasure, scrollRef, contentRef])
 
-  /* 滚动 → 更新当前刻度 */
+  /* Scroll → update the current tick */
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -253,7 +272,8 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     return () => el.removeEventListener('scroll', onScroll)
   }, [scrollRef, syncActive])
 
-  /* 悬停卡的延迟关闭：鼠标从刻度移到卡片上时不能立刻消失（卡片里要能滚动回答） */
+  /* Delayed hover card close: it must not disappear when the pointer moves from the tick onto
+     the card (the answer has to stay scrollable) */
   const cancelClear = useCallback((): void => {
     if (clearTimerRef.current) {
       clearTimeout(clearTimerRef.current)
@@ -266,7 +286,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
   }, [cancelClear])
   useEffect(() => () => cancelClear(), [cancelClear])
 
-  /* 悬停卡高度实测：卡片的纵向中心要对准被悬停的那条刻度 */
+  /* Measured hover card height: the card's vertical center must align with the hovered tick */
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [cardHeight, setCardHeight] = useState(0)
   useLayoutEffect(() => {
@@ -275,14 +295,15 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     if (el) setCardHeight(el.offsetHeight)
   }, [hovered, turns.length])
 
-  /* 轮次数量变化时清掉悬停态，避免指向错位的那一轮 */
+  /* Clear the hover state when the number of turns changes so it never points at the wrong turn */
   useEffect(() => {
     setHovered(null)
   }, [turns.length])
 
   if (turns.length < 2) return null
 
-  /* 等距堆叠：刻度多到放不下时压缩间距，始终不超出可视高度 */
+  /* Even stacking: compress the spacing when there are too many ticks, never exceeding the
+     visible height */
   const gap =
     turns.length > 1
       ? Math.max(
@@ -293,7 +314,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
 
   const hoveredTurn = hovered === null ? null : (turns[hovered] ?? null)
   const hoveredTop = hovered === null ? 0 : hovered * (HIT_H + gap)
-  /* 卡片纵向中心对准刻度（高度实测，未量到之前按 120 估） */
+  /* Center the card vertically on the tick (height measured; 120 is assumed until it is) */
   const cardH = cardHeight || 120
   const cardTop = Math.max(
     0,
@@ -304,7 +325,7 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
     <div
       style={{
         position: 'absolute',
-        /* 让开滚动条与容器圆角 */
+        /* Clear the scrollbar and the container's rounded corners */
         right: RAIL_INSET,
         top: '50%',
         transform: 'translateY(-50%)',
@@ -361,7 +382,8 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
         )
       })}
 
-      {/* 悬停卡：标题=这一轮的提问，内容=该轮各条助手消息的结论（最终答复）拼起来的正文（3 行，超出滚动） */}
+      {/* Hover card: title = this turn's question, body = the conclusions (final answers) of
+          the turn's assistant messages joined together (3 lines, scroll on overflow) */}
       {hoveredTurn && (
         <div
           ref={cardRef}
@@ -394,7 +416,8 @@ const MessageLocator: React.FC<MessageLocatorProps> = ({
             {hoveredTurn.question || t('harness.messageLocator.emptyMessage')}
           </div>
           <div style={{ height: 1, background: token.colorBorderSecondary, margin: '8px 0' }} />
-          {/* 回答区：固定 3 行高，超出滚动；底部留一层渐隐提示「下面还有」 */}
+          {/* Answer area: fixed 3-line height, scroll on overflow; a fade at the bottom hints
+              that more follows */}
           <div style={{ position: 'relative' }}>
             <div
               className="custom-scrollbar"

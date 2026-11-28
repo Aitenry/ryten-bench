@@ -20,20 +20,22 @@ import type {
 } from '../../../shared/notes/types'
 
 /**
- * notes 插件主进程通道的薄封装。
+ * Thin wrapper over the notes plugin's main-process channels.
  *
- * 原先散在 `src/preload/index.ts` 的六个命名空间（`todoItems` / `taskDependencies` /
- * `docs` / `wikis` / `graph` / `nodePositions`）已整体删除；这里的方法分组与
- * **名称、参数、返回类型**逐一对应（分组结构保留，避免 `add` / `delete` / `getAll`
- * 在不同域之间重名），实现改为走 preload 唯一暴露的通用桥
- * （`window.api.system.invoke/on`，通道名 `notes:*`）。
+ * The six namespaces previously scattered in `src/preload/index.ts` (`todoItems` /
+ * `taskDependencies` / `docs` / `wikis` / `graph` / `nodePositions`) have all been removed; the
+ * method grouping here matches them one by one in **names, parameters and return types** (the
+ * grouping is kept so `add` / `delete` / `getAll` do not collide across domains), while the
+ * implementation goes through the single generic bridge exposed by preload
+ * (`window.api.system.invoke/on`, channel names `notes:*`).
  *
- * 契约见 src/main/plugins/context.ts；类型取自 shared/types.ts（跨进程 DTO，运行期零依赖）。
+ * The contract lives in src/main/plugins/context.ts; types come from shared/types.ts
+ * (cross-process DTOs with zero runtime dependencies).
  */
 const invoke = window.api.system.invoke
 
 export const notesApi = {
-  /* ── 待办事项 ── */
+  /* ── To-do items ── */
   todoItems: {
     getById: (id: number) => invoke('notes:todo-items-get-by-id', id) as Promise<TodoItemRow[]>,
     getByTitle: (title: string) =>
@@ -60,7 +62,7 @@ export const notesApi = {
     delete: (id: number) => invoke('notes:todo-items-delete', id) as Promise<boolean>
   },
 
-  /* ── 任务依赖 ── */
+  /* ── Task dependencies ── */
   taskDependencies: {
     add: (taskId: number, dependsOnTaskId: number) =>
       invoke('notes:task-deps-add', taskId, dependsOnTaskId) as Promise<number>,
@@ -71,7 +73,7 @@ export const notesApi = {
       invoke('notes:task-deps-get-with-tasks') as Promise<TaskWithDependencies[]>
   },
 
-  /* ── 文档库 ── */
+  /* ── Document library ── */
   docs: {
     getById: (id: number) => invoke('notes:doc-get-by-id', id) as Promise<DocWithContent | null>,
     getAll: (page?: number, pageSize?: number, excludeWikiId?: number, search?: string) =>
@@ -101,7 +103,7 @@ export const notesApi = {
     exportDocument: (id: number) => invoke('notes:doc-export', id) as Promise<boolean>
   },
 
-  /* ── 知识库与目录 ── */
+  /* ── Knowledge bases and directories ── */
   wikis: {
     getById: (id: number) => invoke('notes:wiki-get-by-id', id) as Promise<WikiRow | null>,
     getAll: (page?: number, pageSize?: number) =>
@@ -128,7 +130,7 @@ export const notesApi = {
       invoke('notes:wiki-doc-directories-get', noteId) as Promise<WikiDirectoryRow[]>
   },
 
-  /* ── 知识图谱（数据查询 / 构建 / 追加 + 三个事件通道） ── */
+  /* ── Knowledge graph (data query / build / append + three event channels) ── */
   graph: {
     getData: (wikiId: number, typeFilter?: string, docIds?: number[]) =>
       invoke('notes:graph-data-get', wikiId, typeFilter, docIds) as Promise<GraphData>,
@@ -143,9 +145,10 @@ export const notesApi = {
     getBuildStatus: (wikiId: number) =>
       invoke('notes:graph-build-status', wikiId) as Promise<GraphBuildJob | null>,
     /**
-     * 启动图谱构建。迁移说明：主进程侧原为 `ipcMain.on('graph-build-start')`，
-     * 现统一走 ctx.registerIpc（只有 handle），因此这里从 send 改为 invoke；
-     * 进度/完成/错误仍由三个 notes:graph-build-* 事件通道下发。
+     * Start a graph build. Migration note: the main-process side used to be
+     * `ipcMain.on('graph-build-start')`; it now goes through ctx.registerIpc (handle only), so
+     * this changed from send to invoke; progress/complete/error are still delivered through the
+     * three notes:graph-build-* event channels.
      */
     buildGraph: (wikiId: number, config?: Record<string, unknown>) =>
       invoke('notes:graph-build-start', wikiId, config) as Promise<void>,
@@ -154,10 +157,11 @@ export const notesApi = {
     getProcessedDocIds: (wikiId: number) =>
       invoke('notes:graph-processed-docs-get', wikiId) as Promise<number[]>,
     /**
-     * 订阅构建进度/完成/错误（主进程 → 渲染层）。
-     * 走通用桥 `window.api.system.on`：通道必须由插件 `ctx.registerEvent` 声明才进
-     * preload 白名单，**插件停用时本调用抛错**——调用方（BuildProgressProvider）
-     * 必须 try/catch 降级，否则异常会从 useEffect 逃逸、卸载整棵渲染树（白屏）。
+     * Subscribe to build progress/complete/error (main process → renderer).
+     * Goes through the generic bridge `window.api.system.on`: channels must be declared by the
+     * plugin via `ctx.registerEvent` to enter the preload allowlist, and **this call throws when
+     * the plugin is disabled** — callers (BuildProgressProvider) must try/catch and degrade,
+     * otherwise the exception escapes useEffect and unmounts the whole render tree (blank screen).
      */
     onBuildProgress: (callback: (progress: GraphBuildProgress) => void) =>
       window.api.system.on('notes:graph-build-progress', (data) =>
@@ -171,7 +175,7 @@ export const notesApi = {
       window.api.system.on('notes:graph-build-error', (data) => callback(data as GraphBuildError))
   },
 
-  /* ── 图谱 / 看板节点坐标 ── */
+  /* ── Graph / board node positions ── */
   nodePositions: {
     getAll: () => invoke('notes:node-positions-get-all') as Promise<NodePositionRow[]>,
     save: (nodeId: string, x: number, y: number) =>

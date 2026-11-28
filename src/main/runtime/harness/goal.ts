@@ -12,21 +12,26 @@ import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
 /**
- * 对话目标系统（goal）— 对应 deepseek-harness 的 dsh-goal / dsh-tool-goal 体系
+ * Conversation goal system (goal)
  *
- * 机制（参考 DSH，适配 RytenBench 按 topicId 组织的对话）：
- * - 每个话题至多一个当前目标（单目标语义）；revision 每次变更 +1，工具更新
- *   必须携带 {goal_id, revision}（CAS 乐观并发，过期即拒 GOAL_STALE_REVISION）；
- * - 状态机：active ⇄ paused / → blocked / → complete；blocked 仅可从 active 进入；
- * - activation（armed/disarmed）为内存态：armed 才允许轮次驱动器自动续跑；
- *   进程重启一律 disarmed（激活态不持久化），用户要求「继续」→ resume 重新武装；
- * - authority 执行期校验：create/edit/pause/resume 须「人类直接请求」（本轮为用户
- *   消息发起）；complete/blocked 接受「人类直接请求」或「精确命中当前目标轮」
- *   （自动续跑轮注入的 goal 来源）；自主轮 blocked 另须 roundsStarted ≥ 3
- *   （即至少完成 3 次自动续跑，与注入提示词里 "at least 3 rounds have passed" 对齐）。
+ * Mechanics (adapted to conversations organized by topicId in this project):
+ * - Each topic has at most one current goal (single-goal semantics); revision increments by 1 on
+ *   every change, and tool updates must carry {goal_id, revision} (CAS optimistic concurrency;
+ *   a stale revision is rejected with GOAL_STALE_REVISION);
+ * - State machine: active ⇄ paused / → blocked / → complete; blocked can only be entered from
+ *   active;
+ * - activation (armed/disarmed) is in-memory: only an armed goal lets the round driver
+ *   auto-continue; a process restart always leaves it disarmed (activation is not persisted), and
+ *   when the user asks to "continue" → resume re-arms it;
+ * - authority is checked at execution time: create/edit/pause/resume require a direct human
+ *   request (the turn was initiated by a user message); complete/blocked accept a direct human
+ *   request or an exact match of the current goal round (the goal source injected by an
+ *   auto-continuation round); an autonomous round may additionally report blocked only when
+ *   roundsStarted ≥ 3 (i.e. at least 3 auto-continuation rounds have completed, matching
+ *   "at least 3 rounds have passed" in the injected prompt).
  */
 
-/** 目标视图（工具输出与前端展示共用） */
+/** Goal view (shared by tool output and the frontend) */
 export interface GoalView {
   id: string
   revision: number
@@ -35,39 +40,41 @@ export interface GoalView {
   roundsStarted: number
   maxGoalRounds: number
   blockedReason?: { code: string; message: string }
-  /** 内存态：armed=自动续跑已武装 / disarmed=停止自动续跑 */
+  /** In-memory state: armed = auto-continuation is armed / disarmed = auto-continuation is stopped */
   activation: 'armed' | 'disarmed'
 }
 
-/** 阻塞原因（DSH 使用稳定小写 kebab code 分类） */
+/** Blocking reason (categorized by a stable lowercase kebab-case code) */
 export interface GoalBlockedReason {
   code: string
   message: string
 }
 
-/** 更新动作（与 DSH update_goal 一致） */
+/** Update action (matches the update_goal actions) */
 export type GoalUpdateAction = 'edit' | 'pause' | 'resume' | 'complete' | 'blocked'
 
 /**
- * 自主轮（模型自报）允许 blocked 的最小已进行轮数（DSH 默认阈值）。
- * 以「自动续跑轮」计数：轮次在派发时结算，故达到该值时正处于第 3 次自动续跑轮内
- * （与注入提示词 "at least 3 rounds have passed" 同义）。
+ * Minimum number of rounds already started before an autonomous round (self-reported by the model)
+ * may mark the goal blocked (default threshold).
+ * Counted in "auto-continuation rounds": rounds are settled at dispatch time, so reaching this
+ * value means the third auto-continuation round is currently in progress (equivalent to "at least
+ * 3 rounds have passed" in the injected prompt).
  */
 export const MIN_ROUNDS_FOR_BLOCK = 3
-/** 默认轮次上限（DSH goal 默认值） */
+/** Default round limit */
 export const DEFAULT_MAX_GOAL_ROUNDS = 256
 
-/** 本轮来源（经 graph configurable.turnSource 注入） */
+/** Source of this turn (injected via graph configurable.turnSource) */
 export type TurnSource = 'user' | 'goal-round'
 
-/** 目标轮来源信息（自动续跑轮由驱动器注入，用于 complete/blocked 的轮级权威校验） */
+/** Goal round source info (injected by the driver for auto-continuation rounds; used for round-level authority checks on complete/blocked) */
 export interface GoalRoundSource {
   goalId: string
   revision: number
   round: number
 }
 
-/** 目标工具调用的 configurable 快照 */
+/** configurable snapshot of a goal tool call */
 interface GoalToolConfig {
   turnSource?: TurnSource
   goalRound?: GoalRoundSource
@@ -75,12 +82,12 @@ interface GoalToolConfig {
 
 export type GoalUpdateListener = (topicId: number, goal: GoalView | null) => void
 
-/** 目标存储（进程级单例，按 topicId 隔离；PGlite 持久化 + 内存 armed 态） */
+/** Goal store (process-level singleton, isolated by topicId; PGlite persistence + in-memory armed state) */
 export class GoalStore {
   private readonly cache = new Map<number, GoalView>()
   private readonly armedTopics = new Set<number>()
 
-  /** 变更回调（主进程注入，广播 harness-goal-updated） */
+  /** Change callback (injected by the main process, broadcasts harness-goal-updated) */
   onChange?: GoalUpdateListener
 
   private static fromRow(row: GoalRow): GoalView {
@@ -104,7 +111,7 @@ export class GoalStore {
     }
   }
 
-  /** 读取话题当前目标（DB → 缓存）；armed 态按内存 Set 叠加 */
+  /** Read the topic's current goal (DB → cache); the armed state is layered on from the in-memory Set */
   async load(topicId: number): Promise<GoalView | null> {
     const cached = this.cache.get(topicId)
     if (cached) {
@@ -123,13 +130,17 @@ export class GoalStore {
   }
 
   /**
-   * 本轮结束后，驱动器还会不会自动派发下一轮？（轮次收尾类兜底的判定依据）
+   * After this round ends, will the driver automatically dispatch another round? (Basis for the
+   * round-finalization fallback decision)
    *
-   * 与 GoalRoundDriver.driveOnce 的派发门槛逐条对齐——那里的三道门是「phase === 'active'」
-   * 「isArmed」「roundsStarted < maxGoalRounds（否则标 blocked 并停止）」，等价于这里的三行。
-   * 刻意收在 store 里而不是散在调用点：目标一停，清单的「进行中」就再没人去收（用户
-   * 2026-09-23 报的「任务都完成了还显示最后一项没完成」就是这么来的），这个判定写错的代价
-   * 是前端永远转圈，所以只能有一处。工装 test/verify-todo-closeout.mjs 直接跑这个方法。
+   * This mirrors the dispatch gates in GoalRoundDriver.driveOnce one by one — those three gates are
+   * "phase === 'active'", "isArmed", and "roundsStarted < maxGoalRounds (otherwise mark blocked and
+   * stop)", which are equivalent to the three lines below. Deliberately kept inside the store rather
+   * than scattered across call sites: once the goal stops, nobody closes out the checklist's
+   * "in progress" item (this is exactly how the user-reported bug of 2026-09-23 — "everything is
+   * done but the last item still shows as unfinished" — happened), and getting this decision wrong
+   * leaves the frontend spinning forever, so there must be only one place for it. The
+   * test/verify-todo-closeout.mjs harness calls this method directly.
    */
   async willContinue(topicId: number): Promise<boolean> {
     const goal = await this.load(topicId)
@@ -137,7 +148,7 @@ export class GoalStore {
     return goal.roundsStarted < goal.maxGoalRounds
   }
 
-  /** 持久化并刷新缓存、广播变更 */
+  /** Persist, refresh the cache, and broadcast the change */
   private async persist(topicId: number, view: GoalView): Promise<GoalView> {
     await upsertGoal({
       topic_id: topicId,
@@ -157,7 +168,7 @@ export class GoalStore {
     return view
   }
 
-  /** CAS 校验：目标 id + revision 必须与当前一致 */
+  /** CAS check: goal id + revision must match the current values */
   private assertCurrent(goalId: string, revision: number, view: GoalView | null): GoalView {
     const m = getAgentToolTexts()
     if (!view) throw new Error(m.goal.noGoal)
@@ -174,13 +185,16 @@ export class GoalStore {
   }
 
   /**
-   * 创建目标：仅「无目标」或「已有目标已完成」时可创建（DSH create 语义）。
-   * 成功后武装自动续跑（armed）。
+   * Create a goal: only allowed when there is no goal or the existing goal is complete.
+   * On success, auto-continuation is armed.
    *
-   * roundsStarted 从 **0** 起算：它表示「已开始的自动续跑轮数」，创建目标的那个用户轮**不算**一轮。
-   * （此前从 1 起算，导致第一次自动续跑被标成「第 2 轮」——消息徽标写第 2 轮、目标栏显示 2/40，
-   * 而实际只续跑了 1 次；给模型的提示词也写着 "Automatic continuation round 2/40"。
-   * 计数与「自动轮」语义对齐后，三处数字一致：第 1 次续跑 = 第 1 轮。）
+   * roundsStarted counts from **0**: it means "the number of auto-continuation rounds already
+   * started"; the user turn that creates the goal does **not** count as a round.
+   * (It previously counted from 1, which made the first auto-continuation round label itself
+   * "round 2" — the message badge said round 2 and the goal bar showed 2/40 while only 1
+   * continuation had actually run; the prompt sent to the model said "Automatic continuation round
+   * 2/40" as well. Now that the counter matches the "auto round" semantics, all three places agree:
+   * the first continuation is round 1.)
    */
   async create(
     topicId: number,
@@ -203,7 +217,8 @@ export class GoalStore {
       activation: 'armed'
     }
     const persisted = await this.persist(topicId, view)
-    // 持久化成功后再武装（修复：先改内存态后落库,落库失败会留下 armed 但无目标的假状态）
+    // Arm only after a successful persistence (fix: memory state used to be changed before the DB
+    // write, so a failed write left a fake armed-but-goal-less state behind)
     this.armedTopics.add(topicId)
     logger.info(
       `[Goal] Goal created topicId=${topicId} id=${view.id} (maxGoalRounds=${maxGoalRounds}, auto-continuation rounds start from round 1)`
@@ -211,7 +226,7 @@ export class GoalStore {
     return persisted
   }
 
-  /** 更新目标（CAS + 状态机转移；authority 由调用方（工具层）先行校验） */
+  /** Update the goal (CAS + state machine transitions; authority is validated first by the caller (tool layer)) */
   async update(
     topicId: number,
     goalId: string,
@@ -224,8 +239,9 @@ export class GoalStore {
     }
   ): Promise<GoalView> {
     const current = await this.load(topicId)
-    // 浅拷贝后再修改（修复：此前直接改 load 返回的缓存对象——persist 失败时缓存已携带
-    // 未落库的假状态，后续 load/CAS 读到脏数据）
+    // Shallow-copy before mutating (fix: the cached object returned by load used to be mutated
+    // directly — when persist failed, the cache carried unpersisted fake state and later load/CAS
+    // calls read dirty data)
     const base = this.assertCurrent(goalId, revision, current)
     const view: GoalView = { ...base }
     const m = getAgentToolTexts()
@@ -281,7 +297,8 @@ export class GoalStore {
 
     view.revision += 1
     const persisted = await this.persist(topicId, view)
-    // 落库成功后再应用武装态变更（修复：先改内存态后落库，失败时状态分歧）
+    // Apply the armed-state change only after a successful DB write (fix: memory state used to be
+    // changed before the write, causing divergence on failure)
     if (armChange === 'add') {
       this.armedTopics.add(topicId)
     } else if (armChange === 'delete') {
@@ -290,11 +307,12 @@ export class GoalStore {
     return persisted
   }
 
-  /** 自动续跑轮次结算：roundsStarted + 1（驱动器在轮次完成后调用） */
+  /** Settle an auto-continuation round: roundsStarted + 1 (called by the driver after the round completes) */
   async incrementRound(topicId: number): Promise<GoalView | null> {
     const current = await this.load(topicId)
     if (!current || current.phase !== 'active') return current
-    // 拷贝后修改（修复：直接改缓存对象，persist 失败留下未落库的假状态）
+    // Copy before mutating (fix: mutating the cached object directly left unpersisted fake state
+    // when persist failed)
     return this.persist(topicId, {
       ...current,
       roundsStarted: current.roundsStarted + 1,
@@ -302,7 +320,7 @@ export class GoalStore {
     })
   }
 
-  /** 话题删除时清理目标（DB + 缓存 + 武装态） */
+  /** Clean up the goal when a topic is deleted (DB + cache + armed state) */
   async delete(topicId: number): Promise<void> {
     this.cache.delete(topicId)
     this.armedTopics.delete(topicId)
@@ -326,11 +344,13 @@ export class GoalStore {
   }
 
   /**
-   * 丢弃全部内存态（缓存 + 武装态），下次访问重新从数据库读。
+   * Discard all in-memory state (cache + armed state); the next access re-reads from the database.
    *
-   * 账号数据空间切换时用：topicId 是**每个账号库各自的自增 id**，换库后同一 id 可能属于
-   * 另一个账号的话题——不清掉就会把上一个账号的目标/武装态套到新账号的话题上。
-   * 口径与「进程重启」一致：换号后一律 disarmed。
+   * Used when switching the account data space: topicId is an **auto-increment id within each
+   * account's database**, so after switching databases the same id may belong to another account's
+   * topic — without clearing, the previous account's goal/armed state would be applied to the new
+   * account's topic. The policy matches a "process restart": always disarmed after an account
+   * switch.
    */
   reset(): void {
     this.cache.clear()
@@ -338,21 +358,21 @@ export class GoalStore {
   }
 }
 
-/** 进程级单例：跨请求共享（与 todoStore 同一模式） */
+/** Process-level singleton: shared across requests (same pattern as todoStore) */
 export const goalStore = new GoalStore()
 
-/** 从工具 config 提取本轮来源信息 */
+/** Extract this turn's source info from the tool config */
 function readToolConfig(config?: Record<string, unknown>): GoalToolConfig {
   const c = (config ?? {}) as unknown as GoalToolConfig
   return { turnSource: c.turnSource, goalRound: c.goalRound }
 }
 
-/** 是否「人类直接请求」：本轮由用户消息发起（自动续跑轮为 goal-round 来源） */
+/** Whether this is a "direct human request": the turn was initiated by a user message (auto-continuation rounds have the goal-round source) */
 function isDirectHuman(cfg: GoalToolConfig): boolean {
   return cfg.turnSource !== 'goal-round'
 }
 
-/** 是否精确命中当前目标轮（自动续跑轮携带的 goal 来源与当前目标全等） */
+/** Whether this exactly matches the current goal round (the goal source carried by an auto-continuation round equals the current goal) */
 function isExactGoalRound(cfg: GoalToolConfig, goal: GoalView): boolean {
   if (cfg.turnSource !== 'goal-round' || !cfg.goalRound) return false
   return (
@@ -362,15 +382,15 @@ function isExactGoalRound(cfg: GoalToolConfig, goal: GoalView): boolean {
   )
 }
 
-/** 目标视图 → 工具返回文本（JSON 序列化，模型与前端共用） */
+/** Goal view → tool return text (JSON-serialized, shared by the model and the frontend) */
 function formatGoal(view: GoalView | null): string {
   if (!view) return JSON.stringify({ goal: null })
   return JSON.stringify({ goal: view })
 }
 
 /**
- * 构建目标工具集（仅注入主代理；子代理不持有目标工具）。
- * authority 校验在工具执行期完成（参考 dsh-tool-goal）。
+ * Build the goal tool set (injected into the main agent only; subagents do not hold goal tools).
+ * Authority is validated at tool execution time.
  */
 export function buildGoalTools(store: GoalStore, topicId: number): StructuredToolInterface[] {
   const getCurrent = (): Promise<GoalView | null> => store.load(topicId)
@@ -435,8 +455,9 @@ export function buildGoalTools(store: GoalStore, topicId: number): StructuredToo
           const current = await getCurrent()
           if (!current) return m.goal.noGoal
 
-          // authority：edit/pause/resume 仅限人类直接请求；
-          // complete/blocked 允许人类直接请求或精确命中当前目标轮（自动续跑轮）
+          // authority: edit/pause/resume require a direct human request;
+          // complete/blocked allow a direct human request or an exact match of the current goal
+          // round (an auto-continuation round)
           const direct = isDirectHuman(cfg)
           const exactRound = isExactGoalRound(cfg, current)
           if (action === 'edit' || action === 'pause' || action === 'resume') {
@@ -463,7 +484,7 @@ export function buildGoalTools(store: GoalStore, topicId: number): StructuredToo
               : undefined
           })
 
-          // 自主轮 complete/blocked：注入收尾指引（参考 DSH wrapup 指令，不硬截断）
+          // Autonomous-round complete/blocked: inject wrap-up guidance (no hard truncation)
           if (!direct && exactRound && (action === 'complete' || action === 'blocked')) {
             const wrapup =
               action === 'complete'

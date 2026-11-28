@@ -20,8 +20,9 @@ import {
 import { getAllWorkspaces } from '../../database/mapper/harness/harness'
 
 /**
- * 工具名归一：旧名迁移（canonicalToolName）+ 去重 + 去空白。
- * 设置页写入、IPC 读展示、gent_create 共用，避免出现两份"看起来一样"的归一逻辑。
+ * Tool name normalization: legacy name migration (canonicalToolName) + dedupe + trim.
+ * Shared by settings-page writes, IPC read display and gent_create, so there aren't two
+ * "seemingly identical" normalization implementations.
  */
 export function normalizeSubAgentTools(tools: string[] | null | undefined): string[] | null {
   if (!tools) return null
@@ -34,21 +35,27 @@ export function normalizeSubAgentTools(tools: string[] | null | undefined): stri
 }
 
 /**
- * 子代理（智能体）配置服务 —— IPC（设置页）与运行时工具（`agent_create`）共用。
+ * Sub-agent (agent) config service — shared by IPC (settings page) and runtime tools (`agent_create`).
  *
- * 之前这套写入逻辑全在 `ipc/harness/agent.ts` 里：工作区校验、工具名归一、缓存失效、
- * 删除时清理记忆目录。现在主智能体也能「委派构建子代理」，如果工具再抄一遍就出现两份
- * 规则；因此把**写入语义**收敛到这里，IPC 与工具只做参数解析与错误展示。
+ * Previously this write logic all lived in `ipc/harness/agent.ts`: workspace validation, tool name
+ * normalization, cache invalidation, and memory directory cleanup on delete. Now the main agent can
+ * also "delegate sub-agent creation"; copying the tool logic again would mean two sets of rules, so
+ * the **write semantics** are consolidated here and IPC / tools only do argument parsing and error
+ * display.
  *
- * 职责边界：
- * - 校验（纯格式规则来自 `shared/harness/subagent.ts`，工具注册表在这里校验）；
- * - 落库 + 缓存失效（写后必须 `clearSubAgentCache()`，运行时下一次 `task` 才能看到新配置）；
- * - 删除配置时连带清理该子代理的专属记忆目录（与旧 IPC 行为一致）。
+ * Responsibility boundaries:
+ * - validation (pure format rules come from `shared/harness/subagent.ts`; the tool registry is
+ *   validated here);
+ * - persistence + cache invalidation (call `clearSubAgentCache()` after writing, so the runtime's
+ *   next `task` sees the new config);
+ * - deleting a config also cleans up that sub-agent's dedicated memory directory (same as the old
+ *   IPC behavior).
  *
- * 读路径（列表/详情）仍由 IPC 直接查 mapper —— 服务层不提供无意义的透传。
+ * Read paths (list/detail) still query the mapper directly from IPC — the service layer provides no
+ * pointless pass-through.
  */
 
-/** 编辑补丁：`null` 表示显式清空可选字段（undefined = 不修改），与设置页表单语义一致 */
+/** Edit patch: `null` means explicitly clear an optional field (undefined = unchanged), consistent with the settings-page form semantics */
 export interface SubAgentDraftPatch {
   name?: string
   displayName?: string | null
@@ -59,22 +66,23 @@ export interface SubAgentDraftPatch {
   skills?: string[] | null
 }
 
-/** 草稿 + 归属工作区：设置页与 `agent_create` 工具的共同入参 */
+/** Draft + owning workspace: common input for the settings page and the `agent_create` tool */
 export interface SubAgentDefinitionInput extends SubAgentDraft {
   workspaceId: number
 }
 
-/** 已落库的子代理配置（工具回给模型/设置页刷新用） */
+/** Persisted sub-agent config (returned to the tool for the model / to the settings page for refresh) */
 export interface SubAgentDefinitionResult {
   id: number
   config: SubAgentConfig
 }
 
-/** 工具选择校验：只接受当前注册表里真实存在的可选工具（设置页同源清单） */
+/** Tool selection validation: accept only selectable tools that really exist in the current registry (same source as the settings page) */
 function assertKnownTools(tools: string[] | null): void {
   if (!tools || tools.length === 0) return
   const available = new Set(listAvailableTools().map((tool) => tool.name))
-  // MCP 服务器分组项（mcp@<server>）由 MCP 页决定具体工具，这里只校验语法；具体可用性在运行时展开
+  // MCP server group entries (mcp@<server>) get their concrete tools from the MCP page; only syntax
+  // is validated here, availability is expanded at runtime
   const unknown = tools.filter((name) => !available.has(name) && !isMcpServerGroup(name))
   if (unknown.length > 0) {
     throw new Error(
@@ -83,7 +91,7 @@ function assertKnownTools(tools: string[] | null): void {
   }
 }
 
-/** 工作区必须存在：`agent_config.workspace_id` 有外键约束，先给出可读错误而不是 FK 违例 */
+/** The workspace must exist: `agent_config.workspace_id` has a foreign key constraint; give a readable error instead of an FK violation */
 async function assertWorkspaceExists(workspaceId: number): Promise<void> {
   const workspaces = await getAllWorkspaces()
   if (!workspaceId || !workspaces.some((workspace) => workspace.id === workspaceId)) {
@@ -91,7 +99,7 @@ async function assertWorkspaceExists(workspaceId: number): Promise<void> {
   }
 }
 
-/** 草稿 → 数据库写入参数（工具名归一、空串转 null 的规则只在服务里维护） */
+/** Draft → database write params (tool name normalization and empty-string→null rules are maintained only here) */
 function toAgentConfigInput(
   workspaceId: number,
   draft: SubAgentDraft,
@@ -110,7 +118,7 @@ function toAgentConfigInput(
   }
 }
 
-/** 草稿 → 运行时形态（创建/更新成功后返回，避免再查一次库） */
+/** Draft → runtime shape (returned after a successful create/update to avoid another DB query) */
 function toSubAgentConfig(draft: SubAgentDraft, tools: string[] | null): SubAgentConfig {
   const rename = draft.displayName?.trim()
   return {
@@ -124,7 +132,7 @@ function toSubAgentConfig(draft: SubAgentDraft, tools: string[] | null): SubAgen
   }
 }
 
-/** 删除配置时连带删除子代理专属记忆目录（`<memoryPath>/workspace-<id>/sub-agents/<name>`） */
+/** When deleting a config, also delete the sub-agent's dedicated memory directory (`<memoryPath>/workspace-<id>/sub-agents/<name>`) */
 function removeSubAgentMemory(workspaceId: number, name: string): void {
   const memoryPath = (settingsStore.get('harness') as HarnessSettings | undefined)?.memoryPath
   if (!memoryPath) return
@@ -139,7 +147,7 @@ function removeSubAgentMemory(workspaceId: number, name: string): void {
   }
 }
 
-/** 创建子代理配置（设置页「新建」与 `agent_create` 工具共用） */
+/** Create a sub-agent config (shared by the settings page's "New" and the `agent_create` tool) */
 export async function createSubAgentDefinition(
   input: SubAgentDefinitionInput
 ): Promise<SubAgentDefinitionResult> {
@@ -160,13 +168,14 @@ export async function createSubAgentDefinition(
   assertKnownTools(tools)
 
   const id = await createAgent(toAgentConfigInput(input.workspaceId, input, tools))
-  // 运行时按工作区缓存已启用配置：写后必须失效，下一次 task/agent_create 才能读到
+  // Runtime caches enabled configs per workspace: invalidate after writing so the next
+  // task/agent_create sees it
   clearSubAgentCache()
   logger.info(`[SubAgentConfig] Created subagent "${input.name}" (workspace=${input.workspaceId})`)
   return { id, config: toSubAgentConfig(input, tools) }
 }
 
-/** 更新子代理配置（设置页编辑用；工具不暴露更新，避免模型改乱用户配置） */
+/** Update a sub-agent config (for settings-page editing; tools don't expose update to keep the model from messing up user config) */
 export async function updateSubAgentDefinition(
   workspaceId: number,
   id: number,
@@ -176,7 +185,8 @@ export async function updateSubAgentDefinition(
   const current = await getAgentById(workspaceId, id)
   if (!current) throw new Error(`subagent config ${id} does not exist in this workspace`)
 
-  // 乐观并发：设置页带着打开时的 revision 保存；期间被别的窗口/进程改过就拒绝
+  // Optimistic concurrency: the settings page saves with the revision it opened with; reject if it
+  // was changed by another window/process meanwhile
   if (expectedRevision !== undefined && current.revision !== expectedRevision) {
     throw new Error(
       `subagent "${current.name}" was modified by someone else (current revision ${current.revision}, expected ${expectedRevision}); reload and try again`
@@ -208,7 +218,7 @@ export async function updateSubAgentDefinition(
   const errors = validateSubAgentDraft(merged)
   if (errors.length > 0) throw new Error(`invalid subagent definition: ${errors.join('; ')}`)
 
-  // 改名要重新校验唯一（排除自己）
+  // Renaming requires re-validating uniqueness (excluding itself)
   if (merged.name.trim() !== current.name) {
     const existing = await getAgentByName(workspaceId, merged.name.trim())
     if (existing && existing.id !== id) {
@@ -219,7 +229,8 @@ export async function updateSubAgentDefinition(
   const tools = normalizeSubAgentTools(merged.tools)
   assertKnownTools(tools)
 
-  // 写库时再带一次 expectedRevision：读-改-写之间若有并发更新，CAS 会失败而不是覆盖
+  // Pass expectedRevision once more when writing: if a concurrent update happens between read and
+  // write, CAS fails instead of overwriting
   const result = await updateAgent(
     workspaceId,
     id,
@@ -233,7 +244,7 @@ export async function updateSubAgentDefinition(
   return result
 }
 
-/** 删除子代理配置（设置页删除用；连带清理专属记忆目录） */
+/** Delete a sub-agent config (for settings-page deletion; also cleans up the dedicated memory directory) */
 export async function deleteSubAgentDefinition(workspaceId: number, id: number): Promise<boolean> {
   const agent = await getAgentById(workspaceId, id)
   const deleted = await deleteAgent(workspaceId, id)
@@ -244,20 +255,20 @@ export async function deleteSubAgentDefinition(workspaceId: number, id: number):
   return deleted
 }
 
-/** 按工作区缓存的「已启用子代理定义」：task 调用期读取，写配置后由本模块失效 */
+/** "Enabled sub-agent definitions" cached per workspace: read when task is called, invalidated by this module after config writes */
 const enabledDefinitionsCache = new Map<number, SubAgentConfig[]>()
 
-/** 失效缓存（创建/更新/删除配置后调用；预加载与运行时共用同一份） */
+/** Invalidate the cache (called after create/update/delete config; preload and runtime share the same cache) */
 export function clearSubAgentCache(): void {
   enabledDefinitionsCache.clear()
 }
 
 /**
- * 读取当前工作区已启用的子代理定义（带进程内缓存）。
+ * Read the enabled sub-agent definitions of the current workspace (with an in-process cache).
  *
- * `task` 工具在**每次调用时**重新读这份清单：主智能体刚用 `agent_create` 建好的
- * 子代理，同一轮内就能被 `task` 派发（缓存在创建时已失效）。预加载也复用同一入口，
- * 避免「读路径两份缓存」。
+ * The `task` tool re-reads this list **on every call**: a sub-agent that the main agent just created
+ * with `agent_create` can be dispatched by `task` within the same turn (the cache was invalidated on
+ * creation). Preload also reuses the same entry point, avoiding "two caches on the read path".
  */
 export async function listEnabledSubAgents(workspaceId: number): Promise<SubAgentConfig[]> {
   const cached = enabledDefinitionsCache.get(workspaceId)

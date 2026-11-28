@@ -13,28 +13,32 @@ import type {
 import { harnessApi } from '../../api/harness'
 
 /**
- * 顶部栏「协作」入口 —— 把「后台子代理」与「共享任务板」合并为一个入口
- * （用户 2026-11-26 选定方案 A）。
+ * "Collaboration" entry in the top bar — merges "background subagents" and the "shared task board"
+ * into a single entry (option A chosen on 2026-11-26).
  *
- * 样式口径：
- * - 入口是纯文字按钮「2 子代理 · 3 任务」，不抢顶部栏注意力；两者都为空时整块隐藏；
- * - Popover 396px，分「子代理 / 共享任务」两段；
- * - 每行只有 5px 状态点 + 状态小字，不再用彩色胶囊/色块；
- * - 负责人用 15px 字母头像（lead 为金色），阻塞依赖显示为「等待 <前置任务名>」的金色小字；
- * - 已完成任务降透明度 + 删除线；行高统一 34px，和主对话的列表密度一致。
+ * Style:
+ * - The entry is a plain text button ("2 agents · 3 tasks") that doesn't distract from the top
+ *   bar; the whole block is hidden when both are empty;
+ * - The Popover is 396px wide with two sections: agents / shared tasks;
+ * - Each row uses only a 5px status dot plus small status text, no colored pills or blocks;
+ * - The owner is a 15px letter avatar (gold for lead), and blocking dependencies show as gold
+ *   small text reading "waiting for <blocking task>";
+ * - Completed tasks get reduced opacity + strikethrough; row height is a uniform 34px to match the
+ *   main conversation's list density.
  *
- * 数据：agents = listAgents + onAgentsUpdated；tasks = listTeamTasks + onTeamUpdated。
- * 子代理行点击直接用顶层 Harness 页的 onSelectAgent 打开会话视图；任务行 v1 只读展示。
+ * Data: agents = listAgents + onAgentsUpdated; tasks = listTeamTasks + onTeamUpdated.
+ * Clicking an agent row opens its conversation view via the top-level Harness page's
+ * onSelectAgent; task rows are read-only in v1.
  */
 interface CollabButtonProps {
   currentTopicId: number | null
-  /** 点某条子代理：主对话区切到它的流式会话 */
+  /** Click a subagent row: switch the main conversation area to its streaming conversation */
   onSelectAgent?: (agent: SubagentSessionRow) => void
-  /** 当前正在查看的子代理（列表里高亮） */
+  /** Subagent currently being viewed (highlighted in the list) */
   activeAgentId?: string | null
 }
 
-/** 子代理状态：文案 / 颜色（与顶部栏旧入口同一套口径，只是去掉了彩色胶囊） */
+/** Subagent status: text / color (same scheme as the old top-bar entry, minus the colored pills) */
 const agentStatus = (t: TFunction, agent: SubagentSessionRow): { text: string; color: string } => {
   if (agent.status === 'running')
     return { text: t('harness.backgroundAgents.running'), color: '#4096ff' }
@@ -47,14 +51,14 @@ const agentStatus = (t: TFunction, agent: SubagentSessionRow): { text: string; c
   return { text: t('harness.backgroundAgents.completed'), color: '#73d13d' }
 }
 
-/** 任务状态点颜色：进行中蓝 / 待办金 / 已完成绿 */
+/** Task status dot colors: in progress blue / pending gold / completed green */
 const taskDotColor = (task: TeamTaskView): string => {
   if (task.status === 'in_progress') return '#4096ff'
   if (task.status === 'completed') return '#73d13d'
   return '#d4a72c'
 }
 
-/** 负责人头像：取名字首字符（lead 用金色区分） */
+/** Owner avatar: first character of the name (gold is reserved for lead) */
 function ownerInitial(ownerName: string): string {
   const name = ownerName.trim()
   if (!name) return '?'
@@ -62,14 +66,14 @@ function ownerInitial(ownerName: string): string {
   return (match?.[0] ?? name[0]).toUpperCase()
 }
 
-/** token 数紧凑展示：< 1000 原样，>= 1000 用 k 保留一位小数 */
+/** Compact token count: raw below 1000, otherwise k with one decimal */
 function formatTokenCount(tokens: number): string {
   if (tokens < 1000) return String(tokens)
   if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`
   return `${(tokens / 1_000_000).toFixed(1)}m`
 }
 
-/** 任务事件动作 → 本地化短语（最近活动行用；缺省回退 updated） */
+/** Task event action → localized phrase (for the recent activity line; falls back to updated) */
 const eventActionLabel = (t: TFunction, action: TeamTaskEventView['action']): string => {
   switch (action) {
     case 'created':
@@ -95,11 +99,11 @@ const CollabButton: React.FC<CollabButtonProps> = ({
   const [agents, setAgents] = useState<SubagentSessionRow[]>([])
   const [board, setBoard] = useState<TeamBoardSnapshot | null>(null)
   const [open, setOpen] = useState(false)
-  /** 拉取请求代次：慢的旧请求不能覆盖新请求/推送结果 */
+  /** Fetch request generation: a slow old request must not overwrite newer requests/pushes */
   const refreshSeqRef = useRef(0)
-  /** 最近一次 agents 推送时间：拉取若早于该推送，结果已过期 */
+  /** Time of the latest agents push: a fetch started before it has stale results */
   const lastAgentsPushAtRef = useRef(0)
-  /** 最近一条任务事件（存储适配器追加写；面板 footer 展示团队最近活动） */
+  /** Latest task event (appended by the storage adapter; the panel footer shows recent team activity) */
   const [lastEvent, setLastEvent] = useState<TeamTaskEventView | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -123,7 +127,7 @@ const CollabButton: React.FC<CollabButtonProps> = ({
     }
     if (boardResult.status === 'fulfilled') {
       const pulled = boardResult.value ?? null
-      // 拉取结果同样走 revision 去旧：慢请求不能把任务板回滚到旧状态
+      // Fetched results also de-dup by revision: a slow request must not roll the board back
       setBoard((prev) => (prev && pulled && pulled.revision < prev.revision ? prev : pulled))
     }
     if (eventsResult.status === 'fulfilled') {
@@ -141,9 +145,9 @@ const CollabButton: React.FC<CollabButtonProps> = ({
     })
     const unsubscribeTeam = api.onTeamUpdated((snapshot) => {
       if (snapshot.topicId !== currentTopicId) return
-      // 整板快照带 revision：只接受不旧于当前板子的快照（防 IPC 乱序回退）
+      // Whole-board snapshots carry a revision: only accept snapshots no older than the current board (guards against IPC reordering)
       setBoard((prev) => (prev && snapshot.revision < prev.revision ? prev : snapshot))
-      // 任务变更会追加事件；面板打开时同步刷新最近活动（节流由任务变更频率决定）
+      // Task changes append events; refresh the recent activity while the panel is open (throttled by task change rate)
       void api
         .listTeamEvents(currentTopicId, 1)
         .then((rows) => setLastEvent(rows[0] ?? null))
@@ -155,14 +159,14 @@ const CollabButton: React.FC<CollabButtonProps> = ({
     }
   }, [currentTopicId, refresh])
 
-  // 切话题：收起列表（子代理与任务板都按 topicId 隔离）
+  // Topic switch: collapse the list (both agents and task board are isolated per topicId)
   useEffect(() => {
     setOpen(false)
   }, [currentTopicId])
 
   const tasks = useMemo(() => board?.tasks ?? [], [board])
   const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
-  /** 任务状态汇总：面板顶部（任务段头）展示团队进度 */
+  /** Task status summary shown at the top of the panel (task section header) */
   const taskCounts = useMemo(
     () => ({
       running: tasks.filter((task) => task.status === 'in_progress').length,
@@ -171,7 +175,7 @@ const CollabButton: React.FC<CollabButtonProps> = ({
     }),
     [tasks]
   )
-  /** 每个子代理当前负责的任务数（owner 是后台会话 id；未认领不计） */
+  /** Number of tasks each subagent currently owns (owner is the background session id; unclaimed tasks are excluded) */
   const agentTaskCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const task of tasks) {
@@ -181,7 +185,7 @@ const CollabButton: React.FC<CollabButtonProps> = ({
     return counts
   }, [tasks])
 
-  // 入口摘要：两个都为空时整块隐藏（顶部栏不占位）
+  // Entry summary: hide the whole block when both are empty (no space taken in the top bar)
   const summaryText = useMemo(() => {
     const parts: string[] = []
     if (agents.length > 0) parts.push(t('harness.collab.agentsCount', { count: agents.length }))
@@ -319,7 +323,7 @@ const CollabButton: React.FC<CollabButtonProps> = ({
             const ownerName = task.ownerName || task.ownerId || ''
             const owner = ownerName ? ownerName : t('harness.team.unowned')
             const lead = task.ownerId === 'lead'
-            // 负责人是某个子代理会话时，任务行可直接跳去它的会话（v1：只对后台可续接会话可跳）
+            // When the owner is a subagent conversation the row can jump to it (v1: only background continuable sessions)
             const ownerAgent = task.ownerId
               ? agents.find((agent) => agent.id === task.ownerId)
               : undefined

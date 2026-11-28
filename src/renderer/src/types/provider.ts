@@ -1,9 +1,10 @@
-/** 思考模式：auto 跟随模型默认配置（与主进程共用同一份定义） */
+/** Thinking mode: auto follows the model's default config (definition shared with the main
+ * process) */
 import type { ThinkingMode } from '../../../shared/model-params'
 
 export type { ThinkingMode }
 
-/** 模型能力字段（与 models-profile.json 的 capabilities 结构一致） */
+/** Model capability fields (matches the capabilities structure in models-profile.json) */
 export interface ModelCapabilities {
   supports_text_input?: boolean
   supports_text_output?: boolean
@@ -25,7 +26,7 @@ export interface ModelCapabilities {
   [key: string]: boolean | string[] | undefined
 }
 
-/** 模型元数据（models-profile.json 单个条目；未收录/未填写时为 null） */
+/** Model metadata (a single models-profile.json entry; null when not listed or not filled in) */
 export interface ModelMetadata {
   id?: string
   vendor?: string
@@ -42,7 +43,7 @@ export interface ModelMetadata {
   [key: string]: unknown
 }
 
-/** LLM 供应商配置 */
+/** LLM provider config */
 export interface LlmProviderConfig {
   id: number
   name: string
@@ -50,51 +51,53 @@ export interface LlmProviderConfig {
   base_url: string | null
   api_key: string | null
   model: string
-  /** 采样温度：null = 未设置，使用供应商最佳默认值 */
+  /** Sampling temperature: null = unset, use the provider's best default */
   temperature: number | null
   max_tokens: number | null
   top_p: number | null
   top_k: number | null
   thinking_mode: ThinkingMode
-  /** 推理等级：null = 未设置（不下发档位参数）；取值来自模型档案的档位表 */
+  /** Reasoning effort: null = unset (no effort parameter is sent); values come from the model
+   * profile's effort table */
   reasoning_effort: string | null
-  /** 工具调用轮数：单次对话工具调用总次数上限 */
+  /** Tool call rounds: upper bound on total tool calls in a single conversation */
   max_tool_rounds: number
   extra_config: Record<string, unknown> | null
   metadata: ModelMetadata | null
   is_default: boolean
   is_enabled: boolean
-  /** 置顶排序值（>0 即置顶，由主进程 SQL 取 max+1）；仅供列表排序 */
+  /** Pin sort value (>0 means pinned, computed by the main process SQL as max+1); ordering only */
   sort_order: number
-  /** 是否置顶（编辑弹窗的「置顶」开关读它） */
+  /** Whether pinned (read by the "Pin" toggle in the edit modal) */
   is_pinned: boolean
 }
 
-/** LLM 供应商输入（新建/编辑表单） */
+/** LLM provider input (create/edit form) */
 export interface LlmProviderInput {
   name: string
   provider: string
   base_url?: string | null
   api_key?: string | null
   model: string
-  /** 采样参数：留空(undefined/null) = 不下发，使用供应商最佳默认值 */
+  /** Sampling params: blank (undefined/null) = not sent, use the provider's best default */
   temperature?: number | null
   max_tokens?: number | null
   top_p?: number | null
   top_k?: number | null
   thinking_mode?: ThinkingMode
-  /** 推理等级：留空(undefined/null) = 未设置，不下发档位参数 */
+  /** Reasoning effort: blank (undefined/null) = unset, no effort parameter sent */
   reasoning_effort?: string | null
   max_tool_rounds?: number
   extra_config?: Record<string, unknown> | null
   metadata?: ModelMetadata | null
   is_default?: boolean
   is_enabled?: boolean
-  /** 是否置顶：排序值由主进程用 SQL 取 max+1，前端不传排序号 */
+  /** Whether pinned: the sort value is computed by the main process SQL as max+1, so the frontend
+   * does not send a sort number */
   pinned?: boolean
 }
 
-/** 拉取模型接口返回项 */
+/** Item returned by the fetch-models API */
 export interface FetchedModel {
   id: string
   metadata: ModelMetadata | null

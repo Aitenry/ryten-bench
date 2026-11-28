@@ -1,13 +1,14 @@
-﻿/**
- * 联网搜索设置 mapper（全局单行 settings + 各服务加密密钥）。
+/**
+ * Web search settings mapper (global single-row settings + per-service encrypted keys).
  *
- * 读取接口只返回掩码与是否已配置；解密只发生在主进程调用搜索前（见 `search/settings.ts`）。
+ * Read APIs only return the mask and whether a key is configured; decryption happens in the main
+ * process only, right before a search call (see `search/settings.ts`).
  */
 import { and, eq, isNotNull } from 'drizzle-orm'
 import { withOrm } from '../orm'
 import { llm_providers, search_providers, search_settings } from '../schema'
 
-/** 全局搜索设置（默认值 = 内置搜索 + 回退开 + 不取正文） */
+/** Global search settings (defaults = built-in search + fallback on + no content fetch) */
 export interface SearchSettingsRow {
   defaultProvider: string
   autoFallback: boolean
@@ -20,7 +21,7 @@ export const DEFAULT_SEARCH_SETTINGS: SearchSettingsRow = {
   includeContent: false
 }
 
-/** 读取全局搜索设置（行不存在时返回默认值，不落库） */
+/** Read the global search settings (returns defaults when no row exists, without writing) */
 export async function getSearchSettingsRow(): Promise<SearchSettingsRow> {
   return withOrm('getSearchSettingsRow', async (db) => {
     const rows = await db.select().from(search_settings).limit(1)
@@ -34,7 +35,7 @@ export async function getSearchSettingsRow(): Promise<SearchSettingsRow> {
   })
 }
 
-/** 更新全局搜索设置（单行 upsert） */
+/** Update the global search settings (single-row upsert) */
 export async function updateSearchSettingsRow(
   patch: Partial<SearchSettingsRow>
 ): Promise<SearchSettingsRow> {
@@ -67,14 +68,14 @@ export async function updateSearchSettingsRow(
   })
 }
 
-/** 各搜索服务的配置行（含密文；仅主进程内部使用） */
+/** Config row of each search service (includes ciphertext; main-process internal use only) */
 export interface SearchProviderRow {
   provider: string
   apiKeyEncrypted: string | null
   keyMask: string | null
 }
 
-/** 列出全部搜索服务配置行 */
+/** List all search-service config rows */
 export async function listSearchProviderRows(): Promise<SearchProviderRow[]> {
   return withOrm('listSearchProviderRows', async (db) => {
     const rows = await db.select().from(search_providers)
@@ -86,7 +87,7 @@ export async function listSearchProviderRows(): Promise<SearchProviderRow[]> {
   })
 }
 
-/** 读取单个服务的配置行 */
+/** Read the config row of a single service */
 export async function getSearchProviderRow(provider: string): Promise<SearchProviderRow | null> {
   return withOrm('getSearchProviderRow', async (db) => {
     const rows = await db
@@ -103,7 +104,7 @@ export async function getSearchProviderRow(provider: string): Promise<SearchProv
   })
 }
 
-/** 写入/更新某服务的密钥（密文 + 掩码） */
+/** Write/update the key of a service (ciphertext + mask) */
 export async function upsertSearchProviderRow(
   provider: string,
   apiKeyEncrypted: string,
@@ -129,7 +130,7 @@ export async function upsertSearchProviderRow(
   })
 }
 
-/** 删除某服务的密钥 */
+/** Delete the key of a service */
 export async function clearSearchProviderRow(provider: string): Promise<void> {
   await withOrm('clearSearchProviderRow', async (db) => {
     await db.delete(search_providers).where(eq(search_providers.provider, provider))
@@ -137,9 +138,9 @@ export async function clearSearchProviderRow(provider: string): Promise<void> {
 }
 
 /**
- * 「模型供应商里是否已配置同厂商的 Key」——用于搜索结果 Key 的复用提示。
+ * "Whether a key for the same vendor is already configured under model providers" — used for the key-reuse hint in search results.
  *
- * 只查 `provider` 类型与「是否存在已加密 Key」两件事，不解密、不返回 Key。
+ * Only checks the `provider` type and "whether an encrypted key exists"; it neither decrypts nor returns the key.
  */
 export async function hasModelProviderWithKey(providerType: string): Promise<boolean> {
   return withOrm('hasModelProviderWithKey', async (db) => {

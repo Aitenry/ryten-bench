@@ -1,38 +1,42 @@
 /**
- * 持久终端的**纯逻辑核心**（无 electron / 无子进程，可离线测试）。
+ * **Pure logic core** of the persistent terminal (no electron / no child process, offline
+ * testable).
  *
- * 设计见 `docs/terminal-sandbox-design-2026-11.md`。这一层只负责「怎么把命令变成一段可切分的
- * 文本、怎么把输出流按完成标记切开、怎么有界地缓存与读取」；真正的进程与会话管理在
- * `terminal-sessions.ts`。把纯逻辑独立出来，是为了让这些容易出错的边界（跨 chunk 半行、
- * ANSI 转义、洪泛输出、二进制垃圾）都能用单测钉住，而不必启动 shell。
+ * This layer only decides how to turn a command into chunkable text, how to split the output
+ * stream at the completion marker, and how to cache and read it with bounds; the actual process
+ * and session management lives in `terminal-sessions.ts`. The pure logic is kept separate so
+ * these error-prone edges (a half line across chunks, ANSI escapes, output floods, binary
+ * garbage) can be pinned down by unit tests without starting a shell.
  */
 
-/** 单条命令的最大字符数（防止一次写入超大脚本） */
+/** Maximum characters per command (prevents writing an oversized script in one go) */
 export const MAX_COMMAND_CHARS = 8_000
-/** 单次 `terminal_read` / 返回给模型的输出上限 */
+/** Output cap for one `terminal_read` / one result returned to the model */
 export const MAX_OUTPUT_CHARS_PER_READ = 50_000
-/** 每条会话的未读输出环形缓冲上限（字节近似 = 字符） */
+/** Ring buffer cap for a session's unread output (bytes ≈ characters) */
 export const RING_CAPACITY_CHARS = 256 * 1024
 
-/** 会话使用的 shell 种类 */
+/** Kind of shell a session uses */
 export type TerminalShell = 'pwsh' | 'cmd' | 'sh'
 
-/** 启动一种 shell 所需的完整描述 */
+/** Full description needed to start one kind of shell */
 export interface ShellSpec {
   kind: TerminalShell
-  /** 可执行文件（Windows 用 .exe 全名，避免 PATH 解析歧义） */
+  /** Executable (use the full .exe name on Windows to avoid PATH resolution ambiguity) */
   command: string
   args: string[]
-  /** 会话建立后先注入的命令（抑制提示符等） */
+  /** Commands injected right after the session starts (suppress the prompt, etc.) */
   initCommands: string[]
-  /** 命令行分隔符：cmd 用 CRLF，其它用 LF */
+  /** Line separator: CRLF for cmd, LF elsewhere */
   newline: '\n' | '\r\n'
 }
 
 /**
- * 选择 shell：Windows 优先 PowerShell 7+（若已安装），否则 cmd；POSIX 用 bash。
+ * Choose a shell: on Windows prefer PowerShell 7+ (if installed), otherwise cmd; on POSIX use
+ * bash.
  *
- * `pwshAvailable` 由会话层探测（`spawn` 一次 `pwsh -v`），这里只做纯决策，便于测试。
+ * `pwshAvailable` is probed by the session layer (one `spawn` of `pwsh -v`); this function only
+ * makes the pure decision, which keeps it testable.
  */
 export function resolveShell(platform: string, pwshAvailable: boolean): ShellSpec {
   if (platform === 'win32') {
@@ -62,39 +66,43 @@ export function resolveShell(platform: string, pwshAvailable: boolean): ShellSpe
   }
 }
 
-/** 生成一条命令的完成标记（每轮随机，避免与命令输出碰撞） */
+/** Build a command's completion marker (random per round to avoid colliding with command output) */
 export function createSentinel(nonce: string): string {
   const safe = nonce.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32) || 'x'
   return `__RB_DONE_${safe}__`
 }
 
 /**
- * 把一条用户命令拼成「命令 + 完成标记」的写入串。
+ * Assemble one user command into the write string of "command + completion marker".
  *
- * 完成标记单独占一行：命令无论成功失败（甚至语法错误）最后都会执行到 `echo`，
- * 读取侧据此判断这一轮结束；不能用退出码——持久 shell 没有「本次命令的退出码」。
+ * The completion marker occupies its own line: whether the command succeeds or fails (even with
+ * a syntax error) it eventually executes the `echo`, and the read side uses that to detect the
+ * end of the round; exit codes cannot be used — a persistent shell has no "exit code of this
+ * command".
  */
 export function buildCommandLine(command: string, sentinel: string, shell: ShellSpec): string {
   const body = command.replace(/\r\n/g, '\n').replace(/\n$/, '')
   return `${body}${shell.newline}echo ${sentinel}${shell.newline}`
 }
 
-/** 命令规范化：空/超长/含 NUL 拒绝；多行命令保留（按行执行） */
+/** Normalize a command: reject empty/too-long/NUL-containing ones; keep multi-line commands (run line by line) */
 export function normalizeCommand(
   raw: string
 ): { ok: true; command: string } | { ok: false; reason: 'empty' | 'too-long' | 'nul' } {
   if (typeof raw !== 'string' || raw.trim().length === 0) return { ok: false, reason: 'empty' }
   if (raw.includes('\u0000')) return { ok: false, reason: 'nul' }
-  // 只清掉整个命令末尾的空白（含换行）；**行内**空白不动——可能是字符串字面量的一部分
+  // Trim only whitespace at the very end of the whole command (including newlines); leave
+  // **inline** whitespace alone — it may be part of a string literal
   const command = raw.replace(/\r\n/g, '\n').replace(/\s+$/, '')
   if (command.length > MAX_COMMAND_CHARS) return { ok: false, reason: 'too-long' }
   return { ok: true, command }
 }
 
-/** 清理 ANSI 转义（颜色、光标控制、OSC 标题等），保留可读文本 */
+/** Strip ANSI escapes (colors, cursor control, OSC titles, etc.) while keeping readable text */
 export function stripAnsi(text: string): string {
-  // ANSI 转义序列本来就必须由 ESC(0x1b)/BEL(0x07) 等控制字符组成，
-  // `no-control-regex` 在这里是误报：保留行内 disable 比放宽全局规则更精确。
+  // ANSI escape sequences necessarily consist of control characters such as ESC(0x1b)/BEL(0x07),
+  // so `no-control-regex` is a false positive here: an inline disable is more precise than
+  // relaxing the global rule.
   /* eslint-disable no-control-regex */
   return text
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
@@ -104,10 +112,11 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * 在一段缓冲里找完成标记行。
+ * Find the completion marker line in a buffer.
  *
- * 只认**整行精确匹配**（允许行尾 `\r`）：命令输出里碰巧出现标记文本也不会误切。
- * 返回标记之前的输出与标记之后的剩余（下一条命令的输出）。
+ * Only an **exact whole-line match** counts (a trailing `\r` is allowed): marker text that
+ * happens to appear in command output does not cause a false split.
+ * Returns the output before the marker and the remainder after it (the next command's output).
  */
 export function splitAtSentinel(
   buffer: string,
@@ -126,10 +135,11 @@ export function splitAtSentinel(
 }
 
 /**
- * 粗略判断输出是否像二进制。
+ * Roughly decide whether output looks binary.
  *
- * 编译产物/压缩包等直接塞进上下文既浪费预算又无意义；控制字符（除换行/回车/制表）
- * 比例超过 30% 或出现 NUL 即视为二进制。
+ * Dumping build artifacts/archives into the context wastes budget and means nothing; output is
+ * treated as binary when control characters (other than newline/CR/tab) exceed 30% or a NUL
+ * appears.
  */
 export function looksBinary(text: string): boolean {
   if (!text) return false
@@ -144,10 +154,11 @@ export function looksBinary(text: string): boolean {
 }
 
 /**
- * 有界的输出环形缓冲。
+ * Bounded output ring buffer.
  *
- * `push` 写入新输出（超容量丢最旧），`drain` 一次性取走未读输出并清空游标。
- * 丢弃的字节数单独累计，返回给模型时能说明「有输出被挤掉了」。
+ * `push` adds new output (dropping the oldest when over capacity); `drain` takes all unread
+ * output at once and resets the cursor. Dropped bytes are counted separately, so the result can
+ * tell the model that "some output was evicted".
  */
 export class OutputRing {
   private chunks: string[] = []
@@ -159,13 +170,14 @@ export class OutputRing {
     this.capacity = Math.max(1, Math.floor(capacity))
   }
 
-  /** 写入一段输出（通常是 stdout/stderr 的 chunk）；超过容量时保留最新内容 */
+  /** Add one chunk of output (usually a stdout/stderr chunk); keep the newest content over capacity */
   push(text: string): void {
     if (!text) return
     this.chunks.push(text)
     this.size += text.length
     if (this.size <= this.capacity) return
-    // 统一按「保留最后 capacity 个字符」裁剪：单块超长与多块累积都能精确处理
+    // Always trim to "keep the last capacity characters": handles both an oversized single chunk
+    // and accumulated chunks exactly
     const joined = this.chunks.join('')
     const keep = joined.slice(-this.capacity)
     this.droppedChars += joined.length - keep.length
@@ -173,17 +185,17 @@ export class OutputRing {
     this.size = keep.length
   }
 
-  /** 当前未读字符数 */
+  /** Current number of unread characters */
   get unreadChars(): number {
     return this.size
   }
 
-  /** 累计被挤掉的字符数（清零前单调递增） */
+  /** Total evicted characters (monotonically increasing until reset) */
   get dropped(): number {
     return this.droppedChars
   }
 
-  /** 取走未读输出（最多 maxChars；超出的留在缓冲里等下次读） */
+  /** Take unread output (at most maxChars; the rest stays in the buffer for the next read) */
   drain(maxChars: number = MAX_OUTPUT_CHARS_PER_READ): {
     text: string
     truncated: boolean
@@ -196,7 +208,7 @@ export class OutputRing {
     if (all.length > limit) {
       text = all.slice(0, limit)
       truncated = true
-      // 把没取走的部分放回缓冲（保持未读语义）
+      // Put the untaken part back into the buffer (preserving unread semantics)
       this.chunks = [all.slice(limit)]
       this.size = all.length - limit
     } else {
@@ -208,7 +220,7 @@ export class OutputRing {
     return { text, truncated, dropped }
   }
 
-  /** 丢弃全部未读输出（关闭会话/清屏用） */
+  /** Discard all unread output (used when closing a session / clearing the screen) */
   clear(): void {
     this.chunks = []
     this.size = 0
@@ -216,10 +228,11 @@ export class OutputRing {
   }
 
   /**
-   * 只读快照：取最近 maxChars 字符，**不消费未读输出**。
+   * Read-only snapshot: the most recent maxChars characters, **without consuming unread output**.
    *
-   * 用户侧终端面板靠轮询刷新输出；如果复用 `drain`，面板会把模型 `terminal_read` 该读的
-   * 内容提前吃掉。这里按「尾部 N 字符」返回，既不移动游标也不重置 dropped 计数。
+   * The user-facing terminal panel refreshes output by polling; reusing `drain` would make the
+   * panel eat content that the model's `terminal_read` should read. This returns the "last N
+   * characters" without moving the cursor or resetting the dropped count.
    */
   snapshot(maxChars: number = MAX_OUTPUT_CHARS_PER_READ): {
     text: string
@@ -237,7 +250,7 @@ export class OutputRing {
   }
 }
 
-/** 输出截断（返回尾部：命令报错通常在最后） */
+/** Truncate output (return the tail: command errors are usually at the end) */
 export function truncateTail(text: string, maxChars: number): { text: string; truncated: boolean } {
   const limit = Math.max(1, Math.floor(maxChars))
   if (text.length <= limit) return { text, truncated: false }
@@ -245,10 +258,11 @@ export function truncateTail(text: string, maxChars: number): { text: string; tr
 }
 
 /**
- * 去掉输出里残留的完成标记行。
+ * Remove completion marker lines left behind in the output.
  *
- * `terminal_send` 正常会切掉当轮的标记，但超时/迟到的情况下旧标记会留在环形缓冲里；
- * `terminal_read` 展示前统一清掉，避免把内部协议文本喂给模型。
+ * `terminal_send` normally strips the current round's marker, but on timeout/late arrival an old
+ * marker stays in the ring buffer; `terminal_read` clears it before display so internal protocol
+ * text is not fed to the model.
  */
 export function stripSentinelLines(text: string): string {
   return text.replace(/^__RB_DONE_[A-Za-z0-9]+__\r?$/gm, '')

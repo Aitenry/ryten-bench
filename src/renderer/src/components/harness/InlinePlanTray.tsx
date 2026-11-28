@@ -14,21 +14,21 @@ import { useTopicPending } from '../../hooks/harness/useTopicPending'
 import MarkdownLoad from '../markdown/MarkdownLoad'
 
 /**
- * 计划区（内联）— 输入框上方。
+ * Plan area (inline) — above the input box.
  *
- * 替代旧的「输入框计划模式徽标 + PlanReviewModal」：
- * - 计划模式开启时显示一行轻型状态条（退出也在行内）；
- * - 模型通过 exit_plan_mode 提交计划后，直接在状态条下方展开评审卡片：
- *   Markdown 计划 + 铅笔原地编辑 + 反馈 + 批准/继续规划；
- * - 全部位于输入框上方，不弹窗、不占用输入框。
+ * Replaces the old "plan mode badge on the input + PlanReviewModal":
+ * - while plan mode is on, a lightweight status row is shown (exiting is inline as well);
+ * - once the model submits a plan through exit_plan_mode, the review card expands right below
+ *   the status row: Markdown plan + in-place pencil editing + feedback + approve / keep planning;
+ * - everything sits above the input box: no modal, no input space taken.
  */
 interface InlinePlanTrayProps {
   currentTopicId: number | null
-  /** 斜杠命令 / 外部入口触发「切换计划模式」的计数器 */
+  /** Counter bumped by the slash command / external entry to toggle plan mode */
   toggleSignal: number
-  /** 取消本轮（与输入框停止同一条路径） */
+  /** Cancel this turn (the same path as the input's stop) */
   onCancelTurn: () => void
-  /** 计划评审挂起状态变化：页面据此锁定目标操作与输入框 */
+  /** Plan review pending state changes: the page locks goal actions and the input accordingly */
   onReviewPendingChange?: (pending: boolean) => void
   isDarkMode: boolean
 }
@@ -96,7 +96,7 @@ const InlinePlanTray: React.FC<InlinePlanTrayProps> = ({
     }
   }, [currentTopicId])
 
-  // 换了一条评审：重置草稿
+  // A different review arrived: reset the draft
   useEffect(() => {
     if (!question) {
       setEditingPlan(false)
@@ -144,7 +144,7 @@ const InlinePlanTray: React.FC<InlinePlanTrayProps> = ({
     if (toggleSignal === lastToggleSignalRef.current) return
     lastToggleSignalRef.current = toggleSignal
     void togglePlanMode(!planActive)
-    // planActive 有意不进依赖：仅在信号变化时触发一次
+    // planActive is deliberately not a dependency: fire once per signal change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toggleSignal, togglePlanMode])
 
@@ -161,7 +161,8 @@ const InlinePlanTray: React.FC<InlinePlanTrayProps> = ({
       if (!pending || !question || submitting) return
       setSubmitting(true)
       try {
-        // 计划批准后：最终计划内容直接成为目标；随后批准计划，计划卡移除、目标开始执行。
+        // Approved: the final plan text becomes the goal directly; the plan card then goes away and
+        // the goal starts running.
         if (approved && currentTopicId != null) {
           const objective = (draftPlan.trim() || question.question.trim()).slice(0, 8000)
           const existing = await harnessApi.harness.getGoal(currentTopicId).catch(() => null)

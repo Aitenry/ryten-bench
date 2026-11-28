@@ -1,13 +1,18 @@
 /**
- * 插件中心契约 v2（源码 / 重新发布 / 下载资产 / 导入本地插件目录）的渲染层桥。
+ * Renderer bridge for the plugin center v2 API (source / republish / asset download / import
+ * local plugin directory).
  *
- * 背景：主进程 v2 与渲染层是并行任务；主进程类型（`src/preload/index.d.ts`）就绪后，
- * `window.api.lattice` 上这些方法是 required，但**运行中的旧主进程 / 旧 preload**
- * 仍可能没有它们。因此页面不直接 `window.api.lattice.xxx`，而是：
- * - 用 `detectLatticeV2Capabilities()` 拿「当前运行的主进程支持哪些 v2 能力」，入口按能力禁用；
- * - 通过 `LatticeProvider` 暴露的包装方法调用（Provider 内部用 `getLatticeV2Bridge()`）。
+ * Background: the main-process v2 work and the renderer work were parallel tasks; once the
+ * main-process types (`src/preload/index.d.ts`) land, these methods are required on
+ * `window.api.lattice`, but a **running older main process / preload** may still lack them. So
+ * pages never call `window.api.lattice.xxx` directly; instead they:
+ * - use `detectLatticeV2Capabilities()` to learn which v2 capabilities the running main process
+ *   supports, and disable entries accordingly;
+ * - call the wrapper methods exposed by `LatticeProvider` (which uses `getLatticeV2Bridge()`
+ *   internally).
  *
- * 这样旧主进程上 UI 只是隐藏/禁用对应入口并提示，不会抛 `xxx is not a function`。
+ * This way the UI on an older main process only hides/disables the affected entries with a hint
+ * instead of throwing `xxx is not a function`.
  */
 import { getLatticeBridge } from './api'
 import type {
@@ -19,10 +24,10 @@ import type {
 
 export type { LatticeV2CapabilityKey }
 
-/** 当前运行的主进程支持哪些 v2 能力（false = 旧主进程，UI 禁用入口并提示） */
+/** Which v2 capabilities the running main process supports (false = older main process; UI disables the entry with a hint) */
 export type LatticeV2Capabilities = Record<LatticeV2CapabilityKey, boolean>
 
-/** 契约 v2 的六个方法名（顺序 = UI 上能力提示的顺序） */
+/** Names of the v2 methods (order = the order of the capability hints in the UI) */
 const V2_CAPABILITY_KEYS: LatticeV2CapabilityKey[] = [
   'publishInstalled',
   'sourcePath',
@@ -33,15 +38,15 @@ const V2_CAPABILITY_KEYS: LatticeV2CapabilityKey[] = [
   'importLocalDir'
 ]
 
-/** 取 v1+v2 形状的桥；主进程未注册 lattice 通道时返回 null */
+/** Get the v1+v2 shaped bridge; returns null when the main process has not registered the lattice channel */
 export function getLatticeV2Bridge(): LatticeBridgeV2 | null {
   return getLatticeBridge()
 }
 
-/** 探测当前主进程提供了哪些 v2 通道（Provider 初始化时算一次；能力在应用生命周期内不变） */
+/** Detect which v2 channels the current main process provides (computed once at provider init; capabilities never change during the app lifetime) */
 export function detectLatticeV2Capabilities(): LatticeV2Capabilities {
   const bridge = getLatticeV2Bridge()
-  // await 运行时形状而不是类型：旧 preload 上这些键是 undefined
+  // Probe the runtime shape rather than the type: these keys are undefined on an older preload
   const runtime = bridge as unknown as Partial<Record<keyof LatticeV2Methods, unknown>> | null
   const capabilities = {} as LatticeV2Capabilities
   for (const key of V2_CAPABILITY_KEYS) {
@@ -50,14 +55,14 @@ export function detectLatticeV2Capabilities(): LatticeV2Capabilities {
   return capabilities
 }
 
-/** `openSource` 结果是否是「回退到文件管理器」（没有自动建对话） */
+/** Whether an `openSource` result fell back to the file manager (no conversation created) */
 export function isFolderFallback(
   result: LatticeOpenSourceResult
 ): result is { ok: true; opened: 'folder'; path?: string } {
   return result.ok && 'opened' in result && result.opened === 'folder'
 }
 
-/** `openSource` 结果是否真的开了插件会话（能拿到工作区 id） */
+/** Whether an `openSource` result actually opened a plugin conversation (a workspace id is available) */
 export function isChatOpened(
   result: LatticeOpenSourceResult
 ): result is {

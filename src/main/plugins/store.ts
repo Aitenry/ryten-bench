@@ -2,44 +2,46 @@ import _Store from 'electron-store'
 import logger from 'electron-log'
 
 /**
- * 插件启用态持久化（userData/plugins.json）。
+ * Plugin enabled-state persistence (userData/plugins.json).
  *
- * 只存「显式覆写」：插件默认**停用**（装进来不等于让它开始跑代码），用户启用后写入 true；
- * 未写入的 id 取默认值 false。
+ * Only **explicit overrides** are stored: plugins are disabled by default (installing does not mean
+ * letting them run code), and enabling by the user writes true; ids not written default to false.
  *
- * 同一个文件还存一类**安装状态**：
- * - `removedInstalls`：用户在这台机器上卸载过的插件 id（插件中心换机自动补齐时跳过它）。
+ * The same file also stores one kind of **install state**:
+ * - `removedInstalls`: ids of plugins the user uninstalled on this machine (skipped by the plugin
+ *   center's new-machine auto-backfill).
  */
 export const Store = _Store['default'] || _Store
 
 export const pluginsStore = new Store<{
   states?: Record<string, boolean>
   /**
-   * 用户在这台机器上主动卸载过的插件 id。
+   * Ids of plugins the user explicitly uninstalled on this machine.
    *
-   * 它防的不是「应用包复活」（应用不分发插件），而是**插件中心的换机自动补齐**——
-   * 平台按用户保存安装记录，pull 发现本机缺插件就会自动装回来；如果卸载时不记这一笔，
-   * 卸载过的插件会在下次同步时「自己回来」。用户重新安装该插件时清掉
-   * （见 package-install 的 installPackageDir）。
+   * What it prevents is not "the app package resurrecting them" (the app ships no plugins), but the
+   * **plugin center's new-machine auto-backfill** - the platform saves install records per user,
+   * and a pull that finds the plugin missing locally installs it back automatically; without this
+   * note at uninstall time, an uninstalled plugin "comes back on its own" at the next sync. It is
+   * cleared when the user reinstalls the plugin (see installPackageDir in package-install).
    */
   removedInstalls?: string[]
 }>({
   name: 'plugins'
 })
 
-/** 读取某插件的显式启用覆写；undefined = 未覆写（取默认值 false） */
+/** Read a plugin's explicit enabled override; undefined = no override (defaults to false) */
 export function getEnabledOverride(id: string): boolean | undefined {
   const states = pluginsStore.get('states') ?? {}
   return states[id]
 }
 
-/** 写入显式启用覆写 */
+/** Write the explicit enabled override */
 export function setEnabledOverride(id: string, enabled: boolean): void {
   const states = pluginsStore.get('states') ?? {}
   pluginsStore.set('states', { ...states, [id]: enabled })
 }
 
-/** 清除显式覆写（回到默认值：停用） */
+/** Clear the explicit override (back to the default: disabled) */
 export function clearEnabledOverride(id: string): void {
   const states = pluginsStore.get('states') ?? {}
   if (!(id in states)) return
@@ -49,27 +51,29 @@ export function clearEnabledOverride(id: string): void {
   logger.info(`[Plugins] Cleared enabled override for ${id}`)
 }
 
-// ---------- 显式卸载记录（换机自动补齐要跳过） ----------
+// ---------- Explicit uninstall records (new-machine auto-backfill must skip them) ----------
 
 /**
- * 用户在这台机器上主动卸载过的插件 id。
+ * Ids of plugins the user explicitly uninstalled on this machine.
  *
- * 用途只有一个：**别让插件中心的换机自动补齐把刚卸载的插件装回来**。
- * 平台按用户保存安装记录，pull 时发现「平台有记录、本机没包」会自动安装；
- * 用户显式卸载后必须留一笔本地标记，否则下次同步/重启就复活。
- * 重新安装该插件时清掉（`installPackageDir` → `clearInstallRemoved`）。
+ * It has exactly one purpose: **stop the plugin center's new-machine auto-backfill from bringing
+ * back a plugin that was just uninstalled**. The platform saves install records per user, and a
+ * pull that finds "a platform record but no local package" installs automatically; after an
+ * explicit uninstall the user must leave a local mark, otherwise it comes back at the next
+ * sync/restart. Cleared when the plugin is reinstalled (`installPackageDir` ->
+ * `clearInstallRemoved`).
  */
 export function getRemovedInstalls(): string[] {
   const list = pluginsStore.get('removedInstalls') ?? []
   return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
 }
 
-/** 某插件是否被用户显式卸载过（换机自动补齐要跳过它） */
+/** Whether the user explicitly uninstalled a plugin (new-machine auto-backfill must skip it) */
 export function isInstallRemoved(id: string): boolean {
   return getRemovedInstalls().includes(id)
 }
 
-/** 记下「用户在这台机器上卸载了插件 id」 */
+/** Record that "the user uninstalled the plugin id on this machine" */
 export function markInstallRemoved(id: string): void {
   const list = getRemovedInstalls()
   if (list.includes(id)) return
@@ -77,7 +81,7 @@ export function markInstallRemoved(id: string): void {
   logger.info(`[Plugins] Marked ${id} as explicitly uninstalled (auto-restore will skip it)`)
 }
 
-/** 清掉「显式卸载」标记（用户重新安装时调用） */
+/** Clear the "explicitly uninstalled" mark (called when the user reinstalls) */
 export function clearInstallRemoved(id: string): void {
   const list = getRemovedInstalls()
   if (!list.includes(id)) return

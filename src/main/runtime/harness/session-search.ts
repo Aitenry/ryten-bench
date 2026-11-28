@@ -1,12 +1,15 @@
 ﻿/**
- * 历史会话检索工具：`session_search`（跨话题搜消息）与 `conversation_read`（读某话题最近消息）。
+ * Session-history retrieval tools: `session_search` (search messages across topics) and
+ * `conversation_read` (read recent messages of one topic).
  *
- * 对照 DSH 的 `dsh-tool-session-query`：DSH 的查询建立在事件溯源会话日志上；本项目以
- * `harness_topic` + `harness_dialogue` 两张表为准，提供同等用途的两个只读入口：
- * - 搜历史：按工作区隔离，返回话题标题 + 角色 + 时间 + 命中片段，供模型定位；
- * - 读会话：按话题 id 读最近 N 条，供模型回看上下文（跨会话引用时用）。
+ * The truth lives in the `harness_topic` + `harness_dialogue` tables, and two read-only entry
+ * points cover these use cases:
+ * - search history: isolated per workspace, returns topic title + role + time + matching snippet so
+ *   the model can locate things;
+ * - read conversation: read the last N messages of a topic id so the model can look back at
+ *   context (used for cross-conversation references).
  *
- * 只读、无副作用；结果按界面语言排版，正文原样返回。
+ * Read-only, no side effects; results are laid out per UI language and bodies are returned as-is.
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -26,9 +29,9 @@ import {
   type SessionSearchHit
 } from './session-search-core'
 
-/** 搜索结果里正文片段的截取由 core 负责；这里只管取数与错误处理 */
+/** core handles snippet clipping; this module only fetches data and handles errors */
 
-/** 构造两个会话检索工具（仅在有工作区的会话里挂载） */
+/** Build the session retrieval tools (mounted only in sessions that have a workspace) */
 export function buildSessionSearchTools(workspaceId: number): StructuredToolInterface[] {
   const sessionSearch = tool(
     async ({ query, limit }) => {

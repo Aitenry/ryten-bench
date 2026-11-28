@@ -4,14 +4,16 @@ import { deleteAllItems } from './db/mapper'
 import { settingsFilePath } from './ipc'
 
 /**
- * ${vars.title} 的清数据实现（`plugin.purge` 贡献）。
+ * Data purge implementation for ${vars.title} (the `plugin.purge` contribution).
  *
- * 用户卸载插件并勾了「同时删除该插件的全部数据」时由宿主调用，做两件事：
- * 1. **删自己的表行**（绝不碰别的表）；
- * 2. **删应用托管的数据**（这里是设置文件；如果你还托管了目录，也只删自己建的那一层，
- *    用户自己选的原始文件一律不动）。
+ * The host calls this when the user uninstalls the plugin with "delete all data for this plugin"
+ * checked. It does two things:
+ * 1. **Deletes its own table rows** (never touches other tables);
+ * 2. **Deletes app-managed data** (here the settings file; if you also manage directories, delete
+ *    only the layer you created — the user's own source files are never touched).
  *
- * 表结构不动：迁移由宿主统一管，卸载后迁移记录必须保持一致。
+ * The table schema stays untouched: migrations are managed by the host, and the migration records
+ * must remain consistent after uninstall.
  */
 export async function purgePluginData(): Promise<void> {
   const removed = await deleteAllItems()
@@ -23,7 +25,7 @@ export async function purgePluginData(): Promise<void> {
       removedFile = true
     }
   } catch (err) {
-    // 文件被占用：只告警，不阻塞卸载（表行已经删干净了）
+    // File is locked: warn only, do not block uninstall (the table rows are already gone)
     logger.warn('[${vars.id}] Failed to clean up settings file:', err)
   }
   logger.info(

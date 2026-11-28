@@ -1,28 +1,35 @@
 import { harnessApi } from '../api/harness'
 
 /**
- * 渲染层**实时探针**：在真实渲染进程里把一个插件的渲染模块 import + install 一遍。
+ * Renderer **live probe**: imports and installs a plugin's render module for real inside the
+ * actual renderer process.
  *
- * 为什么必须是真渲染进程（而不是主进程里做静态分析）：外部插件最常见的失败是
- * **装载期就炸**——引了宿主 UI 表里没有的键、顶层读了不存在的全局、桥的具名导出对不上、
- * 注册的组件一渲染就抛 `Element type is invalid`。这些只有在真 React、真 antd、
- * 真 `__RB_HOST_UI__` 表的环境里跑一遍才会暴露。
+ * Why it must be the real renderer process (and not static analysis in the main process): the
+ * most common failure of external plugins is **exploding at load time** — referencing a key that
+ * is missing from the host UI table, reading a non-existent global at the top level, named
+ * exports of the bridge not matching, or a registered component throwing `Element type is
+ * invalid` on first render. These only surface when the code runs in an environment with real
+ * React, real antd and a real `__RB_HOST_UI__` table.
  *
- * 与真实装载的两点差别（刻意的）：
- * 1. **上下文是记录版**：注册项进数组而不是宿主注册表，探针因此**不改变界面**
- *    （真装一遍再卸掉会让用户的菜单闪一下）；
- * 2. **跑完就走回滚**：install 之后把所有 effect 逆序回滚，顺手验证「插件可停用」。
+ * Two deliberate differences from a real install:
+ * 1. **The context is a recording one**: registrations go into arrays instead of the host
+ *    registry, so the probe **does not change the UI** (installing and uninstalling for real
+ *    would make the user's menu flicker);
+ * 2. **Roll back as soon as it finishes**: after install, all effects are rolled back in reverse
+ *    order, which also verifies that the plugin can be disabled.
  *
- * 说明符改写用的是**活表** `globalThis.__RB_HOST_UI__`（宿主 `external-loader.ts` 用的是
- * 主进程桥自报的键表，两者同源）。这里不直接复用宿主 loader 是有意的：那个模块不在宿主 UI
- * 桥的公开表里，而探针是诊断工具——它自己的改写规则坏掉时表现为「探针失败」，
- * 不影响真实装载路径。
+ * Specifier rewriting uses the **live table** `globalThis.__RB_HOST_UI__` (the host
+ * `external-loader.ts` uses the key table reported by the main-process bridge; both share the
+ * same source). Not reusing the host loader directly is intentional: that module is not in the
+ * public host UI bridge table, and the probe is a diagnostic tool — when its own rewriting rules
+ * break, the symptom is "the probe failed" and the real load path is unaffected.
  *
- * 前置条件：插件必须**已安装且启用**（`plugin://<id>/…` 才拿得到文件、才不是 403），
- * 因此主进程只在「发布之后」或「已安装插件的复验」时发探针。
+ * Precondition: the plugin must be **installed and enabled** (only then can `plugin://<id>/…`
+ * fetch the file, and only then is it not a 403), so the main process only sends a probe after
+ * publishing or when re-verifying an installed plugin.
  */
 
-/** 需要改写成宿主桥 URL 的说明符判定（与宿主 loader 的 needsBridge 同规则） */
+/** Specifiers that must be rewritten to the host bridge URL (same rule as the host loader's needsBridge) */
 function bridgeKey(spec: string, hostTable: Record<string, unknown>): string | null {
   if (spec.startsWith('@host/')) return spec
   if (spec.startsWith('.') || spec.startsWith('/')) return null
@@ -32,10 +39,11 @@ function bridgeKey(spec: string, hostTable: Record<string, unknown>): string | n
 }
 
 /**
- * 把产物里的宿主说明符改写成 `plugin://host/ui.js?m=<key>`。
+ * Rewrite host specifiers in the build output to `plugin://host/ui.js?m=<key>`.
  *
- * blob 模块没有裸说明符的解析能力（那正是宿主 loader 存在的原因），
- * 因此这里做同一件事：只动宿主表里**真的有的**键，其余原样保留。
+ * Blob modules cannot resolve bare specifiers (which is exactly why the host loader exists), so
+ * this does the same thing here: only keys that **really exist** in the host table are touched,
+ * everything else is left as is.
  */
 function rewriteHostSpecifiers(source: string, hostTable: Record<string, unknown>): string {
   const re = /(\bfrom\s*|\bimport\s*\(\s*|(?:^|[;}\n])\s*import\s*)(['"])([^'"]+)\2/gm
@@ -45,11 +53,11 @@ function rewriteHostSpecifiers(source: string, hostTable: Record<string, unknown
   })
 }
 
-/** 记录版宿主上下文（渲染层契约见 src/renderer/src/plugin-host/context.ts） */
+/** Recording host context (renderer contract in src/renderer/src/plugin-host/context.ts) */
 function createRecordingContext(): {
   ctx: Record<string, unknown>
   registrations: string[]
-  /** 注册项里声明的文案键（跑完检查「译得出来吗」——命名空间写错时菜单会显示原始键名） */
+  /** Label keys declared by registrations (checked afterwards: "do they resolve?" — a wrong namespace makes the menu show raw key names) */
   labelKeys: string[]
   rollback: () => void
 } {
@@ -57,7 +65,7 @@ function createRecordingContext(): {
   const labelKeys: string[] = []
   const undos: Array<() => void> = []
   const routes: { path: string; load?: () => Promise<unknown> }[] = []
-  /** 宿主真实的 i18n 实例（在下面 i18n.addResources 里把插件词条真的注册进去） */
+  /** The host's real i18n instance (plugin resources are actually registered into it below in i18n.addResources) */
   const hostI18n = (
     globalThis as {
       __RB_HOST_UI__?: Record<string, { i18n?: { addResourceBundle: (...a: unknown[]) => void } }>
@@ -95,10 +103,11 @@ function createRecordingContext(): {
     },
     i18n: {
       /**
-       * 词条真的注册进宿主 i18n（不是记一笔了事）：这样探针才能核对
-       * 「注册项里的 labelKey 到底译不译得出来」——把语言当命名空间写
-       * （`addResources('zh-CN', …)`）的插件，菜单里会显示原始键名，
-       * 这是外部插件最常见也最难自查的一类错（2026-09-27 真机实测踩到）。
+       * Resources are really registered into the host i18n (not merely noted down): that way the
+       * probe can verify whether "the labelKeys in registrations actually resolve" — plugins that
+       * pass the language as the namespace (`addResources('zh-CN', …)`) show raw key names in the
+       * menu, which is the most common and hardest-to-self-check error in external plugins (hit
+       * on a real device on 2026-09-27).
        */
       addResources: (ns: string, resources: Record<string, Record<string, unknown>>) => {
         registrations.push(`i18n:${ns}`)
@@ -107,7 +116,7 @@ function createRecordingContext(): {
           try {
             hostI18n.addResourceBundle(lang, ns, resources[lang], true, true)
           } catch {
-            // 词条注册失败不该让探针崩：下面用 exists 检查自会点名
+            // A failed resource registration must not crash the probe: the exists check below will name it
           }
         }
       }
@@ -130,7 +139,7 @@ function createRecordingContext(): {
       (globalThis as { __RB_HOST_UI__?: Record<string, unknown> }).__RB_HOST_UI__?.[
         `@host/vendor/${name}`
       ],
-    /** 探针内部用：把注册的路由交出来（挂载冒烟要靠它） */
+    /** Probe-internal: expose the registered routes (the mount smoke test needs them) */
     __routes: routes
   }
 
@@ -143,14 +152,14 @@ function createRecordingContext(): {
         try {
           undos.pop()?.()
         } catch {
-          // 回滚失败不阻断其余（与宿主 dispose 一致）
+          // A failed rollback doesn't block the rest (consistent with host dispose)
         }
       }
     }
   }
 }
 
-/** 注册项里的文案键是否都能译出来（译不出来 = 词条没注册对，界面会显示原始键名） */
+/** Whether all label keys of registrations resolve (unresolved = resources registered wrong; the UI would show raw key names) */
 function unresolvedLabels(labelKeys: string[]): string[] {
   const i18n = (
     globalThis as {
@@ -161,7 +170,7 @@ function unresolvedLabels(labelKeys: string[]): string[] {
   return [...new Set(labelKeys)].filter((key) => !i18n.exists(key))
 }
 
-/** 取模块导出里的 install（兼容 default / default.install / install 三种形态） */
+/** Pick install from the module exports (accepts the three shapes default / default.install / install) */
 function pickInstall(mod: unknown): ((ctx: unknown) => unknown) | null {
   const namespace = mod as { default?: unknown; install?: unknown }
   const candidates = [
@@ -173,15 +182,17 @@ function pickInstall(mod: unknown): ((ctx: unknown) => unknown) | null {
   return (found as ((ctx: unknown) => unknown) | undefined) ?? null
 }
 
-/** 等一小会儿（懒加载 chunk 与 effect 里的微任务都能跑完） */
+/** Wait a little (lazy chunks and microtasks in effects can finish) */
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * 挂载冒烟：把第一个注册路由的组件真的渲染一次（catch 渲染期崩溃）。
+ * Mount smoke test: actually render the component of the first registered route once (catches
+ * crashes during render).
  *
- * 用宿主那一份 React 与 react-dom/client（`__RB_HOST_UI__` 里的就是宿主实例），
- * 因此不会出现「插件自带第二份 React」的假象。渲染到游离节点上，跑完立刻 unmount。
- * 渲染期抛错由 React 19 交回 `window.onerror`，这里靠临时错误监听捕捉。
+ * Uses the host's own React and react-dom/client (the instances inside `__RB_HOST_UI__`), so
+ * there is no illusion of "the plugin bringing a second copy of React". Renders into a detached
+ * node and unmounts immediately afterwards. Render-time errors are handed back to
+ * `window.onerror` by React 19 and are captured here by a temporary error listener.
  */
 async function mountSmoke(ctx: Record<string, unknown>): Promise<string | null> {
   const hostTable = (globalThis as { __RB_HOST_UI__?: Record<string, unknown> }).__RB_HOST_UI__
@@ -223,13 +234,13 @@ async function mountSmoke(ctx: Record<string, unknown>): Promise<string | null> 
     try {
       root.unmount()
     } catch {
-      // 卸载失败不影响结论
+      // A failed unmount doesn't affect the conclusion
     }
     container.remove()
   }
 }
 
-/** 跑一次探针并把结果回话给主进程（任何异常都收敛成 fail，不抛给调用方） */
+/** Run the probe once and report the result back to the main process (any exception collapses to fail, never thrown to the caller) */
 export async function handleProbeRequest(payload: {
   probeId: string
   id: string
@@ -268,7 +279,7 @@ export async function handleProbeRequest(payload: {
             rollback = recorder.rollback
             await install(recorder.ctx)
             registrations.push(...recorder.registrations)
-            // 文案键译不出来 = 词条注册没写对（界面会显示 x.menu.title 这种原始键名）
+            // Unresolved label keys = resources registered wrong (the UI would show raw keys like x.menu.title)
             const unresolved = unresolvedLabels(recorder.labelKeys)
             if (unresolved.length > 0) {
               status = 'fail'

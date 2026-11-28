@@ -12,43 +12,49 @@ import {
 } from './manager'
 
 /**
- * 账号级本地数据空间的**运行时接线**（Electron 相关部分都收在这里，便于 manager 单测）。
+ * **Runtime wiring** for the account-level local data space (all Electron-related parts are
+ * collected here so manager can be unit-tested).
  *
- * - 应用一启动（`whenReady` 最早、DB/插件装载之前）调用 `initAccountProfile()`，
- *   让根目录变成「当前登录账号（或未登录 anonymous）」的数据空间；
- * - 登录 / 登出 / 改基址导致身份变化时，优先调用 `profiles/live.ts` 的
- *   `switchAccountProfile()` **原地切换**（不重启应用）；只有切换条件不满足
- *   （初始化还没跑完）或切换失败时才退回 `requestProfileRestart()` 重启；
- * - `profileSyncGuard()` 给同步层用：数据空间与登录身份不一致时**暂停同步**，
- *   避免「刚登录还没切换完」的窗口把 A 账号的数据推进 B 账号。
+ * - At app startup (`whenReady` at the earliest, before DB/plugin loading) call
+ *   `initAccountProfile()`, making the root directory the data space of "the currently logged-in
+ *   account (or the logged-out anonymous one)";
+ * - when login / logout / base URL changes alter the identity, prefer `switchAccountProfile()` in
+ *   `profiles/live.ts` for an **in-place switch** (no app restart); fall back to
+ *   `requestProfileRestart()` only when the switch conditions do not hold (initialization has not
+ *   finished) or the switch fails;
+ * - `profileSyncGuard()` is for the sync layer: **pause sync** when the data space and the login
+ *   identity do not match, avoiding the window "just logged in but the switch is not done yet"
+ *   writing A's data into B's account.
  */
 
 let activeKey: string | null = null
 let ready = false
 let restartScheduled = false
-/** 正在原地对调账号数据空间（安装/卸载/发布等写盘动作要避开这一段） */
+/** An in-place swap of the account data space is running (disk-writing actions such as install/uninstall/publish must avoid this period) */
 let switchInProgress = false
 
-/** 是否正在切换账号数据空间 */
+/** Whether the account data space is being switched */
 export function isProfileSwitchInProgress(): boolean {
   return switchInProgress
 }
 
-/** 由 `profiles/live.ts` 在切换前后设置 */
+/** Set by `profiles/live.ts` before and after the switch */
 export function setProfileSwitchInProgress(value: boolean): void {
   switchInProgress = value
 }
 
 /**
- * 账号数据空间换了以后，清掉侧栏「各侧当前内容」的引用。
+ * After the account data space changes, clear the sidebar's "current content per side" references.
  *
- * `activeMode` / `workContent` / `chatContent` / `pluginContent` 存在**机器级**
- * `settings.json` 里，但它们记的 workspaceId / topicId 是**账号库自增 id**。
- * 不清理的话，换号后 `restoreLastContent` 会拿 A 账号的 id 去新库查：要么新建一条
- * 插件工作区并改掉刚对齐好的活动工作区，要么撞上另一条无关会话（串号）。
- * 保留 `pluginsPath` / `memoryPath` 等机器级配置，只丢「选中了哪条内容」。
+ * `activeMode` / `workContent` / `chatContent` / `pluginContent` live in the **machine-level**
+ * `settings.json`, but the workspaceId / topicId they record are **account database auto-increment
+ * ids**. Without clearing them, after switching accounts `restoreLastContent` queries the new
+ * database with A's ids: it either creates a plugin workspace and overwrites the just-aligned active
+ * workspace, or hits an unrelated conversation (cross-talk). Machine-level config such as
+ * `pluginsPath` / `memoryPath` is kept; only "which content was selected" is dropped.
  *
- * 启动期与运行中切换共用（启动期的对调在 `initAccountProfile` 里做，早于渲染层）。
+ * Shared by startup and runtime switching (the startup swap happens in `initAccountProfile`,
+ * before the renderer exists).
  */
 export function clearAccountScopedContentSelections(): void {
   try {
@@ -68,7 +74,7 @@ export function clearAccountScopedContentSelections(): void {
   }
 }
 
-/** 应用启动早期调用一次（必须在 initPluginHost / 打开数据库之前）；返回 false 表示已退出 */
+/** Called once early at app startup (must be before initPluginHost / opening the database); returns false when the app has exited */
 export function initAccountProfile(): boolean {
   const userDataDir = app.getPath('userData')
   try {
@@ -79,8 +85,10 @@ export function initAccountProfile(): boolean {
     ready = true
     logApplyResult(result, desired)
     /**
-     * 这次启动真的对调了账号容器（from 与目标不同）：上一次运行记住的侧栏内容
-     * 都是旧账号库的自增 id，必须在渲染层恢复之前清掉，否则会串到新账号的会话。
+     * This startup really swapped the account container (from differs from the target): the sidebar
+     * content remembered by the previous run are all auto-increment ids from the old account
+     * database and must be cleared before the renderer restores, otherwise they cross over into the
+     * new account's conversations.
      */
     if (result.from && result.from !== desired) clearAccountScopedContentSelections()
     return true
@@ -91,8 +99,9 @@ export function initAccountProfile(): boolean {
       '[Profiles] 账号数据空间初始化失败：为避免串号，本次运行会暂停云同步。请检查 userData/profiles 权限或磁盘空间。',
       err
     )
-    // 数据目录对调失败时不继续启动：否则可能用「空/错账号」的库打开界面，
-    // 看起来像数据丢了（其实还在 profiles 里等下次恢复）。宁可退出让用户重试。
+    // When the data directory swap fails, do not continue starting: otherwise the UI may open with
+    // an "empty/wrong account" database, which looks like data loss (it is actually still in
+    // profiles waiting for the next recovery). Better to exit and let the user retry.
     try {
       dialog.showErrorBox(
         '账号数据空间初始化失败',
@@ -100,14 +109,14 @@ export function initAccountProfile(): boolean {
           '应用将退出，请关闭占用该目录的程序后重试；数据没有被删除。'
       )
     } catch {
-      // 对话框失败也不能继续跑
+      // The dialog failing must not keep it running either
     }
     app.exit(1)
     return false
   }
 }
 
-/** 写一条切换结果日志（原地切换与启动期用同一条格式，便于按 key 串起整段日志） */
+/** Write a switch result log (in-place switch and startup use the same format, so a whole log stretch can be followed by key) */
 export function logApplyResult(result: ApplyProfileResult, key: string): void {
   const parts = [`key=${key}`]
   if (result.from) parts.push(`from=${result.from}`)
@@ -118,12 +127,12 @@ export function logApplyResult(result: ApplyProfileResult, key: string): void {
   logger.info(`[Profiles] 账号本地数据空间：${parts.join(' ')}`)
 }
 
-/** 原地切换成功后更新「本进程正在使用的数据空间」（`profiles/live.ts` 调用） */
+/** Update "the data space this process is using" after a successful in-place switch (called by `profiles/live.ts`) */
 export function setActiveProfileKey(key: string): void {
   activeKey = key
 }
 
-/** 本次进程使用的账号数据空间（初始化失败时为 null） */
+/** The account data space used by this process (null when initialization failed) */
 export function getActiveProfileKey(): string | null {
   return activeKey
 }
@@ -132,17 +141,18 @@ export function isAccountProfileReady(): boolean {
   return ready
 }
 
-/** 当前登录态（以**磁盘上的会话文件**为准，和启动时选空间的口径一致） */
+/** Current login state (based on the **on-disk session file**, consistent with how the space is chosen at startup) */
 export function currentSessionProfileKey(): string {
   const identity: SessionIdentity = readSessionIdentity(app.getPath('userData'))
   return deriveProfileKey(identity)
 }
 
 /**
- * 数据空间与登录身份是否一致。
+ * Whether the data space matches the login identity.
  *
- * 不一致的两种典型时刻：刚登录/刚登出、原地切换还没做完；或旧会话启动后才补到 user id。
- * 这时同步必须停，等 `profiles/live.ts` 把数据空间换过来（或启动期按会话对调完）。
+ * Two typical mismatched moments: just logged in / just logged out with the in-place switch not yet
+ * done; or the user id only arrives after an old session started. Sync must stop then, until
+ * `profiles/live.ts` swaps the data space (or startup finishes swapping per the session).
  */
 export function profileMatchesSession(): boolean {
   if (!ready || activeKey === null) return false
@@ -150,15 +160,17 @@ export function profileMatchesSession(): boolean {
 }
 
 /**
- * 同步前的守卫：返回错误文案表示「本次不允许同步」，null 表示可以。
+ * Guard before syncing: an error message means "this sync is not allowed", null means it is.
  *
- * - 初始化失败 → 拒绝（宁可不同步，也不能把数据写进错误账号）；
- * - 数据空间与登录身份不一致 → 拒绝（切换完成/重启后自动恢复）。
+ * - initialization failed -> reject (better not to sync than to write data into the wrong account);
+ * - data space and login identity mismatch -> reject (recovers automatically after the switch
+ *   completes / restart).
  */
 export function profileSyncGuard(): string | null {
   if (!ready) return '本地账号数据空间初始化失败，已暂停同步（详见日志）'
   const identity = readSessionIdentity(app.getPath('userData'))
-  // 已登录但拿不到 user id：无法判断数据该归谁，宁可不发也不串号
+  // Logged in but no user id: cannot tell which account the data belongs to, better not to send
+  // than to cross accounts
   if (identity.loggedIn && (identity.userId ?? '') === '') {
     return '登录账号缺少用户 id，已暂停同步（请重新登录）'
   }
@@ -166,26 +178,30 @@ export function profileSyncGuard(): string | null {
   return null
 }
 
-/** 登录态是否指向未登录空间（供 IPC 判断要不要切回 anonymous） */
+/** Whether the login state points to the logged-out space (for IPC to decide whether to switch back to anonymous) */
 export function sessionIsAnonymous(): boolean {
   return currentSessionProfileKey() === ANONYMOUS_PROFILE
 }
 
 /**
- * 安排一次重启来切换本地数据空间（**回退路径**）。
+ * Schedule a restart to switch the local data space (**fallback path**).
  *
- * 正常路径是 `profiles/live.ts` 的原地切换；只有两种情况会走到这里：
- * - 原地切换的前置条件不满足（应用初始化还没完成、数据库还没就绪）；
- * - 原地切换失败（例如目录被别的进程占用），必须靠重启把半完成的对调收干净。
+ * The normal path is the in-place switch in `profiles/live.ts`; only two cases get here:
+ * - the preconditions for in-place switching do not hold (app initialization not done, database not
+ *   ready);
+ * - the in-place switch failed (e.g. the directory is held by another process), and a restart is
+ *   needed to clean up the half-done swap.
  *
- * 不在这里直接搬数据：`profiles/.active.json` 仍表示「根目录当前属于谁」，
- * 重启后 `initAccountProfile()` 按磁盘会话算出目标 key 再对调，逻辑只有一份。
+ * This does not move data directly: `profiles/.active.json` still says "who the root directory
+ * currently belongs to", and after the restart `initAccountProfile()` derives the target key from
+ * the on-disk session and swaps then, so the logic exists only once.
  */
 export function requestProfileRestart(reason: string): void {
   if (restartScheduled) return
   restartScheduled = true
   logger.info(`[Profiles] 需要重启以切换账号数据空间：${reason}（原地切换不可用或失败）`)
-  // 给 IPC 响应/日志落盘留一点时间，再重启（dev 与打包版都走同一条路径）
+  // Leave a little time for the IPC response / logs to hit disk, then restart (dev and packaged
+  // builds take the same path)
   setTimeout(() => {
     try {
       app.relaunch()
@@ -196,12 +212,12 @@ export function requestProfileRestart(reason: string): void {
   }, 600)
 }
 
-/** 是否已经安排了「重启应用」来切换数据空间（避免同一流程再发起一次切换） */
+/** Whether a "restart the app" to switch the data space has been scheduled (so the same flow does not start another switch) */
 export function isProfileRestartScheduled(): boolean {
   return restartScheduled
 }
 
-/** 会话刷新后核对身份（例如旧会话启动后才从 /v1/me 补到 user id） */
+/** Verify identity after a session refresh (e.g. the user id only arrives from /v1/me after an old session started) */
 export function ensureProfileMatchesSession(reason: string): boolean {
   if (profileMatchesSession()) return true
   logger.info(`[Profiles] 当前数据空间 ${activeKey ?? 'null'} 与登录身份不一致（${reason}）`)

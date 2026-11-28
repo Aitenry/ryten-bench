@@ -3,19 +3,22 @@ import type { MessageInstance } from 'antd/es/message/interface'
 import type { LockUnlockResult } from './settings'
 
 /**
- * core 共享的组件 props / 上下文类型。
+ * Component props / context types shared by core.
  *
- * 归属划分：**插件自己的 props 不放这里**——core 反向 import 插件类型会让
- * 「插件可停用」的边界失真。notes 的 props（`GraphViewProps` / `GraphCanvasProps` /
- * `GraphToolbarProps` / `EntityDetailProps` / `BuildProgressProps` / `WikiEditModalProps` /
- * `WikiCardProps` / `DocPreviewModalProps` / `TodoListProps`）都在
- * `src/renderer/src/types/notes.ts`；图谱构建进度的 Provider props 也随插件收走。
+ * Ownership: **plugin-specific props do not belong here** — a reverse import of plugin types from
+ * core would blur the "plugins are disableable" boundary. The notes props (`GraphViewProps` /
+ * `GraphCanvasProps` / `GraphToolbarProps` / `EntityDetailProps` / `BuildProgressProps` /
+ * `WikiEditModalProps` / `WikiCardProps` / `DocPreviewModalProps` / `TodoListProps`) all live in
+ * `src/renderer/src/types/notes.ts`; the graph build progress Provider props moved along with the
+ * plugin as well.
  *
- * core 收尾清理：删掉已无消费方的类型（`StatusOption` / `SidebarProps` / `MainRoutesProps` /
- * `WeatherData`+`WorkTimeData`+`CardItemProps`——底栏天气卡与侧栏/路由各自就地定义 props）。
+ * Cleanup in core: removed types that no longer have consumers (`StatusOption` / `SidebarProps` /
+ * `MainRoutesProps` / `WeatherData`+`WorkTimeData`+`CardItemProps` — the bottom bar weather card
+ * and the sidebar/routes each define their props locally).
  *
- * 留在这里的是外壳与共享 UI 真正共用的部分：markdown 渲染、锁屏、消息上下文，
- * 以及模型 Provider 选项（图谱设置页与 harness 智能体设置页共用）。
+ * What remains here is what the shell and shared UI genuinely use together: markdown rendering,
+ * the lock screen, the message context, and the model Provider options (shared by the graph
+ * settings page and the harness agent settings page).
  */
 
 /* ── Markdown ── */
@@ -49,17 +52,17 @@ export interface TableOfContentsProps {
 /* ── Lock Screen ── */
 
 export interface LockScreenProps {
-  /** 提交 6 位解锁码；校验在主进程完成（加盐 scrypt + 失败退避），返回失败原因/剩余尝试次数 */
+  /** Submit the 6-digit unlock code; validation happens in the main process (salted scrypt + failure backoff), returning the failure reason / remaining attempts */
   onUnlock: (password: string) => Promise<LockUnlockResult>
 }
 
 /* ── Sidebar ── */
 
-/* 侧栏的 props 就地定义在 `components/system/frame/Sidebar.tsx`（自用，不外借）。 */
+/* Sidebar props are defined locally in `components/system/frame/Sidebar.tsx` (private, not shared). */
 
 /* ── Route ── */
 
-/* 路由 props 就地定义在 `route/MainRoutes.tsx`（自用，不外借）。 */
+/* Route props are defined locally in `route/MainRoutes.tsx` (private, not shared). */
 
 /* ── Provider / Context ── */
 
@@ -77,7 +80,7 @@ export interface MessageProviderProps {
   children: React.ReactNode
 }
 
-/* ── Settings（模型 Provider 选项：图谱设置页与 harness 智能体设置页共用） ── */
+/* ── Settings (model Provider options: shared by the graph settings page and the harness agent settings page) ── */
 
 export interface ProviderOption {
   id: number

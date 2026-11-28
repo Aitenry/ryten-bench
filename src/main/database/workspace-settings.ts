@@ -5,15 +5,15 @@ import type { HarnessSettings } from '../types/settings'
 import { migrateWorkspaceData } from './workspace-migration'
 
 /**
- * 把「工作区」这一层运行配置与某个账号数据库对齐。
+ * Reconcile the "workspace" runtime config layer with a given account database.
  *
- * 为什么单独成文件：这段逻辑以前内联在启动流程里，只在启动早期跑一次。现在账号数据空间
- * 可以在运行中原地切换（登出 / 换号 / 改基址，见 `profiles/live.ts`），切完必须再跑一次——
- * `harness.activeWorkspaceId` 存在**机器级** `settings.json` 里，而工作区行在**账号级**
- * 数据库里：换到另一个账号后，这个 id 很可能指向不存在的行，不重新对齐会出现
- * 「侧栏没有活动工作区 / 打开的会话属于上一个账号」这类串号现象。
+ * Why it is a separate file: this logic used to be inlined in the startup flow and ran only once early on. Now the account data space
+ * can be switched in place at runtime (logout / account switch / base URL change, see `profiles/live.ts`), and it must run again
+ * after switching — `harness.activeWorkspaceId` lives in the **machine-level** `settings.json`, while workspace rows live in the
+ * **account-level** database: after switching to another account that id likely points to a nonexistent row, and failing to re-align
+ * causes cross-account symptoms such as "no active workspace in the sidebar / the open session belongs to the previous account".
  *
- * 幂等：重复调用只会把设置改回与当前库一致的值。
+ * Idempotent: repeated calls only reset the settings to values consistent with the current database.
  */
 export async function applyWorkspaceSettings(db: PGlite): Promise<void> {
   const result = await migrateWorkspaceData(
@@ -22,15 +22,15 @@ export async function applyWorkspaceSettings(db: PGlite): Promise<void> {
       const harness = settingsStore.get('harness') as HarnessSettings | undefined
       return harness?.activeWorkspaceId
     },
-    // 插件存放路径：分类历史上的插件工作区（kind='plugin'）用，没配就跳过那一步
+    // Plugin storage path: used to classify historical plugin workspaces (kind='plugin'); skip that step when unset
     (settingsStore.get('harness') as HarnessSettings | undefined)?.pluginsPath
   )
 
-  // 把迁移确定的活动工作区写回设置（id 与路径一起同步）
+  // Write the active workspace determined by migration back to settings (sync the id and path together)
   const harness = settingsStore.get('harness') as HarnessSettings | undefined
   const next: HarnessSettings = { ...(harness ?? ({} as HarnessSettings)) }
   if (result.activeWorkspaceId == null) {
-    // 没有任何工作区：清掉残留配置，回到「未配置」，由对话页引导用户选择目录
+    // No workspace at all: clear leftover config and return to "not configured", letting the chat page guide the user to pick a directory
     if (next.activeWorkspaceId != null || next.workspacePath) {
       delete next.activeWorkspaceId
       next.workspacePath = ''

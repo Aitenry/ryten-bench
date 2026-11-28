@@ -1,83 +1,87 @@
 /**
- * MCP（Model Context Protocol）服务器配置的**跨进程 DTO**（主进程 ↔ 渲染层 ↔ electron-store）。
+ * **Cross-process DTO** for MCP (Model Context Protocol) server configuration (main process ↔
+ * renderer ↔ electron-store).
  *
- * 为什么单独一个文件、且运行期零依赖：这份形状同时被三处消费——
- *  - 主进程的连接管理器（`main/runtime/mcp.ts`，把配置翻成 MCP SDK 的连接）；
- *  - 设置 → MCP 页的表单（`renderer/components/settings/McpSettings.tsx`）；
- *  - 落盘（electron-store 的 `mcpServers` 键，见 `main/runtime/mcp-store.ts`）。
+ * Why a separate file with zero runtime dependencies: this shape is consumed in three places —
+ *  - the main process connection manager (`main/runtime/mcp.ts`, which turns configs into MCP SDK
+ *    connections);
+ *  - the Settings → MCP page form (`renderer/components/settings/McpSettings.tsx`);
+ *  - persistence (the electron-store `mcpServers` key, see `main/runtime/mcp-store.ts`).
  *
- * 字段命名刻意对齐 mcp.json / Cursor / Claude Desktop 的通用写法（command/args/env、url/headers），
- * 这样用户可以直接粘贴现成的服务器条目，不用重写一遍。
+ * Field names intentionally follow the common mcp.json conventions (command/args/env,
+ * url/headers) so users can paste existing server entries directly without rewriting them.
  */
 
-/** 传输方式：本地进程（stdio）或远程地址（Streamable HTTP，可回退 SSE） */
+/** Transport: local process (stdio) or remote address (Streamable HTTP, with SSE fallback) */
 export type McpTransport = 'stdio' | 'http' | 'sse'
 
-/** 一条 MCP 服务器配置（electron-store 里存的就是它的数组） */
+/** One MCP server configuration (electron-store keeps an array of these) */
 export interface McpServerConfig {
-  /** 稳定标识（nanoid/时间戳生成），工具命名空间与增删改都按它定位 */
+  /** Stable identifier (generated from nanoid/timestamp); tool namespacing and CRUD key off it */
   id: string
-  /** 展示名（设置页与工具卡片上用），也是工具名前缀的来源（会被净化成 [A-Za-z0-9_-]） */
+  /** Display name (used on the settings page and tool cards), also the source of the tool name prefix (sanitized to [A-Za-z0-9_-]) */
   name: string
-  /** 补充说明（可为空）：这台服务器接的是什么，便于以后分辨 */
+  /** Extra note (may be empty): what this server connects to, to tell them apart later */
   description?: string
-  /** 是否启用：停用即不连接、其工具也不出现在工具清单里 */
+  /** Whether enabled: disabled means no connection and its tools don't appear in the tool list */
   enabled: boolean
   transport: McpTransport
-  /** stdio：可执行文件（如 npx / uvx / node） */
+  /** stdio: executable (such as npx / uvx / node) */
   command?: string
-  /** stdio：命令行参数 */
+  /** stdio: command-line arguments */
   args?: string[]
-  /** stdio：附加环境变量（在宿主环境之上叠加） */
+  /** stdio: extra environment variables (layered on top of the host environment) */
   env?: Record<string, string>
-  /** stdio：工作目录（可选） */
+  /** stdio: working directory (optional) */
   cwd?: string
-  /** http/sse：服务地址 */
+  /** http/sse: server address */
   url?: string
-  /** http/sse：附加请求头（token 等） */
+  /** http/sse: extra request headers (tokens etc.) */
   headers?: Record<string, string>
-  /** 单次工具调用超时（毫秒）；留空用工程默认值 */
+  /** Per tool-call timeout (ms); leave empty to use the project default */
   timeoutMs?: number
 }
 
-/** 服务器连上后拿到的一条工具（设置页展示 + 工具清单并入用） */
+/** One tool obtained after the server connects (shown on the settings page + merged into the tool list) */
 export interface McpToolInfo {
-  /** 全名（`mcp__<serverId>__<toolName>`），即模型看到的名字 */
+  /** Full name (`mcp__<serverId>__<toolName>`), i.e. the name the model sees */
   name: string
-  /** 服务器上报的原始工具名 */
+  /** Original tool name reported by the server */
   rawName: string
-  /** 给模型看的描述（可能为空） */
+  /** Description shown to the model (may be empty) */
   description: string
 }
 
 /**
- * 服务器的实时连接状态（设置页逐行展示；连不上的原因要能看见）。
- * `unknown` = 还没连过（加载列表不再顺手重连，见 runtime/mcp.ts 的 mcpServerViews）。
+ * Live connection state of a server (shown row by row on the settings page; the reason for a
+ * failed connection must be visible).
+ * `unknown` = never connected yet (loading the list no longer reconnects on the side, see
+ * mcpServerViews in runtime/mcp.ts).
  */
 export type McpServerStatus = 'ok' | 'error' | 'disabled' | 'unconfigured' | 'unknown'
 
-/** 设置页一行的视图（配置 + 运行期状态 + 工具清单） */
+/** View of one row on the settings page (config + runtime status + tool list) */
 export interface McpServerView {
   config: McpServerConfig
   status: McpServerStatus
-  /** status === 'error' 时的失败原因（原始错误信息） */
+  /** Failure reason when status === 'error' (raw error message) */
   error?: string
   tools: McpToolInfo[]
-  /** 本行凭据里的敏感值是否已配置（渲染层只显示「已设置」，不回传明文） */
+  /** Whether the sensitive values in this row's credentials are configured (the renderer only shows "set", never sends plaintext back) */
   hasSecrets: { env: boolean; headers: boolean }
 }
 
-/** 设置页保存时的入参（id 缺省表示新增） */
+/** Input when saving on the settings page (missing id means create) */
 export type McpServerInput = Omit<McpServerConfig, 'id'> & { id?: string }
 
 /**
- * 把任意来源的条目规整成合法配置（新增/编辑/导入 mcp.json 共用）。
+ * Normalize an entry from any source into a valid config (shared by create/edit/import mcp.json).
  *
- * 宽容之处（都是为了「粘贴现成 JSON 就能用」）：
- *  - `type` / `transport` 二选一，`sse` 归一成自己的传输；
- *  - 缺少 `args` 时补空数组（stdio 连接 schema 要求是数组）；
- *  - 名字非法（空）时用 id 兜底，id 也缺时由调用方生成。
- * 非法输入抛错，错误信息面向用户可直接显示在表单下方。
+ * The lenient parts (all in service of "paste an existing JSON and it works"):
+ *  - `type` / `transport`, either one; `sse` is normalized to its own transport;
+ *  - a missing `args` becomes an empty array (the stdio connection schema requires an array);
+ *  - an illegal (empty) name falls back to the id, and a missing id is generated by the caller.
+ * Illegal input throws; the error message is user-facing and can be shown right below the form.
  */
 export function normalizeMcpServer(input: McpServerInput): McpServerConfig {
   const id = (input.id ?? '').trim()
@@ -119,7 +123,7 @@ export function normalizeMcpServer(input: McpServerInput): McpServerConfig {
   }
 }
 
-/** 去掉空键/空值；全空时返回 undefined（避免落盘一堆空对象） */
+/** Drop empty keys/values; return undefined when everything is empty (avoid persisting a pile of empty objects) */
 function cleanMap(map?: Record<string, string>): Record<string, string> | undefined {
   if (!map) return undefined
   const out: Record<string, string> = {}
@@ -136,16 +140,18 @@ function cleanTimeout(value?: number): number | undefined {
 }
 
 /**
- * 工具名命名空间：`mcp__<server>__<tool>`。
+ * Tool name namespacing: `mcp__<server>__<tool>`.
  *
- * 前缀为什么必要：不同服务器的工具可能重名（`search` / `read`），而工具清单是**扁平**的
- * 一张表（本地工具 + 插件贡献 + MCP），重名会被注册表当冲突丢掉。这里统一成
- * `mcp__` 两段式，既避免冲突，又让工具卡片一眼看出「这是外部 MCP 工具」。
- * 名字里的非法字符（空格、点、中文）一律净化成 `_`：部分模型对工具名字符集敏感。
+ * Why the prefix is necessary: tools from different servers may share a name (`search` /
+ * `read`), and the tool list is a **flat** table (local tools + plugin contributions + MCP);
+ * duplicate names are dropped as conflicts by the registry. The two-part `mcp__` form here both
+ * avoids conflicts and makes it obvious at a glance on the tool card that this is an external
+ * MCP tool. Illegal characters in the name (spaces, dots, Chinese) are all sanitized to `_`:
+ * some models are sensitive to the tool-name character set.
  */
 export const MCP_TOOL_PREFIX = 'mcp__'
 
-/** 服务器名 → 工具命名空间片段（净化到 [A-Za-z0-9_-]） */
+/** Server name → tool namespace fragment (sanitized to [A-Za-z0-9_-]) */
 export function mcpNamespace(name: string): string {
   const cleaned = name
     .trim()
@@ -154,16 +160,17 @@ export function mcpNamespace(name: string): string {
   return cleaned || 'server'
 }
 
-/** 组装工具全名 */
+/** Assemble the full tool name */
 export function mcpToolName(serverNamespace: string, rawToolName: string): string {
   return `${MCP_TOOL_PREFIX}${serverNamespace}__${rawToolName}`
 }
 
 /**
- * 反解工具全名。返回 null 表示这不是一条 MCP 工具。
+ * Parse a full tool name. Returns null if it isn't an MCP tool.
  *
- * 只认 `mcp__` 前缀 + 第一个 `__` 分隔：工具名本身可能含 `__`（如 `list__x`），
- * 按第一个分隔切才不会把服务器名切错。
+ * Only the `mcp__` prefix + the first `__` separator are recognized: the tool name itself may
+ * contain `__` (e.g. `list__x`), and splitting on the first separator keeps the server name
+ * correct.
  */
 export function parseMcpToolName(fullName: string): { server: string; tool: string } | null {
   if (!fullName.startsWith(MCP_TOOL_PREFIX)) return null
@@ -173,32 +180,34 @@ export function parseMcpToolName(fullName: string): { server: string; tool: stri
   return { server: rest.slice(0, sep), tool: rest.slice(sep + 2) }
 }
 
-/** 是不是一条 MCP 工具的全名（`mcp__…`） */
+/** Whether this is the full name of an MCP tool (`mcp__…`) */
 export function isMcpToolName(name?: string): boolean {
   return typeof name === 'string' && name.startsWith(MCP_TOOL_PREFIX)
 }
 
 /**
- * 智能体工具选择里的「MCP 服务器」分组项：`mcp@<命名空间>`。
+ * The "MCP server" group entry in an agent's tool selection: `mcp@<namespace>`.
  *
- * 为什么要有它（2026-09-26 用户要求「MCP 注册到智能体的设置页面，不能直接选择全部的工具」
- * → 紧接着又要求「要用 mcp 的名称」）：MCP 服务器一多，工具就是几十项
- * （`mcp__<服务器>__<工具>`），智能体页的工具下拉会被它们淹没；而在那儿挑某个具体工具，
- * 与 MCP 页的逐项开关本来就是**同一个决定**——两个入口必然漂移。
- * 现在的分工：智能体页**按服务器**给一项，名字就用服务器自己的名字（如 `github`）；
- * **具体哪几个工具只由 MCP 设置页的逐项开关决定**。
+ * Why it exists (user requirement on 2026-09-26: "MCP is registered on the agent settings page,
+ * every tool must not be directly selectable" → and right after that "use the MCP name"): with
+ * many MCP servers the tools are dozens of items (`mcp__<server>__<tool>`), and the agent page's
+ * tool dropdown would be drowned by them; while picking a specific tool there and toggling it
+ * item by item on the MCP page are **the same decision** — two entry points would inevitably
+ * drift. The split now: the agent page offers **one item per server**, named after the server
+ * itself (e.g. `github`); **which specific tools are enabled is decided only by the per-item
+ * toggles on the MCP settings page**.
  *
- * 分隔符为什么用 `@`：`mcpNamespace()` 只保留 `[A-Za-z0-9_-]`，`@` 不可能出现在命名空间里，
- * 因此这一项与真实工具全名（`mcp__…`）绝不会互相误认。
+ * Why `@` as the separator: `mcpNamespace()` only keeps `[A-Za-z0-9_-]`, so `@` can never appear
+ * in a namespace, and this entry can never be mistaken for a real tool full name (`mcp__…`).
  */
 export const MCP_SERVER_GROUP_PREFIX = 'mcp@'
 
-/** 服务器命名空间 → 选择项的值 */
+/** Server namespace → selection value */
 export function mcpServerGroupValue(namespace: string): string {
   return `${MCP_SERVER_GROUP_PREFIX}${namespace}`
 }
 
-/** 反解选择项：是某台 MCP 服务器的分组项就给命名空间，否则 null */
+/** Parse a selection value: returns the namespace if it is some MCP server's group entry, else null */
 export function parseMcpServerGroup(value?: string): string | null {
   if (typeof value !== 'string' || !value.startsWith(MCP_SERVER_GROUP_PREFIX)) return null
   const namespace = value.slice(MCP_SERVER_GROUP_PREFIX.length)
@@ -206,12 +215,13 @@ export function parseMcpServerGroup(value?: string): string | null {
 }
 
 /**
- * 「定时任务」工具分组选择项：列表里只出现一个选择项，运行前展开成
- * `schedule_create/list/view/edit` 四个真实工具（用户口径：定时任务合成一个注册选择）。
+ * "Scheduled tasks" tool group selection entry: only this one entry appears in the list, and it
+ * is expanded before running into the four real tools `schedule_create/list/view/edit` (user
+ * requirement: scheduled tasks are registered as one selection).
  */
 export const SCHEDULE_TOOL_GROUP = 'schedule-tasks'
 
-/** 定时任务分组的真实工具名 */
+/** Real tool names of the scheduled tasks group */
 export const SCHEDULE_TOOL_NAMES = [
   'schedule_create',
   'schedule_list',
@@ -219,57 +229,62 @@ export const SCHEDULE_TOOL_NAMES = [
   'schedule_edit'
 ] as const
 
-/** 该选择项是不是「定时任务」分组 */
+/** Whether this selection entry is the "scheduled tasks" group */
 export function isScheduleToolGroup(value?: string): boolean {
   return value === SCHEDULE_TOOL_GROUP
 }
 
 /**
- * 「网页抓取 + 网页搜索」合并分组选择项（用户口径 2026-11-27：「这两个合成一个注册，
- * 像定时任务一样」）。
+ * Combined "web fetch + web search" group selection entry (user requirement 2026-11-27: "merge
+ * these two into one registration, like scheduled tasks").
  *
- * 与定时任务同一套机制：列表里只出现这一项，运行前由 `buildTools` 展开成
- * `web_fetch` / `web_search` 两个真实工具。旧配置里逐个存的两个名字经
- * `canonicalToolName` 迁到分组项，避免升级后勾选凭空消失。
+ * Same mechanism as scheduled tasks: only this entry appears in the list, and before running it
+ * is expanded by `buildTools` into the two real tools `web_fetch` / `web_search`. The two names
+ * stored individually in old configs are migrated to the group entry by `canonicalToolName`, so
+ * checkmarks don't silently disappear after an upgrade.
  */
 export const WEB_TOOL_GROUP = 'web-tools'
 
-/** 网页分组里的真实工具名（顺序即展开顺序） */
+/** Real tool names in the web group (order = expansion order) */
 export const WEB_TOOL_NAMES = ['web_fetch', 'web_search'] as const
 
-/** 该选择项是不是「网页抓取与搜索」分组 */
+/** Whether this selection entry is the "web fetch and search" group */
 export function isWebToolGroup(value?: string): boolean {
   return value === WEB_TOOL_GROUP
 }
 
-/** 该选择项是不是某台 MCP 服务器的分组项 */
+/** Whether this selection entry is some MCP server's group entry */
 export function isMcpServerGroup(value?: string): boolean {
   return parseMcpServerGroup(value) !== null
 }
 
 /**
- * 历史标记：最早那版只给一项笼统的「MCP」（所有服务器一起开关）。
+ * Legacy marker: the earliest version offered a single broad "MCP" entry (all servers toggled
+ * together).
  *
- * 现在 MCP 的唯一入口是输入框下方的 MCP 选择器（按服务器选），工具清单里**不再列这一项**
- * （用户口径 2026-11-27：「这个 MCP 服务器不就是一个统一的内容吗」）。这个标记只用于
- * **历史配置兼容**：旧话题/旧子智能体里存过的 `mcp` 读到时按「全部已连接的 MCP 工具 +
- * 资源三件套」处理，不报错、不丢能力。
+ * Now the only entry point for MCP is the MCP selector below the input box (per server), and the
+ * tool list **no longer includes this entry** (user requirement 2026-11-27: "isn't this MCP
+ * server just one unified thing"). This marker is only used for **legacy config compatibility**:
+ * an old `mcp` stored in old topics/subagents is read as "all connected MCP tools + the three
+ * resources", without errors or lost capability.
  */
 export const MCP_TOOL_GROUP = 'mcp'
 
-/** 该名字是不是那个笼统的旧「MCP」分组项 */
+/** Whether this name is that broad legacy "MCP" group entry */
 export function isMcpToolGroup(name?: string): boolean {
   return name === MCP_TOOL_GROUP
 }
 
 /**
- * 把选择列表里的 MCP 相关项展开成**具体工具名**（其余原样保留）。
+ * Expand MCP-related entries in a selection list into **concrete tool names** (everything else
+ * is kept as is).
  *
- * 三种形态都认：
- *  - `mcp@<命名空间>`：那台服务器在 MCP 页被勾选的工具；
- *  - `mcp`（旧标记）：全部被勾选的 MCP 工具；
- *  - `mcp__<命名空间>__<工具>`（旧数据里逐个存的真实全名）：**也按所属服务器的勾选展开**——
- *    MCP 页是工具级的唯一管控点，不能因为别处存了个名字就绕过它。
+ * All three forms are recognized:
+ *  - `mcp@<namespace>`: the tools of that server checked on the MCP page;
+ *  - `mcp` (legacy marker): all checked MCP tools;
+ *  - `mcp__<namespace>__<tool>` (real full names stored individually in old data): **also
+ *    expanded according to the owning server's toggles** — the MCP page is the only tool-level
+ *    control point, and a name stored elsewhere must not bypass it.
  */
 export function expandMcpServerGroups(
   names: string[] | undefined,
@@ -301,27 +316,35 @@ export function expandMcpServerGroups(
 }
 
 /**
- * **模式工具**：插件工坊的 4 个工具（草稿 / 构建 / 验收 / 安装）+ 插件中心的「发布版本」。
+ * **Mode tools**: the four plugin workshop tools (draft / build / verify / install) + "publish
+ * release" of the plugin center.
  *
- * 它们**不进**「设置 → 智能体 → 默认工具」的可选清单：那张清单是给「哪一轮都可能用得上」的
- * 工具准备的，而这些只在写插件时成立。用户口径（2026-09-29）：不要在这里勾了才注册；
- * 切到**插件模式**就自动挂载，同时把它们从主智能体的可选清单里拿掉。
+ * They do **not** go into the "Settings → Agent → default tools" selectable list: that list is
+ * for tools that "may be useful in any turn", while these only hold while writing plugins. User
+ * requirement (2026-09-29): don't require checking them here to register; switching to **plugin
+ * mode** mounts them automatically, and at the same time removes them from the main agent's
+ * selectable list.
  *
- * 于是模式工具走一条独立的路：
- *  - 主进程注册表照常登记实例（`main/tools/builders.ts` 的 `toolBuilders`），
- *    `buildTools` 才拿得到它们、同名插件贡献也照旧被本地工具挡住；
- *  - `listAvailableTools()` 把它们滤掉 —— 设置页下拉里看不到、也没法勾；
- *  - `effectiveMainAgentTools(..., { pluginMode: true })` 把它们**追加**进本轮工具名。
- *    插件模式的判定 = 会话（话题）的记忆作用域是 `plugin:<id>`，见 `main/memory-scope.ts`，
- *    因此「切到插件模式 → 下一轮就能用」，不需要任何勾选动作，重启应用后重开这条会话也仍然成立。
+ * So mode tools take a separate path:
+ *  - the main process registry registers instances as usual (`toolBuilders` in
+ *    `main/tools/builders.ts`), so `buildTools` can get them and plugin contributions with the
+ *    same name are still blocked by local tools;
+ *  - `listAvailableTools()` filters them out — they can neither be seen nor checked in the
+ *    settings page dropdown;
+ *  - `effectiveMainAgentTools(..., { pluginMode: true })` **appends** them to this turn's tool
+ *    names. Plugin mode is determined by the session (topic) memory scope being `plugin:<id>`,
+ *    see `main/memory-scope.ts`, so "switch to plugin mode → usable next turn" needs no checking
+ *    action, and still holds after restarting the app and reopening this session.
  *
- * 其中 `LATTICE_MODE_TOOL_NAMES`（发布版本）还多一道**登录闸门**：没登录插件中心时连名字都
- * 不追加，否则模型会去调一个必然 401 的工具（见 `effectiveMainAgentTools` 的 `signedIn`）。
+ * Among them `LATTICE_MODE_TOOL_NAMES` (publish release) has one more **login gate**: when not
+ * logged in to the plugin center even the name is not appended, otherwise the model would call
+ * a tool that is bound to 401 (see `signedIn` in `effectiveMainAgentTools`).
  *
- * 名单放在这个 shared 模块里、而不是新开一个文件：主进程（工具注册/组装）与渲染层
- * （设置页清理历史残留）都要用它，而本模块是**零相对 import 的纯模块**——
- * `test/verify-mcp-tools.mjs` 直接 `node --experimental-strip-types` 加载它做离线断言，
- * 多一条相对 import 那条路就走不通了。
+ * The list lives in this shared module rather than a new file: both the main process (tool
+ * registration/assembly) and the renderer (cleaning legacy leftovers on the settings page) need
+ * it, and this module is a **pure module with zero relative imports** —
+ * `test/verify-mcp-tools.mjs` loads it directly with `node --experimental-strip-types` for
+ * offline assertions, and one more relative import would break that path.
  */
 export const PLUGIN_MODE_TOOL_NAMES = [
   'plugin_draft',
@@ -332,34 +355,38 @@ export const PLUGIN_MODE_TOOL_NAMES = [
 ] as const
 
 /**
- * 模式工具里**需要登录**才挂载的那几个：`plugin_release` 直连插件中心（发版要平台会话），
- * 未登录时调用只会拿到 401/「请先登录」，不如干脆不注册。
+ * The mode tools that are mounted **only after login**: `plugin_release` talks to the plugin
+ * center directly (publishing needs a platform session), and when not logged in a call only
+ * gets a 401 / "please log in first", so it is better not to register it at all.
  *
- * 与 `PLUGIN_MODE_TOOL_NAMES` 分开：上面那份是「插件模式有哪些工具」，这份是「其中哪些还要看登录态」，
- * 设置页的过滤与历史配置清理只关心前者。
+ * Kept separate from `PLUGIN_MODE_TOOL_NAMES`: that one is "which tools plugin mode has", this
+ * one is "which of them also depend on login state"; the settings page filtering and legacy
+ * config cleanup only care about the former.
  */
 export const LATTICE_MODE_TOOL_NAMES = ['plugin_release'] as const
 
-/** 这个名字是不是「登录后才挂载」的模式工具 */
+/** Whether this name is a mode tool mounted only after login */
 export function isLatticeModeTool(name: string): boolean {
   return (LATTICE_MODE_TOOL_NAMES as readonly string[]).includes(name)
 }
 
-/** 这个名字是不是插件模式的模式工具（设置页过滤历史残留时用） */
+/** Whether this name is a plugin mode tool (used when the settings page filters legacy leftovers) */
 export function isPluginModeTool(name: string): boolean {
   return (PLUGIN_MODE_TOOL_NAMES as readonly string[]).includes(name)
 }
 
 /**
- * 「资料整理」统一工具的正式名字。
+ * Official name of the unified "materials" tool.
  *
- * 2026-11 把原 manage_docs / manage_todos / manage_wikis / search_graph 四个工具
- * 合并成一个入口；旧配置（设置页勾选、子智能体配置、旧话题快照）里仍可能是旧名字，
- * 读写时统一经 `canonicalToolName` 迁移，避免升级后「明明勾过工具却全消失」。
+ * In 2026-11 the four original tools manage_docs / manage_todos / manage_wikis / search_graph
+ * were merged into one entry; old configs (settings page checkmarks, subagent config, old topic
+ * snapshots) may still carry the old names, and reads/writes migrate them uniformly through
+ * `canonicalToolName`, so that "I clearly checked the tools but they all disappeared" doesn't
+ * happen after an upgrade.
  */
 export const MATERIALS_TOOL_NAME = 'manage_materials'
 
-/** 归一前的四个工具名（只用于迁移，不再注册） */
+/** The four tool names before normalization (only for migration, no longer registered) */
 export const LEGACY_MATERIAL_TOOL_NAMES = [
   'manage_docs',
   'manage_todos',
@@ -369,47 +396,53 @@ export const LEGACY_MATERIAL_TOOL_NAMES = [
 
 const LEGACY_TOOL_ALIASES: Record<string, string> = {
   ...Object.fromEntries(LEGACY_MATERIAL_TOOL_NAMES.map((name) => [name, MATERIALS_TOOL_NAME])),
-  // 2026-11-27：网页抓取 / 网页搜索合并成一个选择项（见 WEB_TOOL_GROUP），
-  // 旧配置里逐个勾的两个名字在这里归一到分组项，运行时再展开回两个真实工具。
+  // 2026-11-27: web fetch / web search merged into one selection entry (see WEB_TOOL_GROUP);
+  // the two names checked individually in old configs are normalized to the group entry here and
+  // expanded back into two real tools at runtime.
   web_fetch: WEB_TOOL_GROUP,
   web_search: WEB_TOOL_GROUP
 }
 
 /**
- * 旧工具名 → 现行工具名；其余名字原样返回。
+ * Old tool name → current tool name; other names are returned as is.
  *
- * 除了资料整理的四个旧名（→ `manage_materials`），2026-11-27 起 `web_fetch` /
- * `web_search` 也归一成 `web-tools` 分组项（网页抓取与搜索合并成一个选择，见
- * `WEB_TOOL_GROUP`）；运行时由 `expandSelectionToolNames` 再展开成两个真实工具。
+ * Besides the four old materials names (→ `manage_materials`), from 2026-11-27 `web_fetch` /
+ * `web_search` are also normalized to the `web-tools` group entry (web fetch and search merged
+ * into one selection, see `WEB_TOOL_GROUP`); at runtime `expandSelectionToolNames` expands them
+ * back into the two real tools.
  */
 export function canonicalToolName(name: string): string {
   return LEGACY_TOOL_ALIASES[name] ?? name
 }
 /**
- * 主智能体「工具」选择里可保存的真实工具名：系统内置 + 已加载插件贡献的工具。
+ * Real tool names that can be saved in the main agent's "tools" selection: system built-ins +
+ * tools contributed by loaded plugins.
  *
- * MCP 工具与分组项不在这份清单里——它们由 MCP 页按工具开关（mainAgent.mcpTools），
- * 运行时由 effectiveMainAgentTools 自动并入本轮；插件模式工具由模式自动挂载。
- * 主进程在 harness-get-tools / main-agent-get / main-agent-update 统一用这条判定，
- * 渲染层不需要再做过滤。
+ * MCP tools and group entries are not in this list — they are toggled per tool on the MCP page
+ * (mainAgent.mcpTools) and merged into the turn automatically at runtime by
+ * effectiveMainAgentTools; plugin mode tools are mounted automatically by the mode. The main
+ * process uses this check uniformly in harness-get-tools / main-agent-get / main-agent-update,
+ * so the renderer doesn't need to filter again.
  */
 export function isSelectableMainAgentTool(name?: string): boolean {
   if (typeof name !== 'string' || name.length === 0) return false
-  // 可保存的「分组项」：定时任务、网页抓取与搜索；`mcp` 只是历史标记，新配置不会写它
+  // Savable "group entries": scheduled tasks, web fetch and search; `mcp` is only a legacy marker that new configs never write
   if (isScheduleToolGroup(name) || isWebToolGroup(name) || isMcpToolGroup(name)) return true
   if (isMcpToolName(name) || isMcpServerGroup(name) || isPluginModeTool(name)) return false
   return true
 }
 
 /**
- * 主智能体配置（electron-store 的 `mainAgent` 键）。
+ * Main agent config (the electron-store `mainAgent` key).
  *
- * `tools` 是**用户从「智能体」页工具下拉里勾的**（本地工具 + 插件工具，**不含** MCP 工具；
- * MCP 在那一页按服务器显示成 `mcp@<命名空间>`，见 MCP_SERVER_GROUP_PREFIX），
- * `mcpTools` 是**在 MCP 页按工具勾的**（MCP 是全项目唯一的工具级管控点）。
- * 两者分开存的原因：进 MCP 页反勾某个工具时，只该停用它自己，不能把用户在智能体页挑的
- * 其他工具一起抹掉——合并成一张表存就必然出这个问题。
- * 模式工具（插件工坊 4 个）两份都不进：它们由 `pluginMode` 自动带进来。
+ * `tools` is **what the user checks in the "Agent" page tool dropdown** (local tools + plugin
+ * tools, **not including** MCP tools; MCP is shown on that page per server as
+ * `mcp@<namespace>`, see MCP_SERVER_GROUP_PREFIX), `mcpTools` is **what is checked per tool on
+ * the MCP page** (MCP is the only tool-level control point in the whole project). The reason the
+ * two are stored separately: when unchecking a tool on the MCP page, only that tool should be
+ * disabled, other tools the user picked on the agent page must not be wiped as well — storing
+ * them in one table would inevitably cause that problem. Mode tools (the 4 plugin workshop ones)
+ * don't go into either: they are brought in automatically by `pluginMode`.
  */
 export interface MainAgentConfig {
   tools?: string[]
@@ -418,17 +451,22 @@ export interface MainAgentConfig {
 }
 
 /**
- * 一轮对话实际启用的工具名 = 主智能体勾选的工具 + MCP 页勾选的 MCP 工具（去重）
- *   + 插件模式的模式工具（`options.pluginMode`，名单见 PLUGIN_MODE_TOOL_NAMES）。
+ * Tool names actually enabled for a turn = tools checked on the main agent + MCP tools checked
+ * on the MCP page (deduped) + mode tools of plugin mode (`options.pluginMode`, names in
+ * PLUGIN_MODE_TOOL_NAMES).
  *
- * 单一真源：主进程组装工具集（harness-start-stream / harness-send-message）与话题上的工具快照
- * 都走这里，避免「页面显示已启用、实际没挂上」这类漂移。`tools` 里若混进了 MCP 分组项
- * （历史数据/子智能体配置被复制过来）或模式工具（改版前在这一页勾过的历史配置），这里直接跳过
- * ——它们都不是用户可勾的真实工具名，模式工具再由 `pluginMode` 统一追加。
+ * Single source of truth: both the main process tool-set assembly
+ * (harness-start-stream / harness-send-message) and the tool snapshot on the topic go through
+ * here, avoiding drift such as "the page shows it enabled but it isn't actually mounted". If
+ * `tools` contains MCP group entries (historical data / copied subagent config) or mode tools
+ * (legacy config checked on this page before the redesign), they are skipped here — none of them
+ * are real user-checkable tool names, and mode tools are appended uniformly by `pluginMode`.
  *
- * `signedIn`（= 插件中心登录态，主进程取 `hasLatticeSession()`）：只有**登录**时才会追加
- * `LATTICE_MODE_TOOL_NAMES`（发布版本）。缺省按「没登录」处理——少挂一个工具只会让模型
- * 看不到它，而误挂一个必然 401 的工具会让模型把「没登录」当成「发布失败」反复重试。
+ * `signedIn` (= plugin center login state; the main process takes it from
+ * `hasLatticeSession()`): only when **logged in** is `LATTICE_MODE_TOOL_NAMES` (publish release)
+ * appended. Absent means "not logged in" — missing one tool only makes it invisible to the
+ * model, while wrongly mounting a tool that is bound to 401 makes the model treat "not logged
+ * in" as "publish failed" and retry repeatedly.
  */
 export function effectiveMainAgentTools(
   config?: MainAgentConfig | null,
@@ -439,8 +477,10 @@ export function effectiveMainAgentTools(
     for (const name of names ?? []) {
       if (typeof name !== 'string' || !name) continue
       const canonical = canonicalToolName(name)
-      // 分组项（MCP 服务器 / 旧「MCP」标记 / 定时任务 / 网页抓取与搜索）保留到组装阶段再统一展开，
-      // 这样「选择列表里的一项」与「真正挂载的工具」不会各写一套名单。
+      // Group entries (MCP server / legacy "MCP" marker / scheduled tasks / web fetch and
+      // search) are kept until the assembly stage, which expands them uniformly, so "one entry
+      // in the selection list" and "the tools actually mounted" don't each maintain their own
+      // list.
       if (isPluginModeTool(canonical)) continue
       if (!out.includes(canonical)) out.push(canonical)
     }
@@ -449,7 +489,7 @@ export function effectiveMainAgentTools(
   push(config?.mcpTools)
   if (options?.pluginMode) {
     for (const name of PLUGIN_MODE_TOOL_NAMES) {
-      // 登录后才挂的那几个（发布版本）：没登录连名字都不追加
+      // The ones mounted only after login (publish release): not even the name is appended when not logged in
       if (!options.signedIn && isLatticeModeTool(name)) continue
       if (!out.includes(name)) out.push(name)
     }
@@ -458,12 +498,13 @@ export function effectiveMainAgentTools(
 }
 
 /**
- * 渲染层的**掩码占位**：env / headers 的值不下发到界面（凭据不出主进程），
- * 表单里显示的就是这个串；保存时把磁盘上的原值填回去（用户没动这一项）。
+ * Renderer-side **mask placeholder**: env / headers values are never sent to the UI (credentials
+ * don't leave the main process); the form shows this string, and on save the original values on
+ * disk are filled back (the user didn't touch this field).
  */
 export const SECRET_MASK = '••••••'
 
-/** 下发配置前把凭据值掩码（只掩值，键名保留——用户需要看到自己配了哪些变量） */
+/** Mask credential values before sending config (values only, key names kept — users need to see which variables they configured) */
 export function maskServerSecrets<
   T extends { env?: Record<string, string>; headers?: Record<string, string> }
 >(config: T): T {
@@ -473,10 +514,11 @@ export function maskServerSecrets<
 }
 
 /**
- * 保存时把掩码还原成磁盘上的原值。
+ * Restore masks to the original values on disk when saving.
  *
- * 规则：**值等于掩码的键**取原值，其余键用新值（新增/删除照旧生效）。这样用户不改凭据时
- * 不必重新输入 token，也不会因为「表单不回显」而把已保存的值清空。
+ * Rule: **keys whose value equals the mask** take the original value, other keys use the new
+ * value (add/delete still takes effect). This way the user doesn't have to re-enter tokens when
+ * not changing credentials, and saved values aren't wiped because "the form doesn't echo them".
  */
 export function restoreServerSecrets(
   input: McpServerInput,

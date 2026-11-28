@@ -1,14 +1,16 @@
-// 知识库域处理器（统一由 manage_materials 工具调度）：知识库/目录/归档文档全部走
-// notes 自己的 wiki 与 document mapper，不再跨域直读。
+// Knowledge base domain handlers (dispatched uniformly by the manage_materials tool): knowledge
+// bases, directories and archived documents all go through notes' own wiki and document mappers,
+// no longer reading across domains.
 import { mainFormat, mainPlural } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
 
 // ============================================================================
-// Wiki Handlers — 渐进式披露：列表 → 目录 → 文档
-// 同时支持 CRUD：创建/编辑/删除 知识库、目录，以及文档归档/移除
+// Wiki Handlers — progressive disclosure: list → directory → document
+// Also supports CRUD: create/edit/delete knowledge bases and directories, plus document
+// archiving/removal
 // ============================================================================
 
-// ── 查询 ──
+// ── Queries ──
 
 export async function listWikisHandler(
   params: {
@@ -80,7 +82,7 @@ export async function getWikiDirectoriesHandler(params: { wikiId: number }): Pro
     })
   )
 
-  // sort_order 库列为可空（DEFAULT 0），null 按默认值参与排序
+  // The sort_order column is nullable (DEFAULT 0); null participates in sorting as the default
   const sorted = [...directories].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
 
   interface DirNode {
@@ -214,7 +216,7 @@ export async function deleteWikiHandler(params: { wikiId: number }): Promise<str
   return mainFormat(tr.wikis.deleted, { wikiId: params.wikiId, title: wiki.title })
 }
 
-// ── 目录 CRUD ──
+// ── Directory CRUD ──
 
 export async function createDirectoryHandler(params: {
   wikiId: number
@@ -232,10 +234,11 @@ export async function createDirectoryHandler(params: {
     const dirs = await getDirectoriesByWikiId(params.wikiId)
     const parent = dirs.find((d) => d.id === params.parentId)
     if (!parent) {
-      // 修复：父目录不存在/不属于本知识库时,parent_id 仍原值写入会造出跨库/悬空父节点
+      // Fix: if the parent directory does not exist or belongs to another knowledge base, writing
+      // parent_id as-is would create a cross-wiki or dangling parent node
       return mainFormat(tr.wikis.parentNotFound, { wikiId: params.wikiId })
     }
-    // level 库列为可空（DEFAULT 0），null 按 0 处理
+    // The level column is nullable (DEFAULT 0); null is treated as 0
     level = (parent.level ?? 0) + 1
   }
 
@@ -271,7 +274,7 @@ export async function deleteDirectoryHandler(params: { directoryId: number }): P
   return mainFormat(getDocsToolTexts().wikis.directoryDeleted, { directoryId: params.directoryId })
 }
 
-// ── 文档归档 / 移除 ──
+// ── Document archiving / removal ──
 
 export async function archiveDocsHandler(params: {
   directoryId: number
@@ -311,10 +314,11 @@ export async function removeDocHandler(params: {
 }
 
 /**
- * 把文档从一个目录移动到另一个目录（同一知识库内）。
+ * Move a document from one directory to another (within the same knowledge base).
  *
- * 组合 remove + archive 两个原子操作：目标写入失败时把源关联补回去，
- * 避免「源已移除、目标没写进」导致文档从知识库里消失。
+ * Combines the two atomic operations remove + archive: if writing the target fails, the source
+ * association is restored, so the document does not disappear from the knowledge base when "the
+ * source was removed but the target was not written".
  */
 export async function moveDocHandler(params: {
   docId: number
@@ -347,7 +351,8 @@ export async function moveDocHandler(params: {
   try {
     await addDocToDirectory(params.toDirectoryId, params.docId)
   } catch {
-    // 目标写入失败（通常是目标已存在同文档）：把源关联补回去
+    // Writing the target failed (usually the same document already exists there): restore the
+    // source association
     await addDocToDirectory(params.fromDirectoryId, params.docId).catch(() => undefined)
     return mainFormat(tr.wikis.moveFailed, {
       docId: params.docId,

@@ -4,10 +4,11 @@ import { useTranslation } from '@renderer/i18n'
 import type { DocPreviewModalProps } from '../../../types/notes'
 
 /**
- * 资料库文档预览（知识图谱里点来源文档时打开）。
+ * Material-library document preview (opened when clicking a source document in the knowledge graph).
  *
- * 弹窗外壳抽到 `components/markdown/MarkdownPreviewModal`：资料库与技能页的
- * 「查看内容」共用同一套整窗宽 Markdown 预览，不再各自维护 Modal + 滚动容器。
+ * The dialog shell is extracted into `components/markdown/MarkdownPreviewModal`: the material library
+ * and the skills page share the same full-window-width Markdown preview for "view content", instead of
+ * each maintaining its own Modal + scroll container.
  */
 const DocumentPreviewModal: React.FC<DocPreviewModalProps> = ({ open, onCancel, currentDoc }) => {
   const { t } = useTranslation()

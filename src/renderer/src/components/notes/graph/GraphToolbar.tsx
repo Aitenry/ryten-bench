@@ -27,16 +27,16 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedDocIds, setSelectedDocIds] = useState<number[]>([])
 
-  // 过滤掉已在图谱中的文档
+  // Filter out docs that are already in the graph
   const availableDocs = useMemo(
     () => docs.filter((d) => !addedDocIds.has(d.id)),
     [docs, addedDocIds]
   )
 
-  // 文档过滤下拉选项（稳定引用，避免 Select 反复重建）
+  // Doc filter dropdown options (stable reference so Select is not rebuilt repeatedly)
   const docOptions = useMemo(() => docs.map((d) => ({ value: d.id, label: d.title })), [docs])
 
-  // Modal 内追加文档的选项
+  // Options for appending docs inside the modal
   const appendOptions = useMemo(
     () => availableDocs.map((d) => ({ value: d.id, label: d.title })),
     [availableDocs]
@@ -87,7 +87,7 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
             onChange={(e) => onSearchChange(e.target.value)}
             allowClear
           />
-          {/* 文档级子图：隐藏右侧操作（文档筛选 / 追加 / 重建） */}
+          {/* Doc-level subgraph: hide the right-side actions (doc filter / append / rebuild) */}
           {!isDocGraph && (
             <>
               <Select

@@ -3,17 +3,19 @@ import { theme } from 'antd'
 import { entityGradient } from '@renderer/utils/entityColor'
 
 /**
- * 通用实体卡（插件 / 智能体 / 技能 / MCP 服务器 / …）。
+ * Generic entity card (plugin / agent / skill / MCP server / …).
  *
- * 视觉基准参考 Raycast、Linear、Vercel 一类产品的卡片语言：
- * - 一枚带渐变色的图标块作为唯一的彩色元素，其余全部走主题 token；
- * - 标题 + 元信息 + 两行描述 + 底部动作，层级固定，扫视时不会跳；
- * - 悬停只做「轻微抬升 + 描边变亮」，不加花哨的动画。
+ * Visual language follows the card style common in modern desktop products:
+ * - a single gradient icon tile is the only colored element; everything else uses theme tokens;
+ * - title + meta + two-line description + footer actions, a fixed hierarchy that stays steady
+ *   while scanning;
+ * - hover only adds a slight lift and a brighter border, no decorative animation.
  *
- * 卡片本身不决定宽高：外层用 CSS grid 排（`repeat(auto-fill, minmax(232px, 1fr))`）。
+ * The card does not set its own width or height: the parent lays it out with a CSS grid
+ * (`repeat(auto-fill, minmax(232px, 1fr))`).
  */
 
-/** 卡片元信息里的小胶囊（版本、模型、内置标记…） */
+/** Small pill inside the card meta row (version, model, built-in marker…) */
 export const EntityChip: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token } = theme.useToken()
   return (
@@ -41,21 +43,21 @@ export const EntityChip: React.FC<{ children: React.ReactNode }> = ({ children }
 }
 
 export interface EntityCardProps {
-  /** 实体 id：用于稳定取渐变色（`gradient` 优先） */
+  /** Entity id: used to derive a stable gradient (`gradient` takes priority) */
   id?: string
   gradient?: [string, string]
   icon: React.ReactNode
   title: string
-  /** 标题下的元信息行（建议用 EntityChip） */
+  /** Meta row under the title (EntityChip recommended) */
   meta?: React.ReactNode
   description?: string
-  /** 描述与底部之间的补充内容（连接目标、工具数量…） */
+  /** Extra content between the description and the footer (connection target, tool count…) */
   children?: React.ReactNode
   footerStart?: React.ReactNode
   footerEnd?: React.ReactNode
   onClick?: () => void
   minHeight?: number
-  /** 稳定钩子（工装定位用） */
+  /** Stable hooks (for fixture targeting) */
   dataAttrs?: Record<string, string>
 }
 

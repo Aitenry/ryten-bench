@@ -29,26 +29,30 @@ import { detectLatticeV2Capabilities, getLatticeV2Bridge } from './source'
 import { LatticeContext, type LatticeContextValue } from './LatticeContextCore'
 
 /**
- * 插件中心 Provider：把 `window.api.lattice` 的状态与事件收敛成一份 React 状态。
+ * Plugin center provider: funnels `window.api.lattice` state and events into a single React state.
  *
- * 职责：
- * - 启动时读一次 `lattice:status`，并订阅 `lattice:state-changed` / `lattice:sync-state` /
- *   `lattice:upload-progress` 三个推送；
- * - 把每个 IPC 方法包一层（登录/退出/同步后自动刷新状态）；
- * - 主进程通道尚未注册时不崩：`available=false`，所有方法返回「不可用」的兜底结果；
- * - 契约 v2 的源码/发布/导入方法同样包一层，并附带**能力探测**（旧主进程上这些方法是
- *   undefined，页面按 `capabilities` 禁用入口，而不是运行期 `not a function`）。
+ * Responsibilities:
+ * - Read `lattice:status` once at startup and subscribe to the three pushes
+ *   `lattice:state-changed` / `lattice:sync-state` / `lattice:upload-progress`;
+ * - Wrap each IPC method (refresh status automatically after login/logout/sync);
+ * - Don't crash when the main-process channel is not registered yet: `available=false` and every
+ *   method returns an "unavailable" fallback result;
+ * - Wrap the v2 source/publish/import methods the same way and add **capability detection**
+ *   (these methods are undefined on an older main process, so the page disables entries through
+ *   `capabilities` instead of hitting a runtime `not a function`).
  *
- * 约定：Provider 只持有状态，不做路由跳转、不弹提示；这些交给页面组件。
- * 上下文对象在 `LatticeContextCore.ts`（react-refresh 要求组件文件只导出组件）。
+ * Convention: the provider only holds state; it does not route or show toasts — pages do that.
+ * The context object lives in `LatticeContextCore.ts` (react-refresh requires component files to
+ * export components only).
  */
 function normalizeStatus(next: LatticeStatus | null | undefined): LatticeStatus {
   if (!next) return EMPTY_LATTICE_STATUS
   const rawUser = next.user
   /**
-   * `user.avatar` 兜底：旧主进程的 status 里没有这个字段（undefined）→ null；
-   * 平台明确返回空串/空白 → 同样按无头像处理。不合法地址由展示层
-   * `normalizeAvatarSrc()` 再挡一层并回退首字母。
+   * `user.avatar` fallback: the status from an older main process has no such field (undefined)
+   * → null; an explicit empty/blank string from the platform is likewise treated as no avatar.
+   * Invalid addresses are filtered again by `normalizeAvatarSrc()` in the display layer, which
+   * falls back to the initial.
    */
   const user = rawUser
     ? {
@@ -76,11 +80,12 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [syncing, setSyncing] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<LatticeUploadProgress | null>(null)
   /**
-   * v2 能力探测：preload 暴露的方法在应用生命周期内不变，初始化时算一次即可。
-   * 旧主进程上 `sourcePath/openSource/republish/...` 都是 undefined → 入口禁用。
+   * v2 capability detection: the methods exposed by preload never change during the app
+   * lifetime, so computing them once at init is enough. On an older main process
+   * `sourcePath/openSource/republish/...` are all undefined → entries disabled.
    */
   const [capabilities] = useState(() => detectLatticeV2Capabilities())
-  /** 卸载后不再 setState（异步 status 读取 / 事件推送都可能晚于卸载） */
+  /** No setState after unmount (async status reads / event pushes can outlive it) */
   const disposedRef = useRef(false)
 
   const refresh = useCallback(async (): Promise<LatticeStatus> => {
@@ -122,13 +127,13 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     void refresh()
 
     const unsubscribers: Array<() => void> = []
-    /** 订阅失败的推送通道不阻塞其它通道（主进程可能只实现了一部分事件） */
+    /** A failing push subscription must not block the others (the main process may implement only some events) */
     const safeSubscribe = (subscribe: () => unknown): void => {
       try {
         const dispose = subscribe()
         if (typeof dispose === 'function') unsubscribers.push(dispose as () => void)
       } catch {
-        // 单个事件通道不可用时忽略
+        // Ignore an unavailable single event channel
       }
     }
 
@@ -141,7 +146,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     safeSubscribe(() =>
       bridge.onSyncState?.((snapshot: LatticeSyncResult) => {
         if (disposedRef.current) return
-        // 事件载荷是完整的同步结果（含 autoInstall 明细/孤儿记录数组）；状态条只存摘要计数
+        // The event payload is the full sync result (including autoInstall details / orphaned array); the status bar stores only summary counts
         setStatus((prev) => ({
           ...prev,
           sync: {
@@ -173,7 +178,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
         try {
           unsubscribe()
         } catch {
-          // 退订失败不影响卸载
+          // A failed unsubscribe must not break unmount
         }
       }
     }
@@ -237,7 +242,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [refresh]
   )
 
-  /** 同步详情：自动补齐失败/孤儿记录明细（失败原因不静默） */
+  /** Sync details: per-item auto-install failures and orphaned records (failures are never silent) */
   const fetchSyncDetails = useCallback(async (): Promise<LatticeSyncDetails> => {
     const bridge = getLatticeBridge()
     if (!bridge) return { last: null, conflicts: [], orphaned: [] }
@@ -249,7 +254,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [])
 
-  /** 保存「缺失插件自动补齐」开关（主进程持久化并广播状态） */
+  /** Persist the "auto-install missing plugins" toggle (the main process persists it and broadcasts status) */
   const saveAutoInstallMissing = useCallback(
     async (enabled: boolean): Promise<LatticeAutoInstallSettingResult> => {
       const bridge = getLatticeBridge()
@@ -270,9 +275,10 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
   )
 
   /**
-   * 平台目录。不带分页参数时**把所有页都拉回来**（目录页需要完整清单：
-   * 只拿第一页会把第 101 个之后的已发布插件误标成「本地安装 / 尚未发布」，
-   * 搜索也搜不到它们）。调用方显式给 page/pageSize 时按调用方口径返回单页。
+   * Platform catalog. Without pagination params it **fetches every page** (the catalog page needs
+   * the complete list: only the first page would mislabel published plugins beyond #100 as
+   * "installed locally / not published", and search would not find them). When the caller passes
+   * page/pageSize explicitly, return a single page as requested.
    */
   const listHub = useCallback(async (params?: LatticeListQuery): Promise<HubListResultV2> => {
     const bridge = getLatticeBridge()
@@ -285,7 +291,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const pageSize = Number(first.page_size) || 100
     if (first.items.length >= total || first.items.length === 0) return first
     const items = [...first.items]
-    // 上限防服务端 total 异常（或翻页不收敛）时无限循环
+    // Cap the page count so an abnormal server total (or non-converging paging) cannot loop forever
     const maxPages = Math.min(50, Math.ceil(total / Math.max(pageSize, 1)))
     for (let page = 2; page <= maxPages && items.length < total; page += 1) {
       const next = ((await bridge.list({ page, pageSize, ...params })) ??
@@ -297,13 +303,14 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [])
 
   /**
-   * 平台详情。`null` = 这个插件没有发布到平台（本机安装过 / 平台已删除）：
-   * 主进程已把 404 归一成 null，详情页按「尚未发布」渲染，不产生错误日志。
+   * Platform details. `null` = this plugin is not published to the platform (installed locally
+   * only / deleted from the platform): the main process normalizes 404 to null, and the detail
+   * page renders "not published yet" without producing error logs.
    */
   const detailHub = useCallback(async (pluginId: string): Promise<HubDetailV2 | null> => {
     const bridge = getLatticeBridge()
     if (!bridge) return null
-    // 契约 v2 在版本对象上补源码字段；主进程类型未合入前按局部类型（全 optional）兜底
+    // v2 adds source fields to the version object; until main-process types land, fall back to a local all-optional type
     return (await bridge.detail(pluginId)) as HubDetailV2 | null
   }, [])
 
@@ -325,7 +332,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     []
   )
 
-  /** 直接发布本机已安装插件（安装包 + 源码）：不弹目录选择框 */
+  /** Publish a locally installed plugin directly (package + source): no directory picker */
   const publishInstalled = useCallback(async (pluginId: string): Promise<LatticeUploadResult> => {
     const bridge = getLatticeBridge()
     if (!bridge) return { ok: false, error: LATTICE_BRIDGE_MISSING }
@@ -361,7 +368,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [])
 
-  /** 选「安装包目录 + 源码目录」发布：安装包与源码分开上传 */
+  /** Publish by picking "package directory + source directory": package and source upload separately */
   const pickAndUploadWithSource = useCallback(async (): Promise<LatticeUploadResult> => {
     const bridge = getLatticeBridge()
     if (!bridge) return { ok: false, error: LATTICE_BRIDGE_MISSING }
@@ -394,7 +401,7 @@ export const LatticeProvider: React.FC<{ children: React.ReactNode }> = ({ child
     []
   )
 
-  // ---- 契约 v2 ----
+  // ---- v2 API ----
 
   const readSourcePath = useCallback(async (pluginId: string): Promise<LatticeSourcePathResult> => {
     const bridge = getLatticeV2Bridge()

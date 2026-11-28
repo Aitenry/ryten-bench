@@ -1,20 +1,23 @@
 export interface BuildConfig {
-  /** 最大并发 LLM 调用数（默认 8） */
+  /** Maximum number of concurrent LLM calls (default 8) */
   maxConcurrency?: number
-  /** 是否强制重建 */
+  /** Whether to force a full rebuild */
   force?: boolean
   gleaningThreshold?: number
-  /** 是否启用 gleaning（二次抽取遗漏实体，默认 true） */
+  /** Whether to enable gleaning, a second pass for missed entities (default true) */
   enableGleaning?: boolean
-  /** Gleaning 最大处理文档数：当库中文档很多时限制 gleaning 总成本（默认 100，设为 0 不限） */
+  /**
+   * Max documents gleaning may process, capping its total cost on large libraries
+   * (default 100; 0 means unlimited)
+   */
   gleaningMaxDocs?: number
-  /** Markdown 分块最大字符数（默认 2000） */
+  /** Max characters per Markdown chunk (default 2000) */
   maxChunkSize?: number
-  /** 单次 LLM 调用处理的文档数量（批量模式，默认 1） */
+  /** Documents processed per single LLM call in batch mode (default 1) */
   batchSize?: number
-  /** 混合置信度权重：LLM 置信度占比（默认 0.6） */
+  /** Hybrid confidence weight: share of the LLM confidence (default 0.6) */
   llmConfidenceWeight?: number
-  /** 混合置信度权重：统计特征占比（默认 0.4） */
+  /** Hybrid confidence weight: share of the statistical score (default 0.4) */
   statConfidenceWeight?: number
 }
 
@@ -51,7 +54,7 @@ export type ProgressCallback = (progress: {
   needsRefresh?: boolean
 }) => void
 
-/** 文本分块结果 */
+/** A text chunk */
 export interface TextChunk {
   docId: number
   chunkIndex: number

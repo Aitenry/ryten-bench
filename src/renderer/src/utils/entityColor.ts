@@ -1,9 +1,10 @@
 /**
- * 实体卡的稳定渐变色。
+ * Stable gradient colors for entity cards.
  *
- * 同一实体（插件 / 智能体 / 技能 / MCP 服务器…）每次渲染都取到同一组颜色，
- * 列表刷新时不会出现「颜色跳变」。放在独立文件里而不是 EntityCard.tsx：
- * 组件文件只导出组件，才能配合 React Fast Refresh（eslint react-refresh 规则）。
+ * The same entity (plugin / agent / skill / MCP server…) gets the same color pair on every
+ * render, so colors do not jump when the list refreshes. Kept in its own file instead of
+ * EntityCard.tsx: a component file may only export components so it works with React Fast
+ * Refresh (the eslint react-refresh rule).
  */
 
 const GRADIENTS: [string, string][] = [

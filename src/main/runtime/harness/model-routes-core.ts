@@ -1,21 +1,22 @@
 /**
- * `list_subagent_models` 的纯格式化逻辑（无 DB / electron，可离线测试）。
+ * Pure formatting logic for `list_subagent_models` (no DB / electron, can be tested offline).
  *
- * 用途：`agent_create` / 子代理配置里的 `model` 字段要求 `provider:model` 形式的**已启用路由**。
- * 模型看不到供应商配置，所以这里把启用中的路由 + 能力摘要排成一段文本给它挑选。
+ * Purpose: the `model` field of `agent_create` / subagent configuration requires an **enabled
+ * route** in `provider:model` form. Models cannot see the provider configuration, so this
+ * renders the enabled routes plus a capability summary as text for them to choose from.
  */
 
-/** 一条可用的模型路由（工具层从 provider 配置/模型档案投影） */
+/** One available model route (projected by the tool layer from provider config / model profiles) */
 export interface ModelRouteEntry {
-  /** `provider:model`（resolveSubAgentModelSpec 认的格式） */
+  /** `provider:model` (the format accepted by resolveSubAgentModelSpec) */
   spec: string
-  /** 供应商配置的展示名 */
+  /** Display name of the provider configuration */
   name: string
-  /** 供应商类型（如 openai / anthropic） */
+  /** Provider type (e.g. openai / anthropic) */
   providerType: string
   model: string
   isDefault: boolean
-  /** 能力摘要（来自模型档案；未收录时为 undefined） */
+  /** Capability summary (from the model profile; undefined when not listed) */
   capabilities?: {
     image?: boolean
     tools?: boolean
@@ -23,7 +24,7 @@ export interface ModelRouteEntry {
   }
 }
 
-/** 文案（由 i18n 按界面语言提供） */
+/** Texts (provided by i18n according to the UI language) */
 export interface ModelRoutesTexts {
   header: string
   empty: string
@@ -39,7 +40,7 @@ export interface ModelRoutesTexts {
 
 type Format = (template: string, values: Record<string, string | number>) => string
 
-/** 能力标签拼接；没有任何已知能力时返回 none 文案 */
+/** Joins capability labels; returns the none text when no capability is known */
 export function capabilityLabels(texts: ModelRoutesTexts, entry: ModelRouteEntry): string {
   const labels: string[] = []
   if (entry.capabilities?.image) labels.push(texts.image)
@@ -48,7 +49,7 @@ export function capabilityLabels(texts: ModelRoutesTexts, entry: ModelRouteEntry
   return labels.length > 0 ? labels.join(' · ') : texts.none
 }
 
-/** 排成给模型看的清单（默认路由置顶） */
+/** Renders the list shown to the model (the default route comes first) */
 export function formatModelRoutes(
   format: Format,
   texts: ModelRoutesTexts,

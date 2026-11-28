@@ -2,16 +2,20 @@ import logger from 'electron-log'
 import { getTopicTeamMode, setTopicTeamMode } from '../../database/mapper/harness/harness'
 
 /**
- * Agent Teams 开关（opt-in，按话题持久化）—— 对应 DSH 的 `agent-team` 模式开关。
+ * Agent Teams toggle (opt-in, persisted per topic) — the `agent-team` mode switch.
  *
- * DSH 默认关闭团队协作，根会话显式开启后才挂 `tool-agent-team` 工具并注入团队提示词；
- * RytenBench 沿用 plan_mode 的做法：
- * - 状态存 `harness_topic.team_mode`，重启/切话题仍在；
- * - Runtime 的提示词与工具清单在请求期同步拼装，所以主进程用内存缓存读状态，
- *   每轮开始前 `ensure(topicId)` 从库里回填；
- * - 关闭时**不注入** `team_task_*` 工具、不追加团队提示词段；子代理同理。
+ * Team collaboration is off by default; the root session mounts the `tool-agent-team`
+ * tools and injects the team prompt section only after explicitly enabling it. This
+ * follows the plan_mode approach:
+ * - state lives in `harness_topic.team_mode`, surviving restarts and topic switches;
+ * - the Runtime assembles the prompt and tool list per request, so the main process reads
+ *   the state from an in-memory cache and backfills it from the database via
+ *   `ensure(topicId)` before each turn starts;
+ * - when disabled, `team_task_*` tools are **not injected** and the team prompt section is
+ *   not appended; the same applies to subagents.
  *
- * 团队协作只是增强能力：读取失败按关闭处理，不能让整轮请求失败。
+ * Team collaboration is only an enhancement: a read failure is treated as disabled and
+ * must not fail the whole turn.
  */
 
 export interface TeamModeView {
@@ -19,7 +23,7 @@ export interface TeamModeView {
   enabled: boolean
 }
 
-/** 主智能体的团队任务板提示词段（关闭时为空串，不增加任何 token） */
+/** Team task board prompt section for the main agent (empty when disabled, adding no tokens) */
 export function teamModePromptSection(enabled: boolean): string {
   return enabled
     ? `\n\n## Team task board
@@ -32,7 +36,7 @@ Keep the board current: an in_progress task nobody is working on reads as stuck 
     : ''
 }
 
-/** 子代理的团队协作提示词段（与主智能体口径分开：子代理是 member，认领/完成自己那份） */
+/** Team collaboration prompt section for subagents (separate from the main agent's: subagents are members claiming/completing their own part) */
 export function subagentTeamPromptSection(enabled: boolean): string {
   return enabled
     ? `\n\n## Team task board
@@ -42,14 +46,14 @@ You share a task board with the main agent and the other subagents (team_task_li
 
 export type TeamModeListener = (view: TeamModeView) => void
 
-/** 团队模式存储（进程级单例，按 topicId 隔离；数据库是唯一真源） */
+/** Team mode store (process-level singleton, isolated by topicId; the database is the source of truth) */
 export class TeamModeStore {
   private readonly cache = new Map<number, boolean>()
 
-  /** 变更回调（IPC 层广播给界面，用于菜单勾选/顶部栏提示） */
+  /** Change callback (the IPC layer broadcasts it to the UI for menu checks / top-bar hints) */
   onChange?: TeamModeListener
 
-  /** 从数据库回填某话题的团队模式（已有缓存直接返回；读失败按关闭处理） */
+  /** Backfill a topic's team mode from the database (return the cache when present; read failure means disabled) */
   async ensure(topicId: number): Promise<boolean> {
     if (topicId <= 0) return false
     const cached = this.cache.get(topicId)
@@ -64,12 +68,12 @@ export class TeamModeStore {
     }
   }
 
-  /** 同步读取（只对已 ensure 过的话题可靠；未加载按关闭处理） */
+  /** Synchronous read (reliable only for topics already ensured; not loaded means disabled) */
   isEnabled(topicId: number): boolean {
     return this.cache.get(topicId) === true
   }
 
-  /** 切换并持久化；成功后广播，返回最终状态 */
+  /** Toggle and persist; broadcast on success and return the final state */
   async setEnabled(topicId: number, enabled: boolean): Promise<TeamModeView> {
     if (topicId <= 0) return { topicId, enabled: false }
     await setTopicTeamMode(topicId, enabled)
@@ -79,22 +83,22 @@ export class TeamModeStore {
     try {
       this.onChange?.(view)
     } catch (err) {
-      // 广播失败（窗口销毁等）不影响状态本身
+      // A broadcast failure (e.g. window destroyed) does not affect the state itself
       logger.warn('[TeamMode] Failed to broadcast team mode change:', err)
     }
     return view
   }
 
-  /** 话题删除时丢弃缓存（行已随话题级联删除） */
+  /** Drop the cache when a topic is deleted (the row is cascade-deleted with the topic) */
   forget(topicId: number): void {
     this.cache.delete(topicId)
   }
 
-  /** 丢弃全部内存态（账号数据空间切换时用） */
+  /** Drop all in-memory state (used when switching account data spaces) */
   reset(): void {
     this.cache.clear()
   }
 }
 
-/** 进程级单例 */
+/** Process-level singleton */
 export const teamModeStore = new TeamModeStore()

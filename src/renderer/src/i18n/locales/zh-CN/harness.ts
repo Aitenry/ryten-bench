@@ -1,18 +1,18 @@
 /**
- * harness 插件词条（简体中文 = 源语言）。
+ * Harness plugin translations (Simplified Chinese is the source language).
  *
- * 顶层键与原中央词条**完全一致**（`harness` 助手界面 / `agentSettings` 智能体设置页 /
- * `memorySettings` 记忆设置页 / `skillsSettings` 技能设置页），只是从
- * src/renderer/src/i18n/locales/ 搬到了插件目录：
- * 插件 install 时经 `ctx.use('i18n').addResources('translation', harnessLocales)` 注册，
- * 停用插件即不再注册这些键（不再由中央词条无条件打包进首屏）。
+ * The top-level keys match the former central entries exactly (`harness` assistant UI /
+ * `agentSettings` agent settings page / `memorySettings` memory settings page /
+ * `skillsSettings` skills settings page). The plugin registers them on install through
+ * `ctx.use('i18n').addResources('translation', harnessLocales)`; disabling the plugin stops
+ * registering them, so they are no longer bundled into the first screen unconditionally.
  *
- * 注意 `modelSettings`（「模型」设置页）属于 core，不在此列。
+ * Note that `modelSettings` (the "Models" settings page) belongs to core and is not listed here.
  */
 export const harnessZhCN = {
-  /* ── harness（原 locales/zh-CN/harness.ts） ── */
-  /* 「助手（harness）」模块词条（由助手模块负责填充）。
-     命名约定：t('harness.<group>.<key>')，键名一律 camelCase，不写中文。 */
+  /* ── harness ── */
+  /* Strings for the assistant (harness) module.
+     Naming: t('harness.<group>.<key>'), keys are always camelCase, never Chinese. */
   harness: {
     index: {
       setupWorkspaceTitle: '配置工作区后开始对话',
@@ -49,7 +49,7 @@ export const harnessZhCN = {
       pluginDelete: '删除插件',
       pluginDeleteTitle: '删除插件「{{name}}」？',
       pluginNewSession: '针对这个插件新建会话',
-      /** 插件行标题右侧的折叠箭头：展开就是这份插件自己的会话 */
+      /** Disclosure next to the plugin row title: expands this plugin's own conversations */
       pluginSessionsExpand: '展开这个插件的会话',
       pluginSessionsCollapse: '收起这个插件的会话',
       needWorkspace: '先配置一个工作区：会话都挂在它下面',
@@ -68,7 +68,7 @@ export const harnessZhCN = {
       noWorkspace: '尚未配置工作区',
       noMatchResult: '无匹配结果',
       noMatchTopic: '无匹配会话',
-      /** 会话检索（标题 + 正文混合结果） */
+      /** Conversation search (mixed title + message-body results) */
       searchScopeTopics: '会话',
       searchScopeMessages: '消息',
       searchFailed: '搜索失败，请重试',
@@ -78,12 +78,12 @@ export const harnessZhCN = {
       topicDeleteBlocked: '进行中，无法删除',
       topicDelete: '删除会话',
       topicRunning: '会话进行中',
-      /** 行首黄点（呼吸）：这条会话挂着提问 / 审批，等你确认后才会继续 */
+      /** Row leading dot (breathing, yellow): the conversation is waiting for your answer / approval */
       topicAwaiting: '等待你确认',
-      /** 行首绿点（呼吸）：这一轮刚跑完、还没点开看过；点一下这条会话就消失 */
+      /** Row leading dot (breathing, green): the turn just finished and has not been opened yet; it disappears once viewed */
       topicCompleted: '已完成，点击查看',
       topicActions: '会话操作',
-      /* 会话行「⋯」菜单：置顶 / 重命名 / 分叉 / 在应用中打开 / 归档（用户 2026-11-25 口径，除「复制 Session ID」） */
+      /* Conversation row "⋯" menu: pin / rename / fork / open in app / archive */
       topicPin: '置顶会话',
       topicUnpin: '取消置顶',
       topicPinned: '已置顶',
@@ -96,7 +96,7 @@ export const harnessZhCN = {
       topicArchive: '归档会话',
       topicUnarchive: '取消归档',
       topicArchiveBlocked: '进行中，无法归档',
-      /** 侧栏底部「已归档」分组（所有工作区归档的会话都收在这里，位于「记忆」上方） */
+      /** "Archived" group at the bottom of the sidebar (archived conversations from every workspace collect here, above "Memory") */
       topicArchivedTitle: '已归档',
       topicArchivedEmpty: '没有已归档的会话',
       topicArchiveDone: '已归档，收进「已归档」分组',
@@ -113,7 +113,7 @@ export const harnessZhCN = {
       topicRenameFailed: '重命名失败',
       workspaceActions: '工作区操作',
       workspaceHasRunning: '有会话进行中',
-      /** 工作区行「⋯ → 在文件夹中显示」：各平台的文件管理器叫法不同 */
+      /** Workspace row "⋯ → Show in folder": the file manager is called differently per platform */
       workspaceRevealInFolder: '在文件夹中显示',
       workspaceRevealInFinder: '在访达中显示',
       workspaceRevealInFileManager: '在文件管理器中显示',
@@ -161,8 +161,7 @@ export const harnessZhCN = {
       modelMenuAria: '选择模型与推理等级',
       effortLabel: '推理等级',
       teamModeLabel: '启用智能体团队协作',
-      teamModeHint:
-        '开启后，主智能体与子代理共享任务板（team_task_* 工具与团队协作提示词）；按当前会话持久化，默认关闭。',
+      teamModeHint: '开启后，主智能体与子代理共享任务板',
       teamModeFailed: '切换团队协作失败',
       effortNotSentHint: '当前接口协议不下发该参数，仅记录',
       effortSaveFailed: '推理等级保存失败',
@@ -187,10 +186,10 @@ export const harnessZhCN = {
       mcpAria: '选择 MCP 服务器',
       mcpEmpty: '还没有 MCP 服务器，先去「更多 → MCP」添加',
       mcpSearchPlaceholder: '搜索 MCP 服务器',
-      /** 工具 / MCP 面板搜索不到时的空态 */
+      /** Empty state when the tools / MCP panel has no search match */
       pickerNoMatch: '无匹配结果',
       pickerSaveFailed: '保存失败，请重试',
-      /** 「/」命令面（输入框开头输入 / 唤起；目标 / 计划两项，样式参考 DSH 命令菜单） */
+      /** "/" command menu (opened by a leading slash in the composer; Goal / Plan rows) */
       commands: {
         aria: '命令',
         groupAdd: '添加',
@@ -203,15 +202,16 @@ export const harnessZhCN = {
       }
     },
     /**
-     * 工具来源标签（工具清单里名称右侧的小胶囊）：系统 = 随应用编译，插件 = 第三方插件贡献，
-     * MCP = 外部 MCP 服务器。见主进程 `ToolSourceKind`。
+     * Tool source tag (the small pill right of a tool name in the tool list): system = compiled
+     * into the app, plugin = contributed by a third-party plugin, MCP = an external MCP server.
+     * See `ToolSourceKind` in the main process.
      */
     toolSource: {
       system: '系统',
       plugin: '插件',
       mcp: 'MCP'
     },
-    /** 计划模式（plan mode）：输入框徽标 + 进入/退出提示 */
+    /** Plan mode: composer badge and enter/leave feedback */
     planMode: {
       badge: '计划模式',
       badgeAria: '计划模式已开启，点击退出',
@@ -220,8 +220,8 @@ export const harnessZhCN = {
       disabled: '已退出计划模式',
       switchFailed: '计划模式切换失败'
     },
-    /** 目标弹窗（输入框命令面的「目标」入口） */
-    /** 内联目标卡片（输入框上方） */
+    /** Goal dialog (opened from the Goal entry in the composer command menu) */
+    /** Inline goal card (above the composer) */
     goalInline: {
       tag: '目标',
       newTarget: '新目标',
@@ -282,7 +282,7 @@ export const harnessZhCN = {
       clearConfirmOk: '清除',
       cancel: '取消'
     },
-    /** 内联计划区（输入框上方） */
+    /** Inline plan tray (above the composer) */
     planInline: {
       tag: '计划',
       activeHint: '计划模式已开启 · 先给出完整方案，批准后才会改代码',
@@ -295,7 +295,7 @@ export const harnessZhCN = {
       feedbackPlaceholder: '想调整计划？在这里补充意见，不占用底部输入框…',
       editedNote: '已修订计划；批准后会把修订版作为最终计划执行。'
     },
-    /** 计划评审弹窗（exit_plan_mode）：整份计划 + 批准 / 继续规划 */
+    /** Plan review dialog (exit_plan_mode): full plan + approve / keep planning */
     planReview: {
       title: '计划评审',
       approve: '批准并开始执行',
@@ -374,7 +374,7 @@ export const harnessZhCN = {
       toggleTerminal: '终端',
       generating: '生成中'
     },
-    /** 右侧持久终端面板（用户侧） */
+    /** Right-side persistent terminal panel (user-facing) */
     terminalPanel: {
       title: '终端',
       runningCount: '运行中 {{count}}',
@@ -383,7 +383,7 @@ export const harnessZhCN = {
       noShell: '找不到可用的 shell（pwsh / cmd / bash）',
       failed: '终端操作失败，请重试'
     },
-    /** 开始页：工具选择入口（侧栏「开始」） */
+    /** Start page: tool launcher (sidebar "Start") */
     startPage: {
       title: '开始',
       workspace: {
@@ -404,7 +404,7 @@ export const harnessZhCN = {
         description: '技能、MCP、记忆与智能体设置'
       }
     },
-    /** 应用内浏览器面板（Electron webview） */
+    /** In-app browser panel (Electron webview) */
     browserPanel: {
       addressPlaceholder: '输入网址或搜索内容',
       back: '后退',
@@ -477,7 +477,7 @@ export const harnessZhCN = {
       subAgentExecuting: '智能体正在执行中…',
       silentGenerating: '正在生成…',
       taskList: '任务清单',
-      /** 段头上的改动徽标：段体折起后，这是「这一段改了哪几个文件」唯一的可见入口 */
+      /** Changed-files badge on a segment header: with the segment body folded, this is the only visible entry to which files this step changed */
       changedFiles: '{{count}} 个文件已改',
       changedFilesTip: '这一段改了 {{files}} 个文件 · {{pending}} 处待审查（点击看差异）',
       toolOpenFile: '打开文件',
@@ -649,8 +649,10 @@ export const harnessZhCN = {
       completed: '已完成',
       inactive: '未激活',
       /**
-       * 子代理会话视图（点开右上角后台子代理 → 主对话区切到该子智能体的流式会话）。
-       * 与主对话共用消息渲染；这里只是视图外壳（返回入口 / 空态 / 只读提示）的文案。
+       * Subagent conversation view (open a background subagent in the top right and the main chat
+       * area switches to that subagent's streaming conversation).
+       * It shares message rendering with the main conversation; these are only the view shell
+       * strings (back entry / empty state / read-only hint).
        */
       conversation: {
         backToMain: '返回主智能体',
@@ -658,7 +660,7 @@ export const harnessZhCN = {
         loading: '正在加载会话…',
         empty: '该子智能体还没有输出内容',
         missing: '子智能体会话不存在（可能已随话题或会话清理删除）',
-        /* 人工续聊：在会话视图底部给这个子代理投递消息（与主代理 send_message 同一收件箱） */
+        /* Manual follow-up: send a message to this subagent at the bottom of the conversation view (same inbox as the main agent's send_message) */
         placeholder: '给这个子智能体发送消息，继续会话…',
         queuedCount: '{{count}} 条消息排队中',
         sendFailed: '发送失败：{{reason}}',
@@ -666,15 +668,17 @@ export const harnessZhCN = {
       }
     },
     /**
-     * 顶部栏「后台任务」入口（execute run_in_background=true 的任务）。
+     * Top-bar "background tasks" entry (tasks started with execute run_in_background=true).
      *
-     * 与 backgroundAgents 分开：后台子代理已有自己的入口与结果弹窗；
-     * 这里只列命令类任务，避免同一个任务在顶部栏出现两次。
-     * 2026-11-26 起是「顶部内联托盘」：行内折叠输出、右侧停止。
+     * Kept separate from backgroundAgents: background subagents already have their own entry and
+     * result dialog, so only command-style tasks are listed here to avoid showing the same task
+     * twice in the top bar. Since 2026-11-26 this is an inline top tray: output folds in the row,
+     * stop sits on the right.
      */
     /**
-     * 顶部栏「协作」入口（2026-11-26 方案 A）：把后台子代理与共享任务板合并成一个
-     * Popover —— 上半段子代理（点行进会话视图），下半段共享任务。
+     * Top-bar "collaboration" entry (2026-11-26): merges background subagents and the shared task
+     * board into one Popover — subagents on top (click a row to open its conversation view),
+     * shared tasks below.
      */
     collab: {
       agentsCount: '{{count}} 子代理',
@@ -696,10 +700,11 @@ export const harnessZhCN = {
       taskOpenOwner: '该任务由子代理负责，点击打开它的会话',
       footerTasksHint: '任务由主智能体与子智能体共同维护'
     } /**
-     * Agent Teams / 超级智能体：顶部栏「共享任务板」入口。
+     * Agent Teams / shared task board: the top-bar entry.
      *
-     * 机制同一张板：主智能体（lead）与子代理（member）通过 team_task_* 工具读写，
-     * 用户在这里实时看到协作进展（进行中 / 待办 / 已完成 + 负责人 + 依赖）。
+     * One board for everyone: the main agent (lead) and its subagents (members) read and write it
+     * through the team_task_* tools, and the user sees collaboration progress live here
+     * (in progress / pending / completed + owner + dependencies).
      */,
     team: {
       unowned: '未认领',
@@ -741,14 +746,15 @@ export const harnessZhCN = {
       saveFailed: '保存文件失败',
       pendingReview: '{{count}} 处待审查',
       /**
-       * 标题栏的主口径 = **文件数**。
+       * The title bar's primary count is the **number of files**.
        *
-       * 踩过（用户 2026-09-23 原话「明明就编辑了一个文件，却显示 10 处待审查」）：
-       * 「处」在库里是**改动记录条数**——模型每次 write_file / edit_file 各记一条，
-       * 同一个文件改 10 次就是 10 条。只显示这个数字，看的人会以为动了 10 个文件。
+       * Lesson learnt (user report: "I edited just one file, yet it shows 10 changes to
+       * review"): "changes" counts **change records** — the model records one per write_file /
+       * edit_file call, so editing the same file 10 times yields 10 records. Showing only that
+       * number makes readers think 10 files were touched.
        */
       pendingFiles: '{{count}} 个文件',
-      /** 「1 个文件 · 10 处改动」：文件数是主口径，改动条数退到副口径 */
+      /** "1 file · 10 changes": the file count is the primary figure, the change count is secondary */
       pendingSummary: '{{files}} · {{changes}}',
       pendingFilesTip: '有未审查模型改动的文件',
       keepAllTip: '全部保留：清掉待审查标记，磁盘内容保持不变'
@@ -830,9 +836,9 @@ export const harnessZhCN = {
       sendFailed: '抱歉，发生了错误，请稍后重试。'
     }
   },
-  /* ── agentSettings（原 locales/zh-CN/agentSettings.ts） ── */
-  /* 智能体设置页词条（由智能体设置页负责填充）。
-     命名约定：t('agentSettings.<group>.<key>')，键名一律 camelCase，不写中文。 */
+  /* ── agentSettings ── */
+  /* Agent settings page strings.
+     Naming: t('agentSettings.<group>.<key>'), keys are always camelCase, never Chinese. */
   agentSettings: {
     pageTitle: '智能体',
     pageDescription: '管理可委托任务的子智能体；工具与技能改在对话输入框下方选择',
@@ -908,8 +914,8 @@ export const harnessZhCN = {
       noAgents: '暂无智能体，点击右上角「新建」创建'
     }
   },
-  /* ── memorySettings（原 locales/zh-CN/memorySettings.ts） ── */
-  /* 记忆设置页词条（Mnemon 三层记忆管理）。 */
+  /* ── memorySettings ── */
+  /* Memory settings page strings (Mnemon three-layer memory management). */
   memorySettings: {
     page: {
       title: '记忆（Mnemon）',
@@ -932,9 +938,9 @@ export const harnessZhCN = {
     },
     manage: {
       sectionTitle: '记忆管理',
-      /** 插件会话进来时标注管的是哪份插件的记忆（工作区作用域不标注） */
+      /** Shown when a plugin conversation is active, to mark which plugin's memory is managed (the workspace scope stays unlabelled) */
       scopePlugin: '插件「{{name}}」',
-      /** 「对话」模式进来时标注：那份记忆归这个模式自己（它没有工作区） */
+      /** Shown in chat mode: that memory belongs to the mode itself (it has no workspace) */
       scopeChat: '对话',
       snapshotFailed: '加载记忆快照失败: {{reason}}'
     },
@@ -995,8 +1001,8 @@ export const harnessZhCN = {
       updatedAt: '更新于 {{time}} · revision {{revision}}'
     }
   },
-  /* ── skillsSettings（原 locales/zh-CN/skillsSettings.ts） ── */
-  /* 技能设置页词条（由技能设置页负责填充）。 */
+  /* ── skillsSettings ── */
+  /* Skills settings page strings. */
   skillsSettings: {
     pageTitle: '技能（Skills）',
     pageDescription:
@@ -1037,8 +1043,8 @@ export const harnessZhCN = {
     savedDir: '技能目录已保存',
     clearedDir: '已清空技能目录'
   },
-  /* ── mcpSettings（设置 → MCP 页） ── */
-  /* MCP（Model Context Protocol）服务器管理页词条。 */
+  /* ── mcpSettings (Settings → MCP) ── */
+  /* MCP (Model Context Protocol) server management page strings. */
   mcpSettings: {
     pageTitle: 'MCP',
     pageDescription:
@@ -1069,7 +1075,7 @@ export const harnessZhCN = {
       unconfigured: '配置不完整',
       unknown: '未连接'
     },
-    /* 字段名（表单标签与详情面板共用；分组标签是纯文本，不带装饰） */
+    /* Field names (shared by the form labels and the detail panel; group labels are plain text without decoration) */
     field: {
       name: '名称',
       namePlaceholder: '如：filesystem / github / postgres',
@@ -1129,7 +1135,7 @@ export const harnessZhCN = {
       importPartial: '部分条目未导入',
       saveHint: '保存后会立即重连这台服务器'
     },
-    /** 资源浏览（服务器行「资源」按钮 → 弹窗） */
+    /** Resource browser (server row "resources" action → modal) */
     resources: {
       open: '浏览资源',
       title: '资源 · {{name}}',
@@ -1145,7 +1151,7 @@ export const harnessZhCN = {
     }
   },
 
-  /* ── workshopSettings（插件工坊：设置 → 插件工坊） ── */
+  /* ── workshopSettings (Plugin Workshop: Settings → Plugin Workshop) ── */
   workshopSettings: {
     pageTitle: '插件工坊',
     pageDescription: '在对话里让助手替你写插件：工坊负责构建、自动验收，通过后装进应用就能用',
@@ -1224,7 +1230,7 @@ export const harnessZhCN = {
     }
   },
 
-  /* ── 定时任务独立页（侧边栏「定时任务」） ── */
+  /* ── Schedules page (sidebar "Schedules") ── */
   schedulesPage: {
     title: '定时任务',
     description:
@@ -1329,7 +1335,7 @@ export const harnessZhCN = {
     noTopics: '当前工作区还没有会话，先创建一个会话再新建任务。'
   },
 
-  /* ── 设置 →「联网搜索」页 ── */
+  /* ── Settings → Web search page ── */
   searchSettings: {
     pageTitle: '联网搜索',
     pageDescription: '为助手选择联网搜索服务。配置只保存在本机，所有搜索使用同一套统一接口。',

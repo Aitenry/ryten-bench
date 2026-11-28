@@ -5,11 +5,12 @@ import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 import { findSkill, type SkillInfo } from './skills-core'
 
 /**
- * `skill` 工具：按需加载技能全文（对应 DSH 的 dsh-tool-skill）。
+ * `skill` tool: loads a skill's full text on demand.
  *
- * 与 `skills-core.ts` 分开的原因：核心（扫描/解析/索引）不依赖 ai/tools 与 i18n，
- * 可以离线单测；这里只负责工具 schema 与本地化文案。系统提示词只放技能索引
- * （见 buildSkillsPromptSection），正文由本工具在真正使用时返回。
+ * Why separate from `skills-core.ts`: the core (scan/parse/index) does not depend on ai/tools or
+ * i18n and can be unit tested offline; this module only owns the tool schema and localized texts.
+ * The system prompt only carries the skill index (see buildSkillsPromptSection); the body is
+ * returned by this tool when it is actually used.
  */
 export function buildSkillTool(skills: SkillInfo[]): StructuredToolInterface {
   const texts = getAgentToolTexts()

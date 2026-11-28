@@ -5,5 +5,5 @@ pnpm-lock.yaml
 LICENSE.md
 tsconfig.json
 tsconfig.*.json
-# 草稿模板文本资产（带 ${vars.*} 占位符，不是可格式化的源码）
+# Draft template text assets (contain ${vars.*} placeholders; not formattable source)
 src/main/workshop/template-files

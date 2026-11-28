@@ -1,12 +1,15 @@
 /**
- * 持久终端工具面（对照 DSH `dsh-tool-terminal` 的 open/send/read/close/list）。
+ * Persistent terminal tool surface (open/send/read/close/list).
  *
- * 安全边界见 `docs/terminal-sandbox-design-2026-11.md` 的 A 方案：
- * - `terminal_open` / `terminal_send` **只在 `danger-full-access` 档可用**（终端不隔离）；
- * - `terminal_read` / `terminal_close` / `terminal_list` 不加档位限制——读取与清理应当永远
- *   可执行，否则用户切回受限档后就关不掉正在跑的终端了。
+ * Security boundary:
+ * - `terminal_open` / `terminal_send` are **only available in `danger-full-access` mode**
+ *   (the terminal is not sandboxed);
+ * - `terminal_read` / `terminal_close` / `terminal_list` are not mode-restricted — reading and
+ *   cleanup must always work, otherwise a running terminal could not be closed after the user
+ *   switches back to a restricted mode.
  *
- * 真正的进程与会话状态在 `terminal-sessions.ts`（不含 electron/i18n，可被集成测试直接驱动）。
+ * The real process and session state lives in `terminal-sessions.ts` (no electron/i18n, so
+ * integration tests can drive it directly).
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -24,7 +27,7 @@ import {
   type TerminalErrorCode
 } from './terminal-sessions'
 
-/** 工具运行时上下文：话题与本次调用实际生效的档位 */
+/** Tool runtime context: the topic and the permission mode actually in effect for this call */
 function contextOf(config: unknown): { topicId: number; mode: PermissionMode } {
   const cfg = config as
     | { configurable?: { topicId?: unknown; sandboxMode?: unknown } }
@@ -35,14 +38,14 @@ function contextOf(config: unknown): { topicId: number; mode: PermissionMode } {
   return { topicId, mode }
 }
 
-/** 档位名称本地化 */
+/** Localized permission mode name */
 function modeLabel(texts: TerminalToolTexts, mode: PermissionMode): string {
   if (mode === 'read-only') return texts.modeReadOnly
   if (mode === 'workspace-write') return texts.modeWorkspace
   return texts.modeDanger
 }
 
-/** 错误码 → 本地化文本 */
+/** Error code → localized text */
 function errorText(
   texts: TerminalToolTexts,
   error: TerminalErrorCode,
@@ -72,7 +75,7 @@ function errorText(
   }
 }
 
-/** 构造持久终端工具集（无工作区时不挂载） */
+/** Build the persistent terminal tool set (not mounted when there is no workspace) */
 export function buildTerminalTools(options: { workspacePath?: string }): StructuredToolInterface[] {
   const workspacePath = options.workspacePath
   if (!workspacePath) return []

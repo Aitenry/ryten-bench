@@ -1,12 +1,12 @@
 import logger from 'electron-log'
 
 /**
- * EffectScope — 可逆效应作用域（论文 §3.1 的工程落地）
+ * EffectScope — reversible effect scope (engineering implementation of the effect-scope pattern)
  *
- * 每次对话/Agent 执行对应一个 scope：
- * - 通过 effect() 注册「效果 + 逆」；dispose() 时按 LIFO 顺序调用全部逆；
- * - armed 标志保证逆至多执行一次（幂等，同论文 Algorithm 1）；
- * - AbortSignal 触发时自动 dispose。
+ * Each conversation/agent execution corresponds to one scope:
+ * - effect() registers "effect + inverse"; dispose() runs all inverses in LIFO order;
+ * - the armed flag guarantees each inverse runs at most once (idempotent);
+ * - an AbortSignal trigger disposes automatically.
  */
 export class EffectScope {
   private readonly inverses: Array<() => Promise<void> | void> = []
@@ -20,7 +20,7 @@ export class EffectScope {
         void this.dispose()
       }
       if (signal.aborted) {
-        // 已中止：直接解除武装（逆不会再执行）
+        // Already aborted: disarm right away (inverses will not run)
         this.armed = false
         this.disposed = true
       } else {
@@ -30,20 +30,22 @@ export class EffectScope {
     }
   }
 
-  /** 注册一个带逆的效果；dispose 时按 LIFO 恢复 */
+  /** Register an effect with an inverse; restored in LIFO order on dispose */
   async effect<T>(run: () => Promise<T>, undo: () => Promise<void> | void): Promise<T> {
     if (!this.armed) {
-      // 已回收（或信号预中止）：效果不再注册，逆由调用方自行处理
+      // Already disposed (or the signal aborted early): no effect is registered; caller handles
+      // the inverse
       logger.warn('[EffectScope] Already disposed, effect not registered')
       return await run()
     }
-    // 效果失败不回滚（尚未产生副作用），交给调用方处理；成功则以 LIFO 组合逆
+    // A failed effect is not rolled back (it produced no side effects) and is left to the caller;
+    // on success the inverse is composed in LIFO order
     const result = await run()
     this.inverses.unshift(undo)
     return result
   }
 
-  /** 登记取消回调（AbortSignal 触发或 dispose 时调用） */
+  /** Register a cancel callback (called on AbortSignal abort or dispose) */
   onAbort(fn: () => void): void {
     if (!this.armed) {
       fn()
@@ -52,12 +54,12 @@ export class EffectScope {
     this.abortHandlers.push(fn)
   }
 
-  /** 回收：按 LIFO 执行全部逆，且至多执行一次 */
+  /** Dispose: run all inverses in LIFO order, at most once */
   async dispose(): Promise<void> {
     if (!this.armed) return
     this.armed = false
 
-    // 先执行 abort 回调，再执行逆
+    // Run abort callbacks first, then the inverses
     for (const handler of this.abortHandlers) {
       try {
         handler()

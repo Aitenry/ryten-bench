@@ -1,16 +1,20 @@
 /**
- * 旧版定时任务 JSON 解析与导入计划（纯逻辑，无 fs / DB / electron，可离线测试）。
+ * Legacy scheduled-task JSON parsing and import planning (pure logic, no fs / DB / electron,
+ * offline-testable).
  *
- * 背景：0.2.6 之前定时任务存在 `userData/schedules/schedules.json`；现在统一迁到数据库。
- * 这里只负责「把旧 JSON 转成可导入的规范化任务」：
- * - 规则形状非法 / 关键字段缺失 → 跳过（一条坏数据不能挡住迁移）；
- * - 启用中的重复任务按**当前时间**重算下一次触发（迁移等价于重启，错过的触发不补跑）；
- * - 一次性任务时间已过 → 保留为「已暂停」（用户可改时间后恢复），不立即触发。
+ * Background: before 0.2.6 scheduled tasks lived in `userData/schedules/schedules.json`; they are
+ * now stored in the database. This module only turns the old JSON into normalized, importable
+ * tasks:
+ * - invalid rule shape / missing key fields -> skip (one bad record must not block the migration);
+ * - enabled repeating tasks get their next trigger recomputed from **the current time**
+ *   (migration is equivalent to a restart; missed triggers are not caught up);
+ * - one-off tasks whose time already passed are kept as "paused" (the user can edit the time and
+ *   resume them) instead of firing immediately.
  */
 import { validateScheduleWhen, type ScheduleWhen } from './schedule-core'
 import type { ScheduleRunStatus } from './schedule-types'
 
-/** 规范化后的旧任务（待导入） */
+/** Normalized legacy task (pending import) */
 export interface LegacyScheduleTask {
   id: string
   title: string
@@ -27,7 +31,7 @@ export interface LegacyScheduleTask {
 
 const RUN_STATUSES: readonly ScheduleRunStatus[] = ['completed', 'cancelled', 'failed']
 
-/** 规则形状校验（与时间先后无关；时间合法性交给 validateScheduleWhen） */
+/** Rule shape check (independent of time order; temporal validity is left to validateScheduleWhen) */
 function isWhenShape(value: unknown): value is ScheduleWhen {
   if (!value || typeof value !== 'object') return false
   const when = value as Record<string, unknown>
@@ -43,7 +47,7 @@ function isWhenShape(value: unknown): value is ScheduleWhen {
   return false
 }
 
-/** 按当前时间重算下一次触发；规则时间非法（如一次性已过期）时停用 */
+/** Recompute the next trigger from now; disable when the rule time is invalid (one-off already past) */
 function planNextRun(
   when: ScheduleWhen,
   enabled: boolean,
@@ -55,7 +59,7 @@ function planNextRun(
   return { enabled: true, nextRunAt: validated.nextRunAt }
 }
 
-/** 从任意 JSON 值里解析旧任务（数组；非法项跳过、重复 id 去重） */
+/** Parse legacy tasks from any JSON value (array; invalid items skipped, duplicate ids deduped) */
 export function parseLegacySchedules(raw: unknown, now = new Date()): LegacyScheduleTask[] {
   if (!Array.isArray(raw)) return []
   const out: LegacyScheduleTask[] = []

@@ -27,19 +27,19 @@ import type { FileChangeView } from '../../types/harness/file-change'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../../api/harness'
 
-/** 工具条按钮：**只有图标**（文案退到 Tooltip/aria-label），尺寸随内容收缩 */
+/** Toolbar button: **icon only** (text lives in Tooltip/aria-label), sized to fit its content */
 interface DiffToolbarButtonProps {
   title: string
   icon: React.ReactNode
   onClick?: () => void
   disabled?: boolean
-  /** 语义色（保留 = 绿、撤销 = 红） */
+  /** Semantic tone (keep = green, revert = red) */
   tone?: 'default' | 'accept' | 'reject'
   colorText: string
   colorTextSecondary: string
   colorBorderSecondary: string
   isDarkMode: boolean
-  /** 尾部额外样式（间隔线之后的一组用它把按钮推开） */
+  /** Extra trailing style (the group after the divider uses it to push the buttons over) */
   style?: React.CSSProperties
   testId?: string
 }
@@ -73,8 +73,8 @@ const DiffToolbarButton: React.FC<DiffToolbarButtonProps> = ({
         : {}
   const baseColor = toneStyle.color ?? colorTextSecondary
   return (
-    /* 这几个按钮只在差异视图的**顶部操作行**里用（保留/撤销/上一处/下一处），
-       提示朝下弹：朝上会盖住编辑器工具条与页签栏（用户 2026-09-26 统一工具条方向）。 */
+    /* These buttons are only used in the diff view's **top action row** (keep/revert/previous/next),
+       so tooltips open downward: upward tooltips would cover the editor toolbar and tab bar. */
     <Tooltip title={title} placement="bottom">
       <button
         type="button"
@@ -106,7 +106,7 @@ const DiffToolbarButton: React.FC<DiffToolbarButtonProps> = ({
             e.currentTarget.style.borderColor = colorText
             e.currentTarget.style.color = colorText
           } else {
-            // 语义色按钮本来就是满底色：悬停只提亮边框，别把文字色改掉再改不回来
+            // Semantic-tone buttons already have a full background: hover only brightens the border, don't change the text color to something that can't be restored
             e.currentTarget.style.borderColor = baseColor
           }
         }}
@@ -123,13 +123,13 @@ const DiffToolbarButton: React.FC<DiffToolbarButtonProps> = ({
 }
 
 interface FileDiffViewProps {
-  /** 真实文件路径（语言高亮 + 历史查询） */
+  /** Real file path (language highlighting + history lookup) */
   filePath: string
-  /** 当前展示的改动 */
+  /** Change currently displayed */
   change: FileChangeView
-  /** 该文件所有待审查的改动（正序：最早在前） */
+  /** All pending changes for this file (ascending: oldest first) */
   pending: FileChangeView[]
-  /** 差异编辑器的当前文档（= 页签内容；逐处取舍会改它） */
+  /** Current document of the diff editor (= tab content; per-chunk decisions modify it) */
   value: string
   isDarkMode: boolean
   palette: EditorPaletteInput
@@ -138,22 +138,23 @@ interface FileDiffViewProps {
   colorTextTertiary: string
   colorBorderSecondary: string
   isDirty: boolean
-  /** 逐处取舍 / 直接编辑差异文档 */
+  /** Per-chunk accept/reject / direct editing of the diff document */
   onChange: (value: string) => void
-  /** Ctrl+S：落盘审查结果（写文件 + 标记已保留） */
+  /** Ctrl+S: persist the review result (write the file + mark as kept) */
   onApplyReview: (content: string) => void
-  /** 保留（清除待审查标记） */
+  /** Keep (clear pending-review marks) */
   onKeep: (ids: number[]) => void
-  /** 撤销到某次改动之前 */
+  /** Revert to before a given change */
   onRevert: (id: number) => void
-  /** 在历史里切换查看某次改动 */
+  /** Switch the history view to a given change */
   onSelectChange: (id: number) => void
 }
 
 /**
- * 改动来源 / 审查状态的文案。
- * 用 switch 而不是拼字符串键：i18n 的键是字面量联合类型，模板字符串拼出来的键过不了类型检查。
- * 定义在组件内以闭包捕获 t（i18next 的 t 类型带重载，抽成独立函数的形参注解会把类型推爆）。
+ * Labels for change source / review status.
+ * Uses switch instead of building string keys: i18n keys are literal union types, so keys built
+ * from template strings do not type-check. Defined inside the component to capture t via closure
+ * (i18next's t type carries overloads; annotating it as a separate function parameter blows up inference).
  */
 function useChangeLabels(): {
   sourceLabel: (source: FileChangeView['source']) => string
@@ -190,15 +191,16 @@ function useChangeLabels(): {
 }
 
 /**
- * 文件差异视图（模型改动的审查面板）。
+ * File diff view (review panel for model changes).
  *
- * 用 @codemirror/merge 的统一合并视图：当前文档 = 文件现状（可编辑），
- * 改动前内容作为 original 内联展示（删除行以块内联、新增行高亮）。
+ * Uses the unified merge view from @codemirror/merge: the current document = the file as it is
+ * (editable), and the pre-change content is shown inline as original (deleted lines inlined as
+ * chunks, added lines highlighted).
  *
- * 三层审查粒度：
- * 1. **整次改动**：工具条的「全部保留 / 撤销全部改动」（走主进程，写回改动前快照）；
- * 2. **单处差异**：光标定位到某处后「保留此处 / 撤销此处」（CodeMirror 的 acceptChunk/rejectChunk）；
- * 3. **自由编辑**：直接在差异里改，Ctrl+S 落盘为「审查结果」（自动标记已保留）。
+ * Three review granularities:
+ * 1. **Whole change**: the toolbar's "keep all / revert all changes" (goes through the main process, writes back the pre-change snapshot);
+ * 2. **Single chunk**: with the cursor on a chunk, "keep this / revert this" (CodeMirror's acceptChunk/rejectChunk);
+ * 3. **Free editing**: edit directly in the diff and press Ctrl+S to persist it as the "review result" (automatically marked as kept).
  */
 const FileDiffView: React.FC<FileDiffViewProps> = ({
   filePath,
@@ -222,11 +224,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
   const { sourceLabel, statusLabel } = useChangeLabels()
   const viewRef = useRef<EditorView | null>(null)
   /**
-   * 按位置取舍（改动槽按钮用）。
+   * Accept/reject by position (used by the change-gutter buttons).
    *
-   * 用 ref 而不是把回调塞进扩展：chunkActionGutter 的扩展在 useMemo 里构建，
-   * 回调身份一变就整编辑器重配（撤销历史、滚动位置全丢）。这里让扩展始终调用同一个
-   * 函数，函数内部再读最新的 view。
+   * Uses refs instead of passing callbacks into the extension: chunkActionGutter's extension is
+   * built in useMemo, so a changed callback identity would reconfigure the whole editor (losing
+   * undo history and scroll position). The extension therefore always calls the same function,
+   * which reads the latest view internally.
    */
   const acceptAtRef = useRef<(pos: number) => void>(() => {})
   const rejectAtRef = useRef<(pos: number) => void>(() => {})
@@ -243,14 +246,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
     view.focus()
   }
   const [original, setOriginal] = useState<string | null>(null)
-  /** 模型写入后的内容（= 磁盘现值）：用来判断用户在差异里是否又取舍过 */
+  /** Content after the model wrote it (= current disk state): tells whether the user made any per-chunk decisions in the diff */
   const [modelContent, setModelContent] = useState<string | null>(null)
   const [stats, setStats] = useState<{ chunks: number; added: number; removed: number } | null>(
     null
   )
   const [history, setHistory] = useState<FileChangeView[]>([])
 
-  /** 统计文案（工具条左侧）：随 diff 结果变化，工具条自适应用它算让位 */
+  /** Stats label (left of the toolbar): changes with the diff result; the adaptive toolbar uses it to compute space */
   const statsText = stats
     ? t('harness.fileDiff.stats', {
         count: stats.chunks,
@@ -261,13 +264,13 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
 
   const isPending = change.status === 'pending'
   const latestPendingId = pending.length > 0 ? pending[pending.length - 1].id : null
-  // 只有「最新一次待审查改动」才允许在差异里编辑取舍：
-  // 对更早的改动做取舍会把文件拉回旧状态，等于隐式撤销了后面的改动
+  // Only the latest pending change may be edited in the diff:
+  // deciding on an older change would drag the file back to an old state, implicitly reverting later changes
   const canEdit = isPending && change.id === latestPendingId && change.hasBefore
-  /** 差异里的文档与磁盘完全一致（用户还没取舍过任何一处） */
+  /** The diff document matches the disk exactly (the user has not decided on any chunk yet) */
   const docMatchesDisk = modelContent === null || value === modelContent
 
-  // 载入改动前正文（差异的左侧/上方内容）+ 改动后正文（判断是否已取舍）
+  // Load the pre-change body (the diff's left/top side) + the post-change body (to tell whether decisions were made)
   useEffect(() => {
     let cancelled = false
     setOriginal(null)
@@ -297,17 +300,19 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
   }, [refreshHistory, change.id, pending.length])
 
   /**
-   * 工具条自适应：**按钮只有图标**（用户 2026-09-22：「上面的所有按钮不要显示文字，只要图标即可」），
-   * 面板变窄时再按优先级整段让位，绝不把按钮挤到看不见。
+   * Adaptive toolbar: **buttons are icon-only** (per the 2026-09-22 requirement, "don't show text
+   * on any of the buttons above, icons are enough"), and when the panel narrows whole segments
+   * yield by priority so buttons are never squeezed out of sight.
    *
-   * 踩过的两种坏结局：
-   * ① 带文字时 6 个按钮 ≈ 460px，450px 的面板直接横向溢出（实测 scrollWidth/clientWidth
-   *    差 231px），图标退到面板外面点不到；
-   * ② 外层 `overflow-hidden` 会把溢出裁掉，`scrollWidth-clientWidth` 因此**测不准**
-   *    （裁掉后只剩 9px），所以这里按「内容自然宽度之和 vs 容器宽度」自己算，不靠 scrollWidth。
+   * Two bad outcomes we hit:
+   * ① with text, six buttons were ≈ 460px wide and a 450px panel overflowed horizontally
+   *    (measured scrollWidth/clientWidth gap of 231px), pushing icons outside the panel;
+   * ② the outer `overflow-hidden` clips the overflow, which makes `scrollWidth-clientWidth`
+   *    **unreliable** (only 9px left after clipping), so we compute "sum of natural content
+   *    widths vs container width" ourselves instead of relying on scrollWidth.
    *
-   * 让位顺序（先丢最不关键的）：来源说明 → 统计文字 → 未保存提示 → 历史入口。
-   * 保留 / 撤销 / 上一处 / 下一处 始终留在工具条上——它们是这个面板的主操作。
+   * Yield order (least critical dropped first): source label → stats text → unsaved hint → history entry.
+   * Keep / revert / previous / next always stay in the toolbar — they are this panel's primary actions.
    */
   const toolbarRef = useRef<HTMLDivElement>(null)
   const groupRef = useRef<HTMLDivElement>(null)
@@ -324,14 +329,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
     const recompute = (): void => {
       const available = bar.clientWidth
       if (available <= 0) return
-      // 按钮组（含分隔线）的自然宽度：flexShrink 已设为 0，量到的是真实需求
+      // Natural width of the button group (including the divider): flexShrink is 0, so this is the real demand
       const groupWidth = groupRef.current ? groupRef.current.scrollWidth : 0
-      // 尾部留白 + 组间距：宁可算多几像素，也不要在临界宽度上来回抖
+      // Trailing padding + group gaps: better to over-count a few pixels than to oscillate around the threshold
       const reserved = 24 + 8
       const slack = available - groupWidth - reserved
       setCompact((prev) => {
         const next = {
-          // 来源文字（edit_file 之类）最不关键：先丢
+          // Source text (edit_file and the like) is least critical: drop it first
           source: slack >= 64,
           stats: slack >= 120,
           history: slack >= 96
@@ -354,11 +359,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
   }, [history.length, isDirty, statsText, canEdit, isPending])
 
   /**
-   * 统计差异规模（处数 / 新增行 / 删除行）。
+   * Compute diff size (chunk count / added lines / removed lines).
    *
-   * 有合并视图时由 CodeMirror 自己的 chunk 结果换算；没有可比对的正文
-   * （新建文件、命令执行期间被捕获的写入）时回落到**改动记录自带的统计**——
-   * 算法与边界见 utils/mergeStats.ts（那两种「算不出 diff」的返回是真编辑器上量出来的）。
+   * With a merge view the values are derived from CodeMirror's own chunk results; when there is no
+   * body to compare against (new files, writes captured during command execution) it falls back
+   * to **the change record's own stats** — the algorithm and edge cases live in utils/mergeStats.ts
+   * (the two "cannot compute diff" returns were measured on the real editor).
    */
   const refreshStats = useCallback(
     (view: EditorView) => {
@@ -379,7 +385,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
     if (viewRef.current) refreshStats(viewRef.current)
   }, [refreshStats, value])
 
-  /** 合并视图扩展（original 变化 / 可编辑性变化时重建） */
+  /** Merge view extensions (rebuilt when original changes / editability changes) */
   const mergeExtensions = useMemo<Extension[] | undefined>(() => {
     if (original === null || !change.hasBefore) return undefined
     return [
@@ -391,13 +397,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
         allowInlineDiffs: true,
         collapseUnchanged: { margin: 4, minSize: 8 },
         /**
-         * 自带的 mergeControls 会往删除块内部塞两个**文字**按钮（「保留 / 撤销」），
-         * 随块一起滚、还压在正文右端。改成 false：取舍按钮由 chunkActionGutter 画在
-         * 改动槽里（图标 + 「一处差异一组」，见 utils/cmChunkActions.ts）。
+         * The built-in mergeControls inject two **text** buttons ("keep / revert") inside deleted
+         * chunks; they scroll with the chunk and sit on the right edge of the body. Set to false:
+         * accept/reject buttons are drawn by chunkActionGutter in the change gutter (icons, one
+         * group per chunk — see utils/cmChunkActions.ts).
          */
         mergeControls: false
       }),
-      // 行号槽里的逐处取舍按钮：只有最新一次待审查改动允许取舍，其余（历史改动）只读
+      // Per-chunk accept/reject buttons in the line-number gutter: only the latest pending change is decidable; historical changes are read-only
       ...(canEdit
         ? [
             chunkActionGutter({
@@ -432,9 +439,9 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
   const pendingIds = pending.map((item) => item.id)
 
   /**
-   * 「全部保留」：保留的到底是哪一份内容？
-   * - 用户没在差异里取舍过 → 磁盘上的就是最终内容，只需清掉待审查标记；
-   * - 用户逐处取舍/手改过 → 先把眼前这份内容落盘（applyReview），否则那些取舍会被丢掉。
+   * "Keep all": which content is actually kept?
+   * - The user made no decisions in the diff → the disk content is final, only clear the pending-review marks;
+   * - The user decided per chunk / edited manually → persist the visible content first (applyReview), otherwise those decisions are lost.
    */
   const handleKeepAll = useCallback(() => {
     if (canEdit && !docMatchesDisk) {
@@ -537,7 +544,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
     </div>
   )
 
-  /** 语义色按钮的公共入参（图标按钮组件需要的调色板与主题） */
+  /** Shared props for semantic-tone buttons (palette and theme needed by the icon button component) */
   const buttonProps = {
     colorText,
     colorTextSecondary,
@@ -547,8 +554,9 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* 审查工具条：**只有图标**（用户 2026-09-22 要求），文案一律退到 Tooltip；
-          面板变窄时按优先级丢掉文字分段（见上方 compact 的说明），按钮组永不压缩。 */}
+      {/* Review toolbar: **icons only** (per the 2026-09-22 requirement); all text lives in Tooltips.
+          When the panel narrows, text segments are dropped by priority (see the compact note above);
+          the button group is never compressed. */}
       <div
         ref={toolbarRef}
         data-testid="file-diff-toolbar"
@@ -576,7 +584,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
         )}
         <div className="flex-1" />
 
-        {/* 按钮组：flexShrink=0 且整体量过一次自然宽度（toolbarRef 的自适应按它算） */}
+        {/* Button group: flexShrink=0, and its natural width is measured as a whole (the toolbarRef adaptivity uses it) */}
         <div ref={groupRef} className="flex items-center gap-1.5 shrink-0">
           <DiffToolbarButton
             {...buttonProps}
@@ -658,7 +666,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({
         </div>
       </div>
 
-      {/* 无快照（命令执行 / 外部改动）：如实说明不可回溯 */}
+      {/* No snapshot (command execution / external change): state plainly that it cannot be rolled back */}
       {!change.hasBefore && (
         <div
           className="flex items-center gap-2 px-3 shrink-0 text-[11.5px]"

@@ -1,8 +1,8 @@
-/* 模型设置页词条。 */
+/* Model settings page entries. */
 export const zhCNModelSettings = {
   pageTitle: '大模型供应商',
   pageDescription: '管理 AI 聊天和知识图谱使用的模型供应商配置',
-  /* 国内供应商展示名（预设列表里其余厂商本就是拉丁名，不列入词条） */
+  /* Display names for domestic providers (the other vendors in the preset list already use Latin names, so they are not entries) */
   provider: {
     zhipu: '智谱 GLM',
     aliyun: '阿里云百炼',
@@ -18,7 +18,7 @@ export const zhCNModelSettings = {
     clearSelection: '取消选择'
   },
   list: {
-    /* <mono> 只包数字：等宽族缺中文字形，中文落进去会回退成宋体 */
+    /* <mono> wraps numbers only: monospace fonts lack Chinese glyphs, so Chinese inside it falls back to a serif face */
     total_one: '共 <mono>{{count}}</mono> 个模型',
     total_other: '共 <mono>{{count}}</mono> 个模型',
     selected_one: '已选 <mono>{{count}}</mono> 个',
@@ -156,7 +156,7 @@ export const zhCNModelSettings = {
     providerTypePlaceholder: '选择供应商类型',
     customBaseUrlPlaceholder: '自定义 API 地址（必填）',
     ollamaBaseUrlPlaceholder: 'Ollama API 地址',
-    customProviderIdPlaceholder: '供应商 ID（必填，如 opencode）',
+    customProviderIdPlaceholder: '供应商 ID（必填，如 my-provider）',
     customProviderIdHint:
       '供应商 ID 全英文小写，仅可包含数字与 - ｜ 列表拉取仅支持 OpenAI 兼容端点（GET /v1/models）',
     fetchList: '获取模型列表',

@@ -1,20 +1,21 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 
 /**
- * 锁屏解锁码的摘要与校验（只在主进程执行）。
+ * Lock-code hashing and verification (main process only).
  *
- * 为什么不用旧的「6 位数字的裸 MD5」：
- * - 6 位数字只有 100 万种组合，MD5 一秒能算几百万个 —— 拿到 settings.json 里那串
- *   `e10adc…` 等于直接拿到明文密码；
- * - 旧实现还把摘要通过 IPC 下发给渲染层（`lock-screen-code`），任何注入到渲染进程的
- *   代码都能顺手取走它。
+ * Why not the old "bare MD5 of a 6-digit number":
+ * - 6-digit numbers have only a million combinations and MD5 can compute millions per second — the
+ *   `e10adc…` string in settings.json is effectively the plaintext password;
+ * - the old implementation also sent the hash to the renderer over IPC (`lock-screen-code`), so any
+ *   code injected into the renderer process could simply take it.
  *
- * 现在改为**加盐 scrypt**（N=16384, r=8, p=1，每次 16 MiB / 几十毫秒），摘要只在主进程，
- * 渲染层永远拿不到。旧用户的裸 MD5 仍能校验（否则升级后会被锁在门外），首次校验成功后
- * 由 `lock/service.ts` 原地升级成 scrypt。
+ * It now uses **salted scrypt** (N=16384, r=8, p=1, ~16 MiB / a few tens of milliseconds per
+ * attempt); the hash stays in the main process and the renderer never sees it. Legacy bare MD5 hashes
+ * can still be verified (otherwise upgrading would lock users out); after the first successful
+ * verification they are upgraded in place to scrypt by `lock/service.ts`.
  */
 
-/** 6 位纯数字解锁码 */
+/** 6-digit numeric unlock code */
 export const LOCK_CODE_PATTERN = /^\d{6}$/
 
 const HASH_PREFIX = 'scrypt'
@@ -23,20 +24,20 @@ const SCRYPT_R = 8
 const SCRYPT_P = 1
 const KEY_LENGTH = 32
 const SALT_BYTES = 16
-/** scrypt 的内存上限：128 * N * r 是理论值，留一倍余量给实现 */
+/** scrypt memory limit: 128 * N * r is the theoretical value; leave a 2x margin for the implementation */
 const MAX_MEM = 128 * SCRYPT_N * SCRYPT_R * 2
 
-/** 是否是可接受的解锁码（调用方拿来挡住非法输入） */
+/** Whether this is an acceptable unlock code (callers use it to reject invalid input) */
 export function isLockCode(value: unknown): value is string {
   return typeof value === 'string' && LOCK_CODE_PATTERN.test(value)
 }
 
-/** 是否是旧版本的裸 MD5（32 位十六进制） */
+/** Whether this is a legacy bare MD5 hash (32 hex characters) */
 export function isLegacyCodeHash(stored: string): boolean {
   return /^[a-f0-9]{32}$/i.test(stored)
 }
 
-/** 是否是本版本写下的 scrypt 摘要 */
+/** Whether this is a scrypt hash written by this version */
 export function isScryptCodeHash(stored: string): boolean {
   return stored.startsWith(`${HASH_PREFIX}$`)
 }
@@ -49,7 +50,7 @@ interface ScryptParams {
   hash: Buffer
 }
 
-/** 解析 `scrypt$N$r$p$salt$hash`；任何一段不合法都返回 null（宁可不认，也不拿坏参数去算） */
+/** Parses `scrypt$N$r$p$salt$hash`; returns null if any part is invalid (better to reject than compute with bad parameters) */
 function parseScryptHash(stored: string): ScryptParams | null {
   const parts = stored.split('$')
   if (parts.length !== 6) return null
@@ -59,7 +60,7 @@ function parseScryptHash(stored: string): ScryptParams | null {
   const r = Number(rawR)
   const p = Number(rawP)
   if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p)) return null
-  // 参数下限/上限都要卡：上限防止设置文件被改成 N=2^30 把主进程算到卡死
+  // Clamp both lower and upper bounds: the upper bound stops a settings file changed to N=2^30 from freezing the main process
   if (n < 1024 || n > 1_048_576 || r < 1 || r > 32 || p < 1 || p > 16) return null
   const salt = Buffer.from(rawSalt, 'base64url')
   const hash = Buffer.from(rawHash, 'base64url')
@@ -92,7 +93,7 @@ function deriveKey(
   })
 }
 
-/** 生成落盘用的摘要：`scrypt$N$r$p$salt$hash` */
+/** Builds the hash to persist: `scrypt$N$r$p$salt$hash` */
 export async function hashLockCode(code: string): Promise<string> {
   if (!isLockCode(code)) throw new Error('lock code must be 6 digits')
   const salt = randomBytes(SALT_BYTES)
@@ -111,16 +112,17 @@ export async function hashLockCode(code: string): Promise<string> {
   ].join('$')
 }
 
-/** 旧版本写入的 MD5('code')，仅用于校验后升级 */
+/** MD5('code') written by older versions, used only for verification and later upgrade */
 function legacyMd5Hex(code: string): string {
   return createHash('md5').update(code, 'utf8').digest('hex')
 }
 
 /**
- * 校验解锁码。
+ * Verifies the unlock code.
  *
- * 返回 `legacy: true` 表示这次是拿旧 MD5 比对成功的 —— 调用方应立刻把摘要升级成 scrypt。
- * 任何异常（坏摘要、scrypt 参数不可用）都按「不匹配」处理：锁屏失败必须关闭，不能放行。
+ * Returning `legacy: true` means the match was against the old MD5 hash — the caller should upgrade
+ * the hash to scrypt immediately. Any failure (bad hash, unusable scrypt parameters) is treated as
+ * "no match": a failed lock check must stay closed, never let through.
  */
 export async function verifyLockCode(
   code: string,

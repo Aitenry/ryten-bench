@@ -30,18 +30,18 @@ import type { DocumentController } from './documents'
 import type { RuntimeMemoryController } from './runtime-memory'
 
 /**
- * MnemonService — 记忆系统应用门面
+ * MnemonService — application facade for the memory system
  *
- * 移植自 dsh-mnemon 的 MnemonService：组织 Runtime Memory、Documents 与 Memory Spaces
- * 三个控制面，向工具层暴露确定性服务（不做 LLM 判断）。
+ * Organizes three control planes — Runtime Memory, Documents and Memory Spaces —
+ * exposing deterministic services to the tool layer (no LLM judgment).
  */
 
 export interface MnemonServiceOptions {
-  /** 记忆系统存储根目录 */
+  /** Root directory for memory-system storage */
   storageRoot: string
-  /** 热记忆控制器（可延迟注入，避免构造环） */
+  /** Hot-memory controller (may be injected later to avoid a construction cycle) */
   runtimeMemory?: RuntimeMemoryController
-  /** 文档控制器（可延迟注入） */
+  /** Document controller (may be injected later) */
   documents?: DocumentController
 }
 
@@ -51,7 +51,7 @@ export class MnemonService {
   runtimeMemory?: RuntimeMemoryController
   documents?: DocumentController
 
-  /** 已打开的 PGlite 实例缓存（按空间 ID） */
+  /** Cache of opened PGlite instances (by space ID) */
   private readonly openDbs = new Map<string, PGlite>()
 
   constructor(options: MnemonServiceOptions) {
@@ -62,10 +62,10 @@ export class MnemonService {
   }
 
   // --------------------------------------------------------------------------
-  // 目录与状态
+  // Catalog and state
   // --------------------------------------------------------------------------
 
-  /** 记忆空间目录（含统计；复用已打开实例，避免同一目录多实例锁冲突） */
+  /** Memory Space catalog (with statistics; reuses opened instances to avoid lock conflicts between instances on the same directory) */
   async bodies(): Promise<MemoryBodyCatalog> {
     const items: MemoryBodyView[] = []
     for (const body of this.registry.list()) {
@@ -91,12 +91,13 @@ export class MnemonService {
   }
 
   // --------------------------------------------------------------------------
-  // 召回（只读）
+  // Recall (read-only)
   // --------------------------------------------------------------------------
 
   /**
-   * 从一个或多个 active 记忆空间召回。
-   * 未指定 memoryBodyIds 时使用全部激活空间；每个空间独立召回后按 score 合并排序。
+   * Recalls from one or more active Memory Spaces.
+   * When memoryBodyIds is omitted, all active spaces are used; each space recalls
+   * independently, then results are merged and sorted by score.
    */
   async search(
     request: SearchRequest
@@ -121,7 +122,7 @@ export class MnemonService {
         logger.warn(`[Mnemon] Recall failed (space ${body.name}):`, err)
       }
     }
-    // 合并排序：按 score 降序，截断到 limit（默认 10）
+    // Merge and sort: descending by score, truncated to limit (default 10)
     const limit = Math.min(request.limit ?? 10, 12)
     all.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
     const results = all.slice(0, limit)
@@ -133,7 +134,7 @@ export class MnemonService {
     }
   }
 
-  /** 关系遍历 */
+  /** Relation traversal */
   async related(
     id: string,
     depth = 2,
@@ -154,7 +155,7 @@ export class MnemonService {
     return all.slice(0, 12)
   }
 
-  /** 内容浏览（无召回副作用） */
+  /** Content listing (no recall side effects) */
   async list(memoryBodyIds?: string[], limit = 50): Promise<Insight[]> {
     const targets = this.resolveTargets(memoryBodyIds)
     const all: Insight[] = []
@@ -170,10 +171,10 @@ export class MnemonService {
   }
 
   // --------------------------------------------------------------------------
-  // 长期写入
+  // Long-term writes
   // --------------------------------------------------------------------------
 
-  /** 沉淀一条洞察；未指定空间时使用第一个激活空间 */
+  /** Persists one insight; uses the first active space when no space is specified */
   async remember(request: RememberRequest): Promise<Insight> {
     this.validateWrite()
     const tm = mainToolMessages().mnemon
@@ -192,7 +193,7 @@ export class MnemonService {
     return insight
   }
 
-  /** 建立关系 */
+  /** Creates a relation */
   async link(
     sourceId: string,
     targetId: string,
@@ -208,7 +209,7 @@ export class MnemonService {
     return { sourceId, targetId, type }
   }
 
-  /** 软删除 */
+  /** Soft delete */
   async forget(id: string, memoryBodyId?: string): Promise<boolean> {
     this.validateWrite()
     const target = this.resolveWriteTarget(memoryBodyId)
@@ -220,7 +221,7 @@ export class MnemonService {
     return true
   }
 
-  /** 创建记忆空间 */
+  /** Creates a Memory Space */
   async createBody(request: {
     name: string
     description: string
@@ -231,7 +232,7 @@ export class MnemonService {
     return await this.registry.create(request)
   }
 
-  /** 更新记忆空间元数据 */
+  /** Updates Memory Space metadata */
   updateBody(
     id: string,
     request: { name?: string; description?: string; active?: boolean }
@@ -240,15 +241,16 @@ export class MnemonService {
     return this.registry.update(id, request)
   }
 
-  /** 非破坏性合并 */
+  /** Non-destructive merge */
   async mergeBodies(
     targetBodyId: string,
     sourceBodyIds: string[],
     deactivateSources = true
   ): Promise<{ imported: number; skippedDuplicates: number }> {
     this.validateWrite()
-    // 经 openDb 缓存取数据库实例（修复：registry.merge 直开同目录新实例，与缓存实例并存，
-    // 同目录多实例存在锁冲突与一致性风险；缓存实例由 close() 统一收尾）
+    // Obtain the database instance through the openDb cache (fix: registry.merge used to open a
+    // second instance on the same directory alongside the cached one; multiple instances on one
+    // directory risk lock conflicts and inconsistency — cached instances are closed by close())
     const provider = async (
       bodyId: string
     ): Promise<{ db: PGlite; release: () => Promise<void> }> => {
@@ -262,11 +264,11 @@ export class MnemonService {
   }
 
   // --------------------------------------------------------------------------
-  // 内部实现
+  // Internal implementation
   // --------------------------------------------------------------------------
 
   private validateWrite(): void {
-    // 写入口：注册表更新前校验（预留写权限开关）
+    // Write entry point: validated before registry updates (reserved write-permission switch)
   }
 
   private resolveTargets(memoryBodyIds?: string[]): MemoryBody[] {
@@ -291,14 +293,14 @@ export class MnemonService {
     return active
   }
 
-  /** 写入目标：指定 ID（未激活则自动激活）或第一个激活空间 */
+  /** Write target: the specified ID (auto-activated if inactive) or the first active space */
   private resolveWriteTarget(memoryBodyId?: string): MemoryBody {
     const tm = mainToolMessages().mnemon
     if (memoryBodyId) {
       const body = this.registry.get(memoryBodyId)
       if (!body) throw new Error(mainFormat(tm.errors.spaceNotFound, { id: memoryBodyId }))
       if (!body.active) {
-        // 对未激活目标写入成功后自动激活（对应 dsh-mnemon 行为）
+        // Auto-activate an inactive target after a successful write
         this.registry.update(memoryBodyId, { active: true })
       }
       return body
@@ -310,7 +312,7 @@ export class MnemonService {
     return active[0]
   }
 
-  /** 打开（并缓存）空间数据库 */
+  /** Opens (and caches) a space database */
   private async openDb(bodyId: string): Promise<PGlite> {
     const cached = this.openDbs.get(bodyId)
     if (cached) return cached
@@ -323,7 +325,7 @@ export class MnemonService {
     return db
   }
 
-  /** 关闭全部已打开数据库（应用退出时调用） */
+  /** Closes all opened databases (called when the application exits) */
   async close(): Promise<void> {
     for (const [id, db] of this.openDbs) {
       try {

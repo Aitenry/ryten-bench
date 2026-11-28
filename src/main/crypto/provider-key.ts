@@ -12,19 +12,20 @@ const IV_LENGTH = 16
 const AUTH_TAG_LENGTH = 16
 const PBKDF2_ITERATIONS = 600000
 const KEY_LENGTH = 32 // 256 bits
-const SALT = 'ryten-bench-provider-salt-v1' // 固定盐值，与机器属性混合
+const SALT = 'ryten-bench-provider-salt-v1' // Fixed salt, mixed with machine attributes
 
 /**
- * 机器密钥缓存：单次会话内 hostname / username / userData 不会变化，
- * 60 万次迭代的 PBKDF2 只派生一次（约 200~500ms，同步阻塞主进程）。
- * 此前每加解密一个 API Key 都重新派生，批量场景（如 29 个模型逐行解密）
- * 会累计阻塞数秒，导致模型设置树加载卡死。
+ * Machine key cache: hostname / username / userData do not change within a session, so the
+ * 600k-iteration PBKDF2 runs only once (about 200–500 ms, synchronously blocking the main process).
+ * Previously the key was re-derived for every API key encryption/decryption, so batch scenarios
+ * (e.g. decrypting 29 models line by line) blocked for several seconds cumulatively and froze
+ * the model settings tree while loading.
  */
 let cachedMachineKey: Buffer | null = null
 
 /**
- * 从当前机器属性派生加密密钥
- * 基于 hostname + username + userData 路径组合，每台电脑唯一
+ * Derive the encryption key from the current machine attributes
+ * Based on a combination of hostname + username + userData path, unique per machine
  */
 function deriveMachineKey(): Buffer {
   if (cachedMachineKey) return cachedMachineKey
@@ -32,7 +33,7 @@ function deriveMachineKey(): Buffer {
   const username = os.userInfo().username
   const userDataPath = app.getPath('userData')
 
-  // 组合机器唯一标识
+  // Combine the machine-unique identifier
   const machineFingerprint = `${hostname}:${username}:${userDataPath}`
 
   cachedMachineKey = crypto.pbkdf2Sync(
@@ -46,8 +47,8 @@ function deriveMachineKey(): Buffer {
 }
 
 /**
- * 验证机器密钥是否与存储中的验证令牌一致
- * 用于检测机器环境变化（如系统重装、用户名变更）
+ * Verify that the machine key matches the stored verification token
+ * Used to detect machine environment changes (e.g. OS reinstall, username change)
  */
 function verifyMachineKey(): boolean {
   const storedToken = keystore.get('key_verification_token') as string | undefined
@@ -60,8 +61,10 @@ function verifyMachineKey(): boolean {
 }
 
 /**
- * 初始化加密模块：生成验证令牌（首次运行或验证失败时重新生成）
- * 注意：如果验证令牌不一致，说明机器环境已变化，已加密的数据将无法解密
+ * Initialize the encryption module: generate a verification token (regenerated on first run or
+ * when verification fails)
+ * Note: if the verification token does not match, the machine environment has changed and
+ * previously encrypted data can no longer be decrypted
  */
 function initKeystore(): void {
   const storedToken = keystore.get('key_verification_token') as string | undefined
@@ -80,9 +83,9 @@ function initKeystore(): void {
 }
 
 /**
- * 加密 API Key
- * 使用 AES-256-GCM 认证加密，返回 Base64 编码的密文
- * 格式: iv (16 bytes) + authTag (16 bytes) + ciphertext → Base64
+ * Encrypt an API key
+ * Uses AES-256-GCM authenticated encryption and returns Base64-encoded ciphertext
+ * Format: iv (16 bytes) + authTag (16 bytes) + ciphertext → Base64
  */
 function encryptApiKey(plaintext: string): string {
   const key = deriveMachineKey()
@@ -92,14 +95,14 @@ function encryptApiKey(plaintext: string): string {
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
   const authTag = cipher.getAuthTag()
 
-  // 拼接: iv + authTag + ciphertext
+  // Concatenate: iv + authTag + ciphertext
   const combined = Buffer.concat([iv, authTag, encrypted])
   return combined.toString('base64')
 }
 
 /**
- * 解密 API Key
- * 从 Base64 编码的密文中还原明文
+ * Decrypt an API key
+ * Restores the plaintext from Base64-encoded ciphertext
  */
 function decryptApiKey(encryptedBase64: string): string {
   if (!encryptedBase64) return ''

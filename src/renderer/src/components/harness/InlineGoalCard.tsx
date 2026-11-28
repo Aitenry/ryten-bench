@@ -8,20 +8,21 @@ import type { GoalView } from '../../../../shared/harness/types'
 import { harnessApi } from '../../api/harness'
 
 /**
- * 目标卡片（内联）— 输入框上方第一层。
+ * Goal card (inline) — the first layer above the input box.
  *
- * 目标正文的编辑不在卡片里展开，而是复用底部对话输入框：
- * - 点铅笔 / `/goal` 把输入框切到「目标输入」态；
- * - 此时目标条高亮、状态显示「编辑中」；没有目标时显示「新目标」提示行；
- * - 输入框回车后保存目标并立即发起一轮执行。
+ * Editing the objective text does not expand inside the card; it reuses the chat input below:
+ * - clicking the pencil / `/goal` switches the input into "goal input" mode;
+ * - the goal bar is then highlighted and its status reads "editing"; with no goal a "new goal"
+ *   hint row is shown instead;
+ * - pressing Enter in the input saves the objective and immediately starts a round.
  */
 interface InlineGoalCardProps {
   currentTopicId: number | null
-  /** 当前是否处于目标输入选中态（目标条高亮、状态改为编辑中） */
+  /** Whether the goal input is selected (goal bar highlighted, status switched to editing) */
   selected?: boolean
-  /** 计划评审挂起时锁定目标操作 */
+  /** Lock goal actions while a plan review is pending */
   disabled?: boolean
-  /** 点击编辑：把现有目标正文交给主输入框 */
+  /** Edit click: hand the current objective text to the main input */
   onRequestEdit: (objective: string) => void
 }
 

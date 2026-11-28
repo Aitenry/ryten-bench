@@ -1,30 +1,32 @@
 /**
- * `propose_action` 的纯逻辑：校验动作列表、生成给模型看的确认文本、生成动作卡标题。
+ * Pure logic for `propose_action`: validate the action list, build the confirmation text shown to
+ * the model, and build the action card title.
  *
- * 动作卡本身由渲染层按工具入参渲染；工具结果只是告诉模型「已展示」。把校验与文案拼装
- * 拆成纯函数，便于离线测试（长度上限、去重、条数上限、回复文本回退）。
+ * The action card itself is rendered by the renderer from the tool input; the tool result only
+ * tells the model "already displayed". Validation and text assembly are split into pure functions
+ * for offline testing (length caps, dedupe, item cap, reply text fallback).
  */
 
-/** 单个可选动作（渲染层与工具共用） */
+/** A single selectable action (shared by the renderer and the tool) */
 export interface ProposedAction {
-  /** 按钮文字（用户点选的就是它） */
+  /** Button text (this is what the user clicks) */
   label: string
-  /** 可选的一行说明 */
+  /** Optional one-line description */
   description?: string
-  /** 可选：点选后实际回传的文本（缺省 = label） */
+  /** Optional: text actually sent back after clicking (defaults to label) */
   reply?: string
 }
 
-/** 动作条数上限（超过只保留前 N 个，避免卡片过高） */
+/** Maximum number of actions (only the first N are kept so the card stays short) */
 export const MAX_PROPOSED_ACTIONS = 4
-/** 单个 label 上限 */
+/** Maximum length of a single label */
 export const MAX_ACTION_LABEL_CHARS = 60
-/** 单个 description 上限 */
+/** Maximum length of a single description */
 export const MAX_ACTION_DESCRIPTION_CHARS = 160
-/** reply 上限 */
+/** Maximum length of a reply */
 export const MAX_ACTION_REPLY_CHARS = 200
 
-/** 文案（由 i18n 按界面语言提供） */
+/** Texts (provided by i18n according to the UI language) */
 export interface ProposeActionTexts {
   shown: string
   item: string
@@ -34,9 +36,10 @@ export interface ProposeActionTexts {
 type Format = (template: string, values: Record<string, string | number>) => string
 
 /**
- * 规范化动作列表：裁掉空 label、按 label 去重、截断超长字段、限制条数。
+ * Normalize the action list: drop empty labels, dedupe by label, truncate oversized fields, and
+ * cap the count.
  *
- * 返回 `null` 表示没有可用动作（调用方应告诉模型重试）。
+ * Returns `null` when no usable action remains (the caller should ask the model to retry).
  */
 export function normalizeProposedActions(raw: unknown): ProposedAction[] | null {
   if (!Array.isArray(raw)) return null
@@ -63,7 +66,7 @@ export function normalizeProposedActions(raw: unknown): ProposedAction[] | null 
   return actions.length > 0 ? actions : null
 }
 
-/** 给模型看的结果文本：已展示的动作清单 + 「等用户点选」的提示 */
+/** Result text for the model: the list of displayed actions plus a "waiting for the user" hint */
 export function formatProposedActions(
   format: Format,
   texts: ProposeActionTexts,

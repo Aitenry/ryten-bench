@@ -32,30 +32,35 @@ import 'katex/dist/katex.min.css'
 import './tiptap-content.css'
 
 /**
- * 等宽字体栈（只用于数字/拉丁字符，与路由骨架屏、模型设置页同源）。
- * 等宽族缺中文字形，中文落进去会被 Chromium 回退成宋体，因此不包裹中文。
+ * Monospace font stack (used only for digits/Latin characters, same stack as the route
+ * skeleton and the model settings page).
+ * Monospace families lack Chinese glyphs, so Chinese text inside them would fall back
+ * to SimSun in Chromium; that is why Chinese is never wrapped in it.
  */
 const MONO_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
 export interface TipTapMarkdownEditorProps {
-  /** Markdown 源文本（外部更新时同步进编辑器） */
+  /** Markdown source text (synced into the editor when updated externally) */
   value?: string
-  /** 每次内容变更回调（Markdown 文本） */
+  /** Called on every content change (Markdown text) */
   onChange?: (markdown: string) => void
-  /** Ctrl+S 保存回调 */
+  /** Ctrl+S save callback */
   onSave?: (markdown: string) => void
   placeholder?: string
   readOnly?: boolean
-  /** 编辑器实例就绪回调（用于大纲提取等外部联动） */
+  /**
+   * Called when the editor instance is ready (used for outline extraction and other
+   * external wiring)
+   */
   onReady?: (editor: Editor) => void
-  /** 正文滚动容器引用（用于大纲滚动同步） */
+  /** Ref to the body scroll container (used for outline scroll sync) */
   scrollRef?: React.RefObject<HTMLDivElement | null>
   autofocus?: boolean | 'end'
   showToolbar?: boolean
   className?: string
 }
 
-/* ──────────── 图片文件 → dataURL（压缩控制体积） ──────────── */
+/* ──────────── Image file → dataURL (compressed to limit size) ──────────── */
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -78,10 +83,10 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 const MAX_IMAGE_SIZE = 1600
 
 /**
- * 图片压缩策略：
- * - GIF 原样保留（canvas 只能取首帧，不压缩）
- * - PNG（截图）：超宽才等比缩小，保持 PNG 保证文字清晰
- * - JPEG/WebP 等：超宽等比缩小，统一转 JPEG q0.85 压体积
+ * Image compression strategy:
+ * - GIF: kept as-is (canvas can only capture the first frame, so no compression)
+ * - PNG (screenshots): downscaled proportionally only when too wide, kept as PNG for sharp text
+ * - JPEG/WebP etc.: downscaled proportionally when too wide, then converted to JPEG q0.85
  */
 async function compressImageFile(file: File): Promise<string | null> {
   try {
@@ -130,7 +135,7 @@ function normalizeUrl(url: string): string {
   return `https://${trimmed}`
 }
 
-/* ──────────── 主组件 ──────────── */
+/* ──────────── Main component ──────────── */
 
 const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
   value = '',
@@ -149,13 +154,15 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
   const editorRef = useRef<Editor | null>(null)
   const lastMdRef = useRef(value)
 
-  /* 默认占位符走词条；editor 只在挂载时创建（deps 为空），
-     语言切换后不重建实例，故用 ref 保存「当前语言下的占位符」，
-     NodeView 需要读取时一并从 ref 拿（避免 NodeView 文案停留在旧语言）。 */
+  /* The default placeholder comes from a translation key; the editor is created on mount only
+     (empty deps) and is not rebuilt after a language switch, so a ref holds the placeholder for
+     the current language. NodeViews read it from the same ref so their text does not stay in the
+     old language. */
   const placeholderRef = useRef('')
   placeholderRef.current = placeholder ?? t('markdown.editor.placeholder')
 
-  /* Slash 菜单主题（弹层挂载在 body，需把 token 注入 ref 供其读取） */
+  /* Slash menu theme (the popup mounts on body, so tokens are passed in through a ref for it
+     to read) */
   const slashThemeRef = useRef<SlashMenuTheme>({
     bg: token.colorBgElevated,
     border: token.colorBorderSecondary,
@@ -177,13 +184,13 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     hoverBg: token.colorFillTertiary
   }
 
-  /* 回调走 ref，避免 editor 重建 */
+  /* Callbacks go through refs to avoid rebuilding the editor */
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
 
-  /* 链接编辑浮层状态 */
+  /* Link edit popup state */
   const [linkPop, setLinkPop] = useState<{ top: number; left: number; value: string } | null>(null)
   const linkInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -208,13 +215,13 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     editorProps: {
       attributes: {
         class: 'tiptap-editor',
-        // 文档正文是纯文本编辑，关闭浏览器自带的拼写/语法校验波浪线
+        // The document body is plain-text editing, so disable the browser's spell/grammar squiggles
         spellcheck: 'false',
         autocorrect: 'off',
         autocapitalize: 'off'
       },
       handleKeyDown: (_view, event) => {
-        // Ctrl/Cmd + K：打开链接浮层
+        // Ctrl/Cmd + K: open the link popup
         if (
           (event.metaKey || event.ctrlKey) &&
           !event.shiftKey &&
@@ -230,7 +237,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
         const files = event.clipboardData?.files
         const images = files ? Array.from(files).filter((f) => f.type.startsWith('image/')) : []
         if (images.length === 0) return false
-        // 粘贴截图/图片：压缩后插入 dataURL
+        // Pasted screenshots/images: compress, then insert as a dataURL
         event.preventDefault()
         const pos = view.state.selection.from
         void (async () => {
@@ -274,7 +281,8 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
   })
   editorRef.current = editor
 
-  /* 外部 value 变化时同步（弹窗复用同一实例时切换文档） */
+  /* Sync when the external value changes (switching documents when a modal reuses the same
+     instance) */
   useEffect(() => {
     const ed = editorRef.current
     if (!ed || ed.isDestroyed) return
@@ -285,13 +293,13 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     }
   }, [value])
 
-  /* 就绪回调 */
+  /* Ready callback */
   useEffect(() => {
     if (editor && onReady) onReady(editor)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor])
 
-  /* ── 打开链接浮层 ── */
+  /* ── Open the link popup ── */
   const openLinkPop = useCallback(() => {
     const ed = editorRef.current
     if (!ed) return
@@ -300,7 +308,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     if (!range) return
     const rect = range.getBoundingClientRect()
     const href = (ed.getAttributes('link').href as string | undefined) ?? ''
-    // 有选区时取选区内容，否则默认取当前链接
+    // Use the selection content when there is one, otherwise default to the current link
     const top = Math.min(rect.bottom + 8, window.innerHeight - 72)
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - 320))
     setLinkPop({ top: Math.max(top, 8), left, value: href })
@@ -321,7 +329,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     }
   }, [])
 
-  /* 点击浮层外部关闭 */
+  /* Close when clicking outside the popup */
   useEffect(() => {
     if (!linkPop) return
     const handler = (e: MouseEvent): void => {
@@ -332,7 +340,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     return () => document.removeEventListener('mousedown', handler)
   }, [linkPop])
 
-  /* ── Ctrl+S 保存 ── */
+  /* ── Ctrl+S save ── */
   useEffect(() => {
     if (readOnly) return
     const handler = (e: KeyboardEvent): void => {
@@ -346,7 +354,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
     return () => window.removeEventListener('keydown', handler)
   }, [readOnly])
 
-  /* ── 主题 CSS 变量 ── */
+  /* ── Theme CSS variables ── */
   const cssVars = {
     '--ed-text': token.colorText,
     '--ed-text-secondary': token.colorTextSecondary,
@@ -387,7 +395,8 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
           options={{ placement: 'top', offset: 8 }}
           shouldShow={({ state }) => {
             const { selection } = state
-            // 点击 Mermaid/KaTeX 等原子节点（NodeSelection）时不显示文本格式工具栏
+            // Hide the text-format toolbar when an atomic node such as Mermaid/KaTeX is
+            // selected (NodeSelection)
             if (selection instanceof NodeSelection) return false
             return Boolean(selection && !selection.empty)
           }}
@@ -430,7 +439,7 @@ const TipTapMarkdownEditor: React.FC<TipTapMarkdownEditorProps> = ({
   )
 }
 
-/* ──────────── 工具栏 ──────────── */
+/* ──────────── Toolbar ──────────── */
 
 interface EditorToolbarProps {
   editor: Editor
@@ -438,7 +447,10 @@ interface EditorToolbarProps {
   onLinkClick: () => void
 }
 
-/** 工具栏标题下拉的文案键（i18next 键受资源类型约束，须收窄成字面量） */
+/**
+ * Label keys for the toolbar heading dropdown (i18next keys are resource-typed, so they are
+ * narrowed to literals)
+ */
 type ToolbarHeadingLabelKey =
   | 'markdown.toolbar.paragraph'
   | 'markdown.toolbar.heading1'
@@ -484,7 +496,8 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({ editor, onLinkClick }) =>
     active = false,
     disabled = false
   ): React.ReactNode => (
-    /* 工具条贴着编辑区上沿，提示统一朝下弹：朝上会盖住上面那排按钮/页签（用户 2026-09-26） */
+    /* The toolbar sits flush against the top edge of the editor, so tooltips always open downward:
+       upward would cover the row of buttons/tabs above (reported by the user on 2026-09-26) */
     <Tooltip title={title} key={title} placement="bottom">
       <button
         className={`tiptap-toolbar-btn${active ? ' tiptap-toolbar-btn-active' : ''}`}
@@ -505,7 +518,8 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({ editor, onLinkClick }) =>
     { key: 'h4', label: t('markdown.toolbar.heading4') }
   ]
 
-  /* 标题下拉当前项文案：与下拉选项同源，避免两处口径漂移 */
+  /* Current label of the heading dropdown: uses the same source as the dropdown options to
+     avoid drift between the two */
   const headingLabelKeys: Record<number, ToolbarHeadingLabelKey> = {
     1: 'markdown.toolbar.heading1',
     2: 'markdown.toolbar.heading2',
@@ -632,7 +646,10 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({ editor, onLinkClick }) =>
       )}
       <div className="tiptap-toolbar-spacer" />
       <span className="tiptap-toolbar-label">
-        {/* 数字走等宽、中文走默认 UI 字体（见文件顶部字体规则） */}
+        {/*
+          Digits use the monospace font, Chinese uses the default UI font (see the font rules
+          at the top of the file)
+        */}
         <Trans
           i18nKey="markdown.editor.charCount"
           count={state.chars}
@@ -643,7 +660,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({ editor, onLinkClick }) =>
   )
 }
 
-/* ──────────── 气泡菜单（选中文本浮动） ──────────── */
+/* ──────────── Bubble menu (floats on text selection) ──────────── */
 
 interface BubbleButtonsProps {
   editor: Editor

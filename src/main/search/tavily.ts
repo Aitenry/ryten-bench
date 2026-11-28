@@ -1,15 +1,16 @@
 /**
- * Tavily 搜索适配器（**官方 SDK**：`@tavily/core`）。
+ * Tavily search adapter (**official SDK**: `@tavily/core`).
  *
- * 用户指定 Tavily 走官方 SDK，而不是手写 REST：由 SDK 负责鉴权、参数拼装与错误类型。
- * 这里只做「归一化（`mappers.ts`）+ 错误码映射」，不把 SDK 类型泄漏到搜索抽象之外。
+ * Tavily is required to use the official SDK rather than hand-written REST: the SDK handles auth,
+ * parameter assembly and error types. This file only does "normalization (`mappers.ts`) + error code
+ * mapping" and must not leak SDK types outside the search abstraction.
  */
 import { tavily } from '@tavily/core'
 import { mapTavilyResults } from './mappers'
 import type { SearchOutcome, SearchProvider, SearchRequest } from './types'
 import { MAX_SEARCH_RESULTS, clipText } from './types'
 
-/** SDK 抛错 → 稳定错误码（HTTP 状态码 / 错误信息优先） */
+/** SDK error -> stable error code (HTTP status code / error message preferred) */
 function classifyTavilyError(error: unknown): {
   code: Extract<SearchOutcome, { ok: false }>['code']
   message: string

@@ -1,14 +1,16 @@
 import type { HarnessDialogueUsageRow } from '../../../../shared/harness/types'
 
 /**
- * 对话用量的归一化（真实数据，不做任何估算）。
+ * Dialogue usage normalization (real data, no estimation).
  *
- * harness_dialogue_usage 的 input/output/total 是**整轮累加值**，而每次调用的原始
- * usage_metadata 存在 usage_metadata 列（JSON 数组）里——缓存命中、推理 token
- * 这类字段各家命名不同，统一在这里兜住，供「本轮用量」面板展示。
+ * The input/output/total columns of harness_dialogue_usage are **whole-round cumulative
+ * values**, while the raw usage_metadata of each call is stored in the usage_metadata
+ * column (a JSON array) — fields such as cache hits and reasoning tokens are named
+ * differently across providers, so they are all normalized here for the "usage for this
+ * round" panel.
  */
 
-/** 归一化后的明细（字段缺失就不显示对应行，不猜也不补假数据） */
+/** Normalized details (a missing field hides that row; no guessing, no fake data) */
 export interface UsageDetails {
   route: string | null
   inputTokens: number
@@ -22,7 +24,7 @@ export interface UsageDetails {
   hasReasoning: boolean
 }
 
-/** 原始明细里的一次调用 */
+/** One call in the raw details */
 interface RawUsageEntry {
   model?: string
   subagent?: boolean
@@ -39,7 +41,7 @@ function pickNumber(source: unknown, keys: string[]): number | null {
   return null
 }
 
-/** 缓存读取：旧实现用 input_token_details.cache_read，各家原始字段一并兜住 */
+/** Cache read: the legacy implementation used input_token_details.cache_read; raw fields from every provider are covered here */
 function pickCacheRead(usage: Record<string, unknown>): number {
   return (
     pickNumber(usage.input_token_details, ['cache_read', 'cacheRead', 'cached_tokens']) ??
@@ -49,7 +51,7 @@ function pickCacheRead(usage: Record<string, unknown>): number {
   )
 }
 
-/** 缓存写入（Anthropic 系有；没有就是 0） */
+/** Cache write (present for Anthropic-family providers; 0 otherwise) */
 function pickCacheWrite(usage: Record<string, unknown>): number {
   return (
     pickNumber(usage.input_token_details, ['cache_creation', 'cache_write', 'cacheWrite']) ??
@@ -58,7 +60,7 @@ function pickCacheWrite(usage: Record<string, unknown>): number {
   )
 }
 
-/** 推理 token（输出明细里） */
+/** Reasoning tokens (in the output details) */
 function pickReasoning(usage: Record<string, unknown>): number {
   return (
     pickNumber(usage.output_token_details, ['reasoning', 'reasoning_tokens']) ??
@@ -68,13 +70,14 @@ function pickReasoning(usage: Record<string, unknown>): number {
   )
 }
 
-/** 一次调用的上下文规模 = 该次提示 + 输出（各家口径不同，这里只做归一化，不估算） */
+/** Context size of one call = that call's prompt + output (providers measure differently; normalized only, never estimated) */
 function entryContextTokens(usage: Record<string, unknown>): number {
   const input = pickNumber(usage, ['input_tokens', 'prompt_tokens']) ?? 0
   const output = pickNumber(usage, ['output_tokens', 'completion_tokens']) ?? 0
-  // OpenAI / DeepSeek 系的 prompt_tokens 已含缓存命中，缓存明细只是它的子集；
-  // Anthropic 系的 input_tokens 之外另有 cache_read / cache_creation，必须补上，
-  // 否则上下文会被算少一半——按明细里出现的是哪一种来判定。
+  // For OpenAI / DeepSeek, prompt_tokens already includes cache hits, so the cache details
+  // are just a subset of it; for Anthropic, cache_read / cache_creation come on top of
+  // input_tokens and must be added, or the context would be undercounted by half — decide
+  // by which shape appears in the details.
   const cacheIsSubsetOfInput =
     pickNumber(usage.prompt_tokens_details, ['cached_tokens']) !== null ||
     pickNumber(usage, ['prompt_cache_hit_tokens']) !== null
@@ -82,7 +85,7 @@ function entryContextTokens(usage: Record<string, unknown>): number {
   return Math.max(0, input + extra + output)
 }
 
-/** 一行用量里最后一次模型调用的原始 usage（话题汇总用它算「当前上下文多大」） */
+/** Raw usage of the last model call in a usage row (topic summaries use it to compute "how big the current context is") */
 function lastCallUsage(row: HarnessDialogueUsageRow): Record<string, unknown> | null {
   if (!row.usage_metadata) return null
   try {
@@ -96,26 +99,28 @@ function lastCallUsage(row: HarnessDialogueUsageRow): Record<string, unknown> | 
 }
 
 /**
- * 话题级用量汇总（输入框底栏的状态条用它；一条助手回复一行，按话题整段累加）。
+ * Topic-level usage summary (used by the status bar under the input box; one row per
+ * assistant reply, accumulated over the whole topic).
  *
- * 字段拿不到就是 null，界面据此**不画那一项**——例如模型档案没填 context_window
- * 就不画上下文圆环，老会话没有 usage 明细就整条不显示。这里不做任何估算。
+ * A field that cannot be read is null, and the UI **omits that item** accordingly — e.g.
+ * no context ring when the model profile has no context_window, and nothing at all when
+ * an old session has no usage details. No estimation is done here.
  */
 export interface UsageSummary {
-  /** 整段会话累计 token */
+  /** Accumulated tokens for the whole session */
   totalTokens: number
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
   calls: number
-  /** 缓存命中率 0..1；没有输入 token 时为 null */
+  /** Cache hit rate 0..1; null when there are no input tokens */
   cacheHitRate: number | null
-  /** 最近一次模型调用的上下文规模；没有明细时为 null */
+  /** Context size of the most recent model call; null without details */
   contextTokens: number | null
 }
 
-/** 把话题下的所有用量行累加成状态条需要的形状；一行都没有则返回 null */
+/** Accumulate all usage rows of a topic into the shape the status bar needs; null when there are no rows */
 export function buildUsageSummary(rows: HarnessDialogueUsageRow[]): UsageSummary | null {
   if (!rows || rows.length === 0) return null
 
@@ -140,7 +145,7 @@ export function buildUsageSummary(rows: HarnessDialogueUsageRow[]): UsageSummary
     if (lastUsage) contextTokens = entryContextTokens(lastUsage)
   }
 
-  // 一条都没回传 token（老会话 / 请求失败）→ 整条不显示，而不是显示一排 0
+  // No token was ever reported (old session / failed request) → hide the whole thing rather than show a row of 0s
   if (totalTokens === 0) return null
 
   return {
@@ -155,7 +160,7 @@ export function buildUsageSummary(rows: HarnessDialogueUsageRow[]): UsageSummary
   }
 }
 
-/** 状态条里的紧凑计数：912 / 2.5k / 845k / 2.5M（精确值留给「本轮用量」面板） */
+/** Compact counts for the status bar: 912 / 2.5k / 845k / 2.5M (exact values live in the "usage for this round" panel) */
 export function formatCompactTokens(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0'
   if (value >= 1_000_000) {
@@ -169,7 +174,7 @@ export function formatCompactTokens(value: number): string {
   return String(Math.round(value))
 }
 
-/** 把用量行（含 usage_metadata JSON 数组）累加成面板需要的形状 */
+/** Accumulate a usage row (including the usage_metadata JSON array) into the shape the panel needs */
 export function buildUsageDetails(usage: HarnessDialogueUsageRow | undefined): UsageDetails | null {
   if (!usage) return null
   let entries: RawUsageEntry[] = []
@@ -192,7 +197,7 @@ export function buildUsageDetails(usage: HarnessDialogueUsageRow | undefined): U
     if (!model && entry?.model) model = entry.model
   }
 
-  // token 计数优先用库里的累加列（没有明细时也能显示），缺失时才退回明细求和
+  // Prefer the accumulated columns in the database for token counts (they work without details); fall back to summing the details only when missing
   const inputTokens =
     usage.input_tokens ??
     entries.reduce((sum, entry) => sum + (pickNumber(entry?.usage, ['input_tokens']) ?? 0), 0)

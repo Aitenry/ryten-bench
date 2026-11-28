@@ -1,14 +1,16 @@
 /**
- * 宿主**首帧**能解析的菜单图标名（三端共用的唯一名单）。
+ * Menu icon names the host can resolve on the **first frame** (the single list shared by all three sides).
  *
- * 为什么需要一份共享名单：`plugin.json` 的 `menu.icon` 是字符串，宿主要靠
- * `renderer/src/plugin-host/declared-icons.tsx` 把它换成组件——名单外的名字一律回退成
- * 通用图标（不报错，等插件真实注册后才覆盖）。工坊生成模板时若自己抄一份名单，
- * 宿主机加图标/改名就会悄悄不同步；放这里两边引用同一份。
+ * Why a shared list: `menu.icon` in `plugin.json` is a string, and the host uses
+ * `renderer/src/plugin-host/declared-icons.tsx` to turn it into a component — names outside
+ * the list fall back to a generic icon (no error, replaced once the plugin actually registers).
+ * If the workshop template generation kept its own copy of the list, adding or renaming an
+ * icon on the host would silently desynchronise; keeping it here means both sides reference
+ * the same list.
  *
- * 约束：名单里的每个名字都必须是宿主装的 `@remixicon/react` 里**真实存在的导出**
- * （写错 = 运行期 undefined → JSX 抛「Element type is invalid」白屏）。
- * `test/verify-plugin-workshop.mjs` 会核对名单与真实导出。
+ * Constraint: every name in the list must be a **real export** of the `@remixicon/react`
+ * version the host installs (a typo = runtime undefined → JSX throws "Element type is invalid"
+ * and the screen goes blank). `test/verify-plugin-workshop.mjs` checks the list against the real exports.
  */
 export const DECLARED_MENU_ICON_NAMES = [
   'RiPlugLine',
@@ -21,11 +23,12 @@ export const DECLARED_MENU_ICON_NAMES = [
 export type DeclaredMenuIconName = (typeof DECLARED_MENU_ICON_NAMES)[number]
 
 /**
- * 给一份草稿挑一枚**稳定**的首帧图标。
+ * Pick a **stable** first-frame icon for a draft.
  *
- * 为什么按 id 散列而不是固定第一枚：以前所有生成的插件都用 `RiDashboardLine`
- * （笔记的图标），侧栏里几个草稿长得一模一样，用户分不出谁是谁。散列保证同一个 id
- * 每次生成得到同一枚，又能在多份草稿之间分散开。
+ * Why hash by id instead of always using the first icon: previously every generated plugin used
+ * `RiDashboardLine` (the notes icon), so several drafts looked identical in the sidebar and users
+ * could not tell them apart. Hashing guarantees the same id always gets the same icon while
+ * spreading different drafts apart.
  */
 export function pickDeclaredMenuIcon(id: string): DeclaredMenuIconName {
   const text = typeof id === 'string' ? id : ''

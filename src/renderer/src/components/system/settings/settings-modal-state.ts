@@ -1,19 +1,24 @@
 /**
- * 设置弹窗的状态（模块级可订阅快照）。
+ * Settings modal state (a module-level subscribable snapshot).
  *
- * 为什么不放在 `CustomFrame` / `SettingsModal` 的 useState 里：插件自己的 Provider 随插件装卸
- * （`ctx.use('appProvider')`），而 Provider 增删会让 `PluginProvidersShell` 之下的整棵外壳子树
- * 重挂（React 的类型调和语义，见 App.tsx 里 PluginProvidersShell 的注释）。状态留在组件里时：
- * - 停用任意注册了 Provider 的插件（music / harness）会把用户正在看的设置弹窗直接关掉；
- * - 更隐蔽的是**当前页签**也会被重置——齿轮打开时 `tab` 是 undefined，重挂后就会回落到
- *   首个可用页签（2026-09-26 用户实测：「点插件开关会刷新设置内容并跳回通用」）。
+ * Why not in `CustomFrame` / `SettingsModal` useState: a plugin's own Provider is mounted and
+ * unmounted with the plugin (`ctx.use('appProvider')`), and adding/removing a Provider remounts the
+ * entire shell subtree under `PluginProvidersShell` (React's type reconciliation semantics, see the
+ * comment on PluginProvidersShell in App.tsx). With the state kept inside the component:
+ * - disabling any plugin that registers a Provider (music / harness) closes the settings modal the
+ *   user is looking at;
+ * - less obviously, the **current tab** is reset as well — `tab` is undefined when the gear opens,
+ *   so after a remount it falls back to the first available tab (observed by the user on
+ *   2026-09-26: "toggling a plugin switch refreshes the settings content and jumps back to
+ *   General").
  *
- * 因此弹窗的「开着没 / 在哪一页」两件事全部外置到这里：
- * `SettingsModal` 只按注册表把 `tab` 解析成实际可用的页签（页签随插件启停增删）。
+ * So both "is it open" and "which page" are kept outside the component here: `SettingsModal` only
+ * resolves `tab` against the registry into an actually available tab (tabs come and go with plugin
+ * enablement).
  */
 export interface SettingsModalState {
   open: boolean
-  /** 当前页签（undefined = 交给 SettingsModal 解析为首个可用页签） */
+  /** Current tab (undefined = let SettingsModal resolve it to the first available tab) */
   tab: string | undefined
 }
 
@@ -42,16 +47,18 @@ function publish(patch: Partial<SettingsModalState>): void {
   }
 }
 
-/** 打开设置弹窗（tab 缺省 = 首个可用页签） */
+/** Open the settings modal (tab defaults to the first available tab) */
 export function openSettingsModal(tab?: string): void {
   publish({ open: true, tab })
 }
 
 /**
- * 切换当前页签（侧栏导航点击）。
+ * Switch the current tab (sidebar nav click).
  *
- * 必须是模块级写入：外壳子树重挂会重建 `SettingsModal`，页签若只存在组件 state 里就会丢。
- * 页签本身随插件启停增删，失效的 tab 由 `SettingsModal` 的解析逻辑回退到首个可用页签。
+ * This must be a module-level write: a shell subtree remount rebuilds `SettingsModal`, and a tab
+ * kept only in component state would be lost.
+ * Tabs themselves come and go with plugin enablement; a stale tab falls back to the first available
+ * one through `SettingsModal`'s resolution logic.
  */
 export function setSettingsModalTab(tab: string | undefined): void {
   if (state.tab === tab) return

@@ -30,26 +30,33 @@ import type {
 } from '../../../../../shared/harness/types'
 
 /**
- * 设置 → MCP（服务器管理）。
+ * Settings -> MCP (server management).
  *
- * 版面遵循设置页既有约定：**字段顺排**（页头 + 分区卡片 + 行式条目），不用装饰性分组标题、
- * 不用带框的信息块；结构只在携带信息时才成立——所以「工具」不是一个布尔开关，而是一份
- * 逐项开关的清单（哪台服务器带来哪些工具、哪些真的挂给了模型，都要能一眼看见并当场改）。
+ * Layout follows the settings page conventions: **fields flow in order** (page header + section
+ * cards + rows), no decorative group headings and no boxed info blocks; structure exists only
+ * when it carries information - so "tools" is not a boolean switch but a list of per-item toggles
+ * (which server brings which tools, and which are actually attached to the model, must be visible
+ * at a glance and editable on the spot).
  *
- * 数据流：主进程是唯一真源（配置落 electron-store，状态来自真实连接）。这一页只做三件事：
- * 读（`mcp.list`）、写（save/remove/toggle/setToolsEnabled）、触发重连并试连（reconnect/test）。
- * 目录变化由 `mcp.onCatalogUpdated` 广播回来，因此别处（如导入）改了配置这里也会自动刷新。
+ * Data flow: the main process is the single source of truth (config in electron-store, status
+ * from real connections). This page only does three things: read (`mcp.list`), write
+ * (save/remove/toggle/setToolsEnabled), and trigger reconnect and test connections
+ * (reconnect/test). Catalog changes are broadcast back via `mcp.onCatalogUpdated`, so config
+ * changes made elsewhere (e.g. import) also refresh here automatically.
  *
- * 工具清单的两个来源：编辑已连上的服务器时用目录快照里的清单；新建（或刚改了连接参数）时
- * 由「测试连接」现连一次拿回来。两者都落在同一个「工具」字段上，用户勾完保存即可。
+ * Two sources for the tool list: editing a connected server uses the list from the catalog
+ * snapshot; creating one (or just changing connection parameters) gets it from a live "Test
+ * connection". Both land in the same "tools" field; the user checks the boxes and saves.
  *
- * 「工具启用」的勾选不写在本页的临时 state 里，而是保存时并入 `mainAgent.mcpTools`
- * （见 shared/mcp.ts）：与智能体页的工具下拉共用同一份启用清单，避免两处各存一份。
+ * Tool-enabled checkboxes are not kept in this page's temporary state; they are merged into
+ * `mainAgent.mcpTools` on save (see shared/mcp.ts): one shared enabled list with the agent page's
+ * tool dropdown, so there is only one copy.
  */
 
-/** 表单值（env/headers 用数组形态承载键值对，提交时折叠成对象） */
+/** Form values (env/headers carry key-value pairs as arrays and are folded into objects on
+ * submit) */
 interface ServerFormValues {
-  /** 新建时可以为空（必填校验交给 Form.Item 的 rules） */
+  /** May be empty when creating (required validation is handled by the Form.Item rules) */
   name?: string
   description?: string
   transport: 'stdio' | 'http' | 'sse'
@@ -64,33 +71,37 @@ interface ServerFormValues {
 }
 
 /**
- * 工具开关：**按服务器上报的原始名（rawName）记**，不是全名。
+ * Tool switches: recorded **by the server-reported raw name (rawName)**, not the full name.
  *
- * 全名（`mcp__<服务器名净化>__<工具名>`）里含服务器名，用户改一次名字就会整体换掉；
- * 按全名记选择会在改名后集体丢失。保存时再拿最新清单把 rawName 映射成全名（见 handleSave）。
+ * The full name (`mcp__<sanitized server name>__<tool name>`) contains the server name, so a
+ * single rename changes all of it; recording selections by full name makes them all disappear
+ * after a rename. On save, the latest catalog maps rawName to the full name (see handleSave).
  */
 type ToolSelection = Record<string, boolean>
 
-/** 表单窗口的初始值来源：新建（空）或编辑某台服务器；清单与开关初始态由父组件按当前数据算好 */
+/** Source of the form modal's initial values: creating (empty) or editing a server; the parent
+ * computes the catalog and initial switch state from current data */
 interface FormSeed {
-  /** 每次打开递增：作为弹窗的 `key`，保证换一份初始值时一定是全新实例（见 openCreate 的注释） */
+  /** Increments on every open: used as the modal's `key` so a different set of initial values
+   * always means a fresh instance (see the openCreate comment) */
   seq: number
   mode: 'create' | 'edit'
-  /** 编辑时的服务器视图（配置 + 运行期状态 + 已知工具清单） */
+  /** Server view while editing (config + runtime status + known tool catalog) */
   server?: McpServerView
-  /** 打开时已知的工具清单（编辑已连上的服务器时来自目录快照） */
+  /** Tool catalog known when opened (for editing a connected server, from the catalog snapshot) */
   catalog: McpToolInfo[]
   selection: ToolSelection
 }
 
-/** 一次试连的结果：成功时带最新工具清单（就地铺成「工具」字段），失败时带原始错误 */
+/** Result of one test connection: on success the latest tool catalog (laid out in place as the
+ * "tools" field), on failure the raw error */
 interface TestResult {
   ok: boolean
   text: string
   tools: McpToolInfo[]
 }
 
-/** 状态点：颜色是唯一的状态语言，与列表其它页一致 */
+/** Status dot: color is the only status language, consistent with other list pages */
 const StatusDot: React.FC<{ color: string }> = ({ color }) => (
   <span
     style={{
@@ -123,29 +134,34 @@ const McpSettings: React.FC = () => {
   const [servers, setServers] = useState<McpServerView[]>([])
   const [loading, setLoading] = useState(true)
   const [reconnecting, setReconnecting] = useState(false)
-  /** 已启用给模型的工具名（与智能体页共用 mainAgent.mcpTools） */
+  /** Tool names already enabled for the model (shared with the agent page via
+   * mainAgent.mcpTools) */
   const [enabledTools, setEnabledTools] = useState<string[]>([])
-  /** 正在切开关的服务器 id（行内开关的 loading） */
+  /** Id of the server whose switch is being toggled (inline switch loading) */
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
   /**
-   * 表单窗口的初始值（**弹窗打开时一次性喂给内层表单**，见 ServerForm）。
+   * Initial values for the form modal (**fed to the inner form once when the modal opens**, see
+   * ServerForm).
    *
-   * 为什么把表单做成「按初始值挂载的子组件」而不是上面持有一个 useForm 实例：
-   * 同一个实例被两个 Modal 轮流连（先开后关）时，antd 的字段注册/连线时序很脆——
-   * 实测 Form.List（环境变量 / 请求头）在编辑既有服务器时不回填。改成「每次打开用一个
-   * 全新的表单实例、由 initialValues 注入」后，既没有跨次残留，也不受挂载顺序影响。
+   * Why the form is a "child mounted with initial values" instead of holding a useForm instance
+   * above: when one instance is wired by two Modals in turn (open then close), antd's field
+   * registration/wiring timing is fragile - in practice Form.List (env / headers) does not
+   * repopulate when editing an existing server. With "a fresh form instance per open, injected
+   * via initialValues", there is no cross-open leftover and mount order no longer matters.
    */
   const [formSeed, setFormSeed] = useState<FormSeed | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  /** 试连结果：就地显示在「工具」字段上方（成功给清单，失败给原始错误） */
+  /** Test result: shown in place above the "tools" field (catalog on success, raw error on
+   * failure) */
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   /**
-   * 资源浏览弹窗：模型侧早就能读 MCP resources（list_mcp_resources / read_mcp_resource），
-   * 用户侧一直没有入口。这里在服务器卡片上加「资源」按钮，弹窗里列资源 + 模板，
-   * 点一条就地预览文本 / 图片（二进制只给大小与 mime，不做下载）。
+   * Resource browser modal: the model side has long been able to read MCP resources
+   * (list_mcp_resources / read_mcp_resource), but users had no entry point. This adds a
+   * "Resources" button on the server card; the modal lists resources + templates and previews
+   * text / images in place when a row is clicked (for binaries only size and mime, no download).
    */
   const [resourcesTarget, setResourcesTarget] = useState<McpServerView | null>(null)
   const [resourceEntries, setResourceEntries] = useState<McpResourceEntry[]>([])
@@ -181,7 +197,8 @@ const McpSettings: React.FC = () => {
     void load()
   }, [load])
 
-  // 主进程广播目录变化（保存/导入/重连后）：本页与服务清单一并刷新
+  // The main process broadcasts catalog changes (after save/import/reconnect): refresh this page
+  // and the server list together
   useEffect(() => {
     try {
       return harnessApi.mcp.onCatalogUpdated(() => {
@@ -193,25 +210,27 @@ const McpSettings: React.FC = () => {
     }
   }, [load])
 
-  /** 工具名 → 是否已启用（判断某台服务器的工具当前是否进了模型工具清单） */
+  /** Tool name -> whether enabled (whether a server's tools are currently in the model tool
+   * list) */
   const enabledSet = useMemo(() => new Set(enabledTools), [enabledTools])
 
   const serverEnabledCount = (view: McpServerView): number =>
     view.tools.filter((tool) => enabledSet.has(tool.name)).length
 
-  /** 这台服务器的全部工具名（用于并入 / 移出 mainAgent.mcpTools） */
+  /** All tool names of this server (used to merge into / remove from mainAgent.mcpTools) */
   const toolNamesOf = (view: McpServerView): string[] => view.tools.map((tool) => tool.name)
 
-  // ── 表单：打开 / 提交 ────────────────────────────────────────────────
+  // ── Form: open / submit ──────────────────────────────────────────────
 
   /**
-   * 每次打开表单递增一次的序号，作为 `ServerFormModal` 的 `key`。
+   * Sequence number incremented on every form open, used as `ServerFormModal`'s `key`.
    *
-   * 为什么需要它：`formSeed` 直接从「编辑 A」换成「新建」时（关闭与打开落在同一批次，
-   * 或将来多了别的入口），React 会**复用**同一个组件实例——`Form.useForm` 的实例、
-   * `initialValues`、`useState(seed.selection)` 全是首次挂载时的值，界面就会显示上一个
-   * 服务器的字段与勾选（实测：新建窗口里还留着刚编辑那台服务器的命令）。加 `key` 后
-   * 每次打开都强制新实例，与「每次打开用一个全新的表单实例」的约定一致。
+   * Why it is needed: when `formSeed` switches straight from "edit A" to "create" (close and open
+   * in the same batch, or more entry points later), React **reuses** the same component instance -
+   * the `Form.useForm` instance, `initialValues`, and `useState(seed.selection)` all keep the
+   * first-mount values, so the UI would show the previous server's fields and checkboxes
+   * (observed: the create window still contains the command of the server just edited). With
+   * `key`, every open forces a new instance, matching the "fresh form instance per open" rule.
    */
   const seedSeq = React.useRef(0)
 
@@ -223,7 +242,8 @@ const McpSettings: React.FC = () => {
 
   const openEdit = (view: McpServerView): void => {
     setTestResult(null)
-    // 逐项开关的初始态直接来自「已启用清单」：无启发式，看到的就是真的
+    // The per-item switch initial state comes straight from the enabled list: no heuristics,
+    // what you see is real
     const selection: ToolSelection = {}
     for (const tool of view.tools) selection[tool.rawName] = enabledSet.has(tool.name)
     seedSeq.current += 1
@@ -241,7 +261,8 @@ const McpSettings: React.FC = () => {
     setTestResult(null)
   }
 
-  /** 表单值 → IPC 入参（键值对折成对象、参数按行拆、空值不落库） */
+  /** Form values -> IPC input (key-value pairs folded into objects, args split by line, empty
+   * values not persisted) */
   const toInput = (values: ServerFormValues, editing?: McpServerView | null): McpServerInput => {
     const pairs = (
       rows?: { key?: string; value?: string }[]
@@ -281,15 +302,18 @@ const McpSettings: React.FC = () => {
     setSaving(true)
     try {
       const saved = await harnessApi.mcp.save(toInput(values, editing))
-      // 【工具启用】的落点：把这台服务器的工具并入 / 移出 mainAgent.mcpTools。
-      // 关键是**先摘掉这台服务器名下的全部工具名再按勾选补回**——用户可能在服务器上
-      // 删过工具，只做并集会留下永远挂不上的幽灵名字。
+      // Destination of the [tool enabled] state: merge this server's tools into / remove them from
+      // mainAgent.mcpTools. The key is to **first remove all tool names under this server, then add
+      // back the checked ones** - the user may have deleted tools on the server, and a pure union
+      // would leave ghost names that can never be attached.
       const before = servers.find((s) => s.config.id === saved.id)
       const stale = before ? toolNamesOf(before) : []
       const rest = enabledTools.filter((name) => !stale.includes(name))
-      // saved 刚写入、工具清单要等重连完成才有：重新拉一次列表，拿最新工具名把
-      // 按 rawName 记的勾选映射成全名（改名会换命名空间，所以不能直接用旧全名）。
-      // 清单里没出现过的（新发现的 / 没试连过的）按默认启用处理，与「新服务器整台可用」一致。
+      // `saved` has just been written and the tool catalog only becomes available after reconnect:
+      // refetch the list and map the selections recorded by rawName to full names using the latest
+      // names (a rename changes the namespace, so old full names cannot be used directly). Names
+      // missing from the catalog (newly discovered / never test-connected) default to enabled,
+      // consistent with "a new server is fully usable".
       const fresh = (await harnessApi.mcp.list()).find((v) => v.config.id === saved.id)
       const kept = (fresh?.tools ?? [])
         .filter((tool) => selection[tool.rawName] !== false)
@@ -311,11 +335,11 @@ const McpSettings: React.FC = () => {
     }
   }
 
-  // ── 行操作 ──────────────────────────────────────────────────────────
+  // ── Row actions ──────────────────────────────────────────────────────
 
   const handleToggle = async (view: McpServerView, checked: boolean): Promise<void> => {
     setTogglingId(view.config.id)
-    // 乐观更新：开关的手感不该等一次真实的连接握手
+    // Optimistic update: the switch should not wait for a real connection handshake
     setServers((prev) =>
       prev.map((s) =>
         s.config.id === view.config.id ? { ...s, config: { ...s.config, enabled: checked } } : s
@@ -345,7 +369,8 @@ const McpSettings: React.FC = () => {
       onOk: async () => {
         try {
           await harnessApi.mcp.remove(view.config.id)
-          // 顺手把它带来的工具从启用清单里摘掉，避免留下永远挂不上的名字
+          // Also remove the tools it brought from the enabled list, so no names that can never
+          // be attached are left
           const rest = enabledTools.filter((name) => !toolNamesOf(view).includes(name))
           await harnessApi.mcp.setToolsEnabled(rest)
           setEnabledTools(rest)
@@ -429,7 +454,8 @@ const McpSettings: React.FC = () => {
         setTestResult({
           ok: true,
           tools,
-          // 工具数不再重复写进这句话：计数跟着同一行显示（见 ServerFormModal 的 statusLine）
+          // Tool count is no longer repeated in this sentence: the count is shown on the same
+          // line (see ServerFormModal's statusLine)
           text: tools.length ? t('mcpSettings.form.testOk') : t('mcpSettings.form.testEmpty')
         })
       } else {
@@ -446,9 +472,10 @@ const McpSettings: React.FC = () => {
     }
   }
 
-  // ── 版面片段 ────────────────────────────────────────────────────────
+  // ── Layout fragments ─────────────────────────────────────────────────
 
-  /** 状态：小圆点 + 文案（颜色是唯一的状态语言，与列表其它页一致） */
+  /** Status: small dot + text (color is the only status language, consistent with other list
+   * pages) */
   const statusNode = (view: McpServerView): React.ReactNode => {
     const color =
       view.status === 'ok' ? colorSuccess : view.status === 'error' ? colorError : colorTextTertiary
@@ -460,7 +487,8 @@ const McpSettings: React.FC = () => {
     )
   }
 
-  /** 连接目标（命令 + 参数 / 地址）：单行截断，完整值在编辑表单里看 */
+  /** Connection target (command + args / URL): truncated to one line; the full value is in the
+   * edit form */
   const targetOf = (view: McpServerView): string => {
     const config = view.config
     return config.transport === 'stdio'
@@ -468,7 +496,7 @@ const McpSettings: React.FC = () => {
       : (config.url ?? '')
   }
 
-  /** 拉资源清单（首页覆盖、cursor 续页追加） */
+  /** Fetch the resource list (the first page replaces, cursor pages append) */
   const loadResources = useCallback(
     async (server: string, cursor?: string): Promise<void> => {
       setResourcesLoading(true)
@@ -492,7 +520,8 @@ const McpSettings: React.FC = () => {
     []
   )
 
-  /** 打开「资源」弹窗：资源 + 模板并行拉取（模板失败不挡住资源列表） */
+  /** Open the "Resources" modal: fetch resources + templates in parallel (a template failure
+   * does not block the resource list) */
   const openResources = useCallback(
     (view: McpServerView): void => {
       setResourcesTarget(view)
@@ -508,7 +537,8 @@ const McpSettings: React.FC = () => {
           if (result.ok) setTemplateEntries(result.templates)
         })
         .catch(() => {
-          // 模板是补充信息：失败静默（资源列表自己会显示连接错误）
+          // Templates are supplementary: fail silently (the resource list shows connection
+          // errors itself)
         })
     },
     [loadResources]
@@ -523,7 +553,8 @@ const McpSettings: React.FC = () => {
     setResourcesError(null)
   }, [])
 
-  /** 读一条资源并就地预览：文本直接显示；图片把 base64 blob 转 data URL；其它二进制给说明 */
+  /** Read one resource and preview it in place: text is shown directly; images become data URLs
+   * from the base64 blob; other binaries get a description */
   const previewResource = useCallback(
     async (uri: string): Promise<void> => {
       if (!resourcesTarget) return
@@ -727,7 +758,8 @@ const McpSettings: React.FC = () => {
         )}
       </SettingsSection>
 
-      {/* ── 新增 / 编辑（每次打开挂载一个全新的表单实例，见 formSeed 的注释）── */}
+      {/* ── Create / edit (a fresh form instance is mounted on every open,
+          see the formSeed comment) ── */}
       {formSeed && (
         <ServerFormModal
           key={formSeed.seq}
@@ -741,7 +773,8 @@ const McpSettings: React.FC = () => {
         />
       )}
 
-      {/* ── 资源浏览（只读）：服务器暴露的 resources / resource templates ── */}
+      {/* ── Resource browsing (read-only): resources / resource templates exposed by the
+          server ── */}
       <Modal
         open={resourcesTarget !== null}
         onCancel={closeResources}
@@ -751,7 +784,7 @@ const McpSettings: React.FC = () => {
         title={t('mcpSettings.resources.title', { name: resourcesTarget?.config.name ?? '' })}
       >
         <div style={{ display: 'flex', gap: 16, height: 440 }}>
-          {/* 左列：资源清单 + 模板 */}
+          {/* Left column: resource list + templates */}
           <div
             style={{
               width: 300,
@@ -859,7 +892,7 @@ const McpSettings: React.FC = () => {
             )}
           </div>
 
-          {/* 右列：资源内容预览 */}
+          {/* Right column: resource content preview */}
           <div
             style={{
               flex: 1,
@@ -925,11 +958,12 @@ const McpSettings: React.FC = () => {
 }
 
 /**
- * 键值对列表（env / headers 共用）。
+ * Key-value list (shared by env / headers).
  *
- * 用 antd `Form.List` 而不是自造 state：删除某一项后索引要跟着重排（自造 state 最容易
- * 在这里错位——删了第 2 行、值却留在第 3 行）。敏感值用 `Input.Password`，
- * 回显的是掩码串（主进程不下发明文）。
+ * Uses antd `Form.List` instead of home-grown state: indexes must shift when an item is deleted
+ * (home-grown state most easily goes out of sync here - delete row 2 and the value stays in row
+ * 3). Sensitive values use `Input.Password`, which echoes a masked string (the main process never
+ * sends plaintext).
  */
 const KeyValueList: React.FC<{
   name: string
@@ -977,19 +1011,22 @@ const KeyValueList: React.FC<{
 }
 
 /**
- * 新增 / 编辑服务器的表单窗口。
+ * Create / edit server form modal.
  *
- * **每次打开挂载一个新实例**（`{formSeed && <ServerFormModal …/>}`）：表单实例由本组件
- * 自己持有（`Form.useForm`），初始值走 `initialValues`，因此
- *  - 打开前不需要「先 set 值再连表单」的时序配合（用父组件的实例时，值可能在挂载前被丢掉）；
- *  - 关掉再打开不会残留上一次的字段（含 `Form.List` 的行）；
- *  - `transport` 切换时 stdio / http 两组字段由 `Form.useWatch` 决定渲染哪一组。
+ * **Mounts a new instance on every open** (`{formSeed && <ServerFormModal …/>}`): the form
+ * instance is owned by this component (`Form.useForm`) and initial values go through
+ * `initialValues`, so
+ *  - no "set values then connect the form" ordering is needed before opening (with the parent's
+ *    instance, values may be dropped before mount);
+ *  - closing and reopening leaves no fields from the previous round (including `Form.List` rows);
+ *  - when `transport` changes, `Form.useWatch` decides whether the stdio or http field group
+ *    renders.
  *
- * 版面：字段顺排、**不摆装饰性分组标题**，次要输入两两一行（连接方式 + 调用超时、
- * 名称 + 启用）；说明文字只留在真正需要解释的字段上。
+ * Layout: fields flow in order, **no decorative group headings**, secondary inputs two per row
+ * (transport + call timeout, name + enabled); hint text stays only on fields that really need it.
  *
- * 固定高度：body 限高 + 只有表单区滚动（与设置页其余表单弹窗同款），
- * 条目再多也不会把底部按钮顶出视口。
+ * Fixed height: body is capped + only the form area scrolls (same as the other form modals on the
+ * settings page), so the bottom buttons cannot be pushed out of view no matter how many entries.
  */
 const ServerFormModal: React.FC<{
   seed: FormSeed
@@ -1015,25 +1052,27 @@ const ServerFormModal: React.FC<{
   const transport = Form.useWatch('transport', form)
   const editing = seed.server ?? null
 
-  /** 用户当前的勾选（rawName → 是否启用） */
+  /** The user's current checkboxes (rawName -> enabled) */
   const [selection, setSelection] = useState<ToolSelection>(seed.selection)
-  /** 「工具」字段（试连结果与清单都挂在这里，见下面的滚动） */
+  /** The "tools" field (test result and catalog both hang here, see the scroll below) */
   const toolsRef = React.useRef<HTMLDivElement | null>(null)
 
   /**
-   * 试连结束后把「工具」字段滚进视野。
+   * Scroll the "tools" field into view when a test connection finishes.
    *
-   * 这个字段在表单最下方，而表单（stdio + 环境变量）常常长过弹窗高度：用户点完底部
-   * 「测试连接」，结果落在视口外就等于「点了没反应」——这正是用户反馈
-   * 「测试后不能看见工具列表」的现场。滚动是幂等的（已在视野内就不动）。
+   * This field sits at the bottom of the form, and the form (stdio + env vars) is often taller
+   * than the modal: after the user clicks "Test connection" at the bottom, a result outside the
+   * viewport feels like "clicking does nothing" - exactly the user report "cannot see the tool
+   * list after testing". Scrolling is idempotent (no movement if already visible).
    */
   React.useEffect(() => {
     if (!testResult) return
-    // jsdom 没实现 scrollIntoView，工装里靠可选调用跳过
+    // jsdom does not implement scrollIntoView; skip it via an optional call in the test harness
     toolsRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [testResult])
 
-  /** 打开时的初始值：新建给一份可用默认值；编辑把既有配置摊平进字段（凭据是掩码） */
+  /** Initial values on open: create gets usable defaults; edit flattens the existing config
+   * into fields (credentials are masked) */
   const initialValues: ServerFormValues = editing
     ? {
         name: editing.config.name,
@@ -1053,20 +1092,22 @@ const ServerFormModal: React.FC<{
       }
     : { transport: 'stdio', enabled: true, env: [] }
 
-  /** 校验通过才回调（保存与「测试连接」都先过这一关，避免拿半填配置去连） */
+  /** Call back only after validation passes (both save and "Test connection" go through it,
+   * avoiding connecting with a half-filled config) */
   const withValidValues = async (handler: (values: ServerFormValues) => void): Promise<void> => {
     try {
       handler(await form.validateFields())
     } catch {
-      // 校验失败：antd 已在字段下方标红，这里不额外提示
+      // Validation failed: antd already marks the field red, no extra hint here
     }
   }
 
   const isStdio = transport !== 'http' && transport !== 'sse'
 
   /**
-   * 「工具」字段里的清单：试连成功就用刚拿回来的那份，否则用打开时的目录快照。
-   * 试连**失败**时保留旧清单（用户还能看见原来有哪些工具，不至于一片空白）。
+   * Catalog in the "tools" field: use the one just fetched when the test succeeded, otherwise the
+   * catalog snapshot from open time. On test **failure** keep the old catalog (the user can still
+   * see which tools were there, instead of a blank area).
    */
   const catalog = testResult?.ok ? testResult.tools : seed.catalog
   const isEnabled = (rawName: string): boolean => selection[rawName] !== false
@@ -1074,10 +1115,13 @@ const ServerFormModal: React.FC<{
   const allEnabled = catalog.length > 0 && enabledCount === catalog.length
 
   /**
-   * 工具字段顶部那一行 = 连接状态 + 工具计数（原本是上下两行，用户要求合成一行）。
-   *  - 刚试连过：成功报「连接成功」，失败报原始错误；
-   *  - 打开编辑时还没试连：连接成功过的服务器报「已连接」，连不上时报原始错误。
-   * 计数与「全部启用/停用」跟在它后面，按钮靠 `margin-left: auto` 贴字段最右边。
+   * Top line of the tools field = connection status + tool count (previously two lines; the user
+   * asked for one).
+   *  - Just test-connected: success reports "connected", failure reports the raw error;
+   *  - Opened for edit without a test yet: a previously connected server reports "connected",
+   *    otherwise the raw error.
+   * The count and "enable/disable all" follow it, with the button pinned to the far right of the
+   * field via `margin-left: auto`.
    */
   const statusLine: { color: string; text: string } | null = testResult
     ? { color: testResult.ok ? colorSuccess : colorError, text: testResult.text }
@@ -1088,8 +1132,10 @@ const ServerFormModal: React.FC<{
         : null
 
   /**
-   * 没试连、也没有已知清单时**整块不渲染**（用户明确要求：没点「测试连接」就不要出现
-   * 「工具」字段与那句「点测试连接读取清单」的提示）。有清单或有试连结果时才铺开。
+   * With no test connection and no known catalog, **the whole block does not render** (the user
+   * explicitly asked: without clicking "Test connection" there should be no "tools" field and no
+   * "click test connection to read the catalog" hint). It expands only when there is a catalog or
+   * a test result.
    */
   const showTools = catalog.length > 0 || testResult !== null
 
@@ -1128,11 +1174,13 @@ const ServerFormModal: React.FC<{
         </Button>
       ]}
       /**
-       * 固定高度的表单窗口（与设置页其余表单弹窗同款：body 限高 + 自定义滚动条）。
+       * Fixed-height form window (same as the other form modals on the settings page: capped body +
+       * custom scrollbar).
        *
-       * 不设上限时，条目一多（环境变量 / 请求头各几行）窗口会一路长高，底部按钮被顶出视口，
-       * 用户找不到「保存」。这里锁住高度、**只有表单区滚动**，标题与按钮始终留在屏幕内，
-       * 弹窗也不会随内容忽高忽低。
+       * Without a cap, the window keeps growing as entries accumulate (a few rows each for env vars
+       * and headers), pushing the bottom buttons out of view so the user cannot find "Save". Here
+       * the height is locked and **only the form area scrolls**, keeping the title and buttons on
+       * screen and preventing the modal from jumping with content.
        */
       styles={{ body: { maxHeight: 560, padding: '16px 20px', overflowY: 'auto' } }}
       classNames={{ body: 'custom-scrollbar' }}
@@ -1228,13 +1276,16 @@ const ServerFormModal: React.FC<{
         )}
 
         {/*
-          「工具」字段：状态 + 计数一行，下面是清单 + 逐项开关，右侧一个「全部启用/停用」。
-          **没试连过（也没有已知清单）时整块不渲染**——不摆空字段、也不摆「点测试连接读取清单」
-          这类提示（用户 2026-09-26 明确要求）；有清单时条目再多也只在这块内部滚动。
+          "Tools" field: status + count on one line, then the catalog + per-item toggles, with an
+          "enable/disable all" on the right. **With no test connection (and no known catalog) the
+          whole block does not render** - no empty field and no "click test connection to read the
+          catalog" hint (explicit user requirement 2026-09-26); when a catalog exists, entries
+          scroll only inside this block.
         */}
         {showTools && (
           <Form.Item label={t('mcpSettings.field.tools')} style={{ marginBottom: 12 }}>
-            {/* 状态行 + 清单作为一个整体滚进视野（ref 挂在这层，见上面的 useEffect） */}
+            {/* The status line + catalog scroll into view as one unit (ref is on this layer,
+                see the useEffect above) */}
             <div ref={toolsRef} data-mcp-tools-field>
               <div className="flex items-center" style={{ gap: 8 }}>
                 {statusLine && (
@@ -1274,7 +1325,8 @@ const ServerFormModal: React.FC<{
                       data-mcp-tools-all
                       onClick={toggleAll}
                       style={{
-                        // 贴字段最右边：这一行铺满控件宽度，按钮自带 auto 外边距把它推到尽头
+                        // Pinned to the far right of the field: this row spans the control
+                        // width, and the button's auto margin pushes it to the end
                         marginLeft: 'auto',
                         flexShrink: 0,
                         padding: 0,

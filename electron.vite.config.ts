@@ -11,7 +11,7 @@ export default defineConfig({
       }
     },
     build: {
-      // electron-vite v6: 使用 build.externalizeDeps 替代已弃用的 externalizeDepsPlugin
+      // electron-vite v6: use build.externalizeDeps instead of the deprecated externalizeDepsPlugin
       externalizeDeps: true
     }
   },
@@ -30,14 +30,14 @@ export default defineConfig({
     plugins: [tailwindcss(), react()],
     server: {
       fs: {
-        // 允许读取仓库根下的文件，避免上层 workspace 变更时回归
+        // Allow reading files under the repo root, avoiding regressions when the parent workspace changes
         allow: [resolve('.')]
       }
     },
     build: {
       rollupOptions: {
         input: {
-          // 定义多个入口点
+          // Define multiple entry points
           main: resolve(__dirname, 'src/renderer/resource/index.html')
         }
       }

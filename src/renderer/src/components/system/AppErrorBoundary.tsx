@@ -3,9 +3,10 @@ import { theme } from 'antd'
 import { useTranslation } from '@renderer/i18n'
 
 /**
- * 全局错误边界：渲染进程任意未捕获的 React 渲染错误都会让 React 19 卸载整棵组件树，
- * 表现是程序「白屏崩溃」。此处兜底为一张可恢复的提示卡（重新加载即回到笔记页），
- * 避免整个应用无提示地死掉。样式沿用编辑部语言：等宽标签 + 单一强调色，无花哨元素。
+ * Global error boundary: any uncaught React render error in the renderer makes React 19 unmount
+ * the whole component tree, which shows up as a white-screen crash. This boundary falls back to
+ * a recoverable notice card (reloading returns to the notes page) so the app never dies silently.
+ * Styling follows an editorial look: monospace labels plus a single accent color, nothing fancy.
  */
 export class AppErrorBoundary extends React.Component<
   { children: React.ReactNode },

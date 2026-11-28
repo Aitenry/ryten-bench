@@ -26,17 +26,17 @@ export interface OpenFile {
   name: string
   content: string
   isDirty: boolean
-  /** 只读页签（工具结果详情；或工作区之外的记忆文件）——不参与保存、不显示未保存圆点 */
+  /** Read-only tab (tool result details; or memory files outside the workspace) — not saved, no unsaved dot */
   readOnly?: boolean
-  /** 工具结果详情页签：有值时渲染 ToolDetailView 而不是编辑器 */
+  /** Tool result details tab: when set, renders ToolDetailView instead of the editor */
   tool?: ToolDetailTab
-  /** 视图模式：差异（审查模型改动）/ 编辑 */
+  /** View mode: diff (review model changes) / edit */
   view?: 'edit' | 'diff'
-  /** 差异视图当前展示的改动 id */
+  /** Id of the change currently shown in the diff view */
   changeId?: number | null
-  /** 页签处于未保存状态时磁盘被改动过（不覆盖用户输入，只提示） */
+  /** Disk changed while the tab has unsaved edits (user input is not overwritten, only hinted) */
   diskChanged?: boolean
-  /** Markdown 页签是否改用「源码」视图（缺省是所见即所得） */
+  /** Whether the Markdown tab uses the "source" view (default is WYSIWYG) */
   markdownSource?: boolean
 }
 
@@ -48,22 +48,22 @@ interface FileEditorProps {
   colorText: string
   colorTextSecondary: string
   colorTextTertiary: string
-  /** 各文件待审查的改动（正序：最早在前） */
+  /** Pending changes per file (ascending: oldest first) */
   pendingByPath: Map<string, FileChangeView[]>
   onCloseFile: (filePath: string) => void
   onSelectFile: (filePath: string) => void
   onContentChange: (filePath: string, content: string) => void
   onSaveFile: (filePath: string) => void
-  /** 切换编辑 / 差异视图 */
+  /** Switch between edit / diff view */
   onChangeView: (filePath: string, view: 'edit' | 'diff') => void
-  /** 差异视图里选择查看哪一次改动 */
+  /** Choose which change to inspect in the diff view */
   onSelectChange: (filePath: string, changeId: number) => void
   onKeepChanges: (ids: number[]) => void
   onRevertChange: (id: number) => void
   onApplyReview: (filePath: string, content: string) => void
-  /** 从磁盘重新读取（外部改动后手动刷新） */
+  /** Re-read from disk (manual refresh after an external change) */
   onReloadFile: (filePath: string) => void
-  /** Markdown 页签切换「所见即所得 / 源码」 */
+  /** Toggle the Markdown tab between WYSIWYG / source */
   onSetMarkdownSource: (filePath: string, source: boolean) => void
 }
 
@@ -71,9 +71,9 @@ interface FileEditorProps {
 const MORE_BTN_WIDTH = 38
 
 /**
- * 文件编辑器：页签栏 + 工具条 + 编辑器/差异视图 + 状态条。
+ * File editor: tab bar + toolbar + editor/diff view + status bar.
  *
- * 编辑器内核已从 Monaco 换成 CodeMirror 6（见 CodeEditor），差异视图走 @codemirror/merge。
+ * The editor core is CodeMirror 6 (see CodeEditor); the diff view uses @codemirror/merge.
  */
 const FileEditor: React.FC<FileEditorProps> = ({
   openFiles,
@@ -103,7 +103,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
   const activeReadOnly = Boolean(activeFile?.readOnly || activeFile?.tool)
   const pendingOfActive = activeFile ? (pendingByPath.get(activeFile.path) ?? []) : []
 
-  /** 当前展示的改动（差异视图）：显式选中的那条，缺省用最新一条待审查改动 */
+  /** Change currently displayed (diff view): the explicitly selected one, otherwise the latest pending change */
   const activeChange = useMemo<FileChangeView | null>(() => {
     if (!activeFile || pendingOfActive.length === 0) return null
     const explicit = pendingOfActive.find((c) => c.id === activeFile.changeId)
@@ -113,27 +113,28 @@ const FileEditor: React.FC<FileEditorProps> = ({
   }, [activeFile, pendingOfActive])
 
   const viewMode: 'edit' | 'diff' = activeFile?.view === 'diff' && activeChange ? 'diff' : 'edit'
-  /** Markdown 页签默认所见即所得（富文本），可切到源码 */
+  /** Markdown tabs default to WYSIWYG (rich text) and can switch to source */
   const isMarkdown =
     activeFile && !activeFile.tool ? getLanguageId(activeFile.path) === 'markdown' : false
   const markdownPreview = Boolean(isMarkdown && !activeFile?.markdownSource && !activeReadOnly)
 
   const [wrap, setWrap] = useState(() => localStorage.getItem('workspace-editor-wrap') === '1')
   const [caret, setCaret] = useState<EditorCaret | null>(null)
-  /** 每个文件的阅读位置（切换页签后回到原处） */
+  /** Reading position per file (return there after switching tabs) */
   const restoreRef = useRef<Map<string, EditorRestoreState>>(new Map())
 
   /**
-   * 状态条自适应：面板变窄时**按优先级隐藏分段**，绝不让文字换行。
+   * Adaptive status bar: when the panel narrows, **segments are hidden by priority**; text never wraps.
    *
-   * 之前的做法是让各段自己挤（span 默认 white-space:normal），面板一窄文字就折成两行，
-   * 而状态条是固定 22px 高 —— 第二行直接被吞掉，看起来就是「内容不见了」。
-   * 现在：所有分段 shrink-0 + nowrap（永不换行），宽度不够时按下面的顺序依次让位，
-   * 最后留下「行列 + 保存状态」这两条最关键的。
+   * The old approach let each segment squeeze itself (spans default to white-space:normal), so a
+   * narrow panel wrapped text onto two lines while the status bar has a fixed 22px height — the
+   * second line was simply swallowed, which looked like "the content disappeared".
+   * Now: every segment is shrink-0 + nowrap (never wraps); when width runs out they yield in the
+   * order below, finally leaving the two most critical ones: "line/column + save state".
    */
   const statusBarRef = useRef<HTMLDivElement>(null)
   const statusSegEls = useRef<Map<string, HTMLElement>>(new Map())
-  /** 各分段的自然宽度缓存（隐藏后量不到宽度，所以只在可见时更新缓存） */
+  /** Cached natural width per segment (hidden segments cannot be measured, so the cache is only updated while visible) */
   const statusNaturalWidth = useRef<Map<string, number>>(new Map())
   const [hiddenSegments, setHiddenSegments] = useState<Set<string>>(new Set())
 
@@ -145,11 +146,11 @@ const FileEditor: React.FC<FileEditorProps> = ({
     []
   )
 
-  /** 让位顺序：越靠前越先被隐藏（chars 与 caret 同级，二者只会出现一个） */
+  /** Yield order: earlier entries are hidden first (chars and caret are peers — only one appears at a time) */
   const STATUS_DROP_ORDER = ['selection', 'chars', 'lines', 'language', 'pending']
   const STATUS_STICKY = ['caret', 'state']
 
-  /** 被判定放不下的分段：整体隐藏（不换行、不截半） */
+  /** Segments that don't fit: hidden entirely (no wrapping, no half truncation) */
   const segStyle = useCallback(
     (key: string): React.CSSProperties | undefined =>
       hiddenSegments.has(key) ? { display: 'none' } : undefined,
@@ -157,11 +158,13 @@ const FileEditor: React.FC<FileEditorProps> = ({
   )
 
   /**
-   * 工具条自适应。
+   * Adaptive toolbar.
    *
-   * 这里曾有「窄了就把按钮收成纯图标」的 compactToolbar 逻辑；用户 2026-09-22 直接要求
-   * 「上面的所有按钮不要显示文字，只要图标即可」——按钮本来就只画图标了，那套状态机
-   * 失去对象（保留它反而会在窄面板下把按钮整段藏掉）。现在只留状态条的让位逻辑。
+   * There used to be compactToolbar logic that collapsed buttons to icon-only when narrow; the
+   * 2026-09-22 requirement was simply "don't show text on any of the buttons above, icons are
+   * enough" — the buttons are icon-only anyway, so that state machine lost its purpose (keeping
+   * it would actually hide the whole button group on narrow panels). Only the status-bar yield
+   * logic remains.
    */
   const toolbarRef = useRef<HTMLDivElement>(null)
 
@@ -174,7 +177,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
     const available = bar.clientWidth - padX
     if (available <= 0) return
 
-    // 1) 先按自然宽度算出「全部显示」需要多宽
+    // 1) First compute how wide "show everything" needs to be, based on natural widths
     const widthOf = (key: string): number => {
       const el = statusSegEls.current.get(key)
       const measured = el ? el.offsetWidth : 0
@@ -184,11 +187,12 @@ const FileEditor: React.FC<FileEditorProps> = ({
 
     const keys = [...statusSegEls.current.keys()]
     /**
-     * 弹性元素（`flex-1` 占位符）不算「分段」：它按定义收缩到 0。
+     * Flexible elements (the `flex-1` spacer) do not count as "segments": by definition they shrink to 0.
      *
-     * 旧实现把它当成一个固定分段（`gap * shown.length`，其中额外 +1 就是它），
-     * 于是每多显示一个分段就多算一个 gap——实测 300px 面板下明明只剩 170px
-     * 的固定内容，却被算成 220px 而开始隐藏分段（用户看到的「拖动时内容挤在一起」）。
+     * The old implementation treated it as a fixed segment (`gap * shown.length`, where the extra
+     * +1 was it), so every additional visible segment added an extra gap — measured on a 300px
+     * panel, with only 170px of actual fixed content it computed 220px and started hiding
+     * segments (the "content squishes together while dragging" the user saw).
      */
     const isFlex = (key: string): boolean => {
       const el = statusSegEls.current.get(key)
@@ -197,12 +201,12 @@ const FileEditor: React.FC<FileEditorProps> = ({
     const totalOf = (hidden: Set<string>): number => {
       const shown = keys.filter((k) => !hidden.has(k))
       if (shown.length === 0) return 0
-      // 每个可见元素之间一个 gap：分段数 + 弹性元素数 − 1
+      // One gap between each visible element: segment count + flexible element count − 1
       const gapCount = Math.max(0, shown.length - 1)
       return shown.reduce((sum, k) => sum + widthOf(k), 0) + gap * gapCount
     }
 
-    // 2) 不够宽就按让位顺序依次隐藏（关键分段不参与让位）
+    // 2) If too narrow, hide in yield order (critical segments never yield)
     const next = new Set<string>()
     let guard = 0
     while (totalOf(next) > available && guard++ < keys.length + 1) {
@@ -212,7 +216,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
       if (!candidate) break
       next.add(candidate)
     }
-    // 内容仍放不下（面板极窄）：连非关键分段一起收掉，只留 sticky
+    // Still doesn't fit (extremely narrow panel): drop non-critical segments too, leaving only the sticky ones
     let guard2 = 0
     while (totalOf(next) > available && guard2++ < keys.length + 1) {
       const candidate = keys.find((k) => !next.has(k) && !STATUS_STICKY.includes(k) && !isFlex(k))
@@ -226,7 +230,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
     })
   }, [])
 
-  // 状态条尺寸或内容变化时重算（ResizeObserver 覆盖窗口与分栏拖拽）
+  // Recompute when the status bar size or content changes (ResizeObserver covers window and split-pane drags)
   useLayoutEffect(() => {
     const bar = statusBarRef.current
     if (!bar) {
@@ -318,16 +322,16 @@ const FileEditor: React.FC<FileEditorProps> = ({
   const visibleFiles = openFiles.slice(0, visibleCount)
   const overflowFiles = openFiles.slice(visibleCount)
 
-  // 切换页签时清空光标状态（新文件的第一次 update 会重新填上）
+  // Clear caret state when switching tabs (the new file's first update fills it back in)
   useEffect(() => {
     setCaret(null)
   }, [activeFilePath, viewMode])
 
   /**
-   * 页签样式对齐参考设计（VS Code Dark+ 的页签条）：
-   * - 条底 `#252526`、非活动页签 `#2d2d2d`、活动页签与编辑器同底 `#1e1e1e`；
-   * - 活动页签顶部一条 2px 强调色（这是「当前文件」最醒目的标识）；
-   * - 方角、页签之间一条发丝分隔线；关闭按钮只在活动/悬停时出现（样式见下方 style 块）。
+   * Tab styling follows the VS Code Dark+ tab strip:
+   * - strip background `#252526`, inactive tabs `#2d2d2d`, active tab shares the editor background `#1e1e1e`;
+   * - a 2px accent line on top of the active tab (the most visible "current file" marker);
+   * - square corners, a hairline divider between tabs; the close button appears only on active/hover (styles in the style block below).
    */
   const tabStripBg = isDarkMode ? '#252526' : '#f3f3f3'
   const tabInactiveBg = isDarkMode ? '#2d2d2d' : '#ececec'
@@ -444,8 +448,8 @@ const FileEditor: React.FC<FileEditorProps> = ({
         .file-overflow-dropdown .ant-dropdown-menu-item {
           border-radius: 4px;
         }
-        /* Markdown 所见即所得：面板比首页窄得多，收掉文档编辑器的居中留白，
-           工具栏允许换行（否则窄面板下按钮被挤出去） */
+        /* Markdown WYSIWYG: the panel is much narrower than the home page, so drop the document
+           editor's centered padding and let the toolbar wrap (otherwise buttons get pushed out in narrow panels) */
         .workspace-md-editor .tiptap-editor-body {
           max-width: none;
           padding: 14px 18px 48px;
@@ -454,7 +458,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
           flex-wrap: wrap;
           row-gap: 2px;
         }
-        /* 页签关闭按钮：非活动页签默认隐藏，悬停或活动时才出现（VS Code 的做法） */
+        /* Tab close button: hidden on inactive tabs by default, shown on hover or when active (VS Code's approach) */
         .file-tab .file-tab-close {
           opacity: 0;
           transition: opacity 0.12s;
@@ -463,7 +467,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
         .file-tab[data-tab-active='1'] .file-tab-close {
           opacity: 1;
         }
-        /* 编辑器区域：滚动条只属于编辑器本身，宿主与面板都不滚 */
+        /* Editor area: the scrollbars belong to the editor itself; neither the host nor the panel scrolls */
         .cm-file-editor-host {
           height: 100%;
           overflow: hidden;
@@ -505,7 +509,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
                 return <Icon size={14} style={{ color, flexShrink: 0 }} />
               })()}
               <span className="truncate flex-1 min-w-0">{file.name}</span>
-              {/* 待审查改动角标：点开这个页签会直接进差异视图 */}
+              {/* Pending-change badge: opening this tab goes straight to the diff view */}
               {pendingCount > 0 && (
                 <span
                   className="shrink-0 tabular-nums"
@@ -585,9 +589,10 @@ const FileEditor: React.FC<FileEditorProps> = ({
         )}
       </div>
 
-      {/* 工具条：路径 + 视图切换 + 折行 + 重新载入。
-          这一排按钮贴着页签栏下沿，提示统一朝**下**弹（placement="bottom"）：
-          朝上（antd 默认）会盖住上面的页签文字，朝下压在正文上沿、不遮任何操作入口。 */}
+      {/* Toolbar: path + view switch + wrap + reload.
+          This row of buttons sits right under the tab bar, so tooltips all open **downward**
+          (placement="bottom"): upward (antd's default) would cover the tab text above, while
+          downward covers the top edge of the body and hides no action entry. */}
       {activeFile && !activeFile.tool && (
         <div
           ref={toolbarRef}
@@ -615,9 +620,9 @@ const FileEditor: React.FC<FileEditorProps> = ({
               </span>
             </Tooltip>
           )}
-          {/* Markdown：所见即所得 / 源码 切换（差异视图固定用源码，diff 需要原文）。
-              按钮**只有图标**（用户 2026-09-22：「上面的所有按钮不要显示文字，只要图标即可」），
-              文案在 Tooltip 里。 */}
+          {/* Markdown: WYSIWYG / source switch (the diff view always uses source, since a diff must compare the raw text).
+              Buttons are **icon only** (per the 2026-09-22 requirement "don't show text on any of the buttons above,
+              icons are enough"); the text lives in the Tooltip. */}
           {isMarkdown && viewMode === 'edit' && !activeReadOnly && (
             <div className="flex items-center">
               <Tooltip title={t('harness.fileEditor.mdRichTip')} placement="bottom">
@@ -673,7 +678,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
         </div>
       )}
 
-      {/* 工具结果详情页签（ls / glob / grep / execute）：不走编辑器，按工具语义就地渲染 */}
+      {/* Tool result details tab (ls / glob / grep / execute): doesn't use the editor, renders in place by tool semantics */}
       {activeFile?.tool ? (
         <div className="flex-1 min-h-0">
           <ToolDetailView
@@ -703,8 +708,8 @@ const FileEditor: React.FC<FileEditorProps> = ({
           />
         </div>
       ) : activeFile && markdownPreview ? (
-        /* Markdown 所见即所得：复用首页文档编辑器（TipTap v3 + tiptap-markdown），
-           工具栏随面板宽度自适应；差异视图仍走源码（diff 必须比对原文） */
+        /* Markdown WYSIWYG: reuses the home page's document editor (TipTap v3 + tiptap-markdown);
+           the toolbar adapts to the panel width. The diff view still uses source (a diff must compare the raw text) */
         <div className="flex-1 min-h-0 workspace-md-editor">
           <TipTapMarkdownEditor
             key={activeFile.path}
@@ -740,7 +745,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
         </div>
       )}
 
-      {/* 状态条：行列 / 行数 / 语言 / 保存状态（对齐编辑器应有的信息密度） */}
+      {/* Status bar: line/column / line count / language / save state (matching the information density an editor should have) */}
       {activeFile && !activeFile.tool && (
         <div
           ref={statusBarRef}
@@ -753,7 +758,7 @@ const FileEditor: React.FC<FileEditorProps> = ({
           }}
         >
           {markdownPreview ? (
-            /* 富文本视图没有行/列光标概念，改报字数 */
+            /* The rich-text view has no line/column caret concept, so report the character count instead */
             <span
               data-seg="chars"
               ref={statusSegRef('chars')}

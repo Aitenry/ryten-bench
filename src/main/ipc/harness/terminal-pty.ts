@@ -1,8 +1,9 @@
 /**
- * 用户侧**真终端**（node-pty）IPC：右侧终端面板用。
+ * **User-side real terminal** (node-pty) IPC: used by the right-side terminal panel.
  *
- * 与模型侧 `terminal_*` 的行模式通道完全独立；这里只有人类操作：新建、键入、改窗口大小、
- * 关闭、读回放缓冲。输出通过 `harness:pty-terminal-data` 事件推给渲染层的 xterm。
+ * Completely independent of the model-side `terminal_*` line-mode channels; here there are only
+ * human actions: create, type, resize the window, close, read the replay buffer. Output is
+ * pushed to the renderer's xterm via the `harness:pty-terminal-data` event.
  */
 import { BrowserWindow } from 'electron'
 import type { IpcHandlerMap } from '../register'
@@ -16,7 +17,7 @@ export const PTY_EVENTS = {
   changed: 'harness:pty-sessions-changed'
 } as const
 
-/** 把 PTY 输出/退出流接线到所有窗口（输出按 ~12ms 合批，避免逐字符 IPC 抖动） */
+/** Wire PTY output/exit streams to all windows (output is batched per ~12ms to avoid per-character IPC jitter) */
 export function wirePtyTerminalEvents(): () => void {
   const pending = new Map<string, { data: string; timer: NodeJS.Timeout }>()
   const flush = (sessionId: string): void => {
@@ -130,7 +131,7 @@ export function ptyTerminalIpcHandlers(): IpcHandlerMap {
     return { ok: true, data: sessionId ? ptyTerminals.buffer(sessionId) : '' }
   })
 
-  /** 全局统计：开始页 / 侧栏角标显示「运行中 N」 */
+  /** Global stats: the start page / sidebar badge shows "N running" */
   handle('pty-terminal-stats', () => {
     return { ok: true, ...ptyTerminals.stats() }
   })

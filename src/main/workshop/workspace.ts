@@ -13,42 +13,54 @@ import { draftDir } from './paths'
 import { draftSummary } from './service'
 
 /**
- * 插件会话的**工作目录**：这份插件自己的源码目录（`<插件存放路径>/<插件 id>/`）。
+ * The **working directory** of a plugin session: this plugin's own source directory
+ * (`<plugin storage path>/<plugin id>/`).
  *
- * 为什么做成真正的工作区行，而不是只在渲染层换个根：
- * AI 工作目录（Runtime 的 workspacePath）、资源管理器根、文件 IPC 的边界
- * （`assertInsideWorkspace`）、文件改动审查，全都只认 `harness.workspacePath` +
- * `activeWorkspaceId`——把插件目录做成一个工作区、开会话时切过去，这一整条链路就都不用改，
- * 而且话题行记着 `workspace_id`，**重开这个会话（甚至重启应用）仍然回到插件目录**。
+ * Why make it a real workspace row instead of just swapping the root in the renderer:
+ * the AI working directory (Runtime's workspacePath), the explorer root, the file IPC
+ * boundary (`assertInsideWorkspace`) and file change review all rely solely on
+ * `harness.workspacePath` + `activeWorkspaceId` — turning the plugin directory into a
+ * workspace and switching to it when opening a session leaves that whole chain untouched,
+ * and the topic row records `workspace_id`, so **reopening this session (even after an app
+ * restart) still lands in the plugin directory**.
  *
- * 用户口径（2026-09-28「在插件模式下新建会话，其工作区还是之前工作模式下选中的工作区，
- * 资源管理器也一样」）：插件会话不该占用工作模式选中的那个工作区。
+ * User requirement (2026-09-28: "a session created in plugin mode still uses the workspace
+ * selected in work mode, and so does the explorer"): a plugin session must not occupy the
+ * workspace selected in work mode.
  *
- * 这些工作区**不算用户的工作区**：侧栏「工作」列表按路径把它们过滤掉，它们只出现在插件模式下
- * （插件行展开就是这份插件自己的会话；用户口径同一天「插件目录不进『工作』列表，只属于那份插件」）。
+ * These workspaces **do not count as user workspaces**: the sidebar "Work" list filters
+ * them out by path and they appear only in plugin mode (expanding a plugin row shows that
+ * plugin's own sessions; same-day requirement: "plugin directories must not enter the
+ * 'Work' list, they belong only to that plugin").
  *
- * 生命周期：**按需创建**（第一次给这份插件开会话时），插件改名时同步名字；
- * 删除草稿**不动**这一行与它下面的会话（删源码不等于删对话，与卸载插件的口径一致：
- * 代码移除 / 数据保留是两件事）——重建同名草稿后这些会话会重新出现在插件行下。
+ * Lifecycle: **created on demand** (the first time a session is opened for this plugin),
+ * renamed together with the plugin; deleting the draft does **not** touch this row or the
+ * sessions beneath it (removing source is not removing conversations, consistent with
+ * uninstalling a plugin: code removal and data retention are two separate things) —
+ * recreating a draft with the same name makes those sessions reappear under the plugin row.
  */
 
-/** 某份插件的插件工作区（没有则 null，不创建） */
+/** Plugin workspace for one plugin (null when absent, never created here) */
 export async function findPluginWorkspace(pluginId: string): Promise<WorkspaceRow | null> {
   const dir = draftDir(pluginId)
   return await findWorkspaceByPath(dir)
 }
 
 /**
- * 当前所有「插件工作区」：工作区行 → 它对应的插件 id。
+ * All current "plugin workspaces": workspace row → the plugin id it maps to.
  *
- * 侧栏靠这份清单做两件事，两件都**只认这一个来源**（不在渲染层再算一遍路径）：
- * - 把插件行和它自己的会话对上（`draftId` → `workspaceId`）；
- * - 把插件工作区从「工作」列表里滤掉（用户口径 2026-09-28「插件目录不进『工作』列表」）。
+ * The sidebar uses this list for two things, and **only this one source** is consulted for
+ * both (paths are not recomputed in the renderer):
+ * - pairing a plugin row with its own sessions (`draftId` → `workspaceId`);
+ * - filtering plugin workspaces out of the "Work" list (2026-09-28 requirement: "plugin
+ *   directories must not enter the 'Work' list").
  *
- * 判据 = 行自己的 `kind='plugin'`（0010 起的单一真源）。此前是「路径是插件存放路径的直接
- * 子目录」现算——插件根一改配置、或用户恰好把工作区选在插件根下面，同一条记录就会被
- * 两个列表都说成是自己那一类；`kind` 没有这个问题。**草稿已经删掉**的插件工作区照样算数
- * （kind 不会因为草稿没了而变），正是这里需要的语义。
+ * Criterion = the row's own `kind='plugin'` (the single source of truth since 0010). It used
+ * to be computed as "path is a direct child of the plugin storage path" — once the plugin
+ * root config changed, or a user happened to pick a workspace under the plugin root, the
+ * same record would be claimed by both lists; `kind` does not have that problem. Plugin
+ * workspaces whose **draft has already been deleted** still count (kind does not change
+ * when the draft disappears), which is exactly the semantics needed here.
  */
 export async function listPluginWorkspaces(): Promise<
   { draftId: string; workspaceId: number; path: string }[]
@@ -67,11 +79,14 @@ export async function listPluginWorkspaces(): Promise<
 }
 
 /**
- * 取（必要时创建）某份插件的「插件工作区」。幂等：一个插件目录永远只对应一行。
+ * Get (creating if necessary) the "plugin workspace" of one plugin. Idempotent: a plugin
+ * directory always maps to exactly one row.
  *
- * 顺带**归位老会话**：插件工作目录上线（2026-09-28）之前开的插件会话，话题上已经是
- * `plugin:<id>`，但 workspace_id 还指着当时的工作区——把它们收拢到插件工作区下，
- * 用户下次打开这些会话就落在插件目录上（见 mapper 的 `reparentPluginTopics`）。
+ * Also **rehomes old sessions**: plugin sessions opened before the plugin working directory
+ * shipped (2026-09-28) already carry `plugin:<id>` on the topic, but their workspace_id still
+ * points at the workspace back then — collect them under the plugin workspace so that
+ * reopening those sessions lands in the plugin directory (see the mapper's
+ * `reparentPluginTopics`).
  */
 export async function ensurePluginWorkspace(pluginId: string): Promise<WorkspaceRow> {
   const dir = draftDir(pluginId)
@@ -79,9 +94,11 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
   const existing = await findPluginWorkspace(pluginId)
   if (existing) {
     /**
-     * 老行还在、源码目录却被删了（用户删了草稿 / 改了插件存放路径）：不能把这一行
-     * 当成可用工作区返回——切过去以后 AI 的文件工具和监听全都会对着一个不存在的目录
-     * 报 ENOENT。会话行本身保留（删源码不等于删对话），但「现在开不了」要如实报错。
+     * The old row exists but the source directory is gone (user deleted the draft / changed
+     * the plugin storage path): do not return this row as a usable workspace — after
+     * switching to it, the AI's file tools and watchers would all hit ENOENT on a missing
+     * directory. Keep the session rows themselves (removing source is not removing
+     * conversations) but report honestly that it cannot be opened right now.
      */
     if (!fs.existsSync(dir)) {
       throw new Error(
@@ -89,22 +106,25 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
       )
     }
     if (existing.name !== name) {
-      // 插件改过名：工作区名跟着走（这些行不在「工作」列表里，用户不会自己去改名）
+      // Plugin was renamed: the workspace name follows (these rows are not in the "Work" list, so the user will not rename them manually)
       await updateWorkspace(existing.id, { name })
     }
-    // 0010 之前建的行 kind 还是默认的 'user'：认领时就地分类，别再塞回「工作」列表
+    // Rows created before 0010 still have the default 'user' kind: classify in place on claim so they are not pushed back into the "Work" list
     if (existing.kind !== 'plugin') await setWorkspaceKind(existing.id, 'plugin')
     await reparentPluginTopics(existing.id, `plugin:${pluginId}`)
     return { ...existing, name, kind: 'plugin' }
   }
   /**
-   * 新行只在源码目录**真实存在**时创建。
+   * Create a new row only when the source directory **actually exists**.
    *
-   * 为什么必须看盘：插件存放路径改掉之后，「插件模式记住的那份插件」以及老会话还在，
-   * 但新根下未必有它的源码。此前这里直接 `createWorkspace`，于是悄悄造出一条指向
-   * 不存在目录的工作区行（用户 2026-11-23 的 `fs.watch ENOENT` 日志就是这么来的：
-   * `personal-ledger` 的旧工作区在旧插件根下，切到新插件根后又造了一条新路径的行）。
-   * 现有行不动（老会话的归属与历史要保留），只是不再为不存在的目录新增行。
+   * Why the disk check is required: after the plugin storage path changes, the plugin
+   * remembered by plugin mode and the old sessions still exist, but its source may not be
+   * under the new root. This used to call `createWorkspace` directly, silently producing a
+   * workspace row pointing at a nonexistent directory (that is where the user's 2026-11-23
+   * `fs.watch ENOENT` log came from: the old `personal-ledger` workspace lived under the old
+   * plugin root, and switching to the new plugin root created another row with a new path).
+   * Leave existing rows alone (old sessions' ownership and history must be preserved) and
+   * simply stop adding rows for nonexistent directories.
    */
   if (!fs.existsSync(dir)) {
     throw new Error(
@@ -114,19 +134,19 @@ export async function ensurePluginWorkspace(pluginId: string): Promise<Workspace
   const id = await createWorkspace(name, dir, 'plugin')
   const created = await findPluginWorkspace(pluginId)
   if (!created) {
-    // 刚建完必然查得到；查不到说明库出了别的问题，如实抛出去而不是编一行假数据
+    // It was just created, so it must be readable; if not, the database has another problem — throw instead of inventing a fake row
     throw new Error(`插件工作区创建后读不回来（id=${id}，path=${dir}）`)
   }
   await reparentPluginTopics(created.id, `plugin:${pluginId}`)
   return created
 }
 
-/** 插件改名后同步工作区名（没有对应工作区就什么都不做） */
+/** Sync the workspace name after a plugin rename (no-op when there is no matching workspace) */
 export async function syncPluginWorkspaceName(pluginId: string, name: string): Promise<void> {
   try {
     const existing = await findPluginWorkspace(pluginId)
     if (existing && existing.name !== name) await updateWorkspace(existing.id, { name })
   } catch {
-    // 插件存放路径没配置 / 读库失败：改名本身已完成，不同步工作区名不影响任何功能
+    // Plugin storage path not configured / database read failed: the rename already completed, and skipping the workspace name sync affects nothing
   }
 }

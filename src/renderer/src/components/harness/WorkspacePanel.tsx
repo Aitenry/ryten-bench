@@ -26,43 +26,48 @@ interface WorkspacePanelProps {
   colorTextTertiary: string
   onHasOpenFilesChange?: (hasOpen: boolean) => void
   /**
-   * 待审查改动按路径分组后回传（路径 → 条数）。
+   * Pending changes grouped by path, passed back to the parent (path → count).
    *
-   * 往上传一层是为了**任务段头那颗改动徽标**：段折起后段内的编辑卡片会被卸载，
-   * 聊天里就只剩任务名——段头的徽标需要知道「这个文件还有几处没审」，
-   * 而这份数据的真源在面板里（`workspace-changes-pending`）。
+   * They are bubbled up for the **change badge in the task section header**: once a section is
+   * folded its edit cards are unmounted, leaving only the task name in the chat, yet the section
+   * header badge still needs to know how many changes a file has left unreviewed — and the source
+   * of truth for that data lives in this panel (`workspace-changes-pending`).
    */
   onPendingByPathChange?: (pending: Map<string, number>) => void
 }
 
-/** 右侧面板的对外能力（由聊天区的工具卡片经 WorkspaceBridge 调用） */
+/** Public capabilities of the right-hand panel (invoked from chat-area tool cards via WorkspaceBridge) */
 export interface WorkspacePanelHandle {
   /**
-   * 打开工具卡片里的文件（虚拟路径）。工作区内的文件按真实路径打开（可保存、
-   * 资源管理器同步高亮），工作区之外（如 /memories/...）以只读页签打开。
+   * Open a file from a tool card (virtual path). Files inside the workspace open by real path
+   * (saveable, explorer highlight kept in sync); files outside it (e.g. /memories/...) open as
+   * read-only tabs.
    */
   openVirtualFile: (virtualPath: string, realPath: string | null) => void
-  /** 在资源管理器中定位并展开某目录（真实绝对路径） */
+  /** Reveal and expand a directory in the explorer (real absolute path) */
   revealPath: (realPath: string) => void
-  /** 打开工具结果详情页签（ls / glob / grep / execute） */
+  /** Open a tool result detail tab (ls / glob / grep / execute) */
   openToolDetail: (tab: Omit<ToolDetailTab, 'key' | 'name'>) => void
 }
 
-/** 从路径里取文件名（两种分隔符都吃） */
+/** Extract the file name from a path (handles both separators) */
 function baseName(filePath: string): string {
   const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean)
   return parts[parts.length - 1] || filePath
 }
 
 /**
- * 右侧工作区面板：资源管理器 + 文件编辑器（编辑 / 差异审查）。
+ * Right-hand workspace panel: file explorer + file editor (edit / diff review).
  *
- * 文件改动审查的数据流全部在这里收敛：
- * - 主进程每次记录改动都会推送 `workspace-change-recorded` → 刷新待审查列表，
- *   并把**已经打开的页签**切到差异视图（用户要求：打开文件若该文件有 diff 就显示差异）；
- * - 磁盘变化（模型写入 / 命令执行 / 外部编辑器）推送 `workspace-fs-changed` →
- *   重新读取打开着的页签内容 + 让资源管理器刷新受影响目录（都保留展开状态）；
- * - 审查动作（保留 / 撤销 / 落盘取舍结果）走主进程 IPC，成功后重取待审查列表。
+ * All file-change review data flow converges here:
+ * - Each change recorded by the main process pushes `workspace-change-recorded` → the pending
+ *   list refreshes, and **already-open tabs** switch to the diff view (requirement: opening a
+ *   file that has a diff shows the diff);
+ * - Disk changes (model writes / command execution / external editors) push
+ *   `workspace-fs-changed` → open tabs are re-read and the explorer refreshes the affected
+ *   directories (both keep their expansion state);
+ * - Review actions (keep / revert / apply review result) go through main-process IPC, then the
+ *   pending list is refetched.
  */
 const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
   (
@@ -83,19 +88,19 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
     const { viewMessage } = useMessage()
     const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
     const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
-    /** 请求资源管理器定位到的目录（真实路径 + 递增序号；序号变化即重新展开） */
+    /** Directory the explorer was asked to reveal (real path + incrementing nonce; a new nonce re-expands it) */
     const [revealRequest, setRevealRequest] = useState<{ path: string; nonce: number } | null>(null)
     const revealNonceRef = useRef(0)
-    /** 磁盘变化事件（转发给资源管理器刷新受影响目录） */
+    /** Disk change event (forwarded to the explorer to refresh affected directories) */
     const [fsEvent, setFsEvent] = useState<{ nonce: number; paths: string[] } | null>(null)
     const fsNonceRef = useRef(0)
-    /** 当前工作区所有待审查的文件改动 */
+    /** All pending file changes in the current workspace */
     const [pendingChanges, setPendingChanges] = useState<FileChangeView[]>([])
     const [explorerWidth, setExplorerWidth] = useState(220)
     const draggingRef = useRef(false)
 
     const hasOpenFiles = openFiles.length > 0
-    /** 页签状态的实时快照：事件回调里需要读最新值，不能依赖闭包捕获 */
+    /** Live snapshot of tab state: event callbacks need the latest value and cannot rely on closure capture */
     const openFilesRef = useRef(openFiles)
     openFilesRef.current = openFiles
 
@@ -107,7 +112,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       return harnessApi.workspace.readFile(filePath)
     }, [])
 
-    /** 待审查改动按路径分组（正序：最早在前） */
+    /** Pending changes grouped by path (in insertion order: oldest first) */
     const pendingByPath = useMemo(() => {
       const map = new Map<string, FileChangeView[]>()
       for (const change of pendingChanges) {
@@ -118,7 +123,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       return map
     }, [pendingChanges])
 
-    /** 资源管理器徽标：文件路径 → 待审查条数（只算 pending，已保留的不再提示） */
+    /** Explorer badge: file path → pending count (pending only; kept changes are no longer flagged) */
     const pendingCountByPath = useMemo(() => {
       const map = new Map<string, number>()
       for (const [path, list] of pendingByPath) {
@@ -128,7 +133,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       return map
     }, [pendingByPath])
 
-    /** 把「哪个文件还有几处没审」回传给上层（任务段头的改动徽标要用） */
+    /** Report "how many changes a file still has unreviewed" to the parent (used by the task section header badge) */
     useEffect(() => {
       onPendingByPathChange?.(pendingCountByPath)
     }, [pendingCountByPath, onPendingByPathChange])
@@ -143,7 +148,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       }
     }, [])
 
-    /** 打开页签（已打开则仅切换，避免重复读取文件） */
+    /** Open a tab (switch only if already open, avoiding a redundant file read) */
     const addTab = useCallback((tab: OpenFile) => {
       setOpenFiles((prev) => (prev.some((f) => f.path === tab.path) ? prev : [...prev, tab]))
       setActiveFilePath(tab.path)
@@ -158,7 +163,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
         }
         try {
           const content = await readFileContent(filePath)
-          // 有未审查的模型改动 → 直接打开差异视图（用户要求：打开文件有 diff 就显示差异）
+          // Unreviewed model changes exist → open the diff view directly (requirement: opening a file that has a diff shows the diff)
           const hasPending = (pendingByPath.get(filePath) ?? []).some((c) => c.status === 'pending')
           addTab({
             path: filePath,
@@ -176,11 +181,13 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
     )
 
     /**
-     * 工具卡片「打开文件」：按虚拟路径读取。
+     * Tool card "open file": read by virtual path.
      *
-     * 与资源管理器打开的区别：这里走主进程的挂载解析（工作区 + 记忆目录都合法），
-     * 因此 /memories/... 这类不在资源管理器里的文件也能看；工作区内的文件用真实
-     * 路径做页签键（与资源管理器打开的是同一个页签，且仍可编辑保存）。
+     * Differs from opening through the explorer: this goes through the main-process mount
+     * resolution (both the workspace and the memory directory are valid), so files such as
+     * /memories/... that are not in the explorer can also be viewed; files inside the workspace
+     * use the real path as the tab key (the same tab as opening from the explorer, and still
+     * editable and saveable).
      */
     const handleOpenVirtualFile = useCallback(
       async (virtualPath: string, realPath: string | null) => {
@@ -191,8 +198,8 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
           return
         }
         try {
-          // `/memories/...` 按当前会话的作用域解析（插件会话 → 这份插件自己的记忆目录），
-          // 与聊天里 Runtime 的挂载口径一致
+          // `/memories/...` resolves against the current session's scope (a plugin session → that
+          // plugin's own memory directory), matching the Runtime mount semantics used in chat
           const result = await harnessApi.harness.readVirtualFile(virtualPath, getMemoryScope())
           if ('error' in result) {
             viewMessage('workspace-open-file', 'error', result.error)
@@ -221,7 +228,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
           setActiveFilePath(key)
           return
         }
-        // 页签名：路径取末段（'src'），命令/模式取首行前 20 字符（命令整条太长会顶掉其它页签）
+        // Tab name: take the last segment for paths ('src'), the first 20 chars of the first line for commands/patterns (a whole command is too long and crowds out other tabs)
         const raw = tab.title.trim()
         const name = tab.kind === 'file' || tab.kind === 'dir' ? baseName(raw) : raw.slice(0, 20)
         const detail: ToolDetailTab = { ...tab, key, name: name || tab.kind }
@@ -294,13 +301,13 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       [viewMessage, t]
     )
 
-    /** 从磁盘重新读取页签内容（手动刷新 / 磁盘变化后同步） */
+    /** Re-read a tab's content from disk (manual refresh / sync after a disk change) */
     const reloadTab = useCallback(
       async (filePath: string, options?: { force?: boolean }): Promise<void> => {
         const file = openFilesRef.current.find((f) => f.path === filePath)
         if (!file || file.readOnly || file.tool) return
         if (file.isDirty && !options?.force) {
-          // 有未保存内容：不覆盖用户输入，只挂提示（保存时会以本地内容为准）
+          // Unsaved content exists: do not overwrite the user's input, only flag it (saving uses the local content)
           setOpenFiles((prev) =>
             prev.map((f) => (f.path === filePath ? { ...f, diskChanged: true } : f))
           )
@@ -330,7 +337,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       [reloadTab]
     )
 
-    // --- 审查动作 ---
+    // --- Review actions ---
 
     const handleKeepChanges = useCallback(
       async (ids: number[]) => {
@@ -352,7 +359,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
           return
         }
         if (result.content === null) {
-          // 撤销的是「新建文件」→ 文件已被删除，页签关掉
+          // Reverting a "new file" → the file has been deleted, so close the tab
           handleCloseFile(result.path)
         } else {
           setOpenFiles((prev) =>
@@ -375,7 +382,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       [refreshPending, viewMessage, t, handleCloseFile]
     )
 
-    /** 差异视图 Ctrl+S / 保留按钮：落盘取舍结果并标记已保留 */
+    /** Diff view Ctrl+S / keep button: apply the review result to disk and mark it as kept */
     const handleApplyReview = useCallback(
       async (filePath: string, content: string) => {
         const api = harnessApi
@@ -406,7 +413,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       )
     }, [])
 
-    /** Markdown 页签：所见即所得 ↔ 源码 */
+    /** Markdown tab: WYSIWYG ↔ source */
     const handleSetMarkdownSource = useCallback((filePath: string, source: boolean) => {
       setOpenFiles((prev) =>
         prev.map((f) => (f.path === filePath ? { ...f, markdownSource: source } : f))
@@ -414,7 +421,8 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
     }, [])
 
     /**
-     * 主进程事件回调（只订阅一次，经 ref 取最新实现，避免闭包过期）。
+     * Main-process event callbacks (subscribed once; the latest implementation is read through a
+     * ref so callbacks never go stale).
      */
     const eventHandlersRef = useRef<{
       onFsChanged: (data: {
@@ -447,7 +455,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       setPendingChanges((prev) => (prev.some((c) => c.id === change.id) ? prev : [...prev, change]))
       fsNonceRef.current += 1
       setFsEvent({ nonce: fsNonceRef.current, paths: [change.path] })
-      // 已打开的页签：内容同步为磁盘最新，并切到差异视图等用户审查
+      // Already-open tab: sync its content to the latest on disk and switch to the diff view for review
       const file = openFilesRef.current.find((f) => f.path === change.path)
       if (!file || file.readOnly || file.tool) return
       if (file.isDirty) {
@@ -478,7 +486,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
 
     eventHandlersRef.current.onChangesUpdated = (data) => {
       void refreshPending()
-      // 撤销后文件内容由主进程改回，页签内容需要重新读取（revert 已单独处理内容）
+      // After a revert the main process restores the file content, so tab content must be re-read (revert handles content separately)
       if (data.status === 'reverted' && data.path) {
         const file = openFilesRef.current.find((f) => f.path === data.path)
         if (file && !file.isDirty) void reloadTab(data.path, { force: true })
@@ -502,7 +510,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
       }
     }, [refreshPending])
 
-    // 工作区切换：清空页签与待审查列表（新工作区的文件路径完全不同）
+    // Workspace switch: clear tabs and the pending list (the new workspace has entirely different file paths)
     useEffect(() => {
       setOpenFiles([])
       setActiveFilePath(null)
@@ -568,7 +576,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
         .workspace-resizer:hover .workspace-resizer-dragger {
           background: ${isDarkMode ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)'};
         }
-        /* 编辑器宿主：让 CodeMirror 撑满容器（@uiw/react-codemirror 的外层 div） */
+        /* Editor host: let CodeMirror fill the container (the outer div from @uiw/react-codemirror) */
         .cm-file-editor-host { height: 100%; }
         .cm-file-editor-host .cm-editor { height: 100%; }
       `}</style>
@@ -624,7 +632,7 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, WorkspacePanelProps>(
             revealRequest={revealRequest}
             pendingByPath={pendingCountByPath}
             pendingTotal={pendingChanges.filter((c) => c.status === 'pending').length}
-            /* 文件数是主口径：pendingTotal 是「改动记录条数」，同一文件改多次会累加 */
+            /* File count is the primary metric: pendingTotal is the count of "change records", which accumulates when one file changes repeatedly */
             pendingFiles={pendingCountByPath.size}
             onKeepAllPending={() =>
               void handleKeepChanges(

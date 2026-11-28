@@ -39,10 +39,10 @@ import type {
 } from '../main/lattice/types'
 
 /**
- * 本地安装插件（压缩包 / 文件夹）的结果。
+ * Result of installing a plugin locally (archive / folder).
  *
- * `canceled` 与 `error` 分开：用户在系统选择框里点取消不是失败，面板不该弹红字
- * （`ok: true, canceled: true`）。
+ * `canceled` and `error` are separate: clicking cancel in a system chooser is not a failure and
+ * the panel should not show red text (`ok: true, canceled: true`).
  */
 interface LocalPluginInstallResult {
   ok: boolean
@@ -50,17 +50,17 @@ interface LocalPluginInstallResult {
   id?: string
   name?: string
   version?: string
-  /** true = 覆盖了同 id 的既有安装（面板提示「已升级」） */
+  /** true = an existing installation with the same id was overwritten (the panel shows "upgraded") */
   upgraded?: boolean
   error?: string
 }
 
 /**
- * preload 暴露给渲染层的 core 能力（`window.api`）。
+ * core capabilities exposed by preload to the renderer (`window.api`).
  *
- * - `api.system`：系统功能（AI 助手 / 资料库）的通道桥，普通 `harness:*` / `notes:*`；
- * - `api.plugin`：第三方插件的通用桥（`plugin:<命名空间>:*` + 通道白名单），
- *   类型由插件自己的 `shared/types.ts` 提供。
+ * - `api.system`: channel bridge for system features (AI assistant / notes), plain `harness:*` / `notes:*`;
+ * - `api.plugin`: generic bridge for third-party plugins (`plugin:<namespace>:*` + channel
+ *   allowlist), with types provided by the plugin's own `shared/types.ts`.
  */
 interface Api {
   file: {
@@ -68,24 +68,24 @@ interface Api {
       allowImages?: boolean
     ) => Promise<{ dataUrl: string; fileName: string; isImage: boolean } | null>
     selectTextFile: () => Promise<{ fileName: string; filePath: string } | null>
-    /** 取剪贴板/拖拽 File 的真实磁盘路径；无磁盘文件来源（如网页复制的图片）返回空串 */
+    /** Get the real disk path of a clipboard/drag File; returns an empty string when there is no on-disk source (e.g. an image copied from a web page) */
     getPathForFile: (file: File) => string
   }
   lock: {
-    /** 主进程持有的锁屏快照（**不含**解锁码摘要） */
+    /** Lock-screen snapshot held by the main process (**excluding** the unlock code digest) */
     getState: () => Promise<LockScreenSnapshot>
-    /** 手动锁屏（Esc） */
+    /** Lock manually (Esc) */
     lock: () => Promise<LockScreenSnapshot>
-    /** 解锁：校验在主进程完成 */
+    /** Unlock: verification is done in the main process */
     unlock: (code: string) => Promise<LockUnlockResult>
-    /** 开关 / 自动锁屏时长 */
+    /** Toggle / auto-lock duration */
     configure: (patch: {
       enabled?: boolean
       autoLockMinutes?: number
     }) => Promise<LockScreenSnapshot>
-    /** 改码：原密码由主进程校验 */
+    /** Change code: the old password is verified by the main process */
     changeCode: (oldCode: string, newCode: string) => Promise<LockCodeChangeResult>
-    /** 锁屏状态推送（返回取消订阅函数） */
+    /** Lock-state push (returns an unsubscribe function) */
     onChanged: (callback: (state: LockScreenSnapshot) => void) => () => void
   }
   providers: {
@@ -108,7 +108,7 @@ interface Api {
       baseUrl?: string,
       apiKey?: string
     ) => Promise<{ id: string; metadata: Record<string, unknown> | null }[]>
-    /** 供应商配置变化推送（启用/停用/改默认后） */
+    /** Provider config change push (after enable/disable/changing the default) */
     onChanged: (callback: () => void) => () => void
   }
   systemSettings: {
@@ -122,66 +122,71 @@ interface Api {
     isMaximized: () => Promise<boolean>
     onMaximized: (callback: (maximized: boolean) => void) => () => void
     /**
-     * 自绘标题栏与系统窗口按钮覆盖层（Window Controls Overlay）的主题同步。
-     * 只影响系统绘制按钮的配色与标题栏底色，不改变按钮行为。
+     * Theme sync for the custom title bar and the system window controls overlay
+     * (Window Controls Overlay). Only affects the colors of the system-drawn buttons and the
+     * title bar background, not button behavior.
      */
     setTitleBarOverlay: (options: { color?: string; symbolColor?: string; height?: number }) => void
-    /** 让系统窗口边框/标题栏明暗跟随应用主题 */
+    /** Make the system window border/title bar follow the app theme */
     setNativeTheme: (mode: 'light' | 'dark' | 'system') => void
-    /** 设置窗口标题（原生标题栏：内容 - RytenBench） */
+    /** Set the window title (native title bar: content - RytenBench) */
     setTitle: (title: string) => void
-    /** 重新加载当前窗口（标题栏「应用 → 重新加载」） */
+    /** Reload the current window (title bar "App → Reload") */
     reload: () => void
-    /** 退出应用（走正常退出清理，不是隐藏到托盘） */
+    /** Quit the app (normal quit cleanup, not hide-to-tray) */
     quit: () => void
-    /** 编辑命令（标题栏「编辑」菜单）：交给主进程调用 webContents 的原生编辑动作 */
+    /** Edit commands (title bar "Edit" menu): delegated to the main process to invoke native webContents edit actions */
     edit: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => void
   }
-  /** 当前运行平台（win32 / darwin / linux），与主进程的 `process.platform` 同值 */
+  /** Current platform (win32 / darwin / linux), same value as the main process's `process.platform` */
   platform: NodeJS.Platform
   weather: {
     getCurrent: (force?: boolean) => Promise<WeatherData>
     onUpdate: (callback: (data: WeatherData) => void) => () => void
   }
   /**
-   * 系统级功能（AI 助手 / 资料库）的通道桥。
+   * Channel bridge for system-level features (AI assistant / notes).
    *
-   * 通道名是普通 `harness:*` / `notes:*`：它们是随应用编译进来的功能，不是插件，
-   * 因此不经过插件宿主的启用态与通道白名单；preload 只对前缀做一次校验。
+   * Channel names are plain `harness:*` / `notes:*`: they are features compiled into the app,
+   * not plugins, so they bypass the plugin host's enable state and channel allowlist; preload
+   * only validates the prefix once.
    */
   system: {
     invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
     on: (channel: string, callback: (data: unknown) => void) => () => void
   }
   plugin: {
-    /** 已安装插件与启用态（`userData/plugins/<id>/` 扫描结果） */
+    /** Installed plugins and their enable state (scan result of `userData/plugins/<id>/`) */
     list: () => Promise<PluginListEntry[]>
     /**
-     * **同步**取一次插件清单（含启用态）。
-     * 渲染层宿主在构造期要同步拿到权威清单，只有同步 IPC 能在这个时机拿到。
+     * **Synchronously** fetch the plugin list once (including enable state).
+     * The renderer host needs the authoritative list synchronously during construction, and
+     * only sync IPC can provide it at that moment.
      */
     listSync: () => PluginListEntry[]
-    /** 启用/停用插件（写入持久化并广播，渲染层即时装载/卸载） */
+    /** Enable/disable a plugin (persist and broadcast; the renderer loads/unloads immediately) */
     setEnabled: (id: string, enabled: boolean) => Promise<PluginListEntry[]>
-    /** 从本地路径安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json` */
+    /** Install a plugin from a local path: a `.zip` archive, a plugin package directory, or the `plugin.json` inside it */
     installLocal: (source: string) => Promise<LocalPluginInstallResult>
-    /** 弹系统选择框挑一个本地来源并安装（面板唯一的本地安装入口；取消返回 canceled） */
+    /** Show a system chooser to pick a local source and install it (the panel's only local install entry; cancel returns canceled) */
     installLocalFromDialog: () => Promise<LocalPluginInstallResult>
     /**
-     * 卸载插件并返回最新列表。
-     * 卸载本身总是移除插件代码；`purgeData` 决定要不要同时清数据（false = 数据保留在库里）。
+     * Uninstall a plugin and return the latest list.
+     * Uninstalling always removes the plugin code; `purgeData` decides whether to also clear
+     * data (false = data stays in the database).
      */
     uninstall: (id: string, purgeData: boolean) => Promise<PluginListEntry[]>
-    /** 插件启用态变化推送（含安装/卸载） */
+    /** Plugin enable-state change push (including install/uninstall) */
     onStateChanged: (callback: () => void) => () => void
-    /** 插件通道调用（plugin:<id>: 前缀；经主进程权威校验） */
+    /** Plugin channel call (`plugin:<id>:` prefix; authoritatively validated by the main process) */
     invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
-    /** 订阅插件事件通道（白名单缓存门控） */
+    /** Subscribe to plugin event channels (gated by a cached allowlist) */
     on: (channel: string, callback: (data: unknown) => void) => () => void
     /**
-     * 只读诊断：主进程里各插件贡献的宿主生命周期钩子（标签）+ 工作区事件订阅数。
-     * 用于验证「停用插件后 app.preload / app.before-quit / app.renderer-memory-dump
-     * 与工作区订阅都不再存在」（见 src/main/ipc/misc.ts）。
+     * Read-only diagnostics: host lifecycle hooks contributed by each plugin (labels) + the
+     * number of workspace event subscriptions.
+     * Used to verify that "after disabling a plugin, app.preload / app.before-quit /
+     * app.renderer-memory-dump and the workspace subscriptions no longer exist".
      */
     lifecycleHooks: () => Promise<{
       preload: string[]
@@ -190,114 +195,123 @@ interface Api {
       workspaceListeners: number
     }>
     /**
-     * 只读诊断：各插件主模块的**装载来源**。
-     * `package` = 由磁盘包 `main.cjs` 提供；`absent` = 已安装但当前停用（未装载）。
+     * Read-only diagnostics: the **load source** of each plugin's main module.
+     * `package` = provided by the on-disk package's `main.cjs`; `absent` = installed but currently disabled (not loaded).
      */
     loadedFrom: () => Promise<
       Record<string, { installed: boolean; source: 'package' | 'absent'; file?: string }>
     >
-    /** 只读诊断：若干张表的行数（表名按标识符白名单校验） */
+    /** Read-only diagnostics: row counts of several tables (table names validated against an identifier allowlist) */
     tableCounts: (tables: string[]) => Promise<Record<string, number>>
-    /** 上报宿主 UI 表的「键 → 导出名」（`plugin://host/ui.js` 桥据此生成） */
+    /** Report the host UI table's "key → export name" (used to generate the `plugin://host/ui.js` bridge) */
     reportHostUi: (names: Record<string, string[]>) => void
   }
   /**
-   * Lattice 插件中心（core 通道，不走插件白名单）。
+   * Lattice plugin hub (core channels, bypassing the plugin allowlist).
    *
-   * 契约见 `.dev/ryten-lattice-contract.md` §3；IPC 常量在
-   * `src/main/lattice/types.ts` 的 `LATTICE_IPC`（main/preload 共用一份）。
+   * Contract: §3; the IPC constants live in `src/main/lattice/types.ts` under `LATTICE_IPC`
+   * (shared by main and preload).
    */
   lattice: {
-    /** 当前状态（基址 / 登录态 / 用户 / 角色 / 最近同步摘要） */
+    /** Current state (base URL / login state / user / role / latest sync summary) */
     status: () => Promise<LatticeStatus>
-    /** 登录；失败不抛错，返回 `{ok:false,error}`（平台 message） */
+    /** Log in; on failure does not throw, returns `{ok:false,error}` (platform message) */
     login: (input: LatticeLoginInput) => Promise<LatticeLoginResult>
-    /** 退出登录（先尽力吊销服务端 refresh，本地无条件清） */
+    /** Log out (best-effort server refresh revocation first, local state cleared unconditionally) */
     logout: () => Promise<{ ok: boolean }>
-    /** 当前用户与角色（`/v1/me`） */
+    /** Current user and role (`/v1/me`) */
     me: () => Promise<LatticeMeResult>
-    /** 设置基址（环境变量 RB_LATTICE_URL 优先；变更会清除旧登录态） */
+    /** Set the base URL (the RB_LATTICE_URL env var takes precedence; changing it clears the old login state) */
     setBaseUrl: (url: string) => Promise<LatticeSetBaseUrlResult>
-    /** 插件目录（搜索 / 分类 / 排序 / 分页） */
+    /** Plugin catalog (search / category / sort / pagination) */
     list: (query?: LatticeListQuery) => Promise<HubListResult>
-    /** 插件详情（readme / 版本清单 / 我的安装记录） */
+    /** Plugin details (readme / version list / my install record) */
     detail: (pluginId: string) => Promise<HubDetail | null>
-    /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+    /** Publish a locally installed plugin directly (install package + source, no chooser dialog) */
     publishInstalled: (pluginId: string) => Promise<LatticeUploadResult>
-    /** 弹目录选择框并发布；用户取消 → `{ok:true,canceled:true}` */
+    /** Show a directory chooser and publish; user cancel → `{ok:true,canceled:true}` */
     pickAndUpload: () => Promise<LatticeUploadResult>
-    /** 选 .zip 安装包发布 */
+    /** Pick a .zip install package to publish */
     pickAndUploadZip: () => Promise<LatticeUploadResult>
-    /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+    /** Pick "install package directory + source directory" to publish: the package and the source are two different zips */
     pickAndUploadWithSource: () => Promise<LatticeUploadResult>
-    /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 可选，给出时源码单独上传 */
+    /** Publish by explicit path: `source` is the install package directory/zip; `sourcePath` is optional and uploads the source separately when given */
     uploadSource: (source: string, sourcePath?: string) => Promise<LatticeUploadResult>
-    /** 下载并安装（或升级）；失败返回 `{ok:false,error}`，不抛错 */
+    /** Download and install (or upgrade); on failure returns `{ok:false,error}` without throwing */
     install: (pluginId: string, version?: string) => Promise<LatticeInstallResult>
-    /** 本机已安装插件视图（本地口径，不联网） */
+    /** View of locally installed plugins (local only, no network) */
     listInstalls: () => Promise<{ items: LatticeInstallSummary[] }>
     /**
-     * 当前源码目录（v2）：安装时自动下载的源码解压位置。
-     * `managed='pluginsPath'` = 用户配置的插件存放路径（= workshop 草稿目录，插件模式可开对话）；
-     * `managed='userData'` = 应用数据目录回退；`path=null` = 本机没有该插件源码。
+     * Current source directory (v2): where source downloaded automatically during install is
+     * extracted.
+     * `managed='pluginsPath'` = the user-configured plugin storage path (= workshop draft
+     * directory, where plugin mode can start a conversation);
+     * `managed='userData'` = fallback to the app data directory; `path=null` = this machine has
+     * no source for that plugin.
      */
     sourcePath: (pluginId: string) => Promise<LatticeSourcePathResult>
-    /** 本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+    /** Local installed plugin package directory (`userData/plugins/<id>`, used for publishing after local install) */
     localSource: (pluginId: string) => Promise<LatticeLocalSourcePathResult>
     /**
-     * 「在对话中修改」：为源码目录建/复用插件工作区并开一条插件会话。
-     * 成功开对话 → `{ok:true,workspaceId,topicId}`；做不到可靠切换时回退文件管理器 →
-     * `{ok:true,opened:'folder'}`（**不会**假装开了对话）。
+     * "Modify in conversation": create/reuse a plugin workspace for the source directory and
+     * start a plugin session.
+     * On success → `{ok:true,workspaceId,topicId}`; when a reliable switch is not possible, fall
+     * back to the file manager → `{ok:true,opened:'folder'}` (**never** pretend a conversation
+     * was opened).
      */
     openSource: (pluginId: string) => Promise<LatticeOpenSourceResult>
-    /** 「发布新版本」：源码目录整包 zip 同时作为安装包与源码包上传 */
+    /** "Publish a new version": upload the whole source directory zip as both package and source */
     republish: (input: LatticeRepublishInput) => Promise<LatticeRepublishResult>
-    /** 下载安装包 / 源码包到本机（弹保存框 + sha256 校验；用户取消不是失败） */
+    /** Download the install package / source package locally (save dialog + sha256 check; user cancel is not a failure) */
     downloadAsset: (
       pluginId: string,
       version: string,
       kind: LatticeDownloadAssetKind
     ) => Promise<LatticeDownloadAssetResult>
     /**
-     * 「从本地导入」：弹目录选择框，把所选目录下带 `plugin.json` 的插件逐个发布到平台
-     * （安装包 + 源码包都是这个目录的整包 zip）；返回成功/跳过摘要。
+     * "Import from local": show a directory chooser and publish every plugin under the chosen
+     * directory that has a `plugin.json` (both package and source are whole-directory zips);
+     * returns a success/skip summary.
      */
     importLocalDir: (dir?: string) => Promise<LatticeImportLocalDirResult>
     /**
-     * 显式设置「插件存放路径」并立即生效（插件中心导入本地目录后调用）。
-     * 只接受非空路径；清除路径走设置页。
+     * Explicitly set the "plugin storage path" and apply it immediately (called after importing
+     * a local directory in the plugin hub). Only accepts a non-empty path; clearing the path
+     * goes through the settings page.
      */
     setPluginRoot: (dir: string) => Promise<LatticeSetPluginRootResult>
     /**
-     * 手动同步（push / pull / both；也接受裸字符串）。
+     * Manual sync (push / pull / both; a bare string is also accepted).
      *
-     * 扩展入参：`{direction, installMissing?}` —— `installMissing` 控制本次 pull 是否自动补齐
-     * 「平台有安装记录、本机没有插件包」的插件；缺省跟随设置项（默认开启）。
-     * 返回的 `autoInstall` 带成功/失败明细，`orphaned` 列出平台已删除的安装记录。
+     * Extended input: `{direction, installMissing?}` — `installMissing` controls whether this
+     * pull also installs plugins that "have an install record on the platform but no local
+     * package"; when omitted it follows the setting (enabled by default).
+     * The returned `autoInstall` carries success/failure details, `orphaned` lists install
+     * records already deleted on the platform.
      */
     sync: (input?: LatticeSyncInput) => Promise<LatticeSyncResult>
-    /** 同步详情：最近一次同步的自动补齐成功/失败明细 + 孤儿记录（失败原因可查看） */
+    /** Sync details: auto-install success/failure details of the latest sync + orphaned records (failure reasons can be inspected) */
     syncDetails: () => Promise<LatticeSyncDetails>
-    /** 「缺失插件自动补齐」开关（持久化设置；默认开启） */
+    /** "Auto-install missing plugins" toggle (persisted setting; on by default) */
     setAutoInstallMissing: (enabled: boolean) => Promise<LatticeAutoInstallSettingResult>
-    /** 未解决的插件数据冲突（含补拉的云端数据快照） */
+    /** Unresolved plugin data conflicts (including the cloud data snapshot pulled for them) */
     syncConflicts: () => Promise<LatticeSyncConflict[]>
-    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机；merge=两边合并（插件支持时） */
+    /** Resolve a conflict explicitly: local=overwrite cloud with this machine; cloud=overwrite this machine with cloud; merge=merge both sides (when the plugin supports it) */
     resolveConflict: (
       pluginId: string,
       strategy: 'local' | 'cloud' | 'merge'
     ) => Promise<LatticeResolveConflictResult>
-    /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机并推回云端 */
+    /** Merge cloud data: merge the cloud snapshots of installed plugins (those supporting merge) into this machine and push back to the cloud */
     mergeData: () => Promise<LatticeMergeDataResult>
-    /** 状态变化推送（返回取消订阅函数） */
+    /** State change push (returns an unsubscribe function) */
     onStateChanged: (callback: (status: LatticeStatus) => void) => () => void
-    /** 上传阶段进度推送（zip / meta / upload） */
+    /** Upload progress push (zip / meta / upload) */
     onUploadProgress: (callback: (progress: LatticeUploadProgress) => void) => () => void
-    /** 同步结果推送（手动与后台防抖同步都会发） */
+    /** Sync result push (sent for both manual and background debounced syncs) */
     onSyncState: (callback: (result: LatticeSyncResult) => void) => () => void
   }
   mermaid: {
-    /** 全屏窗口预览 SVG（可拖拽/缩放画布） */
+    /** Full-screen window preview of SVG (draggable/zoomable canvas) */
     preview: (svg: string) => Promise<void>
   }
 }
@@ -323,15 +337,15 @@ interface WeatherData {
 
 declare global {
   /**
-   * 启动页桥（`window.loading`）：初始化进度的快照与订阅。
+   * Startup page bridge (`window.loading`): initialization progress snapshots and subscriptions.
    *
-   * 类型只在这里声明一份（此前渲染层 `resource/types/window.d.ts` 还留了一份
-   * 早期副本，两边已经漂移——见 2026-11 审计 C-18）。
+   * The type is declared only here (the renderer used to keep an early copy under
+   * `resource/types/window.d.ts`, and the two had already drifted).
    */
   interface LoadingBridge {
-    /** 应用版本（启动页可展示） */
+    /** App version (can be shown on the startup page) */
     getAppVersion: () => Promise<string>
-    /** 初始化进度快照（启动页挂载时先取一次，处理初始化已经开始/已完成的情况） */
+    /** Initialization progress snapshot (taken once when the startup page mounts, to handle initialization already started/finished) */
     getInitState: () => Promise<{
       complete: boolean
       error: string | null
@@ -340,7 +354,7 @@ declare global {
       taskIndex: number
       totalTasks: number
     }>
-    /** 初始化进度（返回取消订阅函数） */
+    /** Initialization progress (returns an unsubscribe function) */
     onInitProgress: (
       callback: (data: {
         currentTask: string
@@ -349,9 +363,9 @@ declare global {
         totalTasks: number
       }) => void
     ) => () => void
-    /** 初始化完成（返回取消订阅函数） */
+    /** Initialization complete (returns an unsubscribe function) */
     onInitComplete: (callback: () => void) => () => void
-    /** 初始化失败（返回取消订阅函数） */
+    /** Initialization failed (returns an unsubscribe function) */
     onInitError: (callback: (errorMessage: string) => void) => () => void
   }
 

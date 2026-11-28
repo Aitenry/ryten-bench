@@ -1,55 +1,60 @@
 /**
- * 插件样式表的**宿主保护**（三端共用的纯函数，不 import DOM / node）。
+ * **Host protection** for plugin stylesheets (pure functions shared by all three sides; no DOM / node imports).
  *
- * 为什么需要它：插件包自带的 `plugin.css` 会被**原样注入宿主的 `<head>`**
- * （见 `renderer/src/plugin-host/plugin-css.ts`），选择器因此作用于整个文档，
- * 不只是插件自己的界面。一条 `body { display: none }` 或者 `* { box-sizing: content-box }`
- * 就能把整个应用搞坏——这是「插件不能影响系统运转」里最直接、也最不需要恶意的一条路径。
+ * Why it is needed: a plugin bundle's `plugin.css` is injected into the host's `<head>`
+ * **as-is** (see `renderer/src/plugin-host/plugin-css.ts`), so its selectors apply to the whole
+ * document, not just the plugin's own UI. A single `body { display: none }` or
+ * `* { box-sizing: content-box }` can break the entire app — the most direct, and also the least
+ * malicious, path by which a plugin can affect how the system runs.
  *
- * 拦什么（只放行「不会波及宿主外壳」的规则）：
- * - `html` / `body` / `#root`：文档根与挂载点，插件没有理由改；
- * - `*`：全局重置，插件用 Tailwind 也不会产出它；
- * - `.custom-frame` / `.frame-*` / `.custom-scrollbar` / `.ant-app`：宿主外壳自己的类名；
- * - `:root`：**只放行自定义属性**（Tailwind 的 theme 层就是 `:root { --color-… }`），
- *   夹带 `display`、`font-size` 这类真声明整条丢弃。
+ * What gets blocked (only rules that "cannot spill over into the host shell" pass):
+ * - `html` / `body` / `#root`: the document root and mount point; a plugin has no reason to change them;
+ * - `*`: global reset, which not even Tailwind produces for a plugin;
+ * - `.custom-frame` / `.frame-*` / `.custom-scrollbar` / `.ant-app`: the host shell's own class names;
+ * - `:root`: **custom properties only** are allowed through (Tailwind's theme layer is
+ *   `:root { --color-… }`); rules that smuggle in real declarations such as `display` or
+ *   `font-size` are dropped entirely.
  *
- * 为什么不做「把所有规则都 scope 到插件根节点」：插件的 antd 弹窗/下拉是 portal 到
- * `document.body` 的，scope 之后这些浮层会失去全部样式（真实插件都在用 Modal）。
- * 因此这里只砍「明确在动宿主的」规则，其余原样保留；验收项 `safety.scan` 与这条
- * 运行时闸门一起，构成两层保护。
+ * Why not "scope all rules to the plugin root node": plugin antd modals/dropdowns are portaled
+ * into `document.body`, and after scoping those floating layers would lose all styling (real
+ * plugins do use Modal). So only rules that clearly touch the host are cut here and the rest are
+ * kept as-is; together with the verify check `safety.scan`, this runtime gate forms two layers
+ * of protection.
  *
- * 返回值里 `dropped` 是给人看的选择器原文——运行期会打一条 warn 日志，
- * 验收报告也会点名（模型据此删掉这些规则，而不是等用户发现界面坏了）。
+ * In the return value, `dropped` holds the original selector text for humans — a warn log is
+ * emitted at runtime and the verify report names them too (so the model can remove these rules,
+ * rather than waiting for users to notice a broken UI).
  *
- * 幂等：对已经清洗过的 CSS 再跑一遍，结果不变；没有命中任何规则时与输入逐字节相同。
+ * Idempotent: running it again on already-sanitised CSS gives the same result; when nothing
+ * matches, the output is byte-identical to the input.
  */
 
 export interface PluginCssAudit {
-  /** 清洗后的 CSS */
+  /** Sanitised CSS */
   css: string
-  /** 被丢弃的规则（选择器原文，已去重） */
+  /** Dropped rules (original selector text, deduplicated) */
   dropped: string[]
-  /** 被移除的 @import 语句 */
+  /** Removed @import statements */
   imports: string[]
 }
 
-/** 选择器是否指向文档根（html / body） */
+/** Whether the selector targets the document root (html / body) */
 const HTML_BODY = /(^|[\s,>+~(])(?:html|body)(?=$|[\s,>+~.:#[\]])/i
-/** 选择器是否指向 React 挂载点 */
+/** Whether the selector targets the React mount point */
 const ROOT_ID = /(^|[\s,>+~(])#root(?=$|[\s,>+~.:#[])/
-/** 选择器是否指向宿主外壳自己的类名 */
+/** Whether the selector targets the host shell's own class names */
 const HOST_FRAME =
   /(^|[\s,>+~(])\.(?:custom-frame|custom-scrollbar|frame-[a-z0-9-]+|ant-app)(?=$|[\s,>+~.:#[])/
-/** 选择器是否在改宿主框架（antd）的全局组件样式 */
+/** Whether the selector overrides global component styles of the host framework (antd) */
 const HOST_ANTD = /(^|[\s,>+~(])\.ant-[a-z0-9-]+/
-/** 裸通配选择器 */
+/** Bare universal selector */
 const UNIVERSAL = /(^|[\s,>+~(])\*(?=$|[\s,>+~.:#[])/
-/** :root 选择器 */
+/** :root selector */
 const ROOT_PSEUDO = /(^|[\s,>+~(]):root(?=$|[\s,>+~.:#[])/
-/** 一条自定义属性声明（`--foo: …`） */
+/** One custom-property declaration (`--foo: …`) */
 const CUSTOM_PROPERTY = /^\s*--[A-Za-z0-9_-]+\s*:/
 
-/** 体内可以继续出现普通规则的 at-rule（需要递归清洗） */
+/** At-rules whose body may contain ordinary rules (need recursive sanitising) */
 const GROUPING_AT_RULES = new Set([
   'media',
   'supports',
@@ -60,7 +65,7 @@ const GROUPING_AT_RULES = new Set([
   'starting-style'
 ])
 
-/** 跳过字符串字面量（返回结束引号之后的位置） */
+/** Skip a string literal (returns the position after the closing quote) */
 function skipString(css: string, start: number): number {
   const quote = css[start]
   let i = start + 1
@@ -75,7 +80,7 @@ function skipString(css: string, start: number): number {
   return css.length
 }
 
-/** 找配对的 `}`（跳过注释/字符串/嵌套块），返回闭合之后的位置 */
+/** Find the matching `}` (skipping comments/strings/nested blocks) and return the position after it */
 function matchBrace(css: string, open: number): number {
   let depth = 0
   let i = open
@@ -100,7 +105,7 @@ function matchBrace(css: string, open: number): number {
   return css.length
 }
 
-/** 块体是否只含自定义属性（Tailwind theme 层） */
+/** Whether the block body contains only custom properties (Tailwind theme layer) */
 function onlyCustomProperties(body: string): boolean {
   let seen = false
   for (const declaration of body.split(';')) {
@@ -112,23 +117,23 @@ function onlyCustomProperties(body: string): boolean {
   return seen
 }
 
-/** 这条规则会不会波及宿主外壳 */
+/** Whether this rule would spill over into the host shell */
 function hitsHost(selector: string, body: string): boolean {
   if (HTML_BODY.test(selector)) return true
   if (ROOT_ID.test(selector)) return true
   if (HOST_FRAME.test(selector)) return true
   if (HOST_ANTD.test(selector)) return true
-  // `*` 允许「只放变量」的一种形态：Tailwind 的 properties 层就是
-  // `*,:before,:after,::backdrop { --tw-translate-x: 0; … }`（真实插件包里都有）。
-  // 夹带 display 这类真声明的通配规则才是全局重置，丢。
+  // `*` is allowed in one form: "variables only". Tailwind's properties layer is
+  // `*,:before,:after,::backdrop { --tw-translate-x: 0; … }` (present in real plugin bundles).
+  // Universal rules that smuggle in real declarations such as display are a global reset: drop them.
   if (UNIVERSAL.test(selector) && !onlyCustomProperties(body)) return true
-  // :root 只允许放变量（Tailwind theme）；夹带真声明就是全局样式
+  // :root may only hold variables (Tailwind theme); real declarations make it global styling
   if (ROOT_PSEUDO.test(selector) && !onlyCustomProperties(body)) return true
   return false
 }
 
 /**
- * 清洗一段 CSS（递归处理 @media / @layer 等分组 at-rule 的体内规则）。
+ * Sanitise a CSS fragment (recursing into the bodies of grouping at-rules such as @media / @layer).
  */
 function sanitizeFragment(css: string): PluginCssAudit {
   let out = ''
@@ -138,7 +143,7 @@ function sanitizeFragment(css: string): PluginCssAudit {
   const dropped: string[] = []
   const imports: string[] = []
 
-  /** 丢弃 [start, end)（连同前面的空白），从输出流里跳过它 */
+  /** Drop [start, end) (including preceding whitespace) by skipping it in the output stream */
   const drop = (start: number, end: number): void => {
     let from = start
     while (from > cursor && /\s/.test(css[from - 1])) from -= 1
@@ -200,14 +205,14 @@ function sanitizeFragment(css: string): PluginCssAudit {
   return { css: out, dropped, imports }
 }
 
-/** 清洗插件样式表（对同一份 CSS 幂等） */
+/** Sanitise a plugin stylesheet (idempotent for the same CSS) */
 export function sanitizePluginCss(css: string): PluginCssAudit {
   if (typeof css !== 'string' || css.trim() === '') {
     return { css: typeof css === 'string' ? css : '', dropped: [], imports: [] }
   }
   const result = sanitizeFragment(css)
   return {
-    // 删规则可能留下空行：收一下，避免产物里出现大段空白
+    // Dropping rules may leave blank lines: collapse them so the package has no big gaps
     css: result.css.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n'),
     dropped: [...new Set(result.dropped)],
     imports: [...new Set(result.imports)]

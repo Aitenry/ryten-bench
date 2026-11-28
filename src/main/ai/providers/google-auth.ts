@@ -1,11 +1,13 @@
 /**
- * Google 服务账号 / ADC（Application Default Credentials）OAuth 取 token。
+ * Obtains OAuth tokens for Google service accounts / ADC (Application Default Credentials).
  *
- * 只实现桌面应用实际会遇到的两种凭据：
- * - `service_account`：JWT Bearer 断言换 access_token（GOOGLE_APPLICATION_CREDENTIALS 常见形态）；
- * - `authorized_user`：gcloud 默认凭据（refresh_token 换 access_token）。
+ * Only the two credential types a desktop app realistically encounters are implemented:
+ * - `service_account`: a JWT Bearer assertion is exchanged for an access_token (the common
+ *   GOOGLE_APPLICATION_CREDENTIALS form);
+ * - `authorized_user`: gcloud default credentials (refresh_token exchanged for access_token).
  *
- * 结果按凭据指纹缓存到过期前 60 秒（Vertex 每次模型调用不必重新换票）。
+ * Results are cached by credential fingerprint until 60 seconds before expiry (so each Vertex
+ * model call does not need a fresh token).
  */
 import { createHash, createSign } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -15,7 +17,7 @@ import { httpRequest, modelConfigError, safeReadText } from '../http'
 
 const CLOUD_PLATFORM_SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
 
-/** 服务账号凭据 */
+/** Service account credential */
 export interface ServiceAccountCredential {
   type: 'service_account'
   project_id?: string
@@ -24,7 +26,7 @@ export interface ServiceAccountCredential {
   token_uri?: string
 }
 
-/** gcloud 用户凭据 */
+/** gcloud user credential */
 export interface AuthorizedUserCredential {
   type: 'authorized_user'
   client_id: string
@@ -41,7 +43,7 @@ interface CachedToken {
 
 const tokenCache = new Map<string, CachedToken>()
 
-/** 凭据指纹（缓存键） */
+/** Credential fingerprint (cache key) */
 function fingerprint(credential: GoogleCredential): string {
   const seed =
     credential.type === 'service_account'
@@ -58,7 +60,7 @@ function base64Url(input: Buffer | string): string {
     .replace(/=+$/, '')
 }
 
-/** 取 access_token（带缓存） */
+/** Get an access_token (cached) */
 export async function getGoogleAccessToken(credential: GoogleCredential): Promise<string> {
   const key = fingerprint(credential)
   const cached = tokenCache.get(key)
@@ -72,7 +74,7 @@ export async function getGoogleAccessToken(credential: GoogleCredential): Promis
   return token.token
 }
 
-/** 服务账号：签 JWT 断言 → token_uri 换 access_token */
+/** Service account: sign a JWT assertion → exchange it at token_uri for an access_token */
 async function fetchServiceAccountToken(
   credential: ServiceAccountCredential
 ): Promise<CachedToken> {
@@ -113,7 +115,7 @@ async function fetchServiceAccountToken(
   }
 }
 
-/** gcloud 用户凭据：refresh_token 换 access_token */
+/** gcloud user credential: exchange refresh_token for access_token */
 async function fetchAuthorizedUserToken(
   credential: AuthorizedUserCredential
 ): Promise<CachedToken> {
@@ -140,7 +142,7 @@ async function fetchAuthorizedUserToken(
   }
 }
 
-/** gcloud 默认 ADC 文件位置 */
+/** Default gcloud ADC file location */
 function defaultAdcPath(): string {
   if (process.platform === 'win32' && process.env.APPDATA) {
     return join(process.env.APPDATA, 'gcloud', 'application_default_credentials.json')
@@ -148,7 +150,7 @@ function defaultAdcPath(): string {
   return join(homedir(), '.config', 'gcloud', 'application_default_credentials.json')
 }
 
-/** 读取并识别凭据文件（不存在 / 非法返回 null） */
+/** Read and identify a credential file (returns null if missing / invalid) */
 export async function readCredentialFile(path: string): Promise<GoogleCredential | null> {
   try {
     const text = await readFile(path, 'utf-8')
@@ -158,7 +160,7 @@ export async function readCredentialFile(path: string): Promise<GoogleCredential
   }
 }
 
-/** 解析凭据对象（区分 service_account / authorized_user） */
+/** Parse a credential object (distinguishes service_account / authorized_user) */
 export function parseCredential(raw: unknown): GoogleCredential | null {
   if (!raw || typeof raw !== 'object') return null
   const candidate = raw as Record<string, unknown>
@@ -197,10 +199,10 @@ export function parseCredential(raw: unknown): GoogleCredential | null {
 }
 
 /**
- * 解析 Vertex 使用的凭据：
- * 1. 显式传入的 credentials / authOptions.credentials 对象；
- * 2. GOOGLE_APPLICATION_CREDENTIALS 指向的文件；
- * 3. gcloud 默认 ADC 文件。
+ * Resolve the credential used by Vertex:
+ * 1. The explicitly passed credentials / authOptions.credentials object;
+ * 2. The file pointed to by GOOGLE_APPLICATION_CREDENTIALS;
+ * 3. The default gcloud ADC file.
  */
 export async function resolveGoogleCredential(options: {
   credentials?: unknown

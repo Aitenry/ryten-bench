@@ -1,33 +1,37 @@
 /**
- * 行级差异统计（纯函数，无 IO / 无 Electron 依赖，可被 node 脚本直接验证）。
+ * Line-level diff statistics (pure functions, no IO / no Electron dependency, verifiable
+ * directly by a node script).
  *
- * 用途：改动记录落库时给出一份「+N −M」，供资源管理器徽标、历史列表与悬浮明细显示。
- * 精确的行级 diff（CodeMirror 的合并视图）在渲染进程算——那里才有真正的编辑文档；
- * 这里只需要一个够快、够准的统计，且**大文件不能拖住主进程**。
+ * Purpose: produce a "+N −M" when a change record is stored, for explorer badges, the history
+ * list and hover details. The precise line-level diff (CodeMirror's merge view) is computed in
+ * the renderer — that is where the real editor document lives; here we only need a fast enough
+ * and accurate enough statistic, and **large files must not stall the main process**.
  *
- * 算法：Myers 贪心（O(ND)）。先剥掉公共前缀/后缀——真实编辑几乎总是局部的，
- * 剥完之后 D 很小，绝大多数情况瞬间出结果。D 超预算时退化为「粗算」并标记
- * exact=false（前后缀之外的中间段整体视为重写），不去做线性空间的中间蛇优化。
+ * Algorithm: Myers greedy (O(ND)). Strip the common prefix/suffix first — real edits are almost
+ * always local, so D is small after stripping and the result is instant in the vast majority of
+ * cases. When D exceeds the budget it degrades to a "rough estimate" with exact=false (the
+ * middle segment beyond the prefix/suffix is treated as a full rewrite), without the linear-space
+ * middle-snake optimization.
  */
 
 export interface LineDiffStat {
-  /** 新增行数；exact=false 时为粗算值 */
+  /** Number of added lines; a rough estimate when exact=false */
   added: number
-  /** 删除行数；exact=false 时为粗算值 */
+  /** Number of removed lines; a rough estimate when exact=false */
   removed: number
-  /** 是否为精确值 */
+  /** Whether the values are exact */
   exact: boolean
 }
 
-/** D 的上限：超过就退化为粗算（内存 = (2D+1) × D 个 int32，1000 约 8MB，且只存活一次调用） */
+/** Upper bound on D: beyond it, degrade to a rough estimate (memory = (2D+1) × D int32, about 8MB at 1000, alive for one call only) */
 const MAX_D = 1000
 
-/** 逐行比较用不到最后一行之后的换行差异，这里按 \n 切分并保留行内容 */
+/** Line-by-line comparison does not care about trailing-newline differences after the last line; split on \n and keep line content */
 function splitLines(text: string): string[] {
   return text.split('\n')
 }
 
-/** Myers 贪心：返回编辑距离对应的 (added, removed)，超过 maxD 返回 null */
+/** Myers greedy: returns the (added, removed) for the edit distance, or null when maxD is exceeded */
 function myersDelta(
   a: string[],
   b: string[],
@@ -36,7 +40,7 @@ function myersDelta(
   const n = a.length
   const m = b.length
   const offset = maxD
-  // 两端各留一格：k 取到 ±d 时会读 v[k-1] / v[k+1]
+  // One spare cell on each side: k reaches ±d and reads v[k-1] / v[k+1]
   const size = 2 * maxD + 3
   const v = new Int32Array(size)
   const trace: Int32Array[] = []
@@ -57,7 +61,7 @@ function myersDelta(
       }
       v[offset + k] = x
       if (x >= n && y >= m) {
-        // 回溯统计插入/删除
+        // Walk back to count insertions/deletions
         let added = 0
         let removed = 0
         let cx = n
@@ -90,8 +94,8 @@ function myersDelta(
 }
 
 /**
- * 统计把 before 改成 after 新增/删除了多少行。
- * 内容完全相同时返回全 0（调用方据此跳过记录）。
+ * Count how many lines are added/removed when changing before into after.
+ * Returns all zeros when the contents are identical (callers skip recording on that basis).
  */
 export function diffStatByLines(before: string, after: string): LineDiffStat {
   if (before === after) return { added: 0, removed: 0, exact: true }
@@ -99,7 +103,7 @@ export function diffStatByLines(before: string, after: string): LineDiffStat {
   const a = splitLines(before)
   const b = splitLines(after)
 
-  // 公共前缀 / 后缀裁剪（逐行）
+  // Trim the common prefix / suffix (line by line)
   let start = 0
   while (start < a.length && start < b.length && a[start] === b[start]) start++
   let endA = a.length
@@ -118,18 +122,19 @@ export function diffStatByLines(before: string, after: string): LineDiffStat {
   const exact = myersDelta(midA, midB, budget)
   if (exact) return { ...exact, exact: true }
 
-  // 粗算：中间段整体视为重写（宁可高估，也不要为了一个徽标把主进程拖住）
+  // Rough estimate: treat the middle segment as a full rewrite (better to overestimate than to stall the main process for a badge)
   return { added: midB.length, removed: midA.length, exact: false }
 }
 
 /**
- * 文本的行数。
+ * Number of lines in the text.
  *
- * `'a\nb\n'` 是 **2** 行——末尾换行是最后一行的结束符，不是多出来的一行；
- * 空文本 0 行；末行没有换行时照样算一行。这与 git 的口径一致
- * （`git diff --numstat` 对新建的 2 行文件报 `2 0`，不是 `3 0`）。
- * 改前这里是 `split('\n').length`，新建文件于是**永远多报一行**：这条数字现在会长在
- * 聊天卡片上（`+N −M`），多一行是最容易被一眼看穿的错。
+ * `'a\nb\n'` is **2** lines — the trailing newline terminates the last line, it is not an extra
+ * line; an empty text has 0 lines; a last line without a newline still counts as one line. This
+ * matches git's convention (`git diff --numstat` reports `2 0`, not `3 0`, for a new 2-line
+ * file). This used to be `split('\n').length`, so new files **always reported one extra line**:
+ * the number now shows up on chat cards (`+N −M`), and an off-by-one is the easiest error to
+ * spot at a glance.
  */
 export function lineCount(text: string): number {
   if (text === '') return 0
@@ -138,11 +143,13 @@ export function lineCount(text: string): number {
 }
 
 /**
- * 一次「改动前后」的差异规模：新建 = 整份新增、删除 = 整份删除、其余走行级 diff。
+ * Diff size for one "before/after" pair: create = whole content added, delete = whole content
+ * removed, everything else goes through the line-level diff.
  *
- * 这是改动规模统计的**唯一口径**：改动记录落库（file-history）与聊天里的写改卡片
- * （fs-backend 登记 added/removed 事实）都调它。两边若各写一份，卡片上的「+N −M」
- * 与差异视图/历史列表迟早会给出互相矛盾的数字——用户看到的将是同一个改动两套说法。
+ * This is the **single definition** of change size: both change-record storage (file-history)
+ * and the write/edit cards in chat (fs-backend records added/removed facts) call it. If each side
+ * computed its own, the "+N −M" on the card and the diff view / history list would eventually
+ * contradict each other — the user would see two accounts of the same change.
  */
 export function changeStats(
   before: string | null,
@@ -154,7 +161,7 @@ export function changeStats(
   return { added: stat.added, removed: stat.removed }
 }
 
-/** 内容是否为二进制（含 NUL 即视为二进制；快照与差异对它没有意义） */
+/** Whether the content is binary (containing NUL counts as binary; snapshots and diffs are meaningless for it) */
 export function looksBinary(text: string): boolean {
   return text.includes('\u0000')
 }

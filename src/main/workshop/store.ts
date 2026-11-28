@@ -19,17 +19,19 @@ import {
 import { releaseWorkshopDir } from './dir-release'
 
 /**
- * 草稿存储：`drafts/<id>/` 下的读写、列举、删除。
+ * Draft storage: read/write, list and delete under `drafts/<id>/`.
  *
- * 三条边界（都由本文件负责，调用方不需要重复判断）：
- * - **路径**：一切相对路径过 `normalizeDraftRel`（挡 `..`/绝对路径）；
- * - **体积**：单文件 512KB、整份草稿 200 个文件 / 5MB —— 助手一次写坏一个巨型文件时
- *   要立刻得到一个可读的拒绝，而不是把磁盘写满（也防止把整个产物 base64 塞进某个草稿文件）；
- * - **扩展名白名单**：草稿里只允许源码/样式/文本类文件（`.ts/.tsx/.js/.jsx/.mjs/.cjs/.json/.css/.md/.svg/.txt`），
- *   二进制与可执行文件一律拒绝（插件产物只由构建生成）。
+ * Three boundaries (all owned by this file; callers need not re-check):
+ * - **Paths**: every relative path goes through `normalizeDraftRel` (blocks `..`/absolute paths);
+ * - **Size**: 512KB per file, 200 files / 5MB per draft — one huge broken file written by the
+ *   assistant must fail fast with a readable rejection rather than fill the disk (this also
+ *   prevents stuffing an entire base64 build output into a draft file);
+ * - **Extension allowlist**: drafts may contain only source/style/text files
+ *   (`.ts/.tsx/.js/.jsx/.mjs/.cjs/.json/.css/.md/.svg/.txt`); binaries and executables are always
+ *   rejected (plugin output is produced by the build only).
  */
 
-/** 草稿里允许出现的文件扩展名 */
+/** File extensions allowed in a draft */
 const ALLOWED_EXT: ReadonlySet<string> = new Set([
   '.ts',
   '.tsx',
@@ -44,20 +46,21 @@ const ALLOWED_EXT: ReadonlySet<string> = new Set([
   '.txt'
 ])
 
-/** 单个文件体积上限 */
+/** Maximum size of a single file */
 export const MAX_FILE_BYTES = 512 * 1024
-/** 整份草稿的文件数 / 总体积上限 */
+/** File count / total size limits for a whole draft */
 export const MAX_FILES = 200
 export const MAX_TOTAL_BYTES = 5 * 1024 * 1024
 
-/** 列举时跳过的目录（产物、依赖、VCS） */
+/** Directories skipped when listing (build output, dependencies, VCS) */
 const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', '.cache'])
 
 /**
- * 从 `plugin.json` 取展示名（没有/为空返回空字符串）。
+ * Get the display name from `plugin.json` (returns an empty string when absent/empty).
  *
- * 下载安装的源码包（插件中心「源代码」）通常只有 plugin.json、没有 workshop.json：
- * 这时展示名必须取清单里的 name，而不是目录名（插件 id）。
+ * A downloaded source package (the plugin center's "source code" download) usually has only
+ * plugin.json and no workshop.json: the display name must then come from the manifest's name,
+ * not from the directory name (the plugin id).
  */
 function manifestTitle(id: string): string {
   const manifest = readDraftManifest(id)
@@ -65,11 +68,13 @@ function manifestTitle(id: string): string {
 }
 
 /**
- * 草稿元数据的默认值（缺 workshop.json 时用**清单名称**兜底，再退回目录名）。
+ * Default draft metadata (when workshop.json is missing, fall back to the **manifest name**, then
+ * to the directory name).
  *
- * 只在没有 workshop.json 时被 `patchDraftMeta` 用来建底：如果这里写 id，
- * 第一次通过工坊写文件就会生成一份 `title: <id>` 的 workshop.json，之后
- * 侧栏/插件工作区就永远显示 id（用户 2026-11-25「插件工作区的名称还是 id」）。
+ * Only used by `patchDraftMeta` to seed the data when there is no workshop.json: writing the id
+ * here would make the first file written through the workshop create a workshop.json with
+ * `title: <id>`, after which the sidebar/plugin workspace would forever show the id (user report
+ * 2026-11-25: "the plugin workspace name is still the id").
  */
 function defaultMeta(id: string): WorkshopDraftMeta {
   const now = Date.now()
@@ -83,7 +88,7 @@ function defaultMeta(id: string): WorkshopDraftMeta {
   }
 }
 
-/** 读草稿元数据（不存在返回 null） */
+/** Read draft metadata (returns null when missing) */
 export function readDraftMeta(id: string): WorkshopDraftMeta | null {
   const raw = readJson<Partial<WorkshopDraftMeta>>(path.join(draftDir(id), 'workshop.json'))
   if (!raw || typeof raw !== 'object') return null
@@ -100,12 +105,12 @@ export function readDraftMeta(id: string): WorkshopDraftMeta | null {
   }
 }
 
-/** 写草稿元数据 */
+/** Write draft metadata */
 export function writeDraftMeta(meta: WorkshopDraftMeta): void {
   writeJson(path.join(draftDir(meta.id), 'workshop.json'), meta)
 }
 
-/** 局部更新草稿元数据（自动刷新 updatedAt） */
+/** Partially update draft metadata (refreshes updatedAt automatically) */
 export function patchDraftMeta(id: string, patch: Partial<WorkshopDraftMeta>): WorkshopDraftMeta {
   const base = readDraftMeta(id) ?? defaultMeta(id)
   const next: WorkshopDraftMeta = { ...base, ...patch, id, updatedAt: Date.now() }
@@ -114,10 +119,11 @@ export function patchDraftMeta(id: string, patch: Partial<WorkshopDraftMeta>): W
 }
 
 /**
- * 列举全部草稿 id：`<插件存放路径>/` 下的每个子目录。
+ * List all draft ids: every subdirectory under `<plugin storage path>/`.
  *
- * 未配置存放路径时返回空数组（界面据此引导用户先选文件夹）——不抛错，
- * 因为「列个表」在没配置时是正常状态，只有**新建/构建**这类动作才必须配置。
+ * Returns an empty array when the storage path is not configured (the UI prompts the user to
+ * pick a folder from it) — it does not throw, because listing is a normal state while
+ * unconfigured; only actions like **create/build** require configuration.
  */
 export function listDraftIds(): string[] {
   if (!hasPluginsRoot()) return []
@@ -125,14 +131,14 @@ export function listDraftIds(): string[] {
   try {
     entries = fs.readdirSync(requirePluginsRoot(), { withFileTypes: true })
   } catch {
-    // 目录还不存在（用户刚选了一个空文件夹/被移走）：当作没有草稿
+    // The directory does not exist yet (the user just picked an empty folder / it was moved away): treat it as no drafts
     return []
   }
   return entries
     .filter(
       (entry) =>
         entry.isDirectory() &&
-        // 以 `.` 开头的是临时/隐藏目录（scaffold 的 staging、用户的编辑器目录），不是草稿
+        // Names starting with `.` are temporary/hidden directories (scaffold staging, editor directories), not drafts
         !entry.name.startsWith('.') &&
         draftExists(entry.name)
     )
@@ -140,7 +146,7 @@ export function listDraftIds(): string[] {
     .sort((a, b) => a.localeCompare(b, 'en'))
 }
 
-/** 校验扩展名（写文件时用；读/列举不校验，历史文件也要能读出来） */
+/** Validate the extension (used when writing; reads/listing skip validation so historical files stay readable) */
 export function assertAllowedExt(rel: string): void {
   const ext = path.extname(rel).toLowerCase()
   if (!ALLOWED_EXT.has(ext)) {
@@ -151,9 +157,10 @@ export function assertAllowedExt(rel: string): void {
 }
 
 /**
- * 列举草稿内的文件（posix 相对路径，已按路径排序）。
+ * List the files in a draft (posix relative paths, sorted by path).
  *
- * 跳过 `node_modules` / `.git` / `dist`：它们不是源码，列进文件树只会干扰模型与用户。
+ * Skips `node_modules` / `.git` / `dist`: they are not source, and including them in the file
+ * tree only distracts the model and the user.
  */
 export function listDraftFiles(id: string): WorkshopDraftFile[] {
   const root = draftDir(id)
@@ -178,7 +185,7 @@ export function listDraftFiles(id: string): WorkshopDraftFile[] {
         const stat = fs.statSync(full)
         out.push({ path: rel, size: stat.size, mtime: stat.mtimeMs })
       } catch {
-        // 读不到 stat 的文件忽略（正在被删/权限问题）
+        // Ignore files whose stat cannot be read (being deleted / permission issues)
       }
     }
   }
@@ -186,7 +193,7 @@ export function listDraftFiles(id: string): WorkshopDraftFile[] {
   return out.sort((a, b) => a.path.localeCompare(b.path, 'en'))
 }
 
-/** 读一个草稿文件（不存在抛可读错误） */
+/** Read a draft file (throws a readable error when missing) */
 export function readDraftFile(id: string, rel: unknown): string {
   const abs = resolveInDraft(id, rel)
   if (!fs.existsSync(abs)) {
@@ -201,9 +208,10 @@ export function readDraftFile(id: string, rel: unknown): string {
 }
 
 /**
- * 写一个草稿文件（自动建目录）。
+ * Write a draft file (creates directories automatically).
  *
- * @param opts.create 是否允许新建（默认允许）；`false` 时文件必须已存在（用于「只改不新建」的场景）
+ * @param opts.create whether creation is allowed (allowed by default); when `false` the file must
+ * already exist (for "modify only, never create" flows)
  */
 export function writeDraftFile(
   id: string,
@@ -241,7 +249,7 @@ export function writeDraftFile(
   return { path: clean, size: stat.size, mtime: stat.mtimeMs }
 }
 
-/** 删除草稿内的一个文件（不存在的报可读错误） */
+/** Delete a file in a draft (reports a readable error when it does not exist) */
 export function deleteDraftFile(id: string, rel: unknown): void {
   const abs = resolveInDraft(id, rel)
   const clean = normalizeDraftRel(rel)
@@ -254,18 +262,19 @@ export function deleteDraftFile(id: string, rel: unknown): void {
 }
 
 /**
- * 整份删除草稿目录（`<插件存放路径>/<id>/`）。
+ * Delete the whole draft directory (`<plugin storage path>/<id>/`).
  *
- * 只删这个插件的子目录，**根目录本身永远不动**（那是用户在设置里选的文件夹，
- * 里面可能还有别的东西）。
+ * Only this plugin's subdirectory is deleted; **the root directory itself is never touched** (it
+ * is the folder the user picked in settings, which may contain other things).
  *
- * @returns `removedDir` = 是否真的删了目录（未配置存放路径时为 false）
+ * @returns `removedDir` = whether the directory was actually removed (false when the storage path
+ * is unconfigured)
  */
 export function deleteDraft(id: string): { removedDir: boolean } {
   if (!hasPluginsRoot()) return { removedDir: false }
   const dir = draftDir(id)
   if (fs.existsSync(dir)) {
-    // 插件模式打开着它的源码时目录正被监听：Windows 上直接 rm 会 EPERM，先放掉监听
+    // When plugin mode has its source open the directory is being watched: a plain rm on Windows fails with EPERM, so drop the watch first
     const release = releaseWorkshopDir(dir)
     try {
       fs.rmSync(dir, { recursive: true, force: true })
@@ -276,11 +285,11 @@ export function deleteDraft(id: string): { removedDir: boolean } {
   return { removedDir: true }
 }
 
-/** 读草稿清单原文（解析失败返回 null，由验收检查点名） */
+/** Read the raw draft manifest (returns null when unparsable; the verification checks call it out) */
 export function readDraftManifest(id: string): Record<string, unknown> | null {
   const raw = readJson<Record<string, unknown>>(path.join(draftDir(id), 'plugin.json'))
   return raw && typeof raw === 'object' ? raw : null
 }
 
-/** 草稿是否已存在（供 create 判断「新建还是覆盖」） */
+/** Whether the draft already exists (used by create to decide new vs. overwrite) */
 export { draftExists }

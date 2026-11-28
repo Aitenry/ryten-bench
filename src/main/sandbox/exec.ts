@@ -13,34 +13,40 @@ import {
 } from './types'
 
 /**
- * 受限执行 —— 把一条 shell 命令真正放进沙箱里跑。
+ * Confined execution — actually run one shell command inside the sandbox.
  *
- * 与「沙箱服务 + 工具层」的分工：service 负责「怎么隔离」，这里负责「怎么跑、怎么判读结果」：
- *  - `danger-full-access` 档位不隔离（档位语义就是「不拦」），直接跑；
- *  - 其余档位一律经 `sandboxService.confine()` 包装；拿不到后端 → **不执行**并返回
- *    `SANDBOX_UNAVAILABLE_MARKER`（故障关闭，绝不静默放行）；
- *  - 退出后判读输出：先排除「后端自己坏了」（runnerFailure），再识别「沙箱把写拒了」
- *    （denialSignatures）→ 附上拒绝标记与升权提示，让模型知道可以申请一次人工提权。
+ * Division of labor with the sandbox service and tool layer: the service decides "how to
+ * isolate", this module decides "how to run and how to interpret the result":
+ *  - The `danger-full-access` mode is not isolated (its meaning is "do not block"), so it runs
+ *    directly;
+ *  - Every other mode is wrapped by `sandboxService.confine()`; if no backend is available the
+ *    command is **not executed** and `SANDBOX_UNAVAILABLE_MARKER` is returned (fail closed, never
+ *    silently allow);
+ *  - After exit the output is interpreted: first rule out "the backend itself broke"
+ *    (runnerFailure), then detect "the sandbox denied the write" (denialSignatures) → attach the
+ *    denial marker and the escalation hint so the model knows it may request a one-off manual
+ *    escalation.
  *
- * 超时/取消：kill 掉 runner 即可——Windows runner 把子进程放进了 kill-on-close 的
- * Job Object，runner 一死整棵子树就被系统清理；Linux/macOS 的启动器是 exec 替换，
- * kill 到的就是命令本身。`danger-full-access` 不经过 runner，另按进程树终止
- * （见 terminateChild，后台任务「停止」必须真的停掉 dev server 的子孙进程）。
+ * Timeout/cancel: killing the runner is enough — the Windows runner puts child processes into a
+ * kill-on-close Job Object, so the whole subtree is cleaned up by the system when the runner
+ * dies; on Linux/macOS the launcher is an exec replacement, so the kill hits the command itself.
+ * `danger-full-access` does not go through the runner and is terminated by process tree instead
+ * (see terminateChild; a background job's "stop" must really stop the dev server's descendants).
  */
 
-/** 单次执行的结果 */
+/** Result of a single execution */
 export interface ConfinedRunResult {
-  /** 命令退出码（沙箱未执行时为 null） */
+  /** Command exit code (null when the sandbox did not execute it) */
   exitCode: number | null
-  /** 合并后的输出（stdout + stderr，已按上限截断） */
+  /** Combined output (stdout + stderr, truncated to the limit) */
   output: string
-  /** 沙箱拒绝了这次写入/操作 */
+  /** The sandbox denied this write/operation */
   denied: boolean
-  /** 沙箱不可用（命令没跑） */
+  /** Sandbox unavailable (the command did not run) */
   unavailable?: string
-  /** 后端自身失败（命令没跑） */
+  /** Backend failure (the command did not run) */
   runnerFailure?: string
-  /** 超时被终止 */
+  /** Terminated by timeout */
   timedOut: boolean
 }
 
@@ -48,38 +54,41 @@ export interface ConfinedRunOptions {
   command: string
   mode: SandboxMode
   workspaceRoot?: string
-  /** 输出上限（字符） */
+  /** Output limit (characters) */
   maxChars: number
-  /** 超时（毫秒）；0 = 不设超时（后台任务用：dev server 要一直跑） */
+  /** Timeout (ms); 0 = no timeout (used by background jobs: a dev server must keep running) */
   timeoutMs: number
   signal?: AbortSignal
   /**
-   * 输出增量回调（后台任务用）：每收到一段 stdout/stderr 就调用一次。
+   * Output delta callback (used by background jobs): called once for each stdout/stderr chunk.
    *
-   * 与 `maxChars` 的累计截断无关：后台任务要把命令日志持续写给任务注册表
-   * （job_output / 顶部栏查看），而 denial / runnerFailure 判定仍然只关心前
-   * `maxChars` 那个窗口。前台调用不传，行为完全不变。
+   * Independent of the cumulative `maxChars` truncation: background jobs keep writing the command
+   * log to the job registry (viewed via job_output / the top bar), while denial / runnerFailure
+   * detection still only looks at the first `maxChars` window. Foreground calls pass nothing and
+   * behave exactly as before.
    */
   onOutput?: (chunk: string) => void
-  /** 平台覆盖（工装用） */
+  /** Platform override (for tooling) */
   platform?: string
 }
 
-/** 组装「把这段字符串交给系统 shell」的 argv（保持 execute 工具原有的 shell 语义） */
+/** Build the argv handing the string to the system shell (keeping the original shell semantics) */
 export function shellArgv(command: string, platform: string = process.platform): string[] {
   return platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', command] : ['/bin/sh', '-c', command]
 }
 
 /**
- * 终止一次执行（含子孙进程）。
+ * Terminate one execution (including descendant processes).
  *
- * Windows 上 execute 实际跑的是 `cmd.exe /c <command>`：npm/pnpm 这类命令会再起
- * node 子进程，只 kill 直接子进程会留下占着端口的孤儿进程——用户点了「停止」，
- * dev server 却还在跑（后台任务尤其明显）。因此 Windows 用 `taskkill /T /F` 杀整棵树，
- * 其他平台保持 `child.kill()`（SIGTERM）语义。
+ * On Windows, execute really runs `cmd.exe /c <command>`: commands such as npm/pnpm spawn their
+ * own node child processes, so killing only the direct child leaves orphans holding the port —
+ * the user pressed "stop" but the dev server keeps running (especially visible for background
+ * jobs). Windows therefore uses `taskkill /T /F` to kill the whole tree, while other platforms
+ * keep the `child.kill()` (SIGTERM) semantics.
  *
- * taskkill 自身失败（被裁剪的系统、极端权限）时退回 `child.kill()`：至少让等待中的
- * Promise 能结束，不能因为清理动作失败就永远卡住一次工具调用。
+ * If taskkill itself fails (trimmed-down system, extreme permissions), fall back to
+ * `child.kill()`: at least the pending Promise can settle; a failing cleanup must never wedge a
+ * tool call forever.
  */
 function terminateChild(child: ChildProcess): void {
   if (process.platform === 'win32' && typeof child.pid === 'number') {
@@ -92,7 +101,7 @@ function terminateChild(child: ChildProcess): void {
         try {
           child.kill()
         } catch {
-          // 进程可能已经退出
+          // The process may have exited already
         }
       })
       killer.on('close', (code) => {
@@ -100,24 +109,24 @@ function terminateChild(child: ChildProcess): void {
           try {
             child.kill()
           } catch {
-            // 同上
+            // Same as above
           }
         }
       })
       killer.unref()
       return
     } catch {
-      // 落到下面的直接 kill
+      // Fall through to the direct kill below
     }
   }
   try {
     child.kill()
   } catch {
-    // 进程可能已经退出
+    // The process may have exited already
   }
 }
 
-/** 执行并收集输出（带超时、取消、输出上限） */
+/** Run and collect output (with timeout, cancellation, and output limit) */
 function runProcess(
   argv: readonly string[],
   options: {
@@ -126,13 +135,13 @@ function runProcess(
     timeoutMs: number
     maxChars: number
     signal?: AbortSignal
-    /** 输出增量回调（见 ConfinedRunOptions.onOutput） */
+    /** Output delta callback (see ConfinedRunOptions.onOutput) */
     onOutput?: (chunk: string) => void
   }
 ): Promise<{ exitCode: number | null; output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     const [program, ...args] = argv
-    // stdio[0] = 'ignore'：子进程的 stdin 是 null（沙箱命令不接受交互输入）
+    // stdio[0] = 'ignore': the child's stdin is null (commands accept no interactive input)
     let child: ChildProcessByStdio<null, Readable, Readable>
     try {
       child = spawn(program, args, {
@@ -157,8 +166,9 @@ function runProcess(
 
     const append = (chunk: Buffer): void => {
       const text = chunk.toString('utf8')
-      // 先交给增量消费者（后台任务按自己的上限留存），再走累计/截断逻辑：
-      // maxChars 是「模型看到的结果」上限，不是后台任务日志的上限。
+      // Hand the chunk to the delta consumer first (background jobs keep it under their own
+      // limit), then apply accumulation/truncation: maxChars caps "the result the model sees",
+      // not the background job log.
       options.onOutput?.(text)
       if (truncated) return
       if (output.length + text.length > options.maxChars) {
@@ -172,7 +182,8 @@ function runProcess(
     child.stdout.on('data', append)
     child.stderr.on('data', append)
 
-    // timeoutMs <= 0 = 不设超时（后台任务）；setTimeout(0) 会立即触发，不能直接传 0
+    // timeoutMs <= 0 = no timeout (background jobs); setTimeout(0) fires immediately, so 0 cannot
+    // be passed through
     let timer: NodeJS.Timeout | undefined
     if (options.timeoutMs > 0) {
       timer = setTimeout(() => {
@@ -204,16 +215,17 @@ function runProcess(
 }
 
 /**
- * 在沙箱里执行一条 shell 命令。
+ * Run one shell command in the sandbox.
  *
- * @returns 结果（含「是否被沙箱拒绝」「沙箱是否不可用」等信号，供工具层拼装给模型的文本）
+ * @returns the result (including signals such as "denied by the sandbox" and "sandbox
+ * unavailable", used by the tool layer to compose the text shown to the model)
  */
 export async function runConfinedShell(options: ConfinedRunOptions): Promise<ConfinedRunResult> {
   const platform = options.platform ?? process.platform
   const argv = shellArgv(options.command, platform)
   const baseEnv: NodeJS.ProcessEnv = { ...process.env }
 
-  // 完全权限：档位语义就是「不隔离」，直接跑
+  // Full access: the mode means "no isolation", so run directly
   if (options.mode === 'danger-full-access') {
     const result = await runProcess(argv, {
       cwd: options.workspaceRoot,
@@ -261,7 +273,8 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
   })
 
   const combined = result.output
-  // 先排除「后端自己坏了」：它的诊断里也可能出现 denial 词，不能误判成拒绝
+  // Rule out "the backend itself broke" first: its diagnostics may contain denial words, so do
+  // not misread it as a denial
   if (isRunnerFailure(combined, result.exitCode, confined.runnerFailure)) {
     sandboxLog.warn(`[Sandbox] Backend failed (${confined.backend}): ${combined.slice(0, 400)}`)
     return {
@@ -279,12 +292,12 @@ export async function runConfinedShell(options: ConfinedRunOptions): Promise<Con
   return { exitCode: result.exitCode, output: combined, denied, timedOut: result.timedOut }
 }
 
-/** 把「被沙箱拒绝」翻译成给模型看的文本（附协议标记与升权提示） */
+/** Render "denied by the sandbox" for the model (protocol marker plus escalation hint) */
 export function sandboxDenialText(mode: SandboxMode, body: string): string {
   return `${body}\n${sandboxDenyMarker(mode)}\n${SANDBOX_ESCALATION_HINT}`
 }
 
-/** 「沙箱不可用」文本（命令没有执行——绝不能让模型以为它跑了） */
+/** "Sandbox unavailable" text (the command did not run — the model must never think it did) */
 export function sandboxUnavailableText(reason: string): string {
   return `${SANDBOX_UNAVAILABLE_MARKER} ${reason}`
 }

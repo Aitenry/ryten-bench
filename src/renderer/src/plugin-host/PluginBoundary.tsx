@@ -1,45 +1,50 @@
 import React from 'react'
 import PluginCrashCard, { type PluginSurface } from './PluginCrashCard'
 
-// 兼容原来的导入路径：`PluginSurface` 与卡片一起搬到了 PluginCrashCard.tsx
+// Backward-compatible import path: `PluginSurface` moved to PluginCrashCard.tsx with the card
 export type { PluginSurface } from './PluginCrashCard'
 
 /**
- * **单个插件的渲染隔离层**（宿主外壳与插件界面之间的最后一道闸）。
+ * **Render isolation layer for a single plugin** (the last gate between the host shell and plugin
+ * UI).
  *
- * 为什么必须有它：React 的错误边界是逐层兜底的，而宿主此前只有 `App.tsx` 最外面的
- * 那一个——插件页面/设置页/Provider 里任何一次渲染抛错都会一路冒到顶层，
- * 表现就是**整个应用变成「RUNTIME ERROR」卡片**。插件是第三方代码，它不该有这种权力：
- * 坏掉的只该是它自己那一块，菜单、侧栏、其它插件和设置页继续可用。
+ * Why it is required: React error boundaries contain failures one level at a time, and the host
+ * previously had only the outermost one in `App.tsx` — any render error in a plugin page, settings
+ * page, or Provider bubbled all the way to the top, so **the entire app turned into a "RUNTIME
+ * ERROR" card**. Plugins are third-party code and should not have that power: only their own block
+ * should break, while menus, the sidebar, other plugins, and settings keep working.
  *
- * 三种降级形态（按使用位置选）：
- * - **卡片**（route / settings）：显示是哪个插件坏了、错误原文，并给「重试 / 停用插件」；
- * - **静默跳过**（`quiet` + `fallback`，appProvider / bottomBar）：坏掉的 Provider 不再渲染，
- *   它包着的子树照常渲染（`fallback` 就是那棵子树）；底栏条目退化成占位。
- * - **完全静默**：不传 fallback 也不显示卡片（预留给没有可见界面的挂载点）。
+ * Three degradation modes (pick by mount point):
+ * - **Card** (route / settings): shows which plugin broke and the raw error, plus "retry / disable
+ *   plugin";
+ * - **Quiet skip** (`quiet` + `fallback`, appProvider / bottomBar): the broken Provider is no
+ *   longer rendered while the subtree it wraps keeps rendering (`fallback` is that subtree); the
+ *   bottom bar item degrades to a placeholder.
+ * - **Fully silent**: no fallback and no card (reserved for mount points without visible UI).
  *
- * 注意：错误边界只能接住**渲染期**（含子组件挂载/更新）的错误。事件回调、定时器、
- * Promise 里的异常不在它的范围内——那是主进程 `plugin-guard` 与各插件自己 try/catch 的事。
+ * Note: an error boundary only catches **render-phase** errors (including child mount/update).
+ * Exceptions in event callbacks, timers, and promises are out of scope — those belong to the main
+ * process `plugin-guard` and each plugin's own try/catch.
  */
 
 export interface PluginBoundaryProps {
-  /** 出问题时用来停用/展示的插件 id */
+  /** Plugin id used to disable/show the failure */
   pluginId: string
-  /** 出在哪个挂载点（日志里能直接定位） */
+  /** Mount point where the failure occurred (directly locatable in logs) */
   surface: PluginSurface
   children: React.ReactNode
   /**
-   * 出错时渲染的内容。Provider 用「它包着的子树」，底栏用占位；
-   * 不传则退化成错误卡片。
+   * Content rendered on error. A Provider uses "the subtree it wraps", the bottom bar uses a
+   * placeholder; when omitted it degrades to the crash card.
    */
   fallback?: React.ReactNode
-  /** true = 不显示错误卡片（只渲染 fallback）；用于不允许出现一整块提示的位置 */
+  /** true = don't show the crash card (render fallback only); for spots where a full notice block is not allowed */
   quiet?: boolean
 }
 
 interface PluginBoundaryState {
   error: Error | null
-  /** 记下出错时是哪个插件：底栏轮播/路由切换会复用同一个边界实例，插件换了要复位 */
+  /** Records which plugin failed: bottom bar carousel/route switches reuse the same boundary instance, so it must reset when the plugin changes */
   pluginId: string
 }
 
@@ -50,7 +55,7 @@ export class PluginBoundary extends React.Component<PluginBoundaryProps, PluginB
     return { error }
   }
 
-  /** 实例被复用到另一个插件时清空错误（否则新插件会一直显示上一个插件的失败卡片） */
+  /** Clear the error when the instance is reused for another plugin (otherwise the new plugin keeps showing the previous plugin's crash card) */
   static getDerivedStateFromProps(
     props: PluginBoundaryProps,
     state: PluginBoundaryState
@@ -69,7 +74,7 @@ export class PluginBoundary extends React.Component<PluginBoundaryProps, PluginB
     )
   }
 
-  /** 重试：清掉错误状态，用同一棵子树再渲染一次（对瞬时错误有效；再炸还会被接住） */
+  /** Retry: clear the error state and render the same subtree again (works for transient errors; a repeat failure is caught again) */
   private handleRetry = (): void => {
     this.setState({ error: null })
   }

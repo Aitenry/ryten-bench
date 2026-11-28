@@ -8,30 +8,35 @@ import {
 import { activateChatRoot, activateChatTopic } from '../../services/harness/chat/activation'
 
 /**
- * 「对话」模式的 IPC（harness 插件的第 7 个域）。
+ * IPC for "Chat" mode (the 7th domain of the harness plugin).
  *
- * 这个模式**没有工作区概念**：用户直接开一条会话就聊。但模型的文件工具需要一根可写根目录
- * （虚拟 `/` 挂的就是它），资源管理器也需要一个根——所以模式自带一个应用初始化的目录，
- * 见 main/chat/workspace.ts。
+ * This mode **has no workspace concept**: the user just opens a session and chats. But the model's
+ * file tools need a writable root (that is what the virtual `/` is mounted on), and the file
+ * explorer needs a root too — so the mode ships an app-initialized directory of its own; see
+ * main/chat/workspace.ts.
  *
- * 两条纪律：
- * - **一律不抛错**：动作统一返回 `{ ok, error?, data? }`，渲染层据此提示（与工坊同一套约定）；
- * - **切换只走「写设置 + 广播」这一条路**：AI 工作目录、资源管理器根、文件 IPC 边界、
- *   文件改动审查、记忆作用域全都认 `harness.workspacePath` + `activeWorkspaceId`，
- *   与插件会话切到插件目录是同一个机制（见 workshop/workspace.ts）。
+ * Two rules:
+ * - **Never throw**: actions uniformly return `{ ok, error?, data? }` and the renderer shows
+ *   prompts based on that (the same convention as the workshop);
+ * - **Switching only goes through "write settings + broadcast"**: the AI working directory, the
+ *   explorer root, the file IPC boundary, the file-change review, and the memory scope all
+ *   recognize `harness.workspacePath` + `activeWorkspaceId` — the same mechanism as switching a
+ *   plugin session to the plugin directory (see workshop/workspace.ts).
  */
 export function chatIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：本插件的命名空间前缀只在这里出现 */
+  /** Inbound channel: the plugin's namespace prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
 
   /**
-   * 进入「对话」模式（或在该模式里新建会话）：确保目录与工作区行存在，并把它设为活动工作区。
+   * Enter "Chat" mode (or create a new session within it): ensure the directory and workspace row
+   * exist, and make it the active workspace.
    *
-   * 返回**会话目录**（`dir`）而不是工作区行：新建的空白会话用的是「对话」根目录，
-   * 打开已有会话用的是它自己的子目录——两种情况下调用方要写的 `workspacePath` 都是 `dir`。
+   * Returns the **session directory** (`dir`) rather than the workspace row: a newly created blank
+   * session uses the "Chat" root directory, while opening an existing session uses its own
+   * subdirectory — in both cases the caller's `workspacePath` to write is `dir`.
    */
   handle('chat-ensure-workspace', async () => {
     try {
@@ -45,11 +50,12 @@ export function chatIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 打开「对话」模式里的**某一条会话**：把活动工作区切到这条会话自己的目录
-   * （`<userData>/chat/<话题 id>/`，不存在则创建）。
+   * Open **a single session** in "Chat" mode: switch the active workspace to that session's own
+   * directory (`<userData>/chat/<topic id>/`, created if it does not exist).
    *
-   * 为什么要按会话分目录：同一个模式里换会话时，模型看到的文件、资源管理器的根、
-   * 文件改动审查的边界都该是**这条会话的**——共用一个目录会让两条会话互相踩对方的文件。
+   * Why one directory per session: when switching sessions within the same mode, the files the
+   * model sees, the explorer root, and the file-change review boundary should all belong to
+   * **that session** — sharing one directory would let two sessions step on each other's files.
    */
   handle('chat-activate-topic', async (topicId: number) => {
     try {
@@ -63,10 +69,11 @@ export function chatIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 目前所有「对话」工作区 id（侧栏：把「对话」的行从「工作」列表里滤掉，并认出自己的那一行）。
+   * All current "Chat" workspace ids (sidebar: filters the "Chat" row out of the "Work" list and
+   * recognizes its own row).
    *
-   * 渲染层不自己拼路径判种类（`<userData>/chat` 只有主进程知道怎么解析），
-   * 与 `workshop-state.pluginWorkspaces` 同一套做法。
+   * The renderer does not build paths itself to determine the kind (`<userData>/chat` — only the
+   * main process knows how to resolve it); same approach as `workshop-state.pluginWorkspaces`.
    */
   handle('chat-workspaces', async () => {
     try {
@@ -81,11 +88,13 @@ export function chatIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 删掉某条会话的目录（删话题之后由渲染层调用；**失败不影响删话题**）。
+   * Delete a session's directory (called by the renderer after deleting a topic; **a failure does
+   * not affect topic deletion**).
    *
-   * 主进程只按话题 id 推导路径，并且只允许删「对话根目录的直接数字子目录」
-   * （两道闸在 chat/workspace.ts 里）。这里只额外确认「对话工作区确实存在」——
-   * 没有它，这个带 `recursive: true` 的动作就失去上下文了。
+   * The main process derives the path solely from the topic id, and only allows deleting
+   * "immediate numeric subdirectories of the chat root" (the two gates are in chat/workspace.ts).
+   * Here it only additionally confirms that "the chat workspace actually exists" — without that,
+   * this action with `recursive: true` would lose its context.
    */
   handle('chat-remove-topic-dir', async (topicId: number) => {
     try {

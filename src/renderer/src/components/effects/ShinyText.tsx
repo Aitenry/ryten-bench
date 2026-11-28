@@ -2,23 +2,23 @@ import React from 'react'
 
 interface ShinyTextProps {
   children: React.ReactNode
-  /** 光泽基底色（默认取 CSS 变量 --shiny-base，回退 #b5b5b5） */
+  /** Gloss base color (defaults to the CSS variable --shiny-base, falling back to #b5b5b5) */
   baseColor?: string
-  /** 高光扫过色（默认取 --shiny-shine，回退 #fff） */
+  /** Highlight sweep color (defaults to --shiny-shine, falling back to #fff) */
   shineColor?: string
-  /** 扫过周期（秒），默认 1.5 */
+  /** Sweep period in seconds, defaults to 1.5 */
   speed?: number
-  /** 关闭动效：渲染为普通静态文本 */
+  /** Disable the animation: render as plain static text */
   disabled?: boolean
   className?: string
   style?: React.CSSProperties
 }
 
 /**
- * reactbits ShinyText 移植：文字以「基底色→白色高光→基底色」渐变填充
- * （background-clip: text + text-fill-color: transparent），
- * 白色光泽带按 @keyframes shiny-shine 周期扫过文字。
- * 样式与 keyframes 见 src/renderer/src/assets/main.css
+ * ShinyText: text is filled with a "base color → white highlight → base color" gradient
+ * (background-clip: text + text-fill-color: transparent), and a white gloss band sweeps
+ * across the text on the @keyframes shiny-shine cycle.
+ * Styles and keyframes live in src/renderer/src/assets/main.css
  */
 const ShinyText: React.FC<ShinyTextProps> = ({
   children,
@@ -54,7 +54,7 @@ const ShinyText: React.FC<ShinyTextProps> = ({
 }
 
 interface ShinyIconProps {
-  /** 任意 @remixicon/react 图标组件 */
+  /** Any @remixicon/react icon component */
   icon: React.ComponentType<{
     size?: number | string
     color?: string
@@ -65,18 +65,18 @@ interface ShinyIconProps {
   baseColor?: string
   shineColor?: string
   speed?: number
-  /** 是否旋转（加载指示类图标用），默认不转 */
+  /** Whether to spin (for loading-indicator icons); static by default */
   spin?: boolean
-  /** 关闭动效：渲染为普通静态图标 */
+  /** Disable the animation: render as plain static icon */
   disabled?: boolean
   className?: string
   style?: React.CSSProperties
 }
 
 /**
- * ShinyText 的图标版：SVG 无法使用 background-clip: text，
- * 采用「底层基底色图标 + 上层白色图标（mask 渐变带裁剪扫过）」双层叠加，
- * 光泽观感与文字一致，动画同样走 @keyframes shiny-shine-mask
+ * Icon variant of ShinyText: SVG cannot use background-clip: text, so it stacks a base-color
+ * icon underneath a white icon on top (clipped and swept by a mask gradient band); the gloss
+ * looks the same as the text, and the animation also runs on @keyframes shiny-shine-mask
  */
 const ShinyIcon: React.FC<ShinyIconProps> = ({
   icon: Icon,

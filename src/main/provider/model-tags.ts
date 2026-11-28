@@ -1,7 +1,8 @@
 /**
- * 模型元数据档案（models-profile.json）加载与查询。
- * provider-fetch-models 不再做任何名称/接口能力推导，直接使用档案内容；
- * 档案中不存在的模型返回 metadata = null，由用户在设置界面自行填写。
+ * Model metadata profile (models-profile.json) loading and lookup.
+ * provider-fetch-models no longer derives anything from names / interface capabilities; it uses
+ * the profile content directly. Models missing from the profile return metadata = null, and the
+ * user fills it in from the settings UI.
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -14,7 +15,7 @@ import {
   FALLBACK_MODEL_TYPE
 } from '../../shared/model-params'
 
-/** 模型能力字段（models-profile.json 的 capabilities 结构） */
+/** Model capability fields (the capabilities structure of models-profile.json) */
 export interface ModelCapabilities {
   supports_text_input?: boolean
   supports_text_output?: boolean
@@ -34,7 +35,7 @@ export interface ModelCapabilities {
   reasoning_effort_levels?: string[]
 }
 
-/** 单个模型档案条目（models-profile.json models 数组的一项） */
+/** A single model profile entry (one item of the models array in models-profile.json) */
 export interface ModelProfileEntry {
   id: string
   vendor?: string
@@ -51,10 +52,10 @@ export interface ModelProfileEntry {
   [key: string]: unknown
 }
 
-/** 拉取远程模型列表后的返回项 */
+/** Return item after fetching the remote model list */
 export interface FetchedModelInfo {
   id: string
-  /** 元数据：档案命中用档案内容，未收录用兜底档案（见 resolveFetchedModelMetadata） */
+  /** Metadata: the profile content when the profile has it, otherwise a fallback profile (see resolveFetchedModelMetadata) */
   metadata: ModelProfileEntry | null
 }
 
@@ -69,13 +70,13 @@ interface ModelProfileFile {
 let profileCache: Map<string, ModelProfileEntry> | null = null
 
 function profilePath(): string {
-  // dev：项目 resources 目录；打包后：由 electron-builder extraResources 拷贝到 resourcesPath
+  // dev: the project resources directory; packaged: copied to resourcesPath by electron-builder extraResources
   return app.isPackaged
     ? path.join(process.resourcesPath, 'models-profile.json')
     : path.join(app.getAppPath(), 'resources', 'models-profile.json')
 }
 
-/** 加载 models-profile.json，按模型 id 建立索引并缓存 */
+/** Load models-profile.json, index by model id and cache it */
 export function loadModelProfiles(): Map<string, ModelProfileEntry> {
   if (profileCache) return profileCache
 
@@ -97,18 +98,20 @@ export function loadModelProfiles(): Map<string, ModelProfileEntry> {
 }
 
 /**
- * 精确按模型 ID 查询档案，不进行任何名称推导；未收录返回 null。
- * 匹配不到的模型由用户在设置界面手动填写元数据。
+ * Exact profile lookup by model ID, with no name derivation at all; returns null when not in the
+ * profile. Models with no match have their metadata filled in manually by the user in the settings
+ * UI.
  */
 export function findModelProfile(id: string): ModelProfileEntry | null {
   return loadModelProfiles().get(id) ?? null
 }
 
 /**
- * 「拉取模型列表」专用解析：档案命中直接用官方档案；未收录的模型给一份兜底档案——
- * 上下文窗口与最大输出都取预设档位的最低值，类型按语言（对话）模型，能力保留
- * 文本输入输出 / 流式 / 工具调用。这样一键添加进来的模型不会是「什么都没填」的状态，
- * 用户再按需在「高级配置」里上调。
+ * Resolution used only by "fetch model list": if the profile has the model, use the official
+ * profile; for models not in the profile, return a fallback profile - context window and max output
+ * take the lowest preset tiers, the type is language (chat) model, and capabilities keep text
+ * input/output / streaming / tool calling. This way a model added with one click is not in a
+ * "nothing filled in" state, and the user can raise the values later under "advanced config".
  */
 export function resolveFetchedModelMetadata(id: string): ModelProfileEntry {
   const profile = findModelProfile(id)
@@ -123,8 +126,8 @@ export function resolveFetchedModelMetadata(id: string): ModelProfileEntry {
 }
 
 /**
- * Google Gemini /v1beta/models：返回模型的 id（去 models/ 前缀）。
- * 这只是从接口响应中提取模型 id，不做任何能力推导。
+ * Google Gemini /v1beta/models: returns the model id (with the models/ prefix removed).
+ * It only extracts the model id from the API response and derives no capabilities.
  */
 export function geminiModelId(model: Record<string, unknown>): string {
   const name = typeof model.name === 'string' ? model.name : ''

@@ -1,15 +1,15 @@
 /**
- * OpenRouter（OpenAI 兼容；baseURL 缺省 https://openrouter.ai/api/v1）。
+ * OpenRouter (OpenAI-compatible; baseURL defaults to https://openrouter.ai/api/v1).
  *
- * 额外支持站点归属头（`siteUrl` → HTTP-Referer、`siteName` → X-Title），
- * 以及 OpenRouter 的 `reasoning` / `reasoning_effort` 参数（由 modelKwargs 透传）。
+ * Additionally supports site attribution headers (`siteUrl` → HTTP-Referer, `siteName` → X-Title),
+ * plus OpenRouter's `reasoning` / `reasoning_effort` parameters (passed through via modelKwargs).
  */
 import { ChatOpenAI, OpenAICompatibleFields } from './openai'
 
 export interface OpenRouterFields extends OpenAICompatibleFields {
-  /** 站点 URL（OpenRouter 排行榜归属） */
+  /** Site URL (OpenRouter leaderboard attribution) */
   siteUrl?: string
-  /** 站点名称（OpenRouter 排行榜归属） */
+  /** Site name (OpenRouter leaderboard attribution) */
   siteName?: string
 }
 

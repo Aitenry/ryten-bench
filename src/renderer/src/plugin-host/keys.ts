@@ -1,8 +1,9 @@
 /**
- * 插件宿主根键常量。
+ * Plugin host root key constants.
  *
- * 根键（host root keys）：宿主骨架始终存在的能力，插件只能 inject、不能 provide——
- * 保证视图永远无法推翻宿主（论文：需求方只能面向共享上下文声明依赖）。
+ * Root keys: capabilities the host skeleton always provides; plugins can only inject them, never
+ * provide them — this guarantees a view can never override the host (consumers may only declare
+ * dependencies against the shared context).
  */
 export const HOST_KEYS = [
   'route',
@@ -19,5 +20,5 @@ export const HOST_KEYS = [
 
 export type HostKey = (typeof HOST_KEYS)[number]
 
-/** 外部插件可经 ctx.require(name) 获取的宿主 vendored 实例（避双重 React 实例） */
+/** Host vendored instances external plugins can obtain via ctx.require(name) (avoids duplicate React instances) */
 export const VENDOR_MODULES = ['react', 'antd', '@remixicon/react'] as const

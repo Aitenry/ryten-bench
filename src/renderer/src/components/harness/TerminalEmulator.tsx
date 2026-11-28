@@ -10,14 +10,16 @@ import '@xterm/xterm/css/xterm.css'
 import { harnessApi } from '../../api/harness'
 
 /**
- * 终端组件：开源 xterm.js（MIT）+ 主进程 node-pty（真 PTY）。
+ * Terminal component: open-source xterm.js (MIT) + main-process node-pty (a real PTY).
  *
- * 与上一版「行模式桥接」不同：xterm 的 onData 原样写入 PTY（方向键、Ctrl+C、粘贴、
- * Tab 补全都由 shell 自己处理），PTY 原始输出直接回写 xterm（颜色/prompt/进度条/全屏
- * 程序都能工作）。切换页签或重开面板时先拉主进程的回放缓冲，再续实时流。
+ * Unlike the earlier "line-mode bridge": xterm's onData is written to the PTY verbatim (arrow
+ * keys, Ctrl+C, paste, and Tab completion are all handled by the shell), and raw PTY output is
+ * written straight back to xterm (colors/prompt/progress bars/full-screen programs all work).
+ * Switching tabs or reopening the panel first fetches the main process's replay buffer, then
+ * continues the live stream.
  *
- * 无障碍/E2E：xterm 用 canvas 渲染、DOM 里没有正文，因此维护一个 1px 隐藏文本镜像
- * `[data-terminal-text]`，内容与缓冲同源。
+ * Accessibility/E2E: xterm renders to canvas, so the DOM holds no text, hence a 1px hidden text
+ * mirror `[data-terminal-text]` whose content comes from the same buffer.
  */
 
 export interface TerminalEmulatorHandle {
@@ -27,7 +29,7 @@ export interface TerminalEmulatorHandle {
 interface TerminalEmulatorProps {
   sessionId: string
   isDarkMode: boolean
-  /** 进程退出（父组件刷新页签状态） */
+  /** Process exited (parent refreshes tab state) */
   onExited?: (exitCode: number | null) => void
 }
 
@@ -83,16 +85,16 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
         appendMirror(data)
       }
 
-      // xterm 输入 → PTY 原样写入
+      // xterm input → write straight to the PTY
       const dataDisposable = terminal.onData((data) => {
         void harnessApi.ptyTerminal.write(sessionId, data)
       })
-      // 窗口尺寸 → PTY resize（fit 后会自动触发）
+      // Window size → PTY resize (triggered automatically after fit)
       const resizeDisposable = terminal.onResize(({ cols, rows }) => {
         void harnessApi.ptyTerminal.resize(sessionId, cols, rows)
       })
 
-      // 实时输出（先排队，回放缓冲写完再放行，避免顺序错乱）
+      // Live output (queued first, released after the replay buffer is written, to avoid reordering)
       const unsubscribeData = harnessApi.ptyTerminal.onData((payload) => {
         if (payload.sessionId !== sessionId) return
         if (!readyRef.current) {
@@ -112,7 +114,7 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
         onExitedRef.current?.(code)
       })
 
-      // 先回放历史缓冲，再放行实时流
+      // Replay the history buffer first, then release the live stream
       void harnessApi.ptyTerminal
         .buffer(sessionId)
         .then((result) => {
@@ -134,7 +136,7 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
         try {
           fit.fit()
         } catch {
-          // 容器暂时不可见（页签切换/收起）：忽略，下次可见再算
+          // Container temporarily invisible (tab switch / collapsed): ignore and recompute when visible
         }
       }
       doFit()
@@ -155,7 +157,7 @@ const TerminalEmulator = forwardRef<TerminalEmulatorHandle, TerminalEmulatorProp
         terminalRef.current = null
         fitRef.current = null
       }
-      // 主题切换只更新 options，见下一个 effect
+      // Theme changes only update options; see the next effect
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId])
 

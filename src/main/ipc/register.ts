@@ -2,24 +2,26 @@ import { ipcMain } from 'electron'
 import logger from 'electron-log'
 
 /**
- * 主进程 IPC 注册与可逆副作用的最小工具（core 自用）。
+ * Minimal helpers for main-process IPC registration and reversible side effects (used by core).
  *
- * 系统级功能（AI 助手 / 资料库）直接用这里的函数把处理器表挂到 `ipcMain`：
- * 通道名是普通的 `harness:*` / `notes:*`，不再经过插件宿主的命名空间校验、
- * 也没有“启用/停用”这一层——它们随应用启动、随应用退出。
+ * System-level features (AI assistant / knowledge base) use these functions to mount their handler
+ * maps directly on `ipcMain`: channel names are plain `harness:*` / `notes:*`, they do not go
+ * through the plugin host's namespace validation and have no enable/disable layer — they start with
+ * the app and stop with the app.
  *
- * 第三方插件仍然走 `src/main/plugins/context.ts` 的 `MainPluginContext`，
- * 那是给**可装卸代码**用的；两者刻意不共用同一套机制。
+ * Third-party plugins still go through `MainPluginContext` in `src/main/plugins/context.ts`, which
+ * is meant for **loadable code**; the two deliberately do not share the same mechanism.
  */
 
-/** 一张处理器表：通道名 → 处理函数（参数由渲染层经 preload 桥传入） */
+/** One handler map: channel name -> handler function (arguments are passed from the renderer via the preload bridge) */
 export type IpcHandlerMap = Record<string, (...args: never[]) => unknown>
 
 /**
- * 注册一张 IPC 处理器表，返回只注销本次注册的逆操作。
+ * Register an IPC handler map and return an undo function that unregisters only this registration.
  *
- * 失败时不留下半个功能：已注册的通道全部摘除后再抛出。处理器异常带通道名记一条日志
- * （否则渲染层只能看到一句没有上下文的 “Error invoking remote method”），然后原样抛回。
+ * Failure leaves no half-registered feature: all channels registered so far are removed before
+ * rethrowing. Handler exceptions are logged with the channel name (otherwise the renderer only sees
+ * a context-free "Error invoking remote method") and then rethrown unchanged.
  */
 export function registerIpcHandlers(handlers: IpcHandlerMap): () => void {
   const registered: string[] = []
@@ -43,7 +45,7 @@ export function registerIpcHandlers(handlers: IpcHandlerMap): () => void {
       try {
         ipcMain.removeHandler(channel)
       } catch {
-        // 忽略
+        // Ignore
       }
     }
     throw err
@@ -57,18 +59,19 @@ export function registerIpcHandlers(handlers: IpcHandlerMap): () => void {
       try {
         ipcMain.removeHandler(channel)
       } catch {
-        // 忽略
+        // Ignore
       }
     }
   }
 }
 
 /**
- * 可逆副作用作用域：订阅、定时器、后台服务等装配动作登记在这里，
- * 退出时按 LIFO 回滚（`dispose()`）。
+ * Reversible side-effect scope: subscriptions, timers, background services and other setup actions
+ * are registered here and rolled back in LIFO order on exit (`dispose()`).
  *
- * 系统级功能常驻整个进程，正常情况下不会回滚；保留这一层是为了让
- * “装配了哪些全局监听”有唯一出口，而不是散落在模块顶层。
+ * System-level features live for the whole process and normally never roll back; this layer exists
+ * so that "which global listeners were wired up" has a single exit point instead of being scattered
+ * across module top levels.
  */
 export class EffectScope {
   private readonly undos: Array<() => void> = []

@@ -53,47 +53,51 @@ const AgentSettings: React.FC = () => {
   const { modal } = App.useApp()
   const { t } = useTranslation()
 
-  // 当前工作区 ID
+  // Current workspace ID
   const [workspaceId, setWorkspaceId] = useState(0)
 
-  // 子智能体列表
+  // Subagent list
   const [agents, setAgents] = useState<AgentConfigRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
 
   /**
-   * MCP 页当前启用给模型的工具名（`mainAgent.mcpTools`）。
+   * Tool names currently enabled for the model on the MCP page (`mainAgent.mcpTools`).
    *
-   * 智能体页**不逐项列 MCP 工具**（服务器一多就是几十项，而且与 MCP 页的逐项开关是同一个
-   * 决定，两个入口必然漂移）：按**服务器**各给一项，名字就是服务器名，
-   * 具体哪几个工具仍然只由 MCP 页决定。见 shared/mcp.ts 的 MCP_SERVER_GROUP_PREFIX。
+   * The agent page does **not** list MCP tools one by one (a few servers already mean dozens of
+   * items, and it is the same decision as the per-item switches on the MCP page, so the two entry
+   * points would inevitably drift): it gives one item per **server**, named after the server,
+   * while which tools are actually on is still decided only by the MCP page. See
+   * MCP_SERVER_GROUP_PREFIX in shared/mcp.ts.
    */
   const [enabledMcpTools, setEnabledMcpTools] = useState<string[]>([])
-  /** MCP 服务器清单（出分组项用：名字、命名空间、可用工具） */
+  /** MCP server list (for group options: name, namespace, available tools) */
   const [mcpServers, setMcpServers] = useState<McpServerView[]>([])
 
-  // 编辑/创建弹窗
+  // Edit/create modal
   const [modalOpen, setModalOpen] = useState(false)
   const [editingAgent, setEditingAgent] = useState<AgentConfigRow | null>(null)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
-  // 选项数据
+  // Option data
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [availableTools, setAvailableTools] = useState<HarnessToolInfo[]>([])
   const [skills, setSkills] = useState<{ id: string; name: string; description: string }[]>([])
 
-  // 导入 JSON
+  // Import JSON
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [importLoading, setImportLoading] = useState(false)
 
   /**
-   * 运行与安全（沙箱 + 新会话默认权限档位）。
+   * Runtime & security (sandbox + default permission mode for new conversations).
    *
-   * 这两项此前只有后端与词条：沙箱状态从没有界面展示（拿不到后端时命令会被直接
-   * 拒绝），新会话默认档位也只能在输入框里逐会话切。这里给一个最小但完整的只读状态
-   * + 唯一的写入口（默认档位、撤销工作区常驻授权）。
+   * Both previously existed only on the backend and in the locale entries: the sandbox state had
+   * no UI at all (when the backend is unavailable, commands are rejected outright), and the
+   * default mode could only be switched per conversation in the input box. This gives a minimal
+   * but complete read-only status + the only write entry point (default mode, revoke the
+   * workspace's persistent grant).
    */
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatusView | null>(null)
   const [sandboxLoading, setSandboxLoading] = useState(true)
@@ -142,18 +146,22 @@ const AgentSettings: React.FC = () => {
       const rawMcpTools = (rawMain.mcpTools as string[]) ?? []
       const rawSkills = (rawMain.skills as string[]) ?? []
       /**
-       * 兼容旧数据：MCP 工具以前会混在智能体页的工具下拉里、被写进 `tools`。现在这一页按
-       * 服务器出项、工具级管控在 MCP 页，所以把遗留的 `mcp__…` 名字搬进 `mcpTools`
-       * （**只增不减**，用户不会因为这次改版丢掉已勾选的工具）。搬过一次后这里不再触发。
+       * Legacy-data compatibility: MCP tools used to be mixed into the agent page's tool dropdown
+       * and written into `tools`. Now this page shows one item per server and tool-level control
+       * lives on the MCP page, so legacy `mcp__...` names are moved into `mcpTools` (**add only,
+       * never remove**, so users do not lose checked tools because of this redesign). This no
+       * longer triggers after one migration.
        */
       const legacyMcp = rawTools.filter(isMcpToolName)
       const afterMcp =
         legacyMcp.length > 0 ? rawTools.filter((name) => !isMcpToolName(name)) : rawTools
       /**
-       * 插件工坊的 4 个工具以前也要在这一页勾了才注册。现在它们是**插件模式的模式工具**
-       * （切到插件模式自动挂载，见 shared/mcp.ts 的 PLUGIN_MODE_TOOL_NAMES），下拉里已经没有
-       * 它们的选项；历史配置里残留的名字在这里摘掉，免得留下一个没有对应选项的幽灵标签。
-       * 摘掉不影响能力：模式工具由模式带进来，与这一页的勾选无关。
+       * The 4 plugin-workshop tools used to be registered only when checked on this page. They are
+       * now **plugin-mode mode tools** (mounted automatically when switching to plugin mode, see
+       * PLUGIN_MODE_TOOL_NAMES in shared/mcp.ts), and their options are gone from the dropdown;
+       * names left over in historical config are dropped here so no ghost tag without a matching
+       * option remains. Dropping them costs nothing: mode tools come with the mode and are
+       * unrelated to the checkboxes on this page.
        */
       const staleModeTools = afterMcp.filter(isPluginModeTool)
       const nextTools =
@@ -182,9 +190,11 @@ const AgentSettings: React.FC = () => {
   }, [viewMessage, t])
 
   /**
-   * 只重取工具清单（MCP 目录变化时用：不动分页、不动用户正在编辑的表单值）。
-   * 顺带同步 MCP 服务器清单与启用清单——服务器分组项的勾选态与计数都由它们派生，
-   * 而这一页不编辑它们（编辑入口在 MCP 页），所以在别处改了要能立刻反映过来。
+   * Refetch only the tool list (used when the MCP catalog changes: leaves paging and the form
+   * values the user is editing untouched). The MCP server list and enabled list are synced along
+   * the way - the group items' checked state and counts derive from them, and this page does not
+   * edit them (the edit entry point is the MCP page), so changes made elsewhere must show up
+   * immediately.
    */
   const refreshTools = useCallback(async () => {
     try {
@@ -197,7 +207,8 @@ const AgentSettings: React.FC = () => {
       setEnabledMcpTools(main.mcpTools ?? [])
       setMcpServers(mcp)
     } catch {
-      // 工具清单取不到不影响其余功能：保持上一份即可，不弹错
+      // Failing to fetch the tool list does not affect the rest: keep the previous one,
+      // no error popup
     }
   }, [])
 
@@ -207,8 +218,8 @@ const AgentSettings: React.FC = () => {
     })
   }, [loadPage, loadOptions])
 
-  // 运行与安全：沙箱后端状态 + 新会话默认权限档位（与子智能体列表独立加载，
-  // 后端取不到也不阻塞页面主体）
+  // Runtime & security: sandbox backend status + default permission mode for new conversations
+  // (loaded independently of the subagent list, so an unavailable backend does not block the page)
   const loadRuntimeSecurity = useCallback(async (): Promise<void> => {
     setSandboxLoading(true)
     try {
@@ -265,8 +276,9 @@ const AgentSettings: React.FC = () => {
     }
   }, [t, viewMessage, workspacePath])
 
-  // MCP 服务器连接/断开会改变可用工具集：订阅后即时刷新下拉，
-  // 用户不用先关掉设置再打开才看得到刚连上的 MCP 工具
+  // MCP server connect/disconnect changes the available tool set: subscribe and refresh the
+  // dropdown immediately, so users need not close and reopen settings to see a just-connected
+  // MCP tool
   useEffect(() => {
     try {
       return harnessApi.mcp.onCatalogUpdated(() => {
@@ -278,7 +290,7 @@ const AgentSettings: React.FC = () => {
     }
   }, [refreshTools])
 
-  // 监听工作区切换
+  // Listen for workspace switches
   useEffect(() => {
     const handleWorkspaceChanged = (): void => {
       loadOptions().then((wsId) => {
@@ -289,12 +301,13 @@ const AgentSettings: React.FC = () => {
     return () => window.removeEventListener('workspace-changed', handleWorkspaceChanged)
   }, [loadOptions, loadPage])
 
-  // ===== 主智能体 =====
+  // ===== Main agent =====
 
   /**
-   * MCP 服务器分组项：**一台服务器一项，名字就用服务器自己的名字**（用户 2026-09-26 要求
-   * 「要用 mcp 的名称」），勾上=这台服务器的工具进入启用清单，取消=按命名空间摘掉。
-   * 具体哪几个工具仍然只在 MCP 页里逐项开关。
+   * MCP server group item: **one item per server, named after the server itself** (user
+   * requirement 2026-09-26: "use the mcp name"), checked = this server's tools enter the enabled
+   * list, unchecked = removed by namespace. Which tools are on is still switched item by item only
+   * on the MCP page.
    */
   const mcpGroupOptions = useMemo(
     () =>
@@ -310,7 +323,8 @@ const AgentSettings: React.FC = () => {
             enabled
           }
         })
-        // 连不上的服务器也可能留着之前勾过的名字：只要还有启用的工具就仍然列出来（否则没法关掉）
+        // An unreachable server may still have a previously checked name: list it as long as any
+        // tool is still enabled (otherwise it cannot be turned off)
         .filter(
           (group) =>
             group.total > 0 ||
@@ -319,7 +333,7 @@ const AgentSettings: React.FC = () => {
     [mcpServers, enabledMcpTools]
   )
 
-  /** 工具下拉里的选项：普通工具逐个列 + 每台 MCP 服务器一项 */
+  /** Options in the tool dropdown: regular tools listed one by one + one item per MCP server */
   const toolOptions = useMemo(() => {
     const regular = availableTools.filter((tool) => !isMcpToolName(tool.name))
     return [
@@ -330,26 +344,28 @@ const AgentSettings: React.FC = () => {
         description: '',
         icon: 'RiPlug2Line',
         color: '#8c6b3f',
-        // MCP 服务器分组项：清单里同样要标出来源（既不是系统工具也不是插件）
+        // MCP server group item: the list also tags the source (neither a system tool nor a plugin)
         source: 'mcp' as const
       }))
     ]
   }, [availableTools, mcpGroupOptions])
 
-  // ===== 子智能体 =====
+  // ===== Subagents =====
 
   const openEditModal = (agent?: AgentConfigRow): void => {
     setEditingAgent(agent ?? null)
     if (agent) {
       const storedTools: string[] = agent.tools ? JSON.parse(agent.tools) : []
       /**
-       * 旧数据里存的是逐个 MCP 全名（`mcp__<命名空间>__<工具>`）：归一成**各自服务器**的分组项
-       * （具体哪几个工具由 MCP 页决定），随这次保存落库。老的笼统标记 `mcp` 也一并升级。
+       * Old data stored full MCP names one by one (`mcp__<namespace>__<tool>`): normalize them into
+       * **one group item per server** (which tools are on is decided by the MCP page) and persist
+       * that on this save. The old generic `mcp` marker is upgraded too.
        */
       const migrated: string[] = []
       for (const name of storedTools) {
-        // 插件的模式工坊工具（plugin_draft 等）不是子智能体可选项：它们是插件模式的模式工具，
-        // 由模式自动挂载（见 shared/mcp.ts）。历史配置里残留的直接丢掉。
+        // The plugin's mode-workshop tools (plugin_draft etc.) are not subagent options: they are
+        // plugin-mode mode tools mounted automatically by the mode (see shared/mcp.ts). Historical
+        // leftovers are dropped.
         if (isPluginModeTool(name)) continue
         if (isMcpToolName(name)) {
           const parsed = parseMcpToolName(name)
@@ -364,7 +380,8 @@ const AgentSettings: React.FC = () => {
           }
           continue
         }
-        // 归一旧工具名：资料整理四合一、网页抓取/搜索合并成 `web-tools`（见 shared/harness/mcp.ts）
+        // Normalize old tool names: the four material tools merged into one, and web fetch/search
+        // merged into `web-tools` (see shared/harness/mcp.ts)
         migrated.push(canonicalToolName(name))
       }
       form.setFieldsValue({
@@ -386,12 +403,14 @@ const AgentSettings: React.FC = () => {
 
   const handleSave = async (): Promise<void> => {
     /**
-     * 校验失败时字段下方已经有 antd 的红色提示；此前这一步和保存放在同一个 try 里，
-     * catch 还会再弹一条「保存失败: [object Object]」，看起来像后端出了错。先单独
-     * 校验，失败就直接返回，只有真正的保存错误才弹错误条。
+     * On validation failure antd already shows a red hint under the field; this step used to share
+     * the save's try block, and catch would pop another "Save failed: [object Object]" as if the
+     * backend had errored. Validate separately first and return on failure; only real save errors
+     * show an error bar.
      *
-     * 表单区是固定高度的独立滚动容器：出错字段可能滚在视口外，这时点「保存」看起来
-     * 像没反应。把第一个错误字段滚到中间，保留 antd 的字段提示、不再额外弹 toast。
+     * The form area is a fixed-height scroll container: an offending field may be scrolled out of
+     * view, so clicking "Save" seems to do nothing. Scroll the first invalid field into the middle,
+     * keep antd's field hint, and do not pop an extra toast.
      */
     const values = await form.validateFields().catch((error: unknown) => {
       const firstField = (error as { errorFields?: Array<{ name?: unknown }> })?.errorFields?.[0]
@@ -400,7 +419,7 @@ const AgentSettings: React.FC = () => {
         try {
           form.scrollToField(firstField as never)
         } catch {
-          // 滚动失败不影响校验提示
+          // A failed scroll does not affect the validation hints
         }
       }
       return null
@@ -427,7 +446,7 @@ const AgentSettings: React.FC = () => {
       } else {
         await harnessApi.agents.create(input)
         viewMessage('agent-save', 'success', t('agentSettings.messages.agentCreated'), 2)
-        // 通知记忆树刷新（后端已自动创建记忆目录）
+        // Notify the memory tree to refresh (the backend already created the memory directory)
         window.dispatchEvent(new CustomEvent('memory-tree-refresh'))
       }
 
@@ -476,7 +495,7 @@ const AgentSettings: React.FC = () => {
         try {
           await harnessApi.agents.delete(workspaceId, agent.id)
           viewMessage('agent-delete', 'success', t('agentSettings.messages.deleted'), 2)
-          // 通知记忆树刷新（后端已自动删除记忆目录）
+          // Notify the memory tree to refresh (the backend already deleted the memory directory)
           window.dispatchEvent(new CustomEvent('memory-tree-refresh'))
           await loadPage(currentPage, workspaceId)
         } catch (error) {
@@ -490,7 +509,7 @@ const AgentSettings: React.FC = () => {
     })
   }
 
-  // ===== 导入 JSON =====
+  // ===== Import JSON =====
 
   interface ImportAgentItem {
     name: string
@@ -527,7 +546,8 @@ const AgentSettings: React.FC = () => {
       return
     }
 
-    // 建立有效项集合（MCP 分组项 `mcp@<命名空间>` 也是合法的一项：它引用 MCP 页的勾选）
+    // Build the valid item set (an MCP group item `mcp@<namespace>` is also valid: it references
+    // the MCP page's checkbox)
     const validToolNames = new Set([
       ...availableTools.map((t) => t.name),
       ...mcpGroupOptions.map((group) => group.value)
@@ -547,7 +567,8 @@ const AgentSettings: React.FC = () => {
           continue
         }
 
-        // 验证并过滤 tools（导入文件里若是逐个 MCP 全名，归一到它所属服务器的分组项）
+        // Validate and filter tools (individual full MCP names in the import file are normalized
+        // to their server's group item)
         let filteredTools: string[]
         if (Array.isArray(item.tools) && item.tools.length > 0) {
           const normalized = item.tools.map((name) => {
@@ -568,7 +589,7 @@ const AgentSettings: React.FC = () => {
           filteredTools = []
         }
 
-        // 验证并过滤 skills
+        // Validate and filter skills
         let filteredSkills: string[]
         const rawSkills = item.skills
         if (rawSkills !== null && rawSkills !== undefined) {
@@ -589,7 +610,7 @@ const AgentSettings: React.FC = () => {
           filteredSkills = []
         }
 
-        // 验证 model
+        // Validate model
         let validModel: string | null = null
         if (item.model) {
           if (validModelKeys.has(item.model)) {
@@ -629,7 +650,7 @@ const AgentSettings: React.FC = () => {
       setImportLoading(false)
     }
 
-    // 汇总提示
+    // Summary hint
     const parts: string[] = []
     if (imported > 0) {
       parts.push(t('agentSettings.messages.importSummaryImported', { count: imported }))
@@ -643,7 +664,7 @@ const AgentSettings: React.FC = () => {
         : t('agentSettings.messages.importSummaryNone')
     viewMessage('import-summary', 'success', summary)
 
-    // 逐条展示剔除提示
+    // Show the stripped hints one by one
     if (stripped.length > 0) {
       setTimeout(() => {
         modal.info({
@@ -660,16 +681,16 @@ const AgentSettings: React.FC = () => {
       }, 500)
     }
 
-    // 刷新 & 清空
+    // Refresh & clear
     if (fileInputRef.current) fileInputRef.current.value = ''
-    // 通知记忆树刷新（后端已自动创建记忆目录）
+    // Notify the memory tree to refresh (the backend already created the memory directory)
     if (imported > 0) {
       window.dispatchEvent(new CustomEvent('memory-tree-refresh'))
     }
     await loadPage(1, workspaceId)
   }
 
-  // 文件选择处理
+  // File selection handling
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -689,8 +710,9 @@ const AgentSettings: React.FC = () => {
   }))
 
   /**
-   * 字段标签与定时任务弹窗同一套排版：12px 次要色、标签在控件上方、必填星号跟在
-   * 文字后面（antd 默认星号在文字前面且字号 14px，和其余表单并排看差异明显）。
+   * Field labels follow the same layout as the schedule modal: 12px secondary color, label above
+   * the control, required asterisk after the text (antd puts the asterisk before the text by
+   * default at 14px, which looks clearly different next to the other forms).
    */
   const fieldLabel = (text: string, required = false): React.ReactNode => (
     <span style={{ fontSize: 12, color: colorTextSecondary }}>
@@ -699,7 +721,8 @@ const AgentSettings: React.FC = () => {
     </span>
   )
 
-  /** 沙箱状态文案：后端 + 强制级别（拿不到后端时明确说「命令会被拒绝」） */
+  /** Sandbox status text: backend + enforcement level (when the backend is unavailable,
+   * state clearly that "commands will be rejected") */
   const sandboxStatusLabel = sandboxLoading
     ? t('harness.sandbox.loading')
     : sandboxStatus?.usable !== true
@@ -731,7 +754,7 @@ const AgentSettings: React.FC = () => {
         description={t('agentSettings.pageDescription')}
       />
 
-      {/* ====== 子智能体列表 ====== */}
+      {/* ====== Subagent list ====== */}
       <SettingsSection
         title={t('agentSettings.sections.subagents')}
         icon={<TeamOutlined size={14} />}
@@ -762,7 +785,8 @@ const AgentSettings: React.FC = () => {
         }
       >
         {loading ? (
-          /* 助手行与 SettingRow 同构：左标题 + 描述，右「开关 + 编辑 + 删除」 */
+          /* Assistant rows mirror SettingRow: title + description on the left,
+             "switch + edit + delete" on the right */
           <div style={{ padding: '4px 0' }}>
             <SkeletonSettingRows rows={4} />
           </div>
@@ -803,7 +827,8 @@ const AgentSettings: React.FC = () => {
                     description={agent.description || undefined}
                     footerStart={
                       <Switch
-                        // enable 库列为可空（DEFAULT TRUE），null 视作默认启用
+                        // The enable column is nullable in the DB (DEFAULT TRUE);
+                        // treat null as enabled by default
                         checked={agent.enable ?? true}
                         onChange={(checked) => handleToggleEnable(agent, checked)}
                         size="small"
@@ -856,7 +881,8 @@ const AgentSettings: React.FC = () => {
         )}
       </SettingsSection>
 
-      {/* ====== 运行与安全：新会话默认权限档位 + 沙箱状态 ====== */}
+      {/* ====== Runtime & security: default permission mode for new conversations + sandbox
+          status ====== */}
       <SettingsSection
         title={t('agentSettings.sections.runtime')}
         icon={<SafetyCertificateOutlined size={14} />}
@@ -931,7 +957,7 @@ const AgentSettings: React.FC = () => {
         />
       </SettingsSection>
 
-      {/* 编辑/创建弹窗 */}
+      {/* Edit/create modal */}
       <Modal
         title={
           editingAgent
@@ -950,10 +976,12 @@ const AgentSettings: React.FC = () => {
         styles={{ body: { padding: 0 } }}
       >
         {/*
-          滚动区与弹窗标题同一条左边线（此前 `px-5` 让字段比标题多缩进 20px，看起来
-          表单被挤在弹窗中间），右侧只留 `app-modal-scroll` 的 6px 滑块槽——与插件设置
-          弹窗同一口径。高度与其它表单弹窗一致：上限 560px，矮窗口再按视口高度兜底，
-          只让表单区滚动，标题与按钮栏始终留在屏幕内。
+          The scroll area shares the same left edge as the modal title (previously `px-5` indented
+          fields 20px more than the title, making the form look squeezed into the middle of the
+          modal); on the right only the 6px scrollbar slot of `app-modal-scroll` remains - the same
+          rule as the plugin settings modal. Height matches other form modals: 560px max, falling
+          back to the viewport height on short windows; only the form area scrolls, so the title and
+          button bar always stay on screen.
         */}
         <div
           className="custom-scrollbar app-modal-scroll"
@@ -1019,10 +1047,11 @@ const AgentSettings: React.FC = () => {
                 options={toolOptions.map((tool) => ({
                   value: tool.name,
                   label: `${tool.label} (${tool.description})`,
-                  // 自定义字段：optionRender 里取出来摆行尾的来源标签
+                  // Custom field: extracted in optionRender as the source tag at the end of the row
                   source: tool.source
                 }))}
-                // 名称最右边标「系统 / 插件 / MCP」：之前两类工具混在一张清单里分不出来
+                // Tag "system / plugin / MCP" at the far right of the name: previously the two
+                // kinds of tools were mixed in one list and indistinguishable
                 optionRender={(option) => {
                   const source = (option.data as { source?: ToolSourceKind } | undefined)?.source
                   return (
@@ -1076,7 +1105,7 @@ const AgentSettings: React.FC = () => {
           </Form>
         </div>
       </Modal>
-      {/* 隐藏文件选择器 */}
+      {/* Hidden file picker */}
       <input
         ref={fileInputRef}
         type="file"

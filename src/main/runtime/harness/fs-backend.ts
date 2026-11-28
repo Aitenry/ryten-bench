@@ -29,31 +29,33 @@ import {
 } from './tool-limits'
 
 /**
- * 虚拟文件系统工具集 — 替代 deepagents FilesystemBackend / SafeFilesystemBackend
+ * Virtual filesystem toolset.
  *
- * 挂载规则（虚拟路径 → 真实路径）：
- * - '/memories/' → memoryPath（记忆目录）
- * - '/'          → workspacePath（AI 工作区；未配置时无此挂载）
+ * Mount rules (virtual path → real path):
+ * - '/memories/' → memoryPath (memory directory)
+ * - '/'          → workspacePath (AI workspace; not mounted when unset)
  *
- * 设计要点（对应论文 §6.1 系统边界 / §6.3 声明即能力）：
- * - 工具按次构建、无共享状态（隔离）；
- * - 虚拟路径越界直接拒绝（能力衰减）；
- * - grep/glob 捕获 EPERM（延续原 SafeFilesystemBackend 逻辑）。
+ * Design notes:
+ * - Tools are built per call with no shared state (isolation);
+ * - Out-of-bounds virtual paths are rejected outright (capability attenuation);
+ * - grep/glob catch EPERM and return an empty result.
  *
- * 输出边界（MAX_FILE_CHARS / MAX_EXEC_CHARS 等）统一放在 tool-limits.ts：
- * 前端投影（service/tool-presentation.ts）要按同一批常量判断结果是否被截断。
+ * Output limits (MAX_FILE_CHARS / MAX_EXEC_CHARS, etc.) live in tool-limits.ts:
+ * the frontend projection (service/tool-presentation.ts) uses the same constants to decide
+ * whether a result was truncated.
  */
 
-/** EPERM / EACCES - 无权限访问的错误码 */
+/** EPERM / EACCES - error codes for access-denied failures */
 const ACCESS_DENIED_CODES = new Set(['EPERM', 'EACCES'])
 
 /**
- * 升权重试参数（与 DSH 的 sandbox_permissions / justification 同名同义）。
+ * Escalated-retry parameters (sandbox_permissions / justification).
  *
- * 为什么写在 schema 里而不是留给模型自由发挥：参数必须能被解析到工具层（zod 会剥掉
- * 未声明的键），闸门才知道这是一次「升权重试」。但**合法用法**只有一种——同一次被
- * 沙箱拒绝过的调用原样重试并带上它（校验见 permission.ts 的 parseEscalation）：
- * 目标档位必须严格更宽，且必须给 justification，否则连审批弹窗都不弹。
+ * Why declare them in the schema instead of leaving it to the model: parameters must reach the
+ * tool layer (zod strips undeclared keys) so the gate can recognize an escalated retry. There is
+ * exactly one **valid use**: retrying the exact call the sandbox just denied with them attached
+ * (validated by parseEscalation in permission.ts): the target mode must be strictly wider and a
+ * justification is required, otherwise no approval dialog appears.
  */
 const sandboxPermissionField = {
   sandbox_permissions: z
@@ -71,9 +73,9 @@ const sandboxPermissionField = {
 }
 
 /**
- * 从工具运行配置里取本次调用的 toolCallId（agent.ts 注入 `configurable.toolCallId`）。
- * 供工具把结构化事实（行数/字节/替换处数/失败原因）登记给前端卡片用——
- * 工具的返回值是**给模型的文本**，里面没有可靠的结构化信号。
+ * Read this call's toolCallId from the tool run config (agent.ts injects `configurable.toolCallId`).
+ * Tools register structured facts (line counts/bytes/replacements/failure reason) for frontend
+ * cards through this: the tool's return value is **text for the model** with no reliable structure.
  */
 function callIdOf(config: unknown): string | undefined {
   const cfg = config as { configurable?: Record<string, unknown> } | undefined
@@ -81,7 +83,7 @@ function callIdOf(config: unknown): string | undefined {
   return typeof id === 'string' ? id : undefined
 }
 
-/** 本次调用的归属信息（会话 id + 工具调用 id），改动记录与命令窗口都要用 */
+/** Attribution for this call (session id + tool call id), used by change records and command windows */
 function runContextOf(config: unknown): { callId?: string; topicId?: number } {
   const cfg = config as { configurable?: Record<string, unknown> } | undefined
   const topicId = cfg?.configurable?.topicId
@@ -92,11 +94,11 @@ function runContextOf(config: unknown): { callId?: string; topicId?: number } {
 }
 
 /**
- * 本次执行该用哪个沙箱档位。
+ * Which sandbox mode this execution should use.
  *
- * 优先取权限闸门注入的 `configurable.sandboxMode`（那才是「这次调用实际生效的档位」，
- * 升权重试后会更宽）。注入缺失时回落到话题当前档位——**绝不能默认成完全权限**，
- * 否则一次注入 bug 就等于把沙箱关掉。
+ * Prefer `configurable.sandboxMode` injected by the permission gate (that is the mode actually
+ * in effect for this call, wider after an escalated retry). Fall back to the topic's current mode
+ * when absent — **never default to full access**, or one injection bug disables the sandbox.
  */
 function sandboxModeOf(config: unknown, topicId?: number): SandboxMode {
   const cfg = config as { configurable?: Record<string, unknown> } | undefined
@@ -105,22 +107,23 @@ function sandboxModeOf(config: unknown, topicId?: number): SandboxMode {
   return permissionGate.modeFor(topicId ?? 0)
 }
 
-/** execute 的单次执行时限（毫秒）与终止提示 */
+/** Single-run time limit for execute (ms) and its termination note */
 const EXEC_TIMEOUT_MS = 30_000
 
 /**
- * 后台 execute 任务的输出留存上限（字符）。
+ * Retained-output cap for background execute jobs (characters).
  *
- * 前台 execute 只留 8K（`MAX_EXEC_CHARS`，直接进模型上下文）；后台任务的日志是
- * 按需增量读取的，需要留得更久（例如 dev server 启动日志、构建进度），但也不能
- * 让一个话痨进程无限吃内存。超过后丢弃后续输出并补一行提示。
+ * Foreground execute keeps only 8K (`MAX_EXEC_CHARS`, straight into model context); background
+ * job logs are read incrementally on demand and must survive longer (dev-server startup logs,
+ * build progress), but a chatty process must not eat memory forever. Output past the cap is
+ * dropped and a note is appended.
  */
 const MAX_BACKGROUND_OUTPUT_CHARS = 200_000
 
-/** 后台任务标签长度上限（任务列表只做展示；完整命令在工具调用参数里） */
+/** Max background job label length (the task list is display-only; the full command is in the call args) */
 const BACKGROUND_JOB_LABEL_CHARS = 160
 
-/** 把命令压成一行、截断成任务标签（多行 heredoc 不能把任务列表撑开） */
+/** Collapse a command to one line and truncate it into a job label (multi-line heredocs must not stretch the task list) */
 function backgroundJobLabel(command: string): string {
   const oneLine = command.replace(/\s+/g, ' ').trim()
   return oneLine.length > BACKGROUND_JOB_LABEL_CHARS
@@ -129,18 +132,19 @@ function backgroundJobLabel(command: string): string {
 }
 
 /**
- * 启动一次后台命令，立即返回任务 id（不等待命令结束）。
+ * Start a background command and return the job id immediately (does not wait for it to end).
  *
- * 与前台 execute 的三点差别：
- * 1. **不占用工具的取消信号**：后台任务要活过本轮对话/工具调用，因此用独立的
- *    AbortController，只由 job_kill / 停止按钮 / 话题删除 / 退出触发；
- * 2. **不设超时**：dev server 这类命令本来就不会自己退出（`timeoutMs: 0`）；
- * 3. **不占「命令执行窗口」**：文件监听把窗口内的落盘变化归给最近一次调用，
- *    一个跑几十分钟的后台进程会把之后用户和其他工具的改动都算到它头上。
- *    工作区监听仍会广播刷新，只是不记为「本次 execute 的改动」。
+ * Three differences from foreground execute:
+ * 1. **It does not use the tool cancel signal**: the job must outlive the turn/tool call and
+ *    gets its own AbortController, aborted only by job_kill / Stop / topic deletion / app exit;
+ * 2. **No timeout**: commands like dev servers never exit on their own (`timeoutMs: 0`);
+ * 3. **It does not occupy the command write window**: the watcher attributes writes inside a
+ *    window to the most recent call, so a long-running background process would otherwise claim
+ *    later user and tool changes; workspace watching still broadcasts refreshes, it just does
+ *    not record them as this execute's changes.
  *
- * 输出按块追加进任务注册表：模型可 job_output 增量读取，界面可 peek 查看；
- * 超过 `MAX_BACKGROUND_OUTPUT_CHARS` 后丢弃后续输出并补一行说明。
+ * Output is appended to the job registry in chunks: the model can read it incrementally with
+ * job_output and the UI can peek at it; output past `MAX_BACKGROUND_OUTPUT_CHARS` is dropped.
  */
 function startBackgroundCommand(params: {
   command: string
@@ -150,7 +154,7 @@ function startBackgroundCommand(params: {
 }): string {
   const { command, mode, workspacePath, topicId } = params
   const tr = getFsToolTexts()
-  // 命令输出是字节流切片：帧之间原样拼接（不能像子代理文本那样插换行）
+  // Command output is byte-stream slices: frames are concatenated as-is (no newline inserted as with subagent text)
   const job = jobsRegistry.start(topicId, 'exec', backgroundJobLabel(command), undefined, {
     frameSeparator: ''
   })
@@ -178,14 +182,14 @@ function startBackgroundCommand(params: {
         mode,
         workspaceRoot: workspacePath,
         maxChars: MAX_EXEC_CHARS,
-        // 后台命令没有默认时限：停止由用户（顶部栏 / job_kill）或话题删除决定
+        // Background commands have no default time limit: stopping is up to the user (top bar / job_kill) or topic deletion
         timeoutMs: 0,
         signal: controller.signal,
         onOutput
       })
 
       if (result.unavailable) {
-        // 命令根本没跑：与「命令失败」区分开，detail 会随任务一起展示
+        // The command never ran: keep this distinct from "command failed"; detail is shown with the job
         job.settle(
           'failed',
           undefined,
@@ -206,7 +210,7 @@ function startBackgroundCommand(params: {
         return
       }
       if (truncated) job.appendOutput(`\n${tr.exec.backgroundTruncated}`)
-      // 用户点了停止：取消信号先于「正常退出」判定，任务记为 killed 而不是 failed
+      // User pressed Stop: check the cancel signal before "normal exit" and settle as killed, not failed
       if (controller.signal.aborted) {
         job.settle('killed')
         return
@@ -233,34 +237,37 @@ function startBackgroundCommand(params: {
 }
 
 interface FsMount {
-  /** 虚拟前缀，如 '/' 或 '/memories/' */
+  /** Virtual prefix, e.g. '/' or '/memories/' */
   prefix: string
-  /** 真实根目录 */
+  /** Real root directory */
   root: string
 }
 
 export interface FsBackendOptions {
-  /** AI 工作区目录（挂载为虚拟 '/'） */
+  /** AI workspace directory (mounted as virtual '/') */
   workspacePath?: string
-  /** 记忆目录（挂载为虚拟 '/memories/'） */
+  /** Memory directory (mounted as virtual '/memories/') */
   memoryPath?: string
-  /** 当前工作区 ID（文件改动史按工作区归属；缺省则不记录改动） */
+  /** Current workspace ID (file history is per workspace; changes are not recorded when unset) */
   workspaceId?: number
   /**
-   * 本轮路由的模型是否声明支持图片输入（models-profile 的 supports_image_input）。
+   * Whether the model routed for this turn declares image input support (models-profile's
+   * supports_image_input).
    *
-   * 三态语义与 DSH 的 read_image 门禁对齐：`false`（明确不支持/档案未声明）时
-   * `read_image` 执行期拒绝；`true` 放行；`undefined`（运行时未拿到模型信息，例如
-   * 离线测试/子代理）也放行，由 provider 自己报错，避免把工具意外锁死。
+   * Three-state semantics: `false` (explicitly unsupported or undeclared) makes `read_image`
+   * refuse at execution time; `true` allows it; `undefined` (model info unavailable at runtime,
+   * e.g. offline tests/subagents) also allows it and lets the provider fail, so the tool never
+   * gets locked out accidentally.
    */
   supportsImageInput?: boolean
 }
 
 /**
- * 工作区内的写入记账（可追溯 / 可回溯的唯一入口）。
+ * Write accounting inside the workspace (the single entry point for traceable / revertible changes).
  *
- * 只有落在工作区挂载内的写入才记录：'/memories/...' 是记忆目录，属于模型私有数据，
- * 不参与「文件改动审查」。记录失败绝不影响工具本身的结果。
+ * Only writes inside the workspace mount are recorded: '/memories/...' is the memory directory,
+ * model-private data that does not take part in file-change review. Recording failures never
+ * affect the tool result.
  */
 async function recordWorkspaceWrite(args: {
   options: FsBackendOptions
@@ -270,11 +277,12 @@ async function recordWorkspaceWrite(args: {
   after: string | null
   source: 'write_file' | 'edit_file'
   /**
-   * 本次改动的差异规模（+N −M）。
+   * Diff size of this change (+N −M).
    *
-   * 由工具算好传进来，而不是让记录层再 diff 一遍：同一份数字要同时出现在
-   * **改动记录**（资源管理器徽标 / 历史列表 / 差异视图回落值）与**聊天卡片**上，
-   * 两处各算一次就是两个可能互相矛盾的口径（口径本身在 workspace/line-diff.ts）。
+   * Computed by the tool and passed in instead of re-diffing in the recording layer: the same
+   * numbers must appear on the **change record** (explorer badge / history list / diff fallback)
+   * and the **chat card**; computing twice yields two potentially conflicting values (the
+   * definition itself lives in workspace/line-diff.ts).
    */
   stats: { added: number; removed: number }
 }): Promise<void> {
@@ -301,7 +309,7 @@ async function recordWorkspaceWrite(args: {
   }
 }
 
-/** 读出改动前正文；文件不存在（或不可读）返回 null（= 本次是新建） */
+/** Read the pre-change content; null when missing/unreadable (= this is a new file) */
 function readBeforeOrNull(filePath: string): string | null {
   try {
     if (!fs.statSync(filePath).isFile()) return null
@@ -311,7 +319,7 @@ function readBeforeOrNull(filePath: string): string | null {
   }
 }
 
-/** 由选项构建挂载表（IPC 层读取虚拟路径文件时复用同一套映射） */
+/** Build the mount table from options (the IPC layer reuses the same mapping to read virtual paths) */
 export function buildFsMounts(options: FsBackendOptions): FsMount[] {
   const mounts: FsMount[] = []
   if (options.workspacePath) {
@@ -323,7 +331,7 @@ export function buildFsMounts(options: FsBackendOptions): FsMount[] {
   return mounts
 }
 
-/** 解析虚拟路径 → 真实路径；越界或未挂载返回错误 */
+/** Resolve a virtual path to a real path; returns an error when out of bounds or unmounted */
 function resolveVirtualPath(
   vp: string,
   mounts: FsMount[]
@@ -331,33 +339,34 @@ function resolveVirtualPath(
   const tr = getFsToolTexts()
   if (!vp) return { error: tr.path.empty }
 
-  // 统一为 POSIX 分隔符
+  // Normalize to POSIX separators
   let normalized = vp.replace(/\\/g, '/')
-  // Windows 绝对路径（如 E:\...）一律拒绝，防止扫描驱动器
+  // Reject Windows absolute paths (e.g. E:\...) outright to prevent drive scanning
   if (/^[a-zA-Z]:\//.test(normalized)) {
     return { error: mainFormat(tr.path.absolute, { path: vp }) }
   }
   if (!normalized.startsWith('/')) {
     normalized = '/' + normalized
   }
-  // 去除末尾斜杠（根路径除外）
+  // Strip trailing slashes (except for the root path)
   if (normalized.length > 1 && normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1)
   }
 
-  // 最长前缀优先匹配挂载
+  // Match mounts by longest prefix first
   const mountsSorted = [...mounts].sort((a, b) => b.prefix.length - a.prefix.length)
   for (const mount of mountsSorted) {
     if (normalized === mount.prefix.slice(0, -1) || normalized.startsWith(mount.prefix)) {
       const rel = normalized.slice(mount.prefix.length).replace(/^\//, '')
       const realPath = path.join(mount.root, ...(rel ? rel.split('/') : []))
-      // 二次校验：确保解析结果仍在挂载根内（防 ../ 逃逸）
+      // Second check: ensure the resolved path is still inside the mount root (blocks ../ escapes)
       const relative = path.relative(mount.root, realPath)
       if (relative.startsWith('..') || path.isAbsolute(relative)) {
         return { error: mainFormat(tr.path.escapesMount, { path: vp }) }
       }
-      // 三次校验（符号链接，安全审计 S06）：工作区内若有指向根外的 symlink/junction，
-      // 上面的字符串比较仍会通过，但实际读写会落到根外——用 realpath 再比一次。
+      // Third check (symlinks, audit item S06): if the workspace contains a symlink/junction
+      // pointing outside the root, the string comparison above still passes but I/O lands
+      // outside; compare with realpath too.
       if (!isReallyInsideRoot(realPath, mount.root)) {
         return { error: mainFormat(tr.path.escapesMount, { path: vp }) }
       }
@@ -368,7 +377,7 @@ function resolveVirtualPath(
   return { error: mainFormat(tr.path.notMounted, { path: vp }) }
 }
 
-/** 工具输出统一格式化（字符串原样；对象 JSON 序列化；超硬上限截断，溢出策略负责内联预览） */
+/** Uniform tool-output formatting (strings as-is; objects JSON-serialized; hard-cap truncation, spill policy handles inline preview) */
 function formatOutput(output: unknown): string {
   if (output == null) return 'OK'
   const text = typeof output === 'string' ? output : JSON.stringify(output)
@@ -380,15 +389,15 @@ function formatOutput(output: unknown): string {
   return text
 }
 
-/** 简易 glob → 正则（支持 *、**、?） */
+/** Simple glob to regex (supports *, **, ?) */
 function globToRegExp(pattern: string): RegExp {
   const GLOBSTAR = '__GLOBSTAR__'
   let re = pattern
-    .replace(/\*\*/g, GLOBSTAR) // 临时占位
+    .replace(/\*\*/g, GLOBSTAR) // temporary placeholder
     .replace(/\*/g, '[^/]*')
     .replace(/\?/g, '[^/]')
     .replace(new RegExp(GLOBSTAR, 'g'), '.*')
-  // 纯文件名模式也匹配路径末尾
+  // A bare filename pattern also matches the end of a path
   if (!re.includes('/')) {
     re = `(?:^|/)${re}$`
   } else {
@@ -397,7 +406,7 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(re)
 }
 
-/** 递归收集目录下的相对路径列表（限界） */
+/** Recursively collect relative paths under a directory (bounded) */
 function walkDir(root: string, relDir: string, out: string[], cap = MAX_SCAN_ENTRIES): void {
   if (out.length >= cap) return
   let entries: fs.Dirent[]
@@ -419,10 +428,11 @@ function walkDir(root: string, relDir: string, out: string[], cap = MAX_SCAN_ENT
 }
 
 /**
- * 按像素/字节预算缩放或重编码图片（Electron nativeImage）。
+ * Scale or re-encode an image within pixel/byte budgets (Electron nativeImage).
  *
- * 真正的解码/编码在 `image-encode.ts`（与用户上传附件共用同一套规则）；这里只把
- * 返回结构适配成 read_image 需要的形状（带虚拟路径与 ImageMimeType）。
+ * Actual decoding/encoding lives in `image-encode.ts` (the same rules as user-uploaded
+ * attachments); here we only adapt the return shape for read_image (with a virtual path and
+ * ImageMimeType).
  */
 function normalizeImageForContext(image: {
   dataUrl: string
@@ -450,14 +460,15 @@ function normalizeImageForContext(image: {
   }
 }
 
-/** read_document 的单文件大小上限（Office 文档解压前；解压炸弹另由抽取器自身失败兜底） */
+/** Per-file size cap for read_document (before Office files are decompressed; decompression bombs fail inside the extractor) */
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 
 /**
- * 文档文本抽取工具（docx / xlsx / pptx / 纯文本）。
+ * Document text extraction tool (docx / xlsx / pptx / plain text).
  *
- * `read_file` 只读 UTF-8，Office 文件对模型不可见；这里按扩展名把文档抽成文本，
- * 结构化摘要（工作表/幻灯片数）放在头部，正文有 20k 字符上限（可用 max_chars 调整）。
+ * `read_file` reads UTF-8 only, so Office files are invisible to the model; this extracts text
+ * by extension, puts a structural summary (sheet/slide counts) in the header, and caps body text
+ * at 20k characters (adjustable with max_chars).
  */
 function buildReadDocumentTool(
   resolve: (virtualPath: string) => { realPath: string } | { error: string }
@@ -553,7 +564,7 @@ function buildReadDocumentTool(
 }
 
 /**
- * 构建文件系统工具集。无任何挂载时返回空数组（组件不激活，对应论文「依赖缺失 = 不激活」）。
+ * Build the filesystem toolset. Returns an empty array when nothing is mounted (the component stays inactive).
  */
 export function buildFsTools(options: FsBackendOptions): StructuredToolInterface[] {
   const mounts: FsMount[] = buildFsMounts(options)
@@ -580,12 +591,12 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             return notFile
           }
           let content = fs.readFileSync(resolved.realPath, 'utf-8')
-          // 内存保护：超过 2M 字符的文件只保留前 2M 字符
+          // Memory guard: keep only the first 2M characters of larger files
           const oversized = content.length > MAX_FILE_READ_CHARS
           if (oversized) {
             content = content.slice(0, MAX_FILE_READ_CHARS)
           }
-          // 行区间读取（offset 从 1 开始）：大文件按需读取指定片段
+          // Line-range read (offset is 1-based): read just the requested slice of a large file
           if (offset != null || limit != null) {
             const startLine = Math.max(1, offset ?? 1)
             const lines = content.split('\n')
@@ -596,7 +607,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
               oversized ? tr.read.lineRangeOversized : tr.read.lineRange,
               { start: startLine, end: shownEnd, total: lines.length }
             )
-            // 结构化事实：卡片展示「文件共 N 行 · 本次读 start-end」
+            // Structured facts: the card shows "N lines total · read start-end"
             recordToolFacts(callId, {
               lines: lines.length,
               truncated: oversized,
@@ -604,8 +615,8 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             })
             return lineNote + sliced.join('\n')
           }
-          // 内联读取上限：超出部分不进入模型上下文（read 工具自有边界，不走溢出策略，
-          // 参考 dsh-spill-policy 的 read 豁免——大文件用 offset/limit 或 grep 按需读取）
+          // Inline read cap: the excess never enters model context (read has its own bound and
+          // skips the spill policy — use offset/limit or grep to read large files on demand)
           if (content.length > MAX_FILE_CHARS) {
             const note = mainFormat(tr.read.truncated, {
               total: content.length.toLocaleString()
@@ -653,18 +664,18 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     ),
 
     /**
-     * 读取磁盘图片并把图像本身交给模型（对应 DSH 的 read_image）。
+     * Read an image from disk and hand the image itself to the model.
      *
-     * 与 read_file 的分工：文本走 read_file，二进制图片走这里。返回值不是纯文本，而是
-     * 本项目的「文本 + 图像」工具结果（ToolMediaResult）：运行时把 text 当工具结果，
-     * 把图像作为紧随其后的一条用户消息送进模型——这样所有 provider 都无需改动
-     * （OpenAI 兼容协议的工具消息本身不能带图）。
+     * Division of labor with read_file: text goes to read_file, binary images come here. The
+     * result is a "text + image" tool result (ToolMediaResult), not plain text: the runtime treats
+     * text as the tool result and sends the image as the following user message, so no provider
+     * needs changes (tool messages in the OpenAI-compatible protocol cannot carry images).
      */
     tool(
       async ({ file_path }, config) => {
         const callId = callIdOf(config)
-        // 视觉门禁：模型档案明确声明不支持图片输入时，在执行边界拒绝（与 DSH 的
-        // route-gated read_image 同义）。放在读字节之前，避免为一次注定失败的调用白读文件。
+        // Vision gate: refuse at the execution boundary when the model profile explicitly
+        // declares no image input. Done before reading bytes so a doomed call does not read the file.
         if (options.supportsImageInput === false) {
           const refused = tr.readImage.modelUnsupported
           recordToolFacts(callId, { error: refused })
@@ -691,7 +702,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           recordToolFacts(callId, { error: text })
           return text
         }
-        // 规范化：大图/大字节先缩放或重编码，再进上下文（失败自动退回原图）
+        // Normalize: scale or re-encode large images/byte sizes before context (falls back to the original on failure)
         const normalized = normalizeImageForContext(result)
         const note = normalized.normalized ? tr.readImage.normalizedNote : ''
         const text = (
@@ -744,17 +755,17 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           return resolved.error
         }
         try {
-          // 异步写（修复：同步写阻塞主进程事件循环）
+          // Async write (a synchronous write would block the main-process event loop)
           await fs.promises.mkdir(path.dirname(resolved.realPath), { recursive: true })
-          // 改动前正文（供差异视图与撤销）；新建时为 null
+          // Pre-change content (for the diff view and undo); null for new files
           const before = readBeforeOrNull(resolved.realPath)
           await fs.promises.writeFile(resolved.realPath, content, 'utf-8')
           const bytes = Buffer.byteLength(content, 'utf-8')
           recordToolFacts(callId, { bytes })
-          // 卡片上的「+N −M」：与改动记录用同一份数字（见 recordWorkspaceWrite 的 stats）
+          // The "+N −M" on the card uses the same numbers as the change record (stats of recordWorkspaceWrite)
           const stats = changeStats(before, content)
           recordToolFacts(callId, { added: stats.added, removed: stats.removed })
-          // 记账在返回结果之前完成：渲染进程收到「文件已改动」时，磁盘上已经是新内容
+          // Accounting completes before returning: when the renderer hears "file changed", disk already has the new content
           await recordWorkspaceWrite({
             options,
             config,
@@ -786,8 +797,9 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     tool(
       async ({ file_path, old_string, new_string, replace_all }, config) => {
         const callId = callIdOf(config)
-        // 空 old_string 会使下方的非重叠计数循环永不终止（indexOf('', idx) 恒等于 idx，
-        // idx = found + 0 永不前进）——同步死循环直接卡死主进程事件循环，入口必须显式拒绝
+        // An empty old_string makes the non-overlapping count loop below never terminate:
+        // indexOf('', idx) always equals idx, so idx = found + 0 never advances. A synchronous
+        // infinite loop would freeze the main-process event loop, so reject it at the entry.
         if (!old_string) {
           recordToolFacts(callId, { error: tr.edit.emptyOldString })
           return tr.edit.emptyOldString
@@ -799,7 +811,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
         }
         try {
           const current = fs.readFileSync(resolved.realPath, 'utf-8')
-          // 非重叠计数
+          // Non-overlapping count
           let count = 0
           let idx = 0
           while (true) {
@@ -822,8 +834,8 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             : current.replace(old_string, new_string)
           fs.writeFileSync(resolved.realPath, updated, 'utf-8')
           recordToolFacts(callId, { replacements: count })
-          // 「N 处」说的是替换次数，「+N −M」说的是这个文件实际变了多少行：
-          // 一次 replace_all 可能改 3 处却动 40 行，两个数都得在卡片上（口径见 changeStats）
+          // "N occurrences" counts replacements while "+N −M" counts lines actually changed:
+          // one replace_all may touch 3 places but 40 lines, so both numbers belong on the card (see changeStats)
           const stats = changeStats(current, updated)
           recordToolFacts(callId, { added: stats.added, removed: stats.removed })
           await recordWorkspaceWrite({
@@ -869,10 +881,11 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     ),
 
     /**
-     * 多文件补丁（对应 DSH / OpenAI 的 apply_patch）。
+     * Multi-file patch (apply_patch format).
      *
-     * 两阶段执行：先在内存里读入并应用全部操作、逐块校验；任何一处失败就整体放弃
-     * （一个字节都不写）。全部通过后再统一落盘，并逐文件记录改动（差异视图可撤销）。
+     * Two-phase execution: read and apply all operations in memory first, validating hunk by
+     * hunk; any failure abandons everything (not a byte is written). Only after all pass are files
+     * written, with per-file change records (revertible from the diff view).
      */
     tool(
       async ({ input }, config) => {
@@ -889,7 +902,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           realPath: string
           before: string | null
           after: string | null
-          /** 沿用既有来源枚举（DB 有 CHECK 约束）：新增算 write_file，更新/删除算 edit_file */
+          /** Reuse the existing source enum (DB has a CHECK constraint): additions are write_file, updates/deletes are edit_file */
           source: 'write_file' | 'edit_file'
         }
         const planned: PlannedChange[] = []
@@ -1027,9 +1040,9 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     ),
 
     /**
-     * 文本编辑器（对应 DSH 的 str_replace_editor）：
-     * `view`（带行号查看） / `create`（新建，已存在则失败） / `str_replace`（唯一字面替换） /
-     * `insert`（在第 N 行后插入）。写入同样进入文件改动审查。
+     * Text editor with four commands:
+     * `view` (line-numbered) / `create` (new file, fails if it exists) / `str_replace` (unique literal replace) /
+     * `insert` (insert after line N). Writes also go through file-change review.
      */
     tool(
       async (
@@ -1269,7 +1282,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             try {
               const abs = path.join(resolved.realPath, rel)
               const stat = fs.statSync(abs)
-              if (stat.size > 1024 * 1024) continue // 跳过 >1MB 文件
+              if (stat.size > 1024 * 1024) continue // skip files over 1MB
               const lines = fs.readFileSync(abs, 'utf-8').split('\n')
               for (let i = 0; i < lines.length; i++) {
                 if (regex.test(lines[i])) {
@@ -1278,7 +1291,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
                 }
               }
             } catch {
-              // 单个文件失败（EPERM 等）跳过
+              // Skip files that fail individually (EPERM etc.)
             }
           }
           return JSON.stringify({ matches })
@@ -1312,7 +1325,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
     )
   ]
 
-  // execute 仅在工作区目录存在时启用（对应论文 §6.1：命令执行是系统边界外的副作用，需显式开放）
+  // execute is enabled only when a workspace directory exists (command execution is a side effect outside the system boundary, so it must be enabled explicitly)
   if (options.workspacePath) {
     tools.push(
       tool(
@@ -1321,10 +1334,12 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
           const mode = sandboxModeOf(config, topicId)
 
           /**
-           * 后台运行：立即返回任务 id，模型可以继续处理/总结，不阻塞本轮。
+           * Background run: return the job id immediately so the model can keep working or
+           * summarizing without blocking the turn.
            *
-           * 任务归属当前话题（顶部栏按 topicId 过滤）：没有话题上下文（例如子代理图）
-           * 就拒绝——挂到 0 号话题的任务既不可见也不可管理，比明确报错更糟。
+           * The job belongs to the current topic (the top bar filters by topicId): without a topic
+           * context (e.g. a subagent graph) it is rejected — a job on topic 0 is neither visible
+           * nor manageable, which is worse than an explicit error.
            */
           if (run_in_background) {
             if (topicId == null || topicId <= 0) {
@@ -1347,11 +1362,11 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             })
           }
 
-          // 命令执行窗口：这期间被磁盘监听捕获的文件变化归到这次调用名下
-          // （命令没有精确的前后快照，只能如实记录「被命令改过、不可回溯」）
+          // Command write window: file changes captured by the disk watcher during it go to this call
+          // (a command has no exact before/after snapshot, so record truthfully "changed by the command, not revertible")
           beginToolWriteWindow({ topicId, callId })
           try {
-            // 真正在沙箱里跑（档位 → OS 隔离原语；拿不到后端就拒绝执行，见 sandbox/exec.ts）
+            // Actually runs inside the sandbox (mode → OS isolation primitive; refuse to run when no backend is available, see sandbox/exec.ts)
             const result = await runConfinedShell({
               command,
               mode,
@@ -1362,7 +1377,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             })
 
             if (result.unavailable) {
-              // 故障关闭：命令没有执行，必须让模型知道「不是命令失败，是没有沙箱可用」
+              // Fail closed: the command did not run, and the model must know this is not a command failure but a missing sandbox
               const text = sandboxUnavailableText(
                 mainFormat(tr.exec.sandboxUnavailable, { reason: result.unavailable })
               )
@@ -1382,7 +1397,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
               text += (text ? '\n' : '') + tr.exec.timedOut
             }
             if (result.denied) {
-              // 沙箱把写拒了：附上协议标记与升权提示（模型可据此申请一次人工提权）
+              // The sandbox denied a write: attach the protocol marker and escalation hint (the model can request one manual escalation)
               text = sandboxDenialText(
                 mode,
                 `${mainFormat(tr.exec.sandboxDenied, { mode })}${text ? `\n${text}` : ''}`
@@ -1393,7 +1408,7 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
             }
             return JSON.stringify({ exitCode: result.exitCode ?? 1, stdout: text })
           } finally {
-            // 命令已退出：关窗口（后续 1.5s 宽限内的落盘仍归给它，见 watcher.ts）
+            // Command exited: close the window (writes in the following 1.5s grace period still count for it, see watcher.ts)
             endToolWriteWindow(callId)
           }
         },
@@ -1420,13 +1435,13 @@ export function buildFsTools(options: FsBackendOptions): StructuredToolInterface
 }
 
 /**
- * 读取虚拟路径下的文本文件（渲染进程「点开工具卡片里的文件」用）。
+ * Read a text file under a virtual path (used when the renderer opens a file from a tool card).
  *
- * 与 workspace-read-file 的区别：那条通道只允许工作区内的路径（纯文件浏览器的边界），
- * 而工具卡片里的路径可能是记忆挂载（/memories/...）。这里复用同一套挂载解析，
- * 边界仍然是「必须落在某个已挂载根目录内」。
+ * Difference from workspace-read-file: that channel allows only workspace paths (a plain file
+ * browser's boundary), while tool-card paths may be memory mounts (/memories/...). This reuses
+ * the same mount resolution; the boundary is still "must be inside some mounted root directory".
  *
- * @returns 文件内容；路径非法或读取失败时返回 { error }
+ * @returns the file content, or { error } when the path is invalid or reading fails
  */
 export function readVirtualTextFile(
   options: FsBackendOptions,
@@ -1449,5 +1464,5 @@ export function readVirtualTextFile(
   }
 }
 
-/** 供其他模块复用的输出格式化（子代理最终输出等） */
+/** Output formatting reused by other modules (e.g. final subagent output) */
 export { formatOutput }

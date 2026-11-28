@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Checkbox, Empty, Tabs, Tag, Typography } from 'antd'
+import { App, Button, Checkbox, Empty, Tabs, Typography } from 'antd'
 import { RiAddLine, RiDeleteBin6Line, RiRefreshLine } from '@remixicon/react'
 import { useTranslation } from '@host/renderer/i18n'
 import type { ${vars.pascal}Item, ${vars.pascal}ItemInput, ${vars.pascal}Settings } from '../shared/types'
@@ -8,15 +8,19 @@ import ItemForm from './components/ItemForm'
 import { EmptyHint, FitList, HoverRow, PageHeader, PageShell, Pane, Panel, pageTabsProps } from './components/ui'
 
 /**
- * ${vars.title} 的页面。
+ * The ${vars.title} page.
  *
- * 数据只走本插件的主进程通道（./api）；主进程改数据会推 `plugin:${vars.id}:items-changed`，
- * 这里订阅它做实时刷新——设置页那边改开关，这一页也会跟着变。
+ * Data only goes through this plugin's main-process channels (./api); when the main process changes
+ * data it pushes `plugin:${vars.id}:items-changed` and this page subscribes to refresh live -
+ * toggling a switch on the settings page updates this page too.
  *
- * 布局三条纪律（宿主容器高度是确定的，别把它撑破）：
- * 1. 根节点不滚（PageShell 已经保证）——**不要**给根节点加 `overflow-auto`；
- * 2. 「内容比窗口多」不靠滚动条解决，靠 FitList / FitTable 按可用高度少画几行；
- * 3. 颜色从 usePluginPalette() 取，不写字面量色值（写死的浅色在暗色主题下就是白底白字）。
+ * Three layout rules (the host container height is fixed; do not break out of it):
+ * 1. the root node does not scroll (PageShell already guarantees it) - do **not** add
+ *    `overflow-auto` to the root node;
+ * 2. "content taller than the window" is not solved with a scrollbar but by FitList / FitTable
+ *    drawing fewer rows for the available height;
+ * 3. take colors from usePluginPalette(), never literal color values (a hard-coded light color means
+ *    white text on white in dark themes).
  */
 export default function Page(): React.JSX.Element {
   const { t } = useTranslation()
@@ -43,7 +47,7 @@ export default function Page(): React.JSX.Element {
     void load()
   }, [load])
 
-  // 主进程推送：记录变了就重拉（事件通道由插件主进程 registerEvent 声明过才订阅得到）
+  // Main-process push: reload when records change (subscribing only works if the plugin main process declared the event channel via registerEvent)
   useEffect(() => api.onItemsChanged(() => void load()), [load])
 
   const submit = async (input: ${vars.pascal}ItemInput): Promise<void> => {
@@ -77,6 +81,10 @@ export default function Page(): React.JSX.Element {
       }
     })
   }
+
+  const pendingCount = items.filter((item) => !item.done).length
+  // The settings page's "hide completed" really applies to this list: it only changes the display, records stay untouched
+  const visibleItems = settings?.hideDone ? items.filter((item) => !item.done) : items
 
   return (
     <PageShell
@@ -118,23 +126,29 @@ export default function Page(): React.JSX.Element {
             children: (
               <Pane>
                 <div className="grid h-full min-h-0 grid-cols-12 grid-rows-1 gap-3">
-                  {/* 列布局一律 grid-cols-12 + 固定 col-span：用 Tailwind 断点切栏数，
-                      窗口一窄就退回单列、面板竖着堆，必然溢出。 */}
+                  {/* Column layouts always use grid-cols-12 with a fixed col-span: switching the
+                      column count with Tailwind breakpoints makes narrow windows fall back to a
+                      single column and stack panels vertically, which inevitably overflows. */}
                   <Panel
                     className="col-span-8"
                     title={t('${vars.id}.page.title')}
                     extra={<span className="text-xs opacity-60">{items.length}</span>}
                   >
-                    {/* 列表按可用高度贪心塞行：放不下的不画，末尾用「还有 N 项」收尾 */}
+                    {/* The list greedily fills rows by available height: rows that do not fit are
+                        not drawn, and a "N more" line closes the list */}
                     <FitList
-                      items={items}
+                      items={visibleItems}
                       rowHeight={38}
                       keyOf={(item) => item.id}
                       empty={
                         loading ? null : (
                           <Empty
                             image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description={t('${vars.id}.page.empty')}
+                            description={
+                              items.length === 0
+                                ? t('${vars.id}.page.empty')
+                                : t('${vars.id}.page.emptyFiltered')
+                            }
                             style={{ margin: 0 }}
                           />
                         )
@@ -146,8 +160,8 @@ export default function Page(): React.JSX.Element {
                             checked={item.done}
                             onChange={(event) => void toggle(item, event.target.checked)}
                           />
-                          {/* 单元格内容必须能随列宽收缩：min-w-0 + truncate，
-                              固定宽度的块（shrink-0）会把内容挤到隔壁列上 */}
+                          {/* Cell content must shrink with the column width: min-w-0 + truncate;
+                              a fixed-width block (shrink-0) pushes content into the next column */}
                           <button
                             type="button"
                             className="min-w-0 flex-1 cursor-pointer truncate border-none bg-transparent p-0 text-left"
@@ -175,16 +189,21 @@ export default function Page(): React.JSX.Element {
                     />
                   </Panel>
 
-                  <Panel className="col-span-4" title={t('${vars.id}.settings.title')}>
+                  <Panel className="col-span-4" title={t('${vars.id}.page.overview')}>
                     {settings ? (
                       <div className="flex min-h-0 flex-col gap-2 text-xs">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="opacity-60">{t('${vars.id}.settingsPage.enabledLabel')}</span>
-                          <Tag color={settings.enabled ? 'green' : undefined} style={{ marginInlineEnd: 0 }}>
-                            {settings.enabled ? t('${vars.id}.page.on') : t('${vars.id}.page.off')}
-                          </Tag>
+                          <span className="opacity-60">{t('${vars.id}.page.records')}</span>
+                          <span>{items.length}</span>
                         </div>
-                        <div className="min-w-0 truncate opacity-60">{settings.note || '-'}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="opacity-60">{t('${vars.id}.page.pending')}</span>
+                          <span>{pendingCount}</span>
+                        </div>
+                        {/* The page note written on the settings page is shown here (an empty string takes no line) */}
+                        {settings.note ? (
+                          <div className="min-w-0 truncate opacity-60">{settings.note}</div>
+                        ) : null}
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           {t('${vars.id}.settingsPage.storageHint')}
                         </Typography.Text>

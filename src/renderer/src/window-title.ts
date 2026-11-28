@@ -1,16 +1,17 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * 原生窗口标题（Windows 系统绘制的那条标题栏）的状态。
+ * State of the native window title (the title bar drawn by Windows).
  *
- * 用户 2026-11-20 口径：标题要显示成 `当前内容 - RytenBench`，
- * 内容取决于当前选中的东西：插件名称、或模式（对话模式 / 工作模式 / 插件模式）、
- * 或系统页面（资料库 / 插件仓库）。
+ * User requirement 2026-11-20: the title shows as `current content - RytenBench`, where
+ * content depends on the current selection: the plugin name, or the mode (conversation
+ * mode / work mode / plugin mode), or a system page (library / plugin repository).
  *
- * 三类来源，优先级 plugin > route > harness：
- * - `plugin`：插件详情页等明确知道插件名的页面；
- * - `route`：系统页面（资料库 / 插件仓库 / 第三方插件路由）；
- * - `harness`：对话页内部的工作/对话/插件模式（由侧栏模式切换写入）。
+ * Three sources, priority plugin > route > harness:
+ * - `plugin`: pages that know the plugin name explicitly, such as the plugin detail page;
+ * - `route`: system pages (library / plugin repository / third-party plugin routes);
+ * - `harness`: the work/conversation/plugin mode inside the conversation page (written by
+ *   the sidebar mode switch).
  */
 const APP_NAME = 'RytenBench'
 
@@ -33,7 +34,7 @@ function emit(): void {
   listeners.forEach((listener) => listener())
 }
 
-/** 设置某一类来源的标题片段（空串表示不提供） */
+/** Set the title fragment for one source kind (empty string means none) */
 export function setWindowTitleSource(source: TitleSource, part: string): void {
   const next = part.trim()
   if (parts[source] === next) return
@@ -52,7 +53,7 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
-/** 组件里订阅当前窗口标题（变化时同步给主进程） */
+/** Subscribe to the current window title in a component (synced to the main process on change) */
 export function useWindowTitle(): string {
   return useSyncExternalStore(subscribe, getWindowTitle, () => APP_NAME)
 }

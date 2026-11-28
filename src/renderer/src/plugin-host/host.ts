@@ -18,25 +18,30 @@ import type {
 } from './types'
 
 /**
- * 渲染层插件宿主（Cordis Fiber 状态机的轻量实现）。
+ * Renderer-side plugin host (a lightweight lifecycle state machine).
  *
- * 生命周期：inactive →(enable)→ active →(disable)→ inactive；
- * - enable：先校验 inject 依赖（MISSING_DEP），install 抛错时逆序回滚已注册效果、恢复 error；
- * - disable：按 withdrawal 顺序卸载（依赖者先于提供者），注册表 + effects + install dispose 全部回滚；
- * - 任何注册/注销都会 bump 版本号，React 侧经 useSyncExternalStore 响应式重渲染。
+ * Lifecycle: inactive →(enable)→ active →(disable)→ inactive;
+ * - enable: validates inject dependencies first (MISSING_DEP); if install throws, rolls back the
+ *   registered effects in reverse order and restores error;
+ * - disable: unloads in withdrawal order (dependents before providers), rolling back registries +
+ *   effects + install dispose;
+ * - every register/unregister bumps the version counter, and React re-renders reactively through
+ *   useSyncExternalStore.
  */
 
 type FiberState = PluginState
 
 /**
- * 宿主内核自己的设置页签（见 `components/system/settings/SettingsModal.tsx` 的 `STATIC_TABS`）。
+ * Settings tabs owned by the host core itself (see `STATIC_TABS` in
+ * `components/system/settings/SettingsModal.tsx`).
  *
- * 插件注册这些键会与内核页签撞名（`tabMeta` 是「后写覆盖」），界面表现为「通用设置
- * 变成了某个插件页」——不允许，直接让插件的 enable 失败。
+ * A plugin registering these keys would collide with core tabs (`tabMeta` is last-write-wins),
+ * showing up as "the general settings page turned into some plugin page" — not allowed, so the
+ * plugin's enable fails outright.
  */
 const CORE_SETTINGS_TABS: ReadonlySet<string> = new Set(['general', 'model', 'system', 'plugins'])
 
-/** 包一层 pluginId 的注册表：register 返回注销函数；宿主可整组清空 */
+/** A registry wrapped with pluginId: register returns an unregister function; the host can clear a whole group */
 class ScopedRegistry<T extends { pluginId: string }> {
   private items = new Map<string, T[]>()
 
@@ -60,7 +65,7 @@ class ScopedRegistry<T extends { pluginId: string }> {
     if (this.items.delete(pluginId)) bump()
   }
 
-  /** 谁已经占了这条注册项（没有返回 null；用于跨插件冲突判定） */
+  /** Who already occupies this registration (null if none; used for cross-plugin conflict detection) */
   ownerOf(predicate: (item: T) => boolean): string | null {
     for (const [pluginId, list] of this.items) {
       if (list.some(predicate)) return pluginId
@@ -76,7 +81,7 @@ class ScopedRegistry<T extends { pluginId: string }> {
 type EventHandler = (data?: unknown) => void
 
 export class PluginHost {
-  /** 版本号：任何注册表变更都自增，作为 useSyncExternalStore 快照 */
+  /** Version counter: incremented on any registry change; used as the useSyncExternalStore snapshot */
   version = 0
 
   private listeners = new Set<() => void>()
@@ -85,15 +90,17 @@ export class PluginHost {
   private readonly states = new Map<string, FiberState>()
   private readonly errors = new Map<string, string>()
   private readonly enabled = new Set<string>()
-  /** 自定义键 → 提供者插件 id（用于 MISSING_DEP 校验与 withdrawal 顺序） */
-  /** 自定义键 → 提供者插件 id 与其提供的值（注册表本身就是 provide 的真源） */
+  /** Custom key → provider plugin id (used for MISSING_DEP validation and withdrawal ordering) */
+  /** Custom key → provider plugin id and its provided value (the registry itself is the source of truth for provide) */
   private readonly provides = new Map<string, { pluginId: string; value: unknown }>()
 
   /**
-   * 声明式预注册表（id → 清单里的 routes/menu 元数据），**不是**真实注册表。
+   * Declarative pre-registration table (id → routes/menu metadata from the manifest), **not** the
+   * real registry.
    *
-   * 见 `declare()`：磁盘包插件的渲染模块要异步 import 之后才 install，这份声明让它
-   * 的菜单/路由在首帧就位；真实注册出现后按 key/path 覆盖声明（`getMenus`/`getRoutes`）。
+   * See `declare()`: a disk plugin's renderer module installs only after an async import, so this
+   * declaration makes its menu/routes available on the first frame; once real registrations appear
+   * they override the declaration by key/path (`getMenus`/`getRoutes`).
    */
   private readonly declarations = new Map<string, PluginDeclaration>()
 
@@ -107,17 +114,19 @@ export class PluginHost {
 
   constructor(plugins: Plugin[], initialEnabled?: Record<string, boolean>) {
     plugins.forEach((p) => this.registerPlugin(p))
-    // 启动竞态修复：清单里标为「启用」的插件在构造期同步预装载——首帧渲染前路由/菜单
-    // 即已注册。否则首帧 usePluginRoutes/usePluginMenus 为空，启动早期点击菜单
-    // navigate 到无路由位置（"No routes matched"、点击无反应）。
+    // Startup race fix: plugins marked "enabled" in the manifest are pre-installed synchronously in
+    // the constructor — routes/menus are registered before the first frame renders. Otherwise
+    // usePluginRoutes/usePluginMenus are empty on the first frame, and clicking a menu early in
+    // startup navigates to a route-less location ("No routes matched", click does nothing).
     for (const p of plugins) {
       if (initialEnabled?.[p.manifest.id] === true) this.syncInstall(p.manifest.id)
     }
   }
 
   /**
-   * 同步装载：install 同步返回的插件当场完成登记（active）。
-   * install 返回 Promise（异步插件）时回滚并交由 enable() 的异步路径装载。
+   * Synchronous install: plugins whose install returns synchronously are registered on the spot
+   * (active). When install returns a Promise (async plugin), roll back and let enable()'s async path
+   * do the loading.
    */
   private syncInstall(id: string): boolean {
     if (this.enabled.has(id)) return true
@@ -151,11 +160,12 @@ export class PluginHost {
   }
 
   /**
-   * 登记插件（构造期登记静态内置；运行期加载完成的磁盘包插件也走这里）。
+   * Register a plugin (built-in statics at construction; disk plugins that finish loading at runtime
+   * go through here too).
    *
-   * 同 id 重复登记时**替换**旧条目：重装插件后会拿到一个新的 `Plugin` 对象
-   * （`forgetPlugin` 也可能因为某条路径没走到而留下旧条目），此时必须用新的
-   * install 函数，否则重装后「找不到路由/菜单」。
+   * Re-registering the same id **replaces** the old entry: after reinstalling a plugin you get a new
+   * `Plugin` object (`forgetPlugin` may also leave an old entry behind if some path was skipped), and
+   * the new install function must be used, otherwise routes/menus are "not found" after reinstall.
    */
   registerPlugin(plugin: Plugin): void {
     const existing = this.plugins.findIndex((p) => p.manifest.id === plugin.manifest.id)
@@ -170,12 +180,12 @@ export class PluginHost {
     this.bump()
   }
 
-  /** 登记外部插件（运行时加载完成的入口；启用态仍由 applyEnabled 统一驱动） */
+  /** Register an external plugin (entry point once runtime loading completes; the enabled state is still driven by applyEnabled) */
   addExternal(plugin: Plugin): void {
     this.registerPlugin(plugin)
   }
 
-  /** 移除外部插件（先卸载再摘除登记） */
+  /** Remove an external plugin (unload first, then unregister) */
   async removeExternal(id: string): Promise<void> {
     const plugin = this.plugins.find((p) => p.manifest.id === id)
     if (!plugin) return
@@ -188,17 +198,18 @@ export class PluginHost {
   }
 
   /**
-   * 彻底移除某个已登记插件（先停用，再从登记表里摘掉）。
+   * Completely remove a registered plugin (disable first, then unregister).
    *
-   * 与 `removeExternal` 的区别：不看启用态、总是从登记表里删掉。主进程清单里已经没有它
-   * （卸载了）或包换了（升级要重新装载）时用这个，否则会留下「菜单/路由还在、主进程通道
-   * 已注销」的僵尸插件（点进去只报通道未注册）。
-   * 依赖 `applyEnabled` 的 diff 是做不到的：它只处理清单里出现过的 id。
+   * Differs from `removeExternal`: ignores the enabled state and always removes it from the registry.
+   * Use this when the main process manifest no longer has it (uninstalled) or the bundle changed (an
+   * upgrade needs a reload); otherwise a zombie plugin remains with "menus/routes still there,
+   * main-process channels already unregistered" (clicking it only reports channel-not-registered).
+   * Doing this via the `applyEnabled` diff is impossible: it only handles ids present in the manifest.
    */
   async forgetPlugin(id: string): Promise<void> {
     if (!this.plugins.some((p) => p.manifest.id === id)) return
     await this.disable(id).catch(() => undefined)
-    // disable 对「本来就没启用」的 id 会提前返回，所以声明项在这里再删一次（幂等）
+    // disable returns early for ids that were never enabled, so delete the declaration here again (idempotent)
     this.declarations.delete(id)
     this.plugins = this.plugins.filter((p) => p.manifest.id !== id)
     this.states.delete(id)
@@ -208,7 +219,7 @@ export class PluginHost {
     this.bump()
   }
 
-  // ---------- 响应式 ----------
+  // ---------- Reactivity ----------
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
@@ -220,17 +231,19 @@ export class PluginHost {
     for (const listener of [...this.listeners]) listener()
   }
 
-  // ---------- 服务获取 ----------
+  // ---------- Service access ----------
 
   /**
-   * 占位冲突检查：**同一个位置只允许一个插件占**。
+   * Slot conflict check: **only one plugin may occupy a given position**.
    *
-   * 为什么不做「后注册的覆盖前面的」：插件是第三方代码，静默覆盖意味着 A 插件能顶掉
-   * B 插件的路由/菜单（比如把 `/notes` 指到自己的页面），而且用户完全看不出来是哪个
-   * 插件干的。冲突时直接让 enable 失败（插件面板里状态是 error、错误可读），
-   * 比「界面被悄悄换掉」好得多。
+   * Why not "later registration overrides earlier": plugins are third-party code, and silent
+   * overriding means plugin A could take over plugin B's routes/menus (e.g. point `/notes` at its
+   * own page) with no way for the user to tell which plugin did it. Failing enable outright (the
+   * plugin panel shows state error with a readable message) is far better than "the UI was quietly
+   * swapped".
    *
-   * 同一个插件重复注册同一项是允许的（重载/热替换路径），声明式占位不参与这套判定。
+   * A plugin re-registering the same item is allowed (reload/hot-replace path); declarative
+   * placeholders do not participate in this check.
    */
   private claimSlot<T extends { pluginId: string }>(
     registry: ScopedRegistry<T>,
@@ -248,15 +261,16 @@ export class PluginHost {
     }
   }
 
-  /** 每个插件只给自己构建指定键的 scoped 服务（默认经 effect 注册，卸载自动回滚） */
+  /** Build the scoped service for a given key for one plugin only (registered via an effect by default, rolled back on unload) */
   serviceFor<K extends HostServiceKey>(key: K, pluginId: string): HostServices[K] {
     switch (key) {
       case 'route':
         return {
           register: (r) => {
             const item = r as Omit<RegisteredRoute, 'pluginId'>
-            // 路由只允许**具体路径**：`*` 会兜住其它插件的所有路由、`:` 会抢别人的参数段，
-            // 两者都能让一个插件「接管」整个界面（React Router 取第一个匹配）。
+            // Routes may only be **concrete paths**: `*` would swallow all other plugins' routes and
+            // `:` would grab their parameter segments; either lets one plugin "take over" the whole
+            // UI (React Router takes the first match).
             if (
               typeof item.path !== 'string' ||
               !item.path.startsWith('/') ||
@@ -400,28 +414,34 @@ export class PluginHost {
     }
   }
 
-  // ---------- 声明式预注册（首帧占位） ----------
+  // ---------- Declarative pre-registration (first-frame placeholder) ----------
 
   /**
-   * 按**清单元数据**预注册某个插件的菜单与路由（同步，不依赖插件渲染模块是否加载完）。
+   * Pre-register a plugin's menu and routes from **manifest metadata** (synchronously, independent of
+   * whether the plugin's renderer module has loaded).
    *
-   * 为什么需要：磁盘包插件（P1 起 music 走的就是这条）的渲染模块要 `fetch` + `import`
-   * 之后才 `install(ctx)`，于是首帧侧栏只有静态内置的三个菜单，音乐菜单要等几百毫秒
-   * 才「弹出来」（2026-09-26 实测：工装的早期菜单断言直接失败）。
-   * 主进程清单（`PluginListEntry.routes/menu`）里本来就有这两项元数据，宿主在构造期
-   * 照着声明一遍，首帧即完整；插件模块加载完成后它自己的真实注册按 `key`/`path` 覆盖
-   * 声明（`getMenus`/`getRoutes` 的合并规则），因此**声明永远只是占位**。
+   * Why needed: a disk plugin's renderer module installs only after `fetch` + `import` +
+   * `install(ctx)`, so on the first frame the sidebar had only the three static built-in menus and
+   * the music menu "popped in" a few hundred milliseconds later (measured 2026-09-26: the early menu
+   * assertions in the workshop harness failed outright). The main-process manifest
+   * (`PluginListEntry.routes/menu`) already carries this metadata, so the host declares it during
+   * construction and the first frame is complete; once the plugin module finishes loading, its real
+   * registrations override the declaration by `key`/`path` (the `getMenus`/`getRoutes` merging
+   * rules), so **a declaration is always just a placeholder**.
    *
-   * 只有元数据、没有组件与加载器：声明出来的路由落到 `MainRoutes` 的 `PluginRouteView`
-   * 会走「既无 `load` 也无 `Component`」那条分支，渲染 `<RouteSkeleton/>`（骨架 variant
-   * 就取清单里的 `skeleton`）。菜单图标由调用方先用 `declaredMenuIcon()` 解析成节点。
+   * Metadata only, no components or loaders: declared routes land in `PluginRouteView` of
+   * `MainRoutes` through the "neither `load` nor `Component`" branch, rendering `<RouteSkeleton/>`
+   * (the skeleton variant comes from the manifest's `skeleton`). Menu icons are resolved by the
+   * caller with `declaredMenuIcon()` first.
    *
-   * 清理时机：`disable()`（含 withdrawal 连带卸载）、`forgetPlugin()`/`removeExternal()`
-   * 都会删掉该 id 的声明，否则停用/卸载后菜单会残留到下次启动。
+   * Cleanup: `disable()` (including withdrawal-driven unloads) and
+   * `forgetPlugin()`/`removeExternal()` all delete that id's declarations; otherwise menus would
+   * linger until the next launch after disable/uninstall.
    */
   declare(id: string, declaration: PluginDeclaration): void {
-    // 声明项来自磁盘上的 plugin.json（没有 TS 类型校验），同样不能是兜底路由：
-    // `*` / `:` 会抢其它插件的路由，即使是首帧占位也不行（真实注册也有同一道校验）。
+    // Declarations come from plugin.json on disk (no TS type validation), so they cannot be
+    // catch-all routes either: `*` / `:` would grab other plugins' routes even as a first-frame
+    // placeholder (real registration enforces the same check).
     const routes = (declaration.routes ?? []).filter(
       (route) =>
         typeof route.path === 'string' &&
@@ -436,7 +456,7 @@ export class PluginHost {
     this.bump()
   }
 
-  /** 外部插件取 vendored 模块实例 */
+  /** Get a vendored module instance for an external plugin */
   requireVendor(name: string): unknown {
     return (this.vendorModules ?? {})[name]
   }
@@ -447,14 +467,14 @@ export class PluginHost {
 
   private vendorModules?: Record<string, unknown>
 
-  // ---------- provide 登记（自定义键） ----------
+  // ---------- provide registration (custom keys) ----------
 
-  /** 登记插件提供的自定义键（宿主记录提供者与值，供其他插件 inject 后取用） */
+  /** Register a custom key provided by a plugin (the host records the provider and value so other plugins can inject and use it) */
   registerProvide(pluginId: string, key: string, value: unknown): void {
     this.provides.set(key, { pluginId, value })
   }
 
-  /** 取某个自定义键当前提供的值（未提供返回 undefined） */
+  /** Get the value currently provided for a custom key (undefined when not provided) */
   getProvided<T>(key: string): T | undefined {
     return this.provides.get(key)?.value as T | undefined
   }
@@ -465,7 +485,7 @@ export class PluginHost {
     }
   }
 
-  // ---------- 生命周期 ----------
+  // ---------- Lifecycle ----------
 
   private findPlugin(id: string): Plugin {
     const plugin = this.plugins.find((p) => p.manifest.id === id)
@@ -473,7 +493,7 @@ export class PluginHost {
     return plugin
   }
 
-  /** 校验声明依赖是否可满足：宿主根键始终可用，自定义键需有已激活提供者 */
+  /** Validate whether declared dependencies can be satisfied: host root keys are always available, custom keys need an active provider */
   private checkDeps(plugin: Plugin): string[] {
     const inject = plugin.manifest.inject ?? []
     return inject.filter(
@@ -497,8 +517,9 @@ export class PluginHost {
     this.states.set(id, 'reloading')
     this.bump()
     try {
-      // 插件自带的样式表先进 DOM：否则插件首帧会在“没样式”的状态下渲染一次
-      // （见 plugin-css.ts：宿主 Tailwind 扫不到运行期装进来的外部插件源码）
+      // Inject the plugin's own stylesheet into the DOM first: otherwise the plugin's first frame
+      // renders once without styles (see plugin-css.ts: the host's Tailwind cannot see external
+      // plugin sources installed at runtime)
       await installPluginCss(id)
       const dispose = await plugin.install(ctx)
       ctx.attachInstallDispose(dispose)
@@ -520,9 +541,10 @@ export class PluginHost {
 
   async disable(id: string): Promise<void> {
     if (!this.enabled.has(id)) {
-      // 未启用也要把声明项清干净：声明是首帧占位（可能先于 enable 存在），停用态不该有菜单
+      // Even when not enabled, clear the declarations: a declaration is a first-frame placeholder
+      // (it may exist before enable), and a disabled plugin should have no menu.
       if (this.declarations.delete(id)) this.bump()
-      // 样式同理：停用后 document 里不该留着这个插件的 CSS
+      // Same for styles: after disable, this plugin's CSS should not remain in `document`.
       removePluginCss(id)
       return
     }
@@ -530,31 +552,34 @@ export class PluginHost {
       const ctx = this.ctxs.get(pid)
       this.states.set(pid, 'unloading')
       this.bump()
-      // 1) 先摘除注册表条目（菜单/路由/设置页立即消失）
+      // 1) Remove registry entries first (menus/routes/settings pages disappear immediately)
       this.routeRegistry.removeAll(pid, () => this.bump())
       this.menuRegistry.removeAll(pid, () => this.bump())
       this.settingsRegistry.removeAll(pid, () => this.bump())
       this.providerRegistry.removeAll(pid, () => this.bump())
       this.globalRegistry.removeAll(pid, () => this.bump())
       this.bottomBarRegistry.removeAll(pid, () => this.bump())
-      // 1.5) 声明项一并清掉：否则「停用插件」后菜单会被首帧声明补回来（残留到下次启动）
+      // 1.5) Clear declarations too: otherwise the first-frame declaration restores the menu after
+      // "disable plugin" (lingering until the next launch)
       this.declarations.delete(pid)
-      // 2) 逆序回滚 effects + install dispose
+      // 2) Roll back effects + install dispose in reverse order
       await ctx?.dispose().catch(() => undefined)
       this.removeAllProvides(pid)
       this.ctxs.delete(pid)
       this.enabled.delete(pid)
       this.states.set(pid, 'inactive')
-      // 样式随插件一起摘除（下面 this.bump() 之后界面才重绘，不会闪没样式的帧）
+      // Styles are removed together with the plugin (the UI only repaints after this.bump() below,
+      // so no unstyled frame flickers)
       removePluginCss(pid)
     }
     this.bump()
   }
 
   /**
-   * withdrawal 顺序：依赖者先于提供者卸载（论文 L-Leave/L-Unload）。
-   * 受影响集合 = 目标插件 + 所有（传递地）inject 了受影响插件所提供键的已激活插件；
-   * 每次先卸载「不再被其余受影响插件依赖」的插件。
+   * Withdrawal order: dependents unload before providers (leave/unload ordering).
+   * Affected set = the target plugin + every enabled plugin that (transitively) injects a key
+   * provided by an affected plugin; each step unloads a plugin that is no longer depended on by the
+   * remaining affected plugins.
    */
   private withdrawalOrder(root: string): string[] {
     const affected = new Set<string>([root])
@@ -587,7 +612,8 @@ export class PluginHost {
         [...remaining].every((m) => m === n || !dependsOn(n, m))
       )
       if (!next) {
-        // 环路兜底：直接卸载剩余（自定义键循环依赖不应出现，出现则按任意序）
+        // Cycle fallback: unload the rest directly (circular custom-key dependencies should not
+        // happen; if they do, any order works)
         for (const pid of remaining) order.push(pid)
         break
       }
@@ -597,7 +623,7 @@ export class PluginHost {
     return order
   }
 
-  // ---------- 查询 ----------
+  // ---------- Queries ----------
 
   getRoutes(): RegisteredRoute[] {
     return this.cached('routes', () => this.mergeDeclaredRoutes(this.routeRegistry.getAll()))
@@ -608,10 +634,11 @@ export class PluginHost {
   }
 
   /**
-   * 真实注册 + 声明项合并：同一 `key`/`path` **以真实注册为准**。
+   * Merge real registrations + declarations: for the same `key`/`path`, **real registrations win**.
    *
-   * 插件渲染模块加载完成后会注册自己那一份，声明项于是在这里被同 key/path 的判定挡掉；
-   * 顺序仍按 `order`（再按 key 兜底），所以声明项不会打乱侧栏次序。
+   * Once a plugin's renderer module finishes loading it registers its own entry, so the declaration
+   * is filtered out here by the same key/path check; order still follows `order` (then key as a
+   * tiebreaker), so declarations never disturb sidebar ordering.
    */
   private mergeDeclaredMenus(real: RegisteredMenuItem[]): RegisteredMenuItem[] {
     const seen = new Set(real.map((m) => m.key))
@@ -631,7 +658,7 @@ export class PluginHost {
     return merged.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
   }
 
-  /** 路由版合并规则（同 `path` 真实注册优先）；声明路由没有 load/Component，落到骨架屏 */
+  /** Route version of the merge rule (same `path`: real registration wins); declared routes have no load/Component and land on the skeleton screen */
   private mergeDeclaredRoutes(real: RegisteredRoute[]): RegisteredRoute[] {
     const seen = new Set(real.map((r) => r.path))
     const merged = [...real]
@@ -671,7 +698,7 @@ export class PluginHost {
     )
   }
 
-  /** 底栏槽位条目（按 order 排序，宿主侧只做排序、不判可见性） */
+  /** Bottom bar slot items (sorted by order; the host only sorts and does not decide visibility) */
   getBottomBarItems(): BottomBarItemRegistration[] {
     return this.cached('bottomBarItems', () =>
       this.bottomBarRegistry.getAll().sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
@@ -689,10 +716,10 @@ export class PluginHost {
   }
 
   /**
-   * 版本化结果缓存：同一版本内多次调用返回同一引用。
-   * 修复「新鲜数组引用抖动」——useMemo/useEffect 依赖这些 getter 结果时，
-   * 若每次渲染都拿到新数组，会引发效应反复重放（如 SettingsModal 打开后
-   * activeTab 被重置、App providers 重挂载）。
+   * Versioned result cache: repeated calls within the same version return the same reference.
+   * Fixes "fresh array reference jitter" — when useMemo/useEffect depend on these getter results, a
+   * new array on every render replays effects repeatedly (e.g. SettingsModal's activeTab being reset
+   * after opening, App providers remounting).
    */
   private readonly getterCache = new Map<string, { version: number; value: unknown }>()
 
@@ -715,17 +742,17 @@ export class PluginHost {
     }
   }
 
-  /** 批量应用启用态（diff 驱动）：启用的插件按序 enable，停用的按 withdrawal 卸载 */
+  /** Apply enabled states in bulk (diff-driven): enabled plugins enable in order, disabled ones unload in withdrawal order */
   async applyEnabled(map: Record<string, boolean>): Promise<void> {
     const want: Array<[string, boolean]> = []
     for (const key of Object.keys(map)) {
-      // 未登记（如外部插件尚未加载）的 id 跳过，由桥在加载完成后重放
+      // Skip unregistered ids (e.g. external plugins not yet loaded); the bridge replays them once loading completes
       if (!this.plugins.some((p) => p.manifest.id === key)) continue
       const wantEnabled = Boolean(map[key])
       const current = this.enabled.has(key)
       if (wantEnabled !== current) want.push([key, wantEnabled])
     }
-    // 先停用（依赖者先卸载），后启用
+    // Disable first (dependents unload first), then enable
     for (const [id, on] of want) {
       if (!on)
         await this.disable(id).catch((err) => console.error(`[plugin-host] Failed to disable ${id}:`, err))
@@ -740,7 +767,7 @@ export class PluginHost {
     return this.enabled.has(id)
   }
 
-  /** 已登记的插件集合是否已全部按启用态装载完成（供 Provider 首屏判断） */
+  /** Whether every registered plugin has finished loading per its enabled state (used by the Provider for first-screen decisions) */
   hasLoaded(): boolean {
     for (const p of this.plugins) {
       const st = this.states.get(p.manifest.id)

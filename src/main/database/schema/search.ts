@@ -2,13 +2,13 @@ import { boolean, integer, pgTable, text, timestamp, check } from 'drizzle-orm/p
 import { sql } from 'drizzle-orm'
 
 /**
- * 联网搜索的全局配置（**单行表**，id 恒为 1）。
+ * Global web search configuration (**single-row table**, id is always 1).
  *
- * - `default_provider`：全局默认搜索服务（builtin / deepseek / tavily），未配置时用内置搜索；
- * - `auto_fallback`：所选服务失败/超时时是否回退到内置搜索；
- * - `include_content`：是否请求正文摘要（DeepSeek need_content / Tavily raw content）。
+ * - `default_provider`: global default search service (builtin / deepseek / tavily); builtin search is used when unset;
+ * - `auto_fallback`: whether to fall back to builtin search when the selected service fails/times out;
+ * - `include_content`: whether to request content summaries (DeepSeek need_content / Tavily raw content).
  *
- * 密钥单独放在 `search_providers`（加密），本表不存任何敏感信息。
+ * Keys are stored separately in `search_providers` (encrypted); this table holds no sensitive information.
  */
 export const search_settings = pgTable(
   'search_settings',
@@ -29,10 +29,10 @@ export const search_settings = pgTable(
 )
 
 /**
- * 各搜索服务的密钥（**加密存储**，一台机器一份）。
+ * Keys for each search service (**encrypted storage**, one per machine).
  *
- * `api_key_encrypted` 用与模型供应商相同的机器派生密钥（AES-256-GCM）加密；
- * `key_mask` 只是展示用的掩码（前 6 + 后 6），读取接口不会返回明文/密文。
+ * `api_key_encrypted` is encrypted with the same machine-derived key as model providers (AES-256-GCM);
+ * `key_mask` is only a display mask (first 6 + last 6); read APIs never return plaintext or ciphertext.
  */
 export const search_providers = pgTable(
   'search_providers',

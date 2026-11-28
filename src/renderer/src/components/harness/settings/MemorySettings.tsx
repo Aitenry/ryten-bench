@@ -21,25 +21,27 @@ import { harnessApi } from '../../../api/harness'
 import { useMemoryScope, useMemoryScopeName } from '../../../utils/harness/memory-scope'
 
 /**
- * Mnemon 记忆管理（三层记忆）
- * - 热记忆：USER 用户画像 / MEMORY 项目记忆（每轮注入 prompt，容量 4KiB / 10KiB）
- * - 长期空间：Memory Spaces（PGlite 数据库 + 关系图，按需召回）
- * - 档案：Project Documents（完整 Markdown，active/archived 冷热分层）
+ * Mnemon memory management (three layers)
+ * - Hot memory: USER user profile / MEMORY project memory (injected into the prompt every turn,
+ *   capacity 4KiB / 10KiB)
+ * - Long-term spaces: Memory Spaces (PGlite database + relationship graph, recalled on demand)
+ * - Archive: Project Documents (full Markdown, active/archived hot/cold tiers)
  *
- * **跟着当前会话的作用域走**：插件会话里进来管的就是这份插件自己的记忆
- * （`<memoryPath>/plugin-<id>/`），工作会话里就是当前工作区那套（renderer/memory-scope.ts）。
+ * **Follows the current conversation's scope**: entering from a plugin conversation manages that
+ * plugin's own memory (`<memoryPath>/plugin-<id>/`), while from a work conversation it is the
+ * current workspace's set (renderer/memory-scope.ts).
  */
 
 type MnemonSnapshot = Awaited<ReturnType<typeof harnessApi.harness.mnemonSnapshot>>
 
-/** 优先级圆点色（编辑部风格：克制用色） */
+/** Priority dot colors (editorial style: restrained color use) */
 const IMPORTANCE_DOT: Record<string, string> = {
   critical: '#d4380d',
   normal: '#1677ff',
   low: '#bfbfbf'
 }
 
-/** 重要性文案：把 t 作为参数传入，普通函数内不调用 hook */
+/** Importance label: takes t as a parameter, so no hook is called inside a plain function */
 function getImportanceLabel(t: TFunction, importance: string): string {
   switch (importance) {
     case 'critical':
@@ -53,7 +55,7 @@ function getImportanceLabel(t: TFunction, importance: string): string {
   }
 }
 
-/** 目标选择卡片（选中：强调色左条 + 浅色底 + 强调描边） */
+/** Target selection card (selected: accent left bar + light background + accent outline) */
 const TargetCard: React.FC<{
   label: string
   desc: string
@@ -99,7 +101,7 @@ const TargetCard: React.FC<{
   )
 }
 
-/** 重要性胶囊（选中：强调色描边 + 浅底） */
+/** Importance pill (selected: accent outline + light background) */
 const ImportancePill: React.FC<{
   color: string
   label: string
@@ -140,7 +142,7 @@ const ImportancePill: React.FC<{
   )
 }
 
-/** 主题化常量（暗色/亮色自适应） */
+/** Theme tokens (adapt to dark / light) */
 function useThemeTokens(): {
   cardBg: string
   cardBorder: string
@@ -170,7 +172,7 @@ function useThemeTokens(): {
   }
 }
 
-/** 细容量条：4px 圆角条 + 文字 */
+/** Thin capacity bar: 4px rounded bar + text */
 const CapacityBar: React.FC<{
   used: number
   limit: number
@@ -209,7 +211,7 @@ const CapacityBar: React.FC<{
   )
 }
 
-/** 单条热记忆：圆点 + 内容 + 时间 + 删除（hover 显示） */
+/** Single hot-memory entry: dot + content + time + delete (shown on hover) */
 const RuntimeEntryRow: React.FC<{
   entry: { content: string; importance: string; updated_at?: string }
   onRemove: () => void
@@ -267,7 +269,7 @@ const RuntimeEntryRow: React.FC<{
   )
 }
 
-/** 分组卡片：色条标题 + 容量 + 条目列表 */
+/** Group card: color-bar title + capacity + entry list */
 const RuntimeGroupCard: React.FC<{
   title: string
   accent: string
@@ -330,23 +332,25 @@ const MemorySettings: React.FC = () => {
   const [savingPath, setSavingPath] = useState(false)
   const [snapshot, setSnapshot] = useState<MnemonSnapshot | null>(null)
   const [loadingSnapshot, setLoadingSnapshot] = useState(false)
-  /** 当前会话的记忆作用域（插件会话 = 这份插件自己的记忆；对话模式 = 该模式自己的那份；空 = 当前工作区） */
+  /** Memory scope of the current conversation (plugin conversation = that plugin's own memory;
+   * chat mode = that mode's own set; empty = current workspace) */
   const memoryScope = useMemoryScope()
-  /** 插件作用域时显示插件名、「对话」模式时显示该模式的名字，供页面标注「现在管的是谁的记忆」 */
+  /** Show the plugin name for a plugin scope, or the mode name for "chat" mode, so the page can
+   * label "whose memory is being managed now" */
   const memoryScopeName = useMemoryScopeName(translate('memorySettings.manage.scopeChat'))
 
-  // 热记忆添加表单
+  // Hot-memory add form
   const [addTarget, setAddTarget] = useState<'user' | 'memory'>('memory')
   const [addContent, setAddContent] = useState('')
   const [addImportance, setAddImportance] = useState<'critical' | 'normal' | 'low'>('normal')
   const [adding, setAdding] = useState(false)
 
-  // 空间创建表单
+  // Space create form
   const [createName, setCreateName] = useState('')
   const [createDescription, setCreateDescription] = useState('')
   const [creatingBody, setCreatingBody] = useState(false)
 
-  // 空间内容浏览
+  // Space content browsing
   const [browsingBody, setBrowsingBody] = useState<{ id: string; name: string } | null>(null)
   const [bodyInsights, setBodyInsights] = useState<
     { id: string; content: string; category?: string; importance?: number; createdAt?: string }[]
@@ -394,7 +398,8 @@ const MemorySettings: React.FC = () => {
     }
   }, [settings?.harness?.memoryPath, loadSnapshot])
 
-  // 切换作用域（换会话 / 换工作区）后重载快照：那是另一套记忆，旧数据必须失效
+  // Reload the snapshot after switching scope (changing conversation / workspace): that is
+  // another memory set, so old data must be invalidated
   useEffect(() => {
     const handleWorkspaceChanged = (): void => {
       if (settings?.harness?.memoryPath) {
@@ -450,7 +455,7 @@ const MemorySettings: React.FC = () => {
     }
   }
 
-  /** 热记忆新增 */
+  /** Add a hot memory */
   const handleAddRuntime = async (): Promise<void> => {
     const msgKey = 'mnemon-runtime-add'
     const content = addContent.trim()
@@ -479,7 +484,7 @@ const MemorySettings: React.FC = () => {
     }
   }
 
-  /** 热记忆删除（唯一子串定位） */
+  /** Remove a hot memory (located by unique substring) */
   const handleRemoveRuntime = async (entry: {
     content: string
     target: 'user' | 'memory'
@@ -506,7 +511,7 @@ const MemorySettings: React.FC = () => {
     }
   }
 
-  /** 空间激活开关 */
+  /** Space activation toggle */
   const handleToggleBody = async (id: string, active: boolean): Promise<void> => {
     const msgKey = 'mnemon-body-toggle'
     try {
@@ -528,7 +533,7 @@ const MemorySettings: React.FC = () => {
     }
   }
 
-  /** 创建空间 */
+  /** Create a space */
   const handleCreateBody = async (): Promise<void> => {
     const msgKey = 'mnemon-body-create'
     if (!createName.trim()) {
@@ -556,7 +561,7 @@ const MemorySettings: React.FC = () => {
     }
   }
 
-  /** 浏览空间内容 */
+  /** Browse space content */
   const handleBrowseBody = async (body: { id: string; name: string }): Promise<void> => {
     setBrowsingBody(body)
     setBrowsingLoading(true)
@@ -580,7 +585,7 @@ const MemorySettings: React.FC = () => {
 
   const renderRuntimeTab = (): React.ReactNode => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* 添加记忆 */}
+      {/* Add memory */}
       <div
         style={{
           padding: '14px',
@@ -589,7 +594,7 @@ const MemorySettings: React.FC = () => {
           background: t.formBg
         }}
       >
-        {/* 目标选择卡片 */}
+        {/* Target selection card */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <TargetCard
             label={translate('memorySettings.targets.userLabel')}
@@ -605,7 +610,7 @@ const MemorySettings: React.FC = () => {
           />
         </div>
 
-        {/* 内容输入（下划线式） */}
+        {/* Content input (underline style) */}
         <div
           style={{
             marginTop: 12,
@@ -637,7 +642,7 @@ const MemorySettings: React.FC = () => {
           />
         </div>
 
-        {/* 重要性 + 记住 */}
+        {/* Importance + remember */}
         <div
           className="flex items-center justify-between gap-2 flex-wrap"
           style={{ marginTop: 10 }}
@@ -675,7 +680,7 @@ const MemorySettings: React.FC = () => {
           </Button>
         </div>
 
-        {/* 目标说明（随选择切换） */}
+        {/* Target description (switches with the selection) */}
         <div style={{ fontSize: 11, color: t.textTertiary, marginTop: 10, lineHeight: '16px' }}>
           {addTarget === 'user' ? (
             <>{translate('memorySettings.targets.userHint')}</>
@@ -685,7 +690,7 @@ const MemorySettings: React.FC = () => {
         </div>
       </div>
 
-      {/* 用户画像 */}
+      {/* User profile */}
       <RuntimeGroupCard
         title={translate('memorySettings.targets.userLabel')}
         accent="#1677ff"
@@ -695,7 +700,7 @@ const MemorySettings: React.FC = () => {
         onRemove={(entry) => handleRemoveRuntime({ content: entry.content, target: 'user' })}
       />
 
-      {/* 项目记忆 */}
+      {/* Project memory */}
       <RuntimeGroupCard
         title={translate('memorySettings.targets.memoryLabel')}
         accent="#52c41a"
@@ -709,7 +714,7 @@ const MemorySettings: React.FC = () => {
 
   const renderBodiesTab = (): React.ReactNode => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* 创建空间 */}
+      {/* Create space */}
       <div
         className="flex items-center gap-2 flex-wrap"
         style={{
@@ -814,7 +819,7 @@ const MemorySettings: React.FC = () => {
         </div>
       )}
 
-      {/* 空间内容浏览 */}
+      {/* Space content browsing */}
       <Modal
         open={browsingBody !== null}
         title={translate('memorySettings.insights.title', { name: browsingBody?.name })}
@@ -911,7 +916,7 @@ const MemorySettings: React.FC = () => {
         description={translate('memorySettings.page.description')}
       />
 
-      {/* 目录选择 */}
+      {/* Directory selection */}
       <SettingsSection
         title={translate('memorySettings.storage.sectionTitle')}
         icon={<FolderOutlined size={14} />}
@@ -951,7 +956,7 @@ const MemorySettings: React.FC = () => {
         )}
       </SettingsSection>
 
-      {/* 未配置引导 / 三层记忆管理 */}
+      {/* Not configured guidance / three-layer memory management */}
       {!configured ? (
         <SettingsSection
           title={translate('memorySettings.enable.sectionTitle')}
@@ -976,7 +981,8 @@ const MemorySettings: React.FC = () => {
           bodyPadding={12}
           extra={
             <>
-              {/* 管的是**谁的**记忆：插件会话进来时写清插件名（工作区会话沿用既有样子，不标注） */}
+              {/* **Whose** memory is managed: show the plugin name when entering from a plugin
+                  conversation (workspace conversations keep the existing look, no label) */}
               {memoryScopeName && (
                 <span
                   data-memory-scope={memoryScopeName}

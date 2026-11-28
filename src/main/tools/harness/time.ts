@@ -4,14 +4,14 @@ import * as z from 'zod/v4'
 import { getMainLanguage } from '../../i18n'
 
 // ============================================================================
-// Time Tool — 时间查询
+// Time Tool — current date and time
 // ============================================================================
 
 export function buildGetTimeTool(): StructuredToolInterface {
   return tool(
     () =>
       Promise.resolve(
-        // 结果会渲染在工具卡片上，日期格式跟随界面语言
+        // The result renders on the tool card; the date format follows the UI language
         new Date().toLocaleString(getMainLanguage() === 'en-US' ? 'en-US' : 'zh-CN', {
           timeZone: 'Asia/Shanghai'
         })

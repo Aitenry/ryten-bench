@@ -1,10 +1,11 @@
 import { getMainLanguage } from './index'
 
 /**
- * `present`（交付文件）工具文案。
+ * Texts for the `present` (deliverable files) tool.
  *
- * 与其它 `tool-results-*` 模块同一约定：中文是源语言，英文树用 `typeof` 约束。
- * 列表项与错误都跟随界面语言；路径本身是数据，不翻译。
+ * Same convention as the other `tool-results-*` modules: Chinese is the source language and the
+ * English tree is checked with `typeof`.
+ * List items and errors follow the UI language; paths themselves are data and are not translated.
  */
 export const zhCNPresentToolTexts = {
   empty: '文件路径不能为空。',
@@ -13,10 +14,10 @@ export const zhCNPresentToolTexts = {
   escape: '路径必须位于工作区内: {{path}}',
   missing: '文件不存在: {{path}}',
   notFile: '路径不是文件: {{path}}',
-  /** 声明成功：{{list}} 是逐文件的一行摘要 */
+  /** Declaration succeeded: {{list}} is a one-line summary per file */
   presented: '已声明 {{count}} 个交付文件（回合结束后用户会看到它们）：\n{{list}}',
   item: '- {{path}}{{description}}',
-  /** 路径需要修正时的说明（虚拟路径以 / 开头） */
+  /** Note shown when the path needs fixing (virtual paths start with /) */
   hint: '请使用工作区内的虚拟路径（如 /docs/report.pdf）。'
 }
 
@@ -33,7 +34,7 @@ export const enUSPresentToolTexts: typeof zhCNPresentToolTexts = {
   hint: 'Use a workspace virtual path such as /docs/report.pdf.'
 }
 
-/** 按当前界面语言取 present 文案 */
+/** Return the present tool texts for the current UI language */
 export function getPresentToolTexts(): typeof zhCNPresentToolTexts {
   return getMainLanguage() === 'en-US' ? enUSPresentToolTexts : zhCNPresentToolTexts
 }

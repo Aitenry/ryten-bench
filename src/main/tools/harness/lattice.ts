@@ -3,23 +3,27 @@ import * as z from 'zod/v4'
 import type { ToolInfo } from '../../plugins/tool-contract'
 
 /**
- * 插件中心（Lattice）的 AI 工具：**发布版本**。
+ * AI tool for the plugin center (Lattice): **release a version**.
  *
- * 与工坊那 4 个的分工：
- * - `plugin_build` / `plugin_verify` / `plugin_publish` 都在本机——构建产物、跑验收、装进
- *   当前应用；
- * - `plugin_release` 是**对外**的那最后一步：把当前插件打包（安装包 + 源码包）发到插件中心，
- *   别的用户才装得到。
+ * Division of labor with the four workshop tools:
+ * - `plugin_build` / `plugin_verify` / `plugin_publish` all run locally — build the artifact, run
+ *   verification, install it into the current app;
+ * - `plugin_release` is the final, **outward-facing** step: package the current plugin (install
+ *   package + source package) and publish it to the plugin center, so other users can install it.
  *
- * 为什么挂在插件模式：只有插件会话里才有一个明确的「当前在改的插件」，而人多半是
- * 「做出来了 → 顺手发个版」，不该再让他切到插件详情页去手填版本号。
+ * Why it is attached to plugin mode: only a plugin session has an unambiguous "plugin currently
+ * being edited", and people usually go from "it works" to "let me publish a version"; they
+ * should not have to switch to the plugin detail page and type the version number by hand.
  *
- * **登录才注册**：本轮工具名由 `shared/mcp.ts` 的 `effectiveMainAgentTools(…, { signedIn })`
- * 决定（主进程用 `hasLatticeSession()` 取登录态），未登录时插件模式也挂不上它——
- * 否则模型会去调一个必然 401 的工具，还把「没登录」误当成「发布失败」。工具内部再兜一层
- * 登录检查，防止别处直接构造实例绕过那一层。
+ * **Registered only when signed in**: the tool names for the round are decided by
+ * `effectiveMainAgentTools(…, { signedIn })` in `shared/mcp.ts` (the main process reads the
+ * sign-in state via `hasLatticeSession()`); when signed out, plugin mode does not attach this
+ * tool at all — otherwise the model would call a tool that is guaranteed to return 401 and might
+ * mistake "not signed in" for "publishing failed". The tool checks sign-in once more internally
+ * so that an instance constructed elsewhere cannot bypass that layer.
  *
- * 发布**不改本机安装**：装进当前应用仍然是 `plugin_publish install`。
+ * Publishing **does not change the local install**: installing into the current app is still
+ * `plugin_publish install`.
  */
 export const latticeToolInfos: ToolInfo[] = [
   {
@@ -39,8 +43,10 @@ const releaseTool = (): StructuredToolInterface =>
       changelog?: string
       sourceDir?: string
     }): Promise<string> => {
-      // 整段都兜住：工具抛错会把整轮对话变成框架错误，模型也拿不到可执行的下一步。
-      // 登录态：注册那一层已经按登录筛过，这里兜底（直接构造实例 / 发布途中退出登录）。
+      // Wrap the whole body: a thrown tool error turns the entire turn into a framework error,
+      // and the model gets no actionable next step.
+      // Sign-in: the registration layer already filtered by sign-in state; this is a fallback
+      // (an instance constructed directly / signing out while a release is in progress).
       try {
         const { hasLatticeSession } = await import('../../lattice/session')
         if (!hasLatticeSession()) {
@@ -104,7 +110,7 @@ const releaseTool = (): StructuredToolInterface =>
     }
   )
 
-/** 插件中心的工具（`tools/builders.ts` 的本地工具表按名字取用） */
+/** Plugin center tools (looked up by name from the local tool table in `tools/builders.ts`) */
 export const latticeToolBuilders: Record<string, () => StructuredToolInterface> = {
   plugin_release: releaseTool
 }

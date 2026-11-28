@@ -5,28 +5,33 @@ import { questionService } from './ask'
 import type { AskOption, AskQuestion } from './ask'
 
 /**
- * 模型调用共享恢复逻辑（正文 model 节点与早期对话压缩摘要共用）
+ * Shared recovery logic for model calls (used by the main model node and early
+ * conversation compaction summaries)
  *
- * - **失败分类只看 HTTP 状态码**（接口返回什么就是什么，不猜报文里的字眼）：
- *   4xx 是「这次请求本身有问题」，重发不会变好 → 不重试、直接报错；
- *   408 / 429 / 5xx 与「拿不到状态码的网络失败」→ 值得重试；
- * - **重试次数就是唯一的刹车**：可重试失败最多 MODEL_RETRY_LIMIT 次，之后要么弹一次
- *   「换模型继续」，要么按原错误收尾。曾经的问题（2026-09-23「模型不可用时报了错还一直重试」）
- *   一半出在这里不看预算，另一半出在旧实现（LangChain AsyncCaller）的 6 次静默重发
- *   （见 provider/service.ts 的兼容字段说明）；
- * - 用户取消（signal aborted）不重试；目标自动续跑轮（goal-round）不弹换模型。
+ * - **Failure classification only looks at HTTP status codes** (whatever the API returns,
+ *   without guessing from the message wording): 4xx means "this request itself is broken";
+ *   resending will not help → do not retry, fail immediately; 408 / 429 / 5xx and "network
+ *   failures with no status code" are worth retrying;
+ * - **The retry count is the only brake**: retryable failures are tried at most
+ *   MODEL_RETRY_LIMIT times, after which either one "switch model and continue" prompt is
+ *   shown, or the original error is reported. The old problem (2026-09-23: "the model was
+ *   unavailable and it kept retrying after reporting an error") was half caused by not
+ *   checking the budget here, and half by the silent 6 retries of the earlier implementation
+ *   (see the compatibility field notes in provider/service.ts);
+ * - User cancellation (signal aborted) is not retried; automatic goal-round continuations do
+ *   not prompt to switch models.
  */
 
-/** 可重试失败的自动重试上限与重试间隔 */
+/** Automatic retry limit and delay for retryable failures */
 export const MODEL_RETRY_LIMIT = 2
 export const MODEL_RETRY_DELAY_MS = 800
 
-/** 换模型询问所需的上下文（模型调用方能提供的身份信息） */
+/** Context needed for the switch-model prompt (identity information the model caller can provide) */
 export interface ModelRecoveryContext {
   topicId: number
-  /** 调用来源：'user'（缺省）/ 'goal-round'（自动续跑轮，不询问换模型） */
+  /** Call source: 'user' (default) / 'goal-round' (automatic continuation, which never asks to switch models) */
   turnSource?: string
-  /** 是否允许弹窗询问（子代理等场景禁止；缺省允许） */
+  /** Whether prompting is allowed (forbidden for subagents etc.; allowed by default) */
   askEnabled?: boolean
   signal?: AbortSignal
 }
@@ -34,7 +39,7 @@ export interface ModelRecoveryContext {
 export const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms))
 
-/** 失败分类（只由状态码与取消信号得出） */
+/** Failure classification (derived only from status codes and the cancellation signal) */
 export type ModelErrorKind =
   | 'aborted'
   | 'auth'
@@ -46,28 +51,31 @@ export type ModelErrorKind =
   | 'network'
   | 'unknown'
 
-/** 分类结果（raw 保留供应商原文，日志与失败文案都要用） */
+/** Classification result (raw keeps the provider's original text, used by logs and failure messages) */
 export interface ModelErrorInfo {
   kind: ModelErrorKind
-  /** 接口返回的 HTTP 状态码（拿不到就是 undefined） */
+  /** HTTP status code returned by the API (undefined when unavailable) */
   status?: number
   /**
-   * 瞬时失败（408/429/5xx、连接类失败）：值得恢复——按预算原地重试，
-   * 预算用尽还可以问用户要不要换模型继续。
-   * 永久性失败（其余 4xx）为 false：重发同一个请求不会变好，直接报错，不弹窗。
+   * Transient failure (408/429/5xx, connection failures): worth recovering — retried in place
+   * within the budget, and once the budget is exhausted the user may be asked whether to
+   * switch models and continue.
+   * Permanent failures (the other 4xx) are false: resending the same request will not help, so
+   * fail immediately without a prompt.
    */
   transient: boolean
-  /** 本次失败允许的重试次数（永久性失败 0，可重试失败 MODEL_RETRY_LIMIT） */
+  /** Retries allowed for this failure (0 for permanent failures, MODEL_RETRY_LIMIT for retryable ones) */
   retryLimit: number
-  /** 本次失败耗时（只用于报错文案里的「等待 N 秒」） */
+  /** Time spent on this failure (only used for the "waited N seconds" wording in error messages) */
   elapsedMs: number
   raw: Error
 }
 
 /**
- * 取 HTTP 状态码：错误对象上的字段优先（openai/anthropic 等 SDK 都会挂 status），
- * 其次才从报文里读 `status_code=500` / `HTTP 500` 这类**显式状态码写法**——
- * 这一步只取数字，不做任何关键字匹配。
+ * Extracts the HTTP status code: fields on the error object take precedence (openai/anthropic
+ * and other SDKs all attach status), then explicit status-code forms such as `status_code=500`
+ * / `HTTP 500` are read from the message — this step only takes the number and does no keyword
+ * matching.
  */
 function extractHttpStatus(error: Error, message: string): number | undefined {
   const carrier = error as unknown as {
@@ -92,17 +100,17 @@ function extractHttpStatus(error: Error, message: string): number | undefined {
 }
 
 /**
- * 分类一次模型请求失败（纯函数）。
+ * Classifies one model request failure (pure function).
  *
- * | 状态码 | kind | 重试预算 |
+ * | Status code | kind | retry budget |
  * |---|---|---|
- * | 401 / 403 | auth | 0（检查 API Key） |
- * | 404 | not-found | 0（检查模型名与接口地址） |
+ * | 401 / 403 | auth | 0 (check the API key) |
+ * | 404 | not-found | 0 (check the model name and endpoint) |
  * | 408 / 504 / 524 | timeout | MODEL_RETRY_LIMIT |
  * | 429 | rate-limit | MODEL_RETRY_LIMIT |
  * | 5xx | server | MODEL_RETRY_LIMIT |
- * | 其余 4xx | rejected | 0（请求本身有问题） |
- * | 无状态码（连接/网络类） | network | MODEL_RETRY_LIMIT |
+ * | other 4xx | rejected | 0 (the request itself is broken) |
+ * | no status code (connection/network) | network | MODEL_RETRY_LIMIT |
  */
 export function classifyModelError(error: Error, elapsedMs = 0): ModelErrorInfo {
   const message = error.message || String(error)
@@ -129,15 +137,15 @@ export function classifyModelError(error: Error, elapsedMs = 0): ModelErrorInfo 
   if (status === 429) return info('rate-limit', true, MODEL_RETRY_LIMIT)
   if (status >= 500) return info('server', true, MODEL_RETRY_LIMIT)
   if (status >= 400) return info('rejected', false, 0)
-  // 2xx/3xx 走到这里说明不是 HTTP 层失败（协议/解析类），按可重试处理
+  // Reaching here with 2xx/3xx means it is not an HTTP-layer failure (protocol/parsing); treat it as retryable
   return info('unknown', true, MODEL_RETRY_LIMIT)
 }
 
-/** 分类后的收尾说明（拼在供应商原文之前，解释「为什么停了」） */
+/** Post-classification explanation (prepended to the provider's original text, explaining "why it stopped") */
 function describeFailure(info: ModelErrorInfo, attempts: number): string {
   const m = mainMessages().modelFailure
-  // 状态码可能来自错误对象也可能来自报文，也可能根本没有：统一在这里拼成
-  // 「（HTTP 500）」整段，免得文案里留下空的括号
+  // The status code may come from the error object or the message, or not exist at all:
+  // assemble the whole "HTTP <code>" segment here so the message never leaves empty parentheses
   const status = info.status != null ? `（HTTP ${info.status}）` : ''
   switch (info.kind) {
     case 'auth':
@@ -163,7 +171,7 @@ function describeFailure(info: ModelErrorInfo, attempts: number): string {
   }
 }
 
-/** 收尾错误：message 是「分类说明：供应商原文」，kind/status 供上层判断 */
+/** Final error: message is "classification explanation: provider original text"; kind/status are for upper layers */
 export class ModelRequestError extends Error {
   readonly kind: ModelErrorKind
   readonly status?: number
@@ -182,28 +190,30 @@ export class ModelRequestError extends Error {
   }
 }
 
-/** 一次带恢复语义的模型调用 */
+/** One model call with recovery semantics */
 export interface ModelCallRecovery<T> {
-  /** 发起一次调用：重试时按同一份消息/参数重发（不重跑工具、不重放副作用由调用方保证） */
+  /** Starts one call: retries resend the same messages/parameters (the caller guarantees tools are not re-run and side effects are not replayed) */
   call: () => Promise<T>
   ctx: ModelRecoveryContext
-  /** 日志前缀，如 '[Agent]' / '[Compaction]' */
+  /** Log prefix, e.g. '[Agent]' / '[Compaction]' */
   label: string
-  /** 重试进度：attempt 是第几次重试，retries 是本次失败允许的上限 */
+  /** Retry progress: attempt is the retry number, retries is the limit allowed for this failure */
   onRetry?: (attempt: number, retries: number) => void
-  /** 换模型成功：调用方在此重新绑定新模型 */
+  /** Model switch succeeded: the caller rebinds the new model here */
   onSwitch?: (model: BaseChatModel) => void
-  /** 时钟（工装注入假时钟用；缺省 Date.now） */
+  /** Clock (used by tests to inject a fake clock; defaults to Date.now) */
   now?: () => number
-  /** 重试间隔（工装注入零延迟用；缺省 MODEL_RETRY_DELAY_MS） */
+  /** Retry delay (tests inject zero delay; defaults to MODEL_RETRY_DELAY_MS) */
   retryDelayMs?: number
 }
 
 /**
- * 带「状态码分类 + 限次重试 + 换模型兜底」的模型调用。
- * 永久性失败（其余 4xx、取消）立即抛出，不重试也不弹窗；
- * 可重试失败（408/429/5xx/连接类）最多重试 MODEL_RETRY_LIMIT 次，之后（允许询问时）
- * 经 questionService.ask 挂起等待用户换模型，选好则在原调用位置继续。
+ * Model call with "status-code classification + bounded retries + switch-model fallback".
+ * Permanent failures (the other 4xx, cancellation) throw immediately, with no retry and no
+ * prompt; retryable failures (408/429/5xx/connection) are retried at most MODEL_RETRY_LIMIT
+ * times and afterwards (when prompting is allowed) suspend through questionService.ask,
+ * waiting for the user to switch models; if one is chosen, execution continues at the original
+ * call site.
  */
 export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Promise<T> {
   const now = req.now ?? Date.now
@@ -247,7 +257,8 @@ export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Pro
         )
       }
 
-      // 换模型询问：只给「值得恢复」的失败一次机会（永久性错误换模型也解决不了当前这次请求的语义问题）
+      // Switch-model prompt: offer it only once, and only for failures "worth recovering"
+      // (switching models cannot fix the semantic problem of the current request either)
       if (
         info.transient &&
         !switchOffered &&
@@ -271,10 +282,12 @@ export async function invokeWithModelRecovery<T>(req: ModelCallRecovery<T>): Pro
 }
 
 /**
- * 向用户询问是否换模型继续，返回新模型实例；用户放弃返回 null。
- * 失败信息（kind='model-recovery'）经 ask 挂起通道广播，由前端专用
- * ModelRecoveryModal 展示；答案回写后在此解析为已启用供应商。
- * 信号中止（用户停止）时抛 AskAbortedError。
+ * Asks the user whether to switch models and continue; returns the new model instance, or null
+ * when the user declines.
+ * Failure information (kind='model-recovery') is broadcast through the ask suspension channel
+ * and shown by the dedicated frontend ModelRecoveryModal; once the answer is written back it is
+ * resolved here into an enabled provider.
+ * Throws AskAbortedError when the signal is aborted (user stop).
  */
 export async function askUserToSwitchModel(
   ctx: ModelRecoveryContext,
@@ -282,14 +295,15 @@ export async function askUserToSwitchModel(
 ): Promise<BaseChatModel | null> {
   const { getEnabledProviders } = await import('../../database/mapper/provider')
   const providers = await getEnabledProviders()
-  // 界面文案按当前语言取一次：放弃项既要展示又要参与回填比较，
-  // 必须用**同一次**取值，否则弹窗期间切语言会导致比较不上
+  // Read the UI texts once for the current language: the abandon option is both displayed and
+  // used for answer comparison, so it must come from the **same** read; otherwise switching
+  // language while the dialog is open makes the comparison fail
   const m = mainMessages().modelRecovery
   const seen = new Set<string>()
   const options: AskOption[] = []
   for (const p of providers) {
     let label = `${p.name} · ${p.model}`
-    // 同名（name/model 相同）但供应商/端点不同的行：追加 provider 类型保证选项值唯一
+    // Rows with the same name (same name/model) but a different provider/endpoint: append the provider type to keep option values unique
     if (seen.has(label)) label = `${label}（${p.provider}）`
     seen.add(label)
     options.push({
@@ -318,7 +332,8 @@ export async function askUserToSwitchModel(
   const answer = await questionService.ask(ctx.topicId, questions, ctx.signal)
   const selected = answer.answers?.[0]?.selected?.[0] ?? ''
   if (!selected || selected === m.abandonLabel) return null
-  // 答案解析（前端专用弹窗查询同一数据源后按 provider id 提交；兼容按 label 提交的旧路径）
+  // Answer parsing (the dedicated frontend modal queries the same data source and submits by
+  // provider id; supports the legacy path of submitting by label)
   let providerId: number | undefined
   const selectedId = Number(selected)
   if (Number.isInteger(selectedId) && selectedId > 0) {

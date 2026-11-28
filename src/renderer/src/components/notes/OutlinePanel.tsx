@@ -13,16 +13,16 @@ export interface OutlineHeading {
 
 interface OutlinePanelProps {
   editor: Editor | null
-  /** 编辑器滚动容器（用于滚动监听定位） */
+  /** Editor scroll container (used for scroll-listener positioning) */
   scrollRef: React.RefObject<HTMLDivElement | null>
-  /** 文档属性区数据 */
+  /** Data for the document properties section */
   meta?: {
     tags: string[]
     wordCount: number
     createdAt?: string
     updatedAt?: string
   }
-  /** 面板宽度（可拖拽调整） */
+  /** Panel width (adjustable by dragging) */
   width?: number
 }
 
@@ -32,7 +32,7 @@ const OutlinePanel: React.FC<OutlinePanelProps> = ({ editor, scrollRef, meta, wi
   const [activePos, setActivePos] = useState<number | null>(null)
   const rafRef = useRef(0)
 
-  /* 从编辑器文档提取标题大纲 */
+  /* Extract the heading outline from the editor document */
   const headingsState = useEditorState({
     editor,
     selector: ({ editor: ed }) => {
@@ -53,12 +53,13 @@ const OutlinePanel: React.FC<OutlinePanelProps> = ({ editor, scrollRef, meta, wi
   })
   const headings = useMemo(() => headingsState ?? [], [headingsState])
 
-  /* ── 滚动同步：高亮当前所在标题 ── */
+  /* ── Scroll sync: highlight the heading currently in view ── */
   useEffect(() => {
     const container = scrollRef.current
     if (!container || headings.length === 0) return
-    /* 注意：domAtPos 在节点起始边界（offset 为 0）会退回 contentDOM 而不是标题元素，
-       所有标题拿到同一个容器矩形，导致高亮恒为最后一个；必须用 coordsAtPos 取视口坐标 */
+    /* Note: at a node's start boundary (offset 0) domAtPos falls back to the contentDOM instead of
+       the heading element, so every heading gets the same container rect and the highlight always
+       ends up on the last one; use coordsAtPos for viewport coordinates instead */
     const headingTop = (pos: number): number | null => {
       if (!editor) return null
       const coords = editor.view.coordsAtPos(pos)
@@ -90,11 +91,11 @@ const OutlinePanel: React.FC<OutlinePanelProps> = ({ editor, scrollRef, meta, wi
     }
   }, [headings, scrollRef, editor])
 
-  /* ── 点击大纲跳转（不改动光标） ── */
+  /* ── Click an outline item to jump (without moving the cursor) ── */
   const handleNavigate = (pos: number): void => {
     const container = scrollRef.current
     if (!editor || !container) return
-    /* 同样不能用 domAtPos：它返回的是内容容器，scrollIntoView 会滚到文档顶部 */
+    /* domAtPos cannot be used here either: it returns the content container, so scrollIntoView would scroll to the top of the document */
     const coords = editor.view.coordsAtPos(pos)
     if (!coords) return
     const containerTop = container.getBoundingClientRect().top
@@ -115,12 +116,12 @@ const OutlinePanel: React.FC<OutlinePanelProps> = ({ editor, scrollRef, meta, wi
         flexDirection: 'column',
         minHeight: 0,
         background: token.colorBgContainer,
-        /* 贴边面板：右上/右下直角，左缘保留圆角与中间主区呼应（与左侧栏对称） */
+        /* Edge-docked panel: square top-right/bottom-right corners, rounded left edge to echo the center area (mirrors the left sidebar) */
         borderRadius: '0 12px 12px 0',
         overflow: 'hidden'
       }}
     >
-      {/* 大纲 */}
+      {/* Outline */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div
           className="shell-topbar"
@@ -190,7 +191,7 @@ const OutlinePanel: React.FC<OutlinePanelProps> = ({ editor, scrollRef, meta, wi
         </div>
       </div>
 
-      {/* 属性 */}
+      {/* Properties */}
       {meta && (
         <div
           style={{

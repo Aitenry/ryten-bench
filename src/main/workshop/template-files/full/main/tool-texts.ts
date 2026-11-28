@@ -1,10 +1,11 @@
 import { getMainLanguage } from '@host/main/i18n'
 
 /**
- * ${vars.title} 工具的返回文案（显示在工具卡片上，跟随界面语言）。
+ * Tool result texts for ${vars.title} (shown on the tool card, following the UI language).
  *
- * 为什么单独一份：模型看到的字符串会原样进对话，**用户也会看到**——
- * 文案随插件走，插件停用就一起消失（别塞进宿主内核的文案表）。
+ * Why a separate copy: the strings the model sees enter the conversation verbatim, so **the user
+ * sees them too** — the texts ship with the plugin and disappear when it is disabled (do not put
+ * them in the host kernel's text table).
  */
 export const zhCNToolTexts = {
   common: {
@@ -38,12 +39,12 @@ export const enUSToolTexts: typeof zhCNToolTexts = {
   }
 }
 
-/** 当前界面语言对应的文案 */
+/** Texts for the current UI language */
 export function getToolTexts(): typeof zhCNToolTexts {
   return getMainLanguage() === 'en-US' ? enUSToolTexts : zhCNToolTexts
 }
 
-/** 工具描述（给模型看的；也显示在设置 → 智能体 → 工具里） */
+/** Tool description (shown to the model; also displayed under Settings → Agent → Tools) */
 export function toolDescriptions(): { zh: string; en: string } {
   return {
     zh: '读写「${vars.title}」：action=list 列全部；add 新增一条；done 标记完成；remove 删除一条。',

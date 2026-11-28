@@ -1,23 +1,25 @@
 /**
- * 文档文本抽取（docx / xlsx / pptx / 纯文本）——纯逻辑，无 electron 依赖，可离线测试。
+ * Document text extraction (docx / xlsx / pptx / plain text) — pure logic, no electron
+ * dependencies, testable offline.
  *
- * 为什么需要：`read_file` 只读 UTF-8 文本，Office 文档对模型是"二进制黑盒"；而工作区里
- * 最常见的资料恰恰是 Word/Excel/PPT。这里按扩展名分派到对应的抽取器：
+ * Why this exists: `read_file` reads UTF-8 text only, so Office documents are a "binary black
+ * box" to the model, yet Word/Excel/PPT files are the most common material in a workspace.
+ * Extraction dispatches by extension:
  *
- * - `.docx` → mammoth 抽取纯文本（与笔记导入同一条路径，可靠）；
- * - `.xlsx` → JSZip + cheerio 解析工作簿 XML：工作表名、单元格值（共享字符串/内联/数字）；
- * - `.pptx` → JSZip + cheerio 解析每页 `<a:t>` 文本；
- * - `.csv/.tsv/.md/.txt/.json/.log/.yaml` → 按 UTF-8 原样返回；
- * - `.pdf` → 明确返回不支持（避免模型把二进制当文本读）。
+ * - `.docx` -> mammoth extracts plain text (the same reliable path used by notes import);
+ * - `.xlsx` -> JSZip + cheerio parse the workbook XML: sheet names, cell values (shared strings/inline/numeric);
+ * - `.pptx` -> JSZip + cheerio parse the `<a:t>` text of each slide;
+ * - `.csv/.tsv/.md/.txt/.json/.log/.yaml` -> returned as-is as UTF-8;
+ * - `.pdf` -> explicitly returns unsupported (so the model does not read binary as text).
  *
- * 输出有上限（默认 20k 字符），超出部分截断并标注；解析失败返回结构化原因，
- * 由工具层翻译成界面语言。
+ * Output is capped (20k characters by default) with the excess truncated and flagged; parse
+ * failures return a structured reason that the tool layer translates for the UI.
  */
 import JSZip from 'jszip'
 import mammoth from 'mammoth'
 import * as cheerio from 'cheerio'
 
-/** 可识别的文档类型 */
+/** Recognized document kinds */
 export type DocumentKind = 'docx' | 'xlsx' | 'pptx' | 'text' | 'pdf' | 'unsupported'
 
 export const DEFAULT_MAX_DOCUMENT_CHARS = 20_000
@@ -32,7 +34,7 @@ export type DocumentExtraction =
   | {
       ok: true
       kind: DocumentKind
-      /** 结构化摘要（工作表数、幻灯片数等），一行一条 */
+      /** Structural summary (sheet count, slide count, etc.), one per line */
       meta: string[]
       text: string
       truncated: boolean
@@ -40,7 +42,7 @@ export type DocumentExtraction =
     }
   | { ok: false; reason: 'unsupported' | 'empty' | 'failed'; message?: string }
 
-/** 按扩展名判断类型（大小写不敏感） */
+/** Determine the kind by extension (case-insensitive) */
 export function detectDocumentKind(fileName: string): DocumentKind {
   const ext = (fileName.split('.').pop() ?? '').toLowerCase()
   if (ext === 'docx') return 'docx'
@@ -53,7 +55,7 @@ export function detectDocumentKind(fileName: string): DocumentKind {
   return 'unsupported'
 }
 
-/** 把文本按上限截断（保留开头） */
+/** Truncate text to the limit (keeping the beginning) */
 function clip(
   text: string,
   maxChars: number
@@ -63,12 +65,12 @@ function clip(
   return { text: text.slice(0, maxChars), truncated: true, totalChars }
 }
 
-/** 最小 XML 节点形状（不依赖 cheerio 内部的 AnyNode 类型导出） */
+/** Minimal XML node shape (avoids depending on cheerio's internal AnyNode export) */
 interface XmlNode {
   tagName?: string
 }
 
-/** 取某个标签的全部元素（XML 命名空间前缀按完整 tagName 比较） */
+/** Get all elements of a tag (XML namespace prefixes compared by full tagName) */
 function elementsByTag($: cheerio.CheerioAPI, tagName: string): XmlNode[] {
   const out: XmlNode[] = []
   $('*').each((_, element) => {
@@ -78,7 +80,7 @@ function elementsByTag($: cheerio.CheerioAPI, tagName: string): XmlNode[] {
   return out
 }
 
-/** 元素下所有同名文本拼接（用于 `<si><t>a</t><t>b</t></si>`） */
+/** Concatenate all same-name text under an element (for `<si><t>a</t><t>b</t></si>`) */
 function textOfTags($: cheerio.CheerioAPI, root: XmlNode, tagName: string): string {
   let text = ''
   $(root as never)
@@ -90,13 +92,13 @@ function textOfTags($: cheerio.CheerioAPI, root: XmlNode, tagName: string): stri
   return text
 }
 
-/** 数字文件名排序（sheet1 < sheet2 < sheet10） */
+/** Sort numeric file names (sheet1 < sheet2 < sheet10) */
 function numericSuffix(name: string): number {
   const match = /(\d+)\.xml$/i.exec(name)
   return match ? Number(match[1]) : 0
 }
 
-/** XML 文本里的常见实体还原（工作簿/演示文稿里会以转义形式出现） */
+/** Restore common XML entities (workbooks/presentations store them escaped) */
 function decodeXmlEntities(text: string): string {
   return text
     .replace(/&lt;/g, '<')
@@ -106,7 +108,7 @@ function decodeXmlEntities(text: string): string {
     .replace(/&amp;/g, '&')
 }
 
-/** 抽取 xlsx：工作表名 + 逐行单元格值 */
+/** Extract xlsx: sheet names + per-row cell values */
 async function extractXlsx(buffer: Buffer): Promise<{ meta: string[]; text: string }> {
   const zip = await JSZip.loadAsync(buffer)
   const workbookFile = zip.file('xl/workbook.xml')
@@ -118,7 +120,7 @@ async function extractXlsx(buffer: Buffer): Promise<{ meta: string[]; text: stri
         .filter(Boolean)
     : []
 
-  // 共享字符串表：<si><t>...</t></si>，单元格 t="s" 的 <v> 是这里的下标
+  // Shared string table: <si><t>...</t></si>; the <v> of a cell with t="s" is an index into it
   const sharedStrings: string[] = []
   const sharedFile = zip.file('xl/sharedStrings.xml')
   if (sharedFile) {
@@ -165,7 +167,7 @@ async function extractXlsx(buffer: Buffer): Promise<{ meta: string[]; text: stri
   return { meta, text: parts.join('\n\n') }
 }
 
-/** 抽取 pptx：每页幻灯片文本 */
+/** Extract pptx: per-slide text */
 async function extractPptx(buffer: Buffer): Promise<{ meta: string[]; text: string }> {
   const zip = await JSZip.loadAsync(buffer)
   const slideFiles = Object.keys(zip.files)
@@ -185,9 +187,9 @@ async function extractPptx(buffer: Buffer): Promise<{ meta: string[]; text: stri
 }
 
 /**
- * 抽取一个文档的文本。
+ * Extract the text of one document.
  *
- * 失败一律返回结构化结果（不抛异常）：调用方据此给出本地化提示。
+ * Failures always return a structured result (no exception): the caller localizes the message from it.
  */
 export async function extractDocument(input: ExtractDocumentInput): Promise<DocumentExtraction> {
   const kind = detectDocumentKind(input.fileName)

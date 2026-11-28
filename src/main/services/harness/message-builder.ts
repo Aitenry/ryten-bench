@@ -1,22 +1,22 @@
 import { HumanMessage } from '../../ai/messages'
 
 /**
- * 上传文件信息（已复制到 agent 文件系统中的路径）
+ * Uploaded file info (path already copied into the agent filesystem)
  */
 export interface UploadedFileRef {
   fileName: string
-  /** agent 文件系统中的虚拟路径，如 /uploads/report.pdf */
+  /** Virtual path in the agent filesystem, e.g. /uploads/report.pdf */
   virtualPath: string
 }
 
 /**
- * 构建 HumanMessage，支持多模态（图片 + 文本）
+ * Build a HumanMessage, with multimodal (image + text) support.
  *
- * 文档附件不直接嵌入内容，而是告知 agent 文件路径，让 agent 通过
- * read_file 工具按需读取。DeepAgents 框架内置了上下文管理：
- * - 大文件读取结果 > 20K token 自动写入 /large_tool_results/
- * - 上下文超 85% 时旧工具调用替换为文件指针
- * - 最终回退到摘要压缩
+ * Document attachments are not embedded directly; the agent is told the file path and reads them
+ * on demand with the read_file tool. Context management is built in:
+ * - read results for large files over 20K tokens are written to /large_tool_results/
+ * - once context exceeds 85%, old tool calls are replaced with file pointers
+ * - finally falls back to summary compression
  */
 export function buildHumanMessage(
   text: string,
@@ -25,7 +25,7 @@ export function buildHumanMessage(
 ): HumanMessage {
   let fullText = text
 
-  // 告知 agent 上传文件的位置，让 agent 自行用 read_file 按需读取
+  // Tell the agent where uploaded files live so it can read them on demand with read_file
   if (documents && documents.length > 0) {
     const fileList = documents.map((doc) => `- \`${doc.virtualPath}\` (${doc.fileName})`).join('\n')
     fullText += `\n\n## Uploaded files\nThe following files are now available in your filesystem. Use the read_file tool to read them as needed:\n${fileList}`
@@ -35,7 +35,7 @@ export function buildHumanMessage(
     return new HumanMessage(fullText)
   }
 
-  // 多模态消息：文本 + 图片
+  // Multimodal message: text + images
   const content: { type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }[] = [
     { type: 'text', text: fullText }
   ]

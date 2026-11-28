@@ -1,11 +1,12 @@
-﻿/* 应用外壳（主窗口框架、路由骨架、构建进度通知）词条。
-   注意 errorBoundary.eyebrow 与 routing.loading 是**等宽全大写的装饰性标签**，
-   按项目字体规则（等宽只给拉丁与数字）两种语言都保持拉丁大写，不译中文——
-   中文落进等宽族会回退成宋体，和页面其它中文不是一套字。 */
+﻿/* Strings for the app shell (main window frame, route skeleton, build progress notifications).
+   Note that errorBoundary.eyebrow and routing.loading are **decorative monospace, all-caps labels**.
+   Per the project font rule (monospace is reserved for Latin and digits), they stay Latin uppercase
+   in both languages and are never translated into Chinese: Chinese rendered in the monospace family
+   falls back to a serif face and no longer matches the other Chinese on the page. */
 export const zhCNShell = {
   menu: {
-    // 只保留**内置**插件的菜单文案；独立插件（task-planner / music-player）自带
-    // planner.menu.title / music.menu.title（见各自 locales）。
+    // Keep menu copy for **built-in** plugins only; standalone plugins (task-planner / music-player)
+    // ship their own planner.menu.title / music.menu.title (see their respective locales).
     notes: '笔记',
     harness: '助手'
   },
@@ -13,7 +14,7 @@ export const zhCNShell = {
     library: '资料库',
     pluginRepo: '插件仓库',
     schedules: '定时任务',
-    /** 设置从侧栏收起成一个入口（菜单 + 内容都在这一页里） */
+    /** Settings collapse into a single sidebar entry (both menu and content live on this page) */
     more: '更多内容'
   },
   titleBar: {
@@ -21,7 +22,7 @@ export const zhCNShell = {
     maximize: '最大化',
     restore: '还原',
     close: '关闭',
-    /** 自绘标题栏左侧的两个应用菜单（与参考形态一致：应用 / 编辑） */
+    /** The two application menus on the left side of the custom title bar (App / Edit) */
     app: '应用',
     edit: '编辑',
     settings: '设置…',

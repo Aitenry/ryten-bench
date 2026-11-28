@@ -1,7 +1,7 @@
 import React from 'react'
 import { BuildProgressContext, type BuildProgressContextType } from './BuildProgressContext'
 
-/** 读图谱构建进度上下文（Provider 与消费方都在 notes 插件内） */
+/** Read the graph build progress context (both provider and consumers live inside the notes plugin) */
 export const useBuildProgress = (): BuildProgressContextType => {
   const context = React.useContext(BuildProgressContext)
   if (!context) {

@@ -17,18 +17,23 @@ import { SpillStore } from './spill'
 import type { SubagentSessionRuntime } from './subagent-sessions'
 
 /**
- * 冷恢复：按持久化的子代理配置快照重建一次会话运行所需的 runtime。
+ * Cold resume: rebuild the runtime required to run a session from the persisted subagent
+ * config snapshot.
  *
- * 恢复语义对齐 DSH 的「按当前部署的 preset 重建 continuable session」，但刻意去掉
- * Cordis/插件组合那层：这里只需要
- * - 主模型（spawn 时持久化的 provider/model；缺失或不可用时回退默认供应商）与
- *   `provider:model` 覆盖解析；
- * - 工具（子代理声明集合 + 团队任务板）并统一过权限闸门；
- * - 系统提示词（基础 prompt + 专属记忆 + 技能 + 团队段，与首次启动同源）；
- * - 运行时上限（模型设置的工具轮数）。
+ * Resume semantics rebuild a continuable session from the currently deployed preset, but
+ * deliberately omit the plugin-composition layer: only these are needed here
+ * - the main model (provider/model persisted at spawn time; falls back to the default
+ *   provider when missing or unavailable) and `provider:model` override resolution;
+ * - tools (the subagent's declared set + team task board), all passed through the
+ *   permission guard;
+ * - the system prompt (base prompt + dedicated memory + skills + team section, from the
+ *   same source as first start);
+ * - runtime limits (tool rounds from the model settings).
  *
- * 记忆作用域按**话题当前的** `memory_scope` 解析：插件/对话/工作区会话各自落到自己的记忆目录，
- * 与主对话/前台子代理保持同一口径（配置快照里不重复存路径，避免设置搬家后指向旧目录）。
+ * The memory scope is resolved from the topic's **current** `memory_scope`: plugin /
+ * conversation / workspace sessions each land in their own memory directory, consistent
+ * with the main conversation and foreground subagents (the config snapshot does not store
+ * paths, so moving settings will not leave references to old directories).
  */
 export async function buildResumedSubagentRuntime(
   topicId: number,
@@ -45,7 +50,7 @@ export async function buildResumedSubagentRuntime(
     }
 
     const providerService = getProviderService()
-    // 优先用 spawn 时持久化的 provider（DSH 的 descriptor 语义）；缺失/不可用回退默认
+    // Prefer the provider persisted at spawn time (descriptor semantics); fall back to the default when missing/unavailable
     let provider = defaultProvider
     let usedPersistedDescriptor = false
     if (descriptor?.providerId) {
@@ -78,7 +83,7 @@ export async function buildResumedSubagentRuntime(
         throw err
       }
     }
-    // 实际生效的模型名：持久化 descriptor 的 model 优先（模型名可能是历史值）
+    // Effective model name: the persisted descriptor's model takes precedence (it may be a historical value)
     const effectiveModel =
       (usedPersistedDescriptor ? descriptor?.model?.trim() : '') || provider.model
     logger.info(

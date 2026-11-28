@@ -13,34 +13,41 @@ import { harnessApi } from '../../api/harness'
 import { useTopicPending } from '../../hooks/harness/useTopicPending'
 
 /**
- * 模型请求失败专用弹窗（换模型继续）。
+ * Dedicated dialog for model request failures (continue with another model).
  *
- * 主进程在模型请求自动重试 2 次仍失败后，于图内 model 节点挂起并向用户发出
- * kind='model-recovery' 的提问（复用 ask 挂起/回写通道）；本组件监听该提问并展示
- * 专用选择窗口：**目录树直接来自数据库查询的已启用模型列表（按供应商分组）**，
- * 用户选好后按 provider id 回写答案 → 主进程用新模型在原位置继续执行
- * （不结束本轮、不重发问题、不重跑已执行工具）。
+ * After a model request fails even after 2 automatic retries, the main process parks the model node
+ * in the graph and raises a question with kind='model-recovery' to the user (reusing the ask
+ * park/write-back channel); this component listens for that question and shows a dedicated picker:
+ * **the tree comes directly from the query of enabled models in the database (grouped by
+ * provider)**. Once the user picks one, the answer is written back by provider id → the main
+ * process continues in place with the new model (without ending the turn, re-sending the question,
+ * or re-running tools that already ran).
  *
- * 与通用 AskQuestionModal 分工：kind='model-recovery' 由本组件处理，AskQuestionModal 忽略。
- * **按会话隔离**（与另外两个弹窗同款，见 hooks/useTopicPending）：只显示当前这条会话挂起的
- * 那一条，切到别的会话就收起、点回来再拉出来（否则这条提问会永远挂着，用户看不到也答不了）。
+ * Division of labor with the generic AskQuestionModal: kind='model-recovery' is handled here and
+ * AskQuestionModal ignores it.
+ * **Isolated per conversation** (like the other two dialogs, see hooks/useTopicPending): only the
+ * question parked for the current conversation is shown; switching to another conversation collapses
+ * it and switching back brings it up again (otherwise the question would stay parked forever, with
+ * the user unable to see or answer it).
  */
 interface ModelRecoveryModalProps {
   currentTopicId: number | null
 }
 
-/** 目录树条目（来自 providers 查询或提问载荷，submit 为回写给主进程的答案值） */
+/** Tree entry (from the providers query or the question payload; submit is the answer value written back to the main process) */
 interface PickerItem {
-  /** 回写答案：优先 provider id 字符串；载荷兜底时为选项 label */
+  /** Value to write back: the provider id string when available; the option label on payload fallback */
   submit: string
-  /** 分组键（供应商类型，小写） */
+  /** Group key (provider type, lowercase) */
   group: string
-  /** 展示文本（只显示模型名称） */
+  /** Display text (model name only) */
   name: string
 }
 
-/** 分组标题：供应商首字母大写（openai → OpenAI）；多段名逐段大写（google-genai → Google-Genai）。
- *  'other' 是「无供应商」的兜底分组名（数据标识，非用户可见中文），原样首字母大写显示。 */
+/** Group title: capitalize the provider's first letter (openai → OpenAI); multi-segment names are
+ *  capitalized per segment (google-genai → Google-Genai).
+ *  'other' is the fallback group name for "no provider" (a data identifier, not user-visible
+ *  Chinese text) and is displayed with its first letter capitalized as-is. */
 const displayGroup = (group: string): string => {
   const g = (group || '').trim().toLowerCase()
   if (!g) return ''
@@ -67,13 +74,14 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
   const [selected, setSelected] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [query, setQuery] = useState('')
-  /** 折叠的分组（默认全部展开）；搜索时忽略折叠态并自动展开匹配组 */
+  /** Collapsed groups (all expanded by default); searching ignores the collapsed state and auto-expands matching groups */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  /** 弹窗打开时查询到的已启用模型列表（数据源：providers.getEnabled） */
+  /** Enabled model list queried when the dialog opens (source: providers.getEnabled) */
   const [queriedItems, setQueriedItems] = useState<PickerItem[]>([])
   const [queryFailed, setQueryFailed] = useState(false)
 
-  // 「换模型继续」的提问：只认当前这条会话（切会话时按话题重新拉，见 useTopicPending）
+  // The "continue with another model" question: only accept the current conversation (re-fetched
+  // per topic when switching conversations, see useTopicPending)
   const { pending, clear: clearPending } = useTopicPending<PendingQuestionView>({
     currentTopicId,
     fetchPending: (topicId) => harnessApi.harness.getQuestion(topicId),
@@ -91,12 +99,12 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
     setQueryFailed(false)
   }, [clearPending])
 
-  // 换了一条提问（或收起）就清掉上一轮的临时选择态
+  // A different question (or a dismissal) clears the temporary selection from the previous round
   useEffect(() => {
     setSelected(null)
   }, [pending?.requestId])
 
-  // 弹窗打开（拿到提问）后查询已启用模型列表，构建目录树
+  // Once the dialog opens (question received), query the enabled model list and build the tree
   const question = pending?.questions.find((q) => q.kind === 'model-recovery')
   useEffect(() => {
     if (!question) return
@@ -126,11 +134,13 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
     }
   }, [question])
 
-  // 流结束/出错 → 按话题重新核对、切话题 → 换成本话题挂起的那一条：
-  // 都在 useTopicPending 里统一处理（此前这里各自写了一份，才会出现「别的会话的 done
-  // 把本弹窗误关」「切走再切回来弹窗就再也不出现了」这两种事故）
+  // Stream finished/failed → re-check per topic; topic switched → swap in the question parked for
+  // this topic: both are handled centrally in useTopicPending (this used to have its own copy here,
+  // which caused "another conversation's done wrongly closed this dialog" and "after switching away
+  // and back the dialog never appeared again")
 
-  // 目录树条目：优先查询结果；查询失败/为空时回退到提问载荷里的选项（按 label 提交）
+  // Tree entries: prefer the query result; on query failure/empty, fall back to the options in the
+  // question payload (submitted by label)
   const treeItems = useMemo<PickerItem[]>(() => {
     if (!question) return []
     if (queriedItems.length > 0) return queriedItems
@@ -148,7 +158,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
 
   const hasAnyModel = treeItems.length > 0
 
-  // 搜索过滤：按模型名称实时过滤
+  // Search filter: filter by model name in real time
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase()
     const grouped = new Map<string, PickerItem[]>()
@@ -216,7 +226,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
       width={560}
       centered
       closable={false}
-      // antd 6：maskClosable 已弃用，改用 mask.closable
+      // antd 6: maskClosable is deprecated, use mask.closable instead
       mask={{ closable: false }}
       onCancel={() => undefined}
       footer={
@@ -269,7 +279,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
           />
         </div>
 
-        {/* 目录树：按供应商分组折叠 + 组内模型；列表独立滚动（细条滚动区） */}
+        {/* Tree: collapsible groups by provider + models inside each group; the list scrolls on its own (thin scroll area) */}
         <div
           className="model-picker-scroll flex flex-col pr-1 -mr-1 overflow-y-auto"
           style={{
@@ -286,7 +296,7 @@ const ModelRecoveryModal: React.FC<ModelRecoveryModalProps> = ({ currentTopicId 
                   const expanded = searching || !collapsed.has(group)
                   return (
                     <div key={group} className="flex flex-col">
-                      {/* 分组头：供应商名 + 折叠箭头 */}
+                      {/* Group header: provider name + collapse arrow */}
                       <button
                         type="button"
                         onClick={() => toggleGroup(group)}

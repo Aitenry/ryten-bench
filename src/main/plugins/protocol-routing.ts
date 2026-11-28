@@ -1,37 +1,40 @@
 /**
- * `plugin://` 请求的**路由决策**（纯函数，零 import：可被 Node 直接加载做离线回归）。
+ * **Routing decision** for `plugin://` requests (pure function, zero imports: loadable directly by
+ * Node for offline regression).
  *
- * 为什么把它从 `src/main/plugins/protocol.ts` 里抽出来：
- * 这个文件只描述「哪个 URL 该配哪条状态码」——安全边界（目录穿越）、启用态、
- * 宿主保留 id、可选资源缺失，全都在这几条分支里，而它此前只能靠启动整个 Electron
- * 才能验证。抽成无依赖纯函数后，`test/verify-plugin-protocol-404.mjs` 用
- * `node --experimental-strip-types` 直接跑真实代码（协议处理器只留「按决策取文件」）。
+ * Why it was extracted from `src/main/plugins/protocol.ts`: this file only describes "which URL
+ * gets which status code" - the security boundary (path traversal), enabled state, host reserved
+ * id, missing optional resources all live in these branches, and previously it could only be
+ * verified by booting the whole Electron app. As a dependency-free pure function,
+ * `test/verify-plugin-protocol-404.mjs` runs the real code directly with
+ * `node --experimental-strip-types` (the protocol handler only keeps "fetch the file per the
+ * decision").
  */
 
-/** 解析结果：交给处理器去读文件 */
+/** Parse result: hand it to the handler to read the file */
 export interface PluginFileDecision {
   kind: 'file'
-  /** 插件 id（log 用） */
+  /** Plugin id (for logging) */
   id: string
-  /** 已解析的绝对路径 */
+  /** Resolved absolute path */
   abs: string
-  /** 相对插件根目录的路径（log 用） */
+  /** Path relative to the plugin root (for logging) */
   relPath: string
 }
 
-/** 解析结果：交给宿主 UI 桥生成 ESM（不读磁盘） */
+/** Parse result: hand it to the host UI bridge to generate ESM (no disk read) */
 export interface PluginBridgeDecision {
   kind: 'bridge'
   key: string
-  /** 原始 query（含前导 `?`） */
+  /** Raw query (including the leading `?`) */
   search: string
 }
 
-/** 解析结果：直接回一个状态码，不读磁盘 */
+/** Parse result: return a status code directly without reading the disk */
 export interface PluginErrorDecision {
   kind: 'error'
   status: number
-  /** 进程内诊断用的原因（不进响应体，避免泄漏磁盘路径） */
+  /** Reason for in-process diagnostics (not put in the response body, to avoid leaking disk paths) */
   reason:
     | 'bad-url'
     | 'bad-bridge-path'
@@ -44,33 +47,35 @@ export interface PluginErrorDecision {
 
 export type PluginRequestDecision = PluginFileDecision | PluginBridgeDecision | PluginErrorDecision
 
-/** 处理器需要的宿主能力（注入以便离线测试） */
+/** Host capabilities the handler needs (injected so it can be tested offline) */
 export interface PluginRequestDeps {
-  /** 插件根目录（未安装返回 null） */
+  /** Plugin root directory (null when not installed) */
   pluginDir: (id: string) => string | null
-  /** 插件是否处于启用态（停用插件不可访问任何文件） */
+  /** Whether the plugin is enabled (a disabled plugin cannot access any file) */
   isEnabled: (id: string) => boolean
-  /** 目录 / 文件是否存在（注入后离线工装可脱离真实文件系统跑） */
+  /** Whether the directory / file exists (injected so offline tooling can run without a real filesystem) */
   exists: (abs: string) => boolean
 }
 
 const PLUGIN_ID_RE = /^[A-Za-z0-9._-]+$/
 
 /**
- * 宿主 UI 桥的固定路径。
+ * Fixed path of the host UI bridge.
  *
- * 与 `host-ui-bridge.ts` 的 `HOST_UI_BRIDGE_PATH` 是**同一个值**，刻意重复一次而不是
- * import：本模块必须零 import（见文件头）。防漂移由工装兜住——
- * `test/verify-plugin-protocol-404.mjs` 同时断言这两个常量都等于 `ui.js`。
+ * It is the **same value** as `HOST_UI_BRIDGE_PATH` in `host-ui-bridge.ts`, deliberately
+ * duplicated instead of imported: this module must have zero imports (see the file header).
+ * Drift is caught by tooling - `test/verify-plugin-protocol-404.mjs` asserts that both constants
+ * equal `ui.js`.
  */
 export const PLUGIN_BRIDGE_PATH = 'ui.js'
 
 /**
- * 归一化路径：统一分隔符、去掉 `.` 段与重复分隔符。
+ * Normalize a path: unify separators, drop `.` segments and repeated separators.
  *
- * 为什么不用 `path.resolve`（那是原来处理器的写法）：这个模块刻意**零 import**，
- * 才能被 Node 直接加载做离线回归（见文件头）。归一化必须自己来，且必须是**字符串**
- * 层面的——把 `..` 一并消掉，这样解码出来的 `%2e%2e%2f` 也逃不出插件目录。
+ * Why not `path.resolve` (which the previous handler used): this module deliberately has **zero
+ * imports** so Node can load it for offline regression (see the file header). Normalization must
+ * be done here, and it must be at the **string** level - `..` is collapsed too, so decoded
+ * `%2e%2e%2f` cannot escape the plugin directory either.
  */
 function normalizePath(input: string): string {
   const unified = input.replace(/\\/g, '/')
@@ -87,36 +92,41 @@ function normalizePath(input: string): string {
   return (isAbsolute ? '/' : '') + out.join('/')
 }
 
-/** 拼接插件目录与相对路径（结果已归一化，`..` 无法逃出） */
+/** Join the plugin directory and a relative path (the result is normalized; `..` cannot escape) */
 function joinPath(dir: string, rel: string): string {
   const base = dir.replace(/[/\\]+$/, '').replace(/\\/g, '/')
   const joined = rel ? `${base}/${rel}` : base
   return normalizePath(joined)
 }
 
-/** 判断 `abs` 是否落在 `dir` 内（防目录穿越；纯字符串比较，不碰文件系统） */
+/** Whether `abs` falls inside `dir` (traversal guard; pure string comparison, no filesystem access) */
 export function isInsideDir(dir: string, abs: string): boolean {
   const base = normalizePath(dir)
-  // 归一化后 `..` 已被消解，这里只剩「同前缀」判定；根目录（`/`）直接放行
+  // After normalization `..` is already collapsed, so only the "same prefix" check remains; the
+  // root directory (`/`) passes directly
   if (base === '/' || base === '') return true
   return abs === base || abs.startsWith(`${base}/`)
 }
 
 /**
- * 解析 `plugin://` 请求 → 决策。
+ * Resolve a `plugin://` request -> a decision.
  *
- * 分支顺序有讲究，错了会改变语义：
- * 1. URL 不合法 → 400；
- * 2. 宿主保留 id `host` → 只服务 UI 桥路径，且必须带 `?m=<key>`（否则 400）；
- * 3. 插件不存在 → 404；**4. 已停用 → 403**（早于文件判定：不允许从停用插件探测文件是否存在）；
- * 5. 路径归一化后跑出插件目录 → 403（注意：`new URL` 会先消解**未编码**的 `..`，
- *    所以真正会撞上这条守卫的是 `%2e%2e%2f` 这类编码穿越——2026-09-26 工装实测）；
- * 6. **文件不存在 → 404**（缺失是可预期状态，不是 5xx；见 protocol.ts 的实测说明）；
- * 7. 其余 → 交处理器读取。
+ * Branch order matters; changing it changes semantics:
+ * 1. invalid URL -> 400;
+ * 2. host reserved id `host` -> serve only the UI bridge path, and `?m=<key>` is required
+ *    (otherwise 400);
+ * 3. plugin not found -> 404; **4. disabled -> 403** (before the file check: disallow probing
+ *    whether a file exists in a disabled plugin);
+ * 5. path escapes the plugin directory after normalization -> 403 (note: `new URL` already
+ *    collapses **unencoded** `..` first, so what really hits this guard is encoded traversal such
+ *    as `%2e%2e%2f` - measured by tooling on 2026-09-26);
+ * 6. **file not found -> 404** (absence is an expected state, not a 5xx; see the measured notes in
+ *    protocol.ts);
+ * 7. everything else -> hand to the handler to read.
  */
 export function resolvePluginRequest(input: {
   url: string
-  /** 从 `?m=<key>` 解析出的桥 key（由处理器按自己的口径解析；缺省为 null） */
+  /** The bridge key parsed from `?m=<key>` (parsed by the handler with its own rules; null if absent) */
   bridgeKey: string | null
   deps: PluginRequestDeps
 }): PluginRequestDecision {
@@ -131,7 +141,8 @@ export function resolvePluginRequest(input: {
 
   const id = parsed.hostname || parsed.pathname.replace(/^\/+/, '').split('/')[0] || ''
   if (!PLUGIN_ID_RE.test(id)) return { kind: 'error', status: 400, reason: 'bad-url' }
-  // `plugin://<id>/a.js` 的 hostname 是 id；`plugin:///<id>/a.js`（无 authority）则切掉 id 段
+  // For `plugin://<id>/a.js` the hostname is the id; for `plugin:///<id>/a.js` (no authority)
+  // strip the id segment
   const rawPath = parsed.hostname
     ? parsed.pathname
     : parsed.pathname.replace(new RegExp(`^/+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '')
@@ -139,7 +150,7 @@ export function resolvePluginRequest(input: {
   try {
     relPath = decodeURIComponent(rawPath)
   } catch {
-    // 编码非法：保留原文（下游当普通路径处理）
+    // Invalid encoding: keep the raw text (downstream treats it as a normal path)
   }
   relPath = relPath.replace(/^\/+/, '')
 

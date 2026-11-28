@@ -9,10 +9,11 @@ import type { ServiceContext } from './llm-invoke'
 const mergeParser = StructuredOutputParser.fromZodSchema(EntityMergingResultSchema)
 
 /**
- * 按实体名文本相似度聚类分组，确保同名/相似名的实体在同一批次中合并
- * 使用 Dice 系数（string-similarity），相似度阈值 0.6 以上为同一组
- * - 单批次上限 40 个实体
- * - 优先比较短名称实体（更可能是其他名称的子串/简称）
+ * Cluster entities by the textual similarity of their names so that entities with the same or
+ * similar names end up merged in the same batch.
+ * Uses the Dice coefficient: a similarity of 0.6 or above puts two names in the same group.
+ * - At most 40 entities per batch
+ * - Shorter names are compared first (they are more likely substrings or abbreviations of others)
  */
 export function groupEntitiesByPrefix(entities: ExtractedEntity[]): ExtractedEntity[][] {
   const MAX_BATCH = 40
@@ -57,22 +58,26 @@ export function groupEntitiesByPrefix(entities: ExtractedEntity[]): ExtractedEnt
   return clusters.map((c) => c.entities)
 }
 
-/** 合并结果：合并后的实体列表 + 旧名 → 规范名映射（供落库阶段重指向关系/清理旧行） */
+/**
+ * Merge result: the merged entity list plus an old-name → canonical-name map, used by the
+ * persistence stage to repoint relations and clean up stale rows.
+ */
 export interface EntityMergeResult {
   entities: ExtractedEntity[]
   renameMap: Map<string, string>
 }
 
 /**
- * 实体消歧合并（Stage 1 程序化去重 → Stage 2 按名前缀分批次 LLM 合并）
- * onProgress(processedBatches, totalBatches) 用于上报阶段详情进度
+ * Entity deduplication and merging (Stage 1 programmatic dedup → Stage 2 batched LLM merging
+ * grouped by name similarity).
+ * onProgress(processedBatches, totalBatches) reports detailed phase progress.
  */
 export async function mergeEntities(
   ctx: ServiceContext,
   entities: ExtractedEntity[],
   onProgress?: (processed: number, total: number) => void
 ): Promise<EntityMergeResult> {
-  /** 旧名 → 规范名：被合并掉的实体名指向保留名 */
+  /** Old name → canonical name: names of merged-away entities point to the kept name */
   const renameMap = new Map<string, string>()
 
   if (entities.length <= 1) {
@@ -80,7 +85,7 @@ export async function mergeEntities(
     return { entities, renameMap }
   }
 
-  // Stage 1: 程序化合并（完全同名 + 简单别名匹配）
+  // Stage 1: Programmatic merge (exact same name + simple alias matching)
   const nameMap = new Map<string, ExtractedEntity>()
 
   for (const entity of entities) {
@@ -110,7 +115,7 @@ export async function mergeEntities(
     return { entities: stage1Entities, renameMap }
   }
 
-  // Stage 2: 按名前缀分组 → 分批次 LLM 合并
+  // Stage 2: Group by name similarity → batched LLM merging
   const batches = groupEntitiesByPrefix(stage1Entities)
   onProgress?.(0, batches.length)
 
@@ -140,7 +145,8 @@ export async function mergeEntities(
                 source_doc_ids: e.source_doc_ids || []
               }) as ExtractedEntity
           )
-          // 记录旧名 → 规范名：合并结果别名中属于本批次的实体名，以及 removed_names
+          // Record old name → canonical name: batch entity names found among the merged aliases,
+          // plus removed_names
           for (const m of merged) {
             for (const alias of m.aliases) {
               if (batchNames.has(alias) && alias !== m.name) {
@@ -170,7 +176,7 @@ export async function mergeEntities(
     onProgress?.(i + 1, batches.length)
   }
 
-  // 重命名链收敛：A→B、B→C 统一落到 C；并清理映射到自身的冗余项
+  // Collapse rename chains: A→B and B→C both resolve to C; drop redundant self-mappings
   const resolveChain = (name: string): string => {
     let current = name
     const seen = new Set<string>([name])

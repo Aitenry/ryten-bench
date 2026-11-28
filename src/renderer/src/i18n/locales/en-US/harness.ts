@@ -1,8 +1,8 @@
 import type { harnessZhCN } from '../zh-CN/harness'
 
-/** `typeof harnessZhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错 */
+/** The `typeof harnessZhCN` constraint: keys line up one-to-one with the Chinese source, so a missing or extra key fails at compile time */
 export const harnessEnUS: typeof harnessZhCN = {
-  /* ── harness（原 locales/en-US/harness.ts） ── */
+  /* ── harness ── */
   /* Harness (assistant) module strings. Keep keys identical to the zh-CN source of truth. */
   harness: {
     index: {
@@ -109,10 +109,10 @@ export const harnessEnUS: typeof harnessZhCN = {
       workspaceRevealInFolder: 'Show in folder',
       workspaceRevealInFinder: 'Show in Finder',
       workspaceRevealInFileManager: 'Show in file manager',
-      workspaceSwitchFailed:
-        'Could not switch workspace. Check that the folder still exists and try again.',
       workspaceCreateFailed: 'Failed to create the workspace — check that the folder is writable and retry',
-      workspaceDeleteFailed: 'Failed to delete the workspace — please retry',
+    workspaceDeleteFailed: 'Failed to delete the workspace — please retry',
+    workspaceSwitchFailed:
+        'Could not switch workspace. Check that the folder still exists and try again.',
       workspaceDelete: 'Delete workspace',
       workspaceDeleteConfirmTitle: 'Delete workspace',
       workspaceDeleteConfirmContent:
@@ -155,8 +155,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       modelMenuAria: 'Choose model and reasoning effort',
       effortLabel: 'Reasoning effort',
       teamModeLabel: 'Enable agent teamwork',
-      teamModeHint:
-        'Lets the main agent and subagents share the task board (team_task_* tools and teamwork prompt); persisted per conversation, off by default.',
+      teamModeHint: 'Lets the main agent and subagents share the task board',
       teamModeFailed: 'Failed to toggle agent teamwork',
       effortNotSentHint: 'This protocol does not send the parameter; the value is only stored',
       effortSaveFailed: 'Failed to save the reasoning effort',
@@ -483,7 +482,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       subAgentExecuting: 'The agent is working…',
       silentGenerating: 'Generating…',
       taskList: 'Task list',
-      /** 段头上的改动徽标 / changed-files badge on a task segment header */
+      /** Changed-files badge on a task segment header */
       changedFiles: '{{count}} file(s) changed',
       changedFilesTip:
         '{{files}} file(s) changed in this step · {{pending}} awaiting review (click to diff)',
@@ -729,7 +728,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       openFailed: 'Failed to open the file',
       saveFailed: 'Failed to save the file',
       pendingReview: '{{count}} to review',
-      /** 改动记录条数不是文件数（同一个文件改 10 次 = 10 条），所以标题栏的主口径是文件数 */
+      /** Change records are not files (editing one file 10 times = 10 records), so the title bar's primary count is files */
       pendingFiles: '{{count}} file',
       pendingSummary: '{{files}} · {{changes}}',
       pendingFilesTip: 'Files with unreviewed model changes',
@@ -814,7 +813,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       sendFailed: 'Sorry, something went wrong. Please try again later.'
     }
   },
-  /* ── agentSettings（原 locales/en-US/agentSettings.ts） ── */
+  /* ── agentSettings ── */
   /* Agent settings page strings. Keep keys identical to the zh-CN source of truth. */
   agentSettings: {
     pageTitle: 'Agents',
@@ -896,7 +895,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       noAgents: 'No agents yet. Click New in the top right to create one'
     }
   },
-  /* ── memorySettings（原 locales/en-US/memorySettings.ts） ── */
+  /* ── memorySettings ── */
   memorySettings: {
     page: {
       title: 'Memory (Mnemon)',
@@ -988,7 +987,7 @@ export const harnessEnUS: typeof harnessZhCN = {
       updatedAt: 'Updated {{time}} · revision {{revision}}'
     }
   },
-  /* ── skillsSettings（原 locales/en-US/skillsSettings.ts） ── */
+  /* ── skillsSettings ── */
   skillsSettings: {
     pageTitle: 'Skills',
     pageDescription:

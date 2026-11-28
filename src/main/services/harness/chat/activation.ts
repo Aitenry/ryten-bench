@@ -4,24 +4,28 @@ import type { HarnessSettings } from '../../../types/settings'
 import { ensureChatTopicDir, ensureChatWorkspace } from './workspace'
 
 /**
- * 把「对话」模式的目录写成**活动工作区**（AI 工作目录 / 资源管理器根 / 文件 IPC 边界都认它）。
+ * Writes the "chat" mode directory as the **active workspace** (recognized by the AI working
+ * directory / explorer root / file IPC boundary).
  *
- * 为什么单独一个模块：对话目录的**计算**在 chat/workspace.ts（纯文件系统 + 数据库），
- * 而「切换活动工作区」要写 electron-store 并让文件监听换根——那是主进程环境的事。
- * 拆开之后离线工装只 import workspace.ts 就能验目录规则，不必把设置存储 / 监听器拖进来。
+ * Why a separate module: the chat directory **calculation** lives in chat/workspace.ts (pure
+ * filesystem + database), while "switching the active workspace" writes electron-store and
+ * re-roots the file watcher — that is main-process environment work. Split apart, the offline
+ * tooling can import workspace.ts alone to verify directory rules without dragging in the
+ * settings store or the watcher.
  *
- * 两条纪律（与工坊的插件工作区切换完全同款）：
- * - 只走「写设置 + 重新同步监听」这一条路：文件工具、资源管理器、改动审查、记忆作用域
- *   全都只看 `harness.workspacePath` + `activeWorkspaceId`；
- * - **幂等**：目录 / 工作区没变就什么都不做，避免每次进会话都重建文件监听。
+ * Two rules (the same ones the workshop uses when switching plugin workspaces):
+ * - Only one path: "write settings + resync watcher" — file tools, the explorer, change review
+ *   and memory scope all read only `harness.workspacePath` + `activeWorkspaceId`;
+ * - **Idempotent**: if the directory / workspace is unchanged, do nothing, avoiding rebuilding
+ *   the file watcher on every session entry.
  */
 export interface ChatActivation {
   workspaceId: number
-  /** 这条会话（或空白会话）的工作目录 */
+  /** Working directory of this session (or of the blank session) */
   dir: string
 }
 
-/** 写设置 + 让监听换根（没变化时不重复写） */
+/** Write settings + re-root the watcher (does not write again when unchanged) */
 export function activateChatWorkspace(dir: string, workspaceId: number): void {
   const harness = settingsStore.get('harness') as HarnessSettings | undefined
   if (harness?.workspacePath === dir && harness?.activeWorkspaceId === workspaceId) return
@@ -33,7 +37,7 @@ export function activateChatWorkspace(dir: string, workspaceId: number): void {
   syncWorkspaceWatcher()
 }
 
-/** 进入「对话」模式的空白会话：活动工作区 = 模式根目录（`<userData>/chat/`） */
+/** Blank session entering "chat" mode: active workspace = the mode root directory (`<userData>/chat/`) */
 export async function activateChatRoot(): Promise<ChatActivation> {
   const workspace = await ensureChatWorkspace()
   activateChatWorkspace(workspace.path, workspace.id)
@@ -41,10 +45,11 @@ export async function activateChatRoot(): Promise<ChatActivation> {
 }
 
 /**
- * 打开某条会话：活动工作区 = 它自己的子目录（`<userData>/chat/<话题 id>/`）。
+ * Open a session: active workspace = its own subdirectory (`<userData>/chat/<topic id>/`).
  *
- * 目录是**按需创建**的：重开应用后点开会话、或目录被用户手动删掉，这里都会补回来，
- * 否则模型的文件工具一调就是 ENOENT（「文件内容不可操作」）。
+ * The directory is created **on demand**: this recreates it when a session is opened after an
+ * app restart, or when the directory was deleted manually; otherwise the model's file tools
+ * would hit ENOENT ("file content not operable").
  */
 export async function activateChatTopic(topicId: number): Promise<ChatActivation> {
   const workspace = await ensureChatWorkspace()

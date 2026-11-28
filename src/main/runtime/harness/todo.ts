@@ -2,19 +2,22 @@ import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod'
 
 /**
- * 待办工具集 — 对话中模型制定的任务计划（write_todos / read_todos）
+ * Todo tool set — the task plan the model draws up during a conversation (write_todos / read_todos)
  *
- * schema 与前端渲染契约保持一致：
+ * The schema stays consistent with the frontend rendering contract:
  *   { todos: [{ content, status: "pending"|"in_progress"|"completed", activeForm }] }
  *
- * 生命周期（2026-08-20 重构）：
- * - 进程级单例（跨请求、跨轮次存在）：模型在多轮对话中持续用 write_todos 维护计划，
- *   后续轮次 read_todos 仍能读到（原实现每请求一个实例、运行结束清空，计划无法跨轮）；
- * - 按 topicId 隔离：每个对话话题一份清单，互不串扰；
- * - 写入即触发 onChange（由主进程注入，广播 harness-todos-updated 事件，
- *   驱动输入框上方的进行中任务卡片实时更新）；
- * - 本轮结束后的收尾（不再有「进行中」）不在这里，见 todo-closeout.ts：那是与轮次调度
- *   有关的判定，工具层只负责读写清单本身。
+ * Lifecycle (2026-08-20 refactor):
+ * - Process-level singleton (survives requests and turns): the model keeps maintaining the plan
+ *   with write_todos across turns, and later turns can still read it via read_todos (the original
+ *   implementation created one instance per request and cleared it when the run ended, so the plan
+ *   could not span turns);
+ * - Isolated by topicId: each conversation topic has its own list, with no cross-talk;
+ * - A write triggers onChange immediately (injected by the main process, which broadcasts the
+ *   harness-todos-updated event and drives live updates of the in-progress task card above the
+ *   composer);
+ * - End-of-turn close-out (so no item stays "in progress") is not here, see todo-closeout.ts: that
+ *   is a turn-scheduling decision, while the tool layer only reads and writes the list itself.
  */
 
 export interface TodoItem {
@@ -25,11 +28,11 @@ export interface TodoItem {
 
 export type TodoUpdateListener = (topicId: number, todos: TodoItem[]) => void
 
-/** 对话待办存储（进程级单例，按 topicId 隔离） */
+/** Conversation todo store (process-level singleton, isolated by topicId) */
 export class TodoStore {
   private readonly itemsByTopic = new Map<number, TodoItem[]>()
 
-  /** 变更回调（主进程注入，用于向渲染进程广播） */
+  /** Change callback (injected by the main process to broadcast to the renderer) */
   onChange?: TodoUpdateListener
 
   set(topicId: number, todos: TodoItem[]): TodoItem[] {
@@ -42,26 +45,32 @@ export class TodoStore {
     return this.itemsByTopic.get(topicId) ?? []
   }
 
-  /** 删除话题时清理对应清单 */
+  /** Clear the corresponding list when a topic is deleted */
   clear(topicId: number): void {
     this.itemsByTopic.delete(topicId)
   }
 
   /**
-   * 丢弃全部清单（账号数据空间切换时用）。
+   * Discard every list (used when the account data space switches).
    *
-   * topicId 在每个账号的库里各自自增，换库后同一个 id 可能指向另一个话题；
-   * 不清掉会把上一个账号的计划显示到新账号的对话上。
+   * topicId auto-increments separately in each account's database, so after switching databases
+   * the same id may point at a different topic; without clearing, the previous account's plan
+   * would be shown on the new account's conversation.
    */
   reset(): void {
     this.itemsByTopic.clear()
   }
 }
 
-/** 进程级单例：跨请求共享，供 Runtime 与主进程广播使用 */
+/**
+ * Process-level singleton: shared across requests, used by the Runtime and main-process broadcasts
+ */
 export const todoStore = new TodoStore()
 
-/** 构建待办工具集（闭包绑定 topicId，保证清单归属当前对话） */
+/**
+ * Build the todo tool set (the closure binds topicId so the list belongs to the current
+ * conversation)
+ */
 export function buildTodoTools(store: TodoStore, topicId: number): StructuredToolInterface[] {
   const todoSchema = z.object({
     content: z.string().describe('Content of the todo item'),

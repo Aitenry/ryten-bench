@@ -6,18 +6,18 @@ import { withOrm } from '../orm'
 import { llm_providers } from '../schema'
 import { DEFAULT_MAX_TOOL_ROUNDS, type ThinkingMode } from '../../../shared/model-params'
 
-// --- 类型定义 ---
+// --- Type definitions ---
 
-/** 数据库原始行（字段由 schema 推导） */
+/** Raw database row (fields inferred from schema) */
 export type LlmProviderRow = typeof llm_providers.$inferSelect
 
 /**
- * 置顶排序值：由数据库取「当前最大值 + 1」，前端不再手填排序号。
- * 列表排序恒为 sort_order 倒序 → 置顶(>0)在前、未置顶(0)在后。
+ * Pin sort value: the database takes "current max + 1", so the frontend no longer fills in a sort number.
+ * List order is always sort_order descending → pinned (>0) first, unpinned (0) after.
  */
 const NEXT_PIN_ORDER = sql`(select coalesce(max(sort_order), 0) + 1 from ${llm_providers})`
 
-/** 供应商配置（api_key 仅运行时路径解密；列表视图恒为 null，密钥不发送到渲染进程） */
+/** Provider config (api_key is decrypted only on runtime paths; it is always null in list views, so keys never reach the renderer) */
 export interface LlmProviderConfig {
   id: number
   name: string
@@ -25,58 +25,58 @@ export interface LlmProviderConfig {
   base_url: string | null
   api_key: string | null
   model: string
-  /** 采样温度：null = 未设置，使用供应商最佳默认值 */
+  /** Sampling temperature: null = unset, use the provider's best default */
   temperature: number | null
   max_tokens: number | null
   top_p: number | null
   top_k: number | null
   thinking_mode: ThinkingMode
-  /** 推理等级：null = 未设置（不下发档位参数，走模型默认）；取值来自模型档案的档位表 */
+  /** Reasoning effort: null = unset (no tier parameter is sent, model default applies); values come from the model profile's tier table */
   reasoning_effort: string | null
   max_tool_rounds: number
   extra_config: Record<string, unknown> | null
   metadata: Record<string, unknown> | null
   is_default: boolean
   is_enabled: boolean
-  /** 置顶排序值（>0 即置顶，来自 SQL 的 max+1）；仅供列表排序，不在表单里手填 */
+  /** Pin sort value (>0 means pinned, taken from max+1 in SQL); used for list ordering only, never typed in the form */
   sort_order: number
-  /** 是否置顶（sort_order > 0 的投影，界面开关直接读它） */
+  /** Whether pinned (projection of sort_order > 0, read directly by the UI toggle) */
   is_pinned: boolean
 }
 
-/** 创建/更新时的输入（不含自动生成的字段） */
+/** Input for create/update (excluding auto-generated fields) */
 export interface LlmProviderInput {
   name: string
   provider: string
   base_url?: string | null
-  api_key?: string | null // 明文输入，mapper内部加密
+  api_key?: string | null // plaintext input, encrypted inside the mapper
   model: string
-  /** 采样参数：留空(undefined/null) = 不下发，使用供应商最佳默认值 */
+  /** Sampling params: empty (undefined/null) = not sent, use the provider's best default */
   temperature?: number | null
   max_tokens?: number | null
   top_p?: number | null
   top_k?: number | null
   thinking_mode?: ThinkingMode
-  /** 推理等级：留空(undefined/null) = 未设置，不下发档位参数 */
+  /** Reasoning effort: empty (undefined/null) = unset, no tier parameter is sent */
   reasoning_effort?: string | null
   max_tool_rounds?: number
   extra_config?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
   is_default?: boolean
   is_enabled?: boolean
-  /** 是否置顶：true → sort_order 由 SQL 取 max+1，false → 归零 */
+  /** Whether pinned: true → sort_order is max+1 from SQL, false → reset to 0 */
   pinned?: boolean
 }
 
-// --- 内部工具 ---
+// --- Internal helpers ---
 
 /**
- * 按行组装配置。includeKey=false 时 api_key 恒为 null（列表/前端只读场景，
- * 解密后的密钥绝不离开主进程）；运行时取数路径（getProviderById、
- * getEnabledProviders、getDefaultProvider）必须传 true 供拉取调用使用。
+ * Build the config from a row. When includeKey=false, api_key is always null (list/read-only
+ * scenarios where the decrypted key must never leave the main process); runtime read paths
+ * (getProviderById, getEnabledProviders, getDefaultProvider) must pass true for fetch calls.
  *
- * 库列可空，缺值时按建表默认值补齐（top_p、top_k、temperature 留空不下发 /
- * thinking_mode auto / max_tool_rounds 500 / is_default false / is_enabled true / sort_order 0）。
+ * Columns are nullable; missing values fall back to the table defaults (top_p, top_k, temperature unset = not sent /
+ * thinking_mode auto / max_tool_rounds 500 / is_default false / is_enabled true / sort_order 0).
  */
 function rowToConfig(row: LlmProviderRow, includeKey = true): LlmProviderConfig {
   return {
@@ -105,16 +105,16 @@ function rowToConfig(row: LlmProviderRow, includeKey = true): LlmProviderConfig 
 // --- CRUD ---
 
 /**
- * 获取所有供应商的「列表视图」（设置页树等只读场景）。
- * 不解密 api_key —— 密钥永不发送到渲染进程；
- * 需要完整配置（含密钥）的路径请使用 getProviderById / getEnabledProviders / getDefaultProvider。
+ * Get the list view of all providers (read-only scenarios such as the settings tree).
+ * Does not decrypt api_key — keys never reach the renderer;
+ * paths that need the full config (including the key) should use getProviderById / getEnabledProviders / getDefaultProvider.
  */
 async function getAllProviderList(): Promise<LlmProviderConfig[]> {
   return withOrm('getAllProviderList', async (db) => {
     const rows = await db
       .select()
       .from(llm_providers)
-      // 置顶(>0)在前，未置顶(0)按创建顺序在后
+      // Pinned (>0) first; unpinned (0) follow in creation order
       .orderBy(desc(llm_providers.sort_order), asc(llm_providers.id))
     logger.info(`Query for all providers returned ${rows.length} rows.`)
     return rows.map((row) => rowToConfig(row, false))
@@ -122,7 +122,7 @@ async function getAllProviderList(): Promise<LlmProviderConfig[]> {
 }
 
 /**
- * 根据 ID 获取供应商
+ * Get a provider by ID
  */
 async function getProviderById(id: number): Promise<LlmProviderConfig | null> {
   return withOrm('getProviderById', async (db) => {
@@ -133,7 +133,7 @@ async function getProviderById(id: number): Promise<LlmProviderConfig | null> {
 }
 
 /**
- * 获取默认供应商（已启用的）
+ * Get the default provider (enabled)
  */
 async function getDefaultProvider(): Promise<LlmProviderConfig | null> {
   return withOrm('getDefaultProvider', async (db) => {
@@ -143,7 +143,7 @@ async function getDefaultProvider(): Promise<LlmProviderConfig | null> {
       .where(and(eq(llm_providers.is_default, true), eq(llm_providers.is_enabled, true)))
       .limit(1)
     if (rows.length === 0) {
-      // 回退：取第一个已启用的
+      // Fallback: take the first enabled one
       const fallback = await db
         .select()
         .from(llm_providers)
@@ -158,7 +158,7 @@ async function getDefaultProvider(): Promise<LlmProviderConfig | null> {
 }
 
 /**
- * 获取所有已启用的供应商
+ * Get all enabled providers
  */
 async function getEnabledProviders(): Promise<LlmProviderConfig[]> {
   return withOrm('getEnabledProviders', async (db) => {
@@ -171,7 +171,7 @@ async function getEnabledProviders(): Promise<LlmProviderConfig[]> {
   })
 }
 
-/** 把输入整理成可直接写库的列值（api_key 加密、JSON 列序列化；置顶时排序值走 SQL 子查询） */
+/** Normalize the input into columns ready to be written (encrypt api_key, serialize JSON columns; the pinned sort value uses an SQL subquery) */
 function toProviderColumns(input: LlmProviderInput): PgInsertValue<typeof llm_providers> {
   return {
     name: input.name,
@@ -190,17 +190,17 @@ function toProviderColumns(input: LlmProviderInput): PgInsertValue<typeof llm_pr
     metadata: input.metadata ? JSON.stringify(input.metadata) : null,
     is_default: input.is_default ?? false,
     is_enabled: input.is_enabled ?? true,
-    // 置顶的排序值由数据库取 max+1，调用方不传数值
+    // The pinned sort value comes from the database as max+1; callers do not pass a number
     sort_order: input.pinned ? NEXT_PIN_ORDER : 0
   }
 }
 
 /**
- * 创建供应商
+ * Create a provider
  */
 async function createProvider(input: LlmProviderInput): Promise<number> {
   return withOrm('createProvider', async (db) => {
-    // 如果设为默认，先取消其他默认
+    // If this one is set as default, clear any other default first
     if (input.is_default) {
       await db
         .update(llm_providers)
@@ -220,11 +220,11 @@ async function createProvider(input: LlmProviderInput): Promise<number> {
 }
 
 /**
- * 批量创建供应商（“一键添加”拉取到的模型列表）。
- * 相比逐个调用 createProvider：
- * - 全部插入在同一个事务中完成（PGlite 单次事务开销）；
- * - 自动跳过非法输入与已存在的 (provider, model) 组合，防止重复添加；
- * - 调用方只需清一次缓存、广播一次变更，避免渲染进程风暴性全量刷新。
+ * Create providers in bulk (the model list pulled by "one-click add").
+ * Compared with calling createProvider one by one:
+ * - all inserts complete in a single transaction (PGlite per-transaction overhead);
+ * - invalid inputs and existing (provider, model) combinations are skipped automatically to prevent duplicates;
+ * - the caller clears the cache and broadcasts a change only once, avoiding stormy full refreshes of the renderer.
  */
 async function createProviders(
   inputs: LlmProviderInput[]
@@ -245,7 +245,7 @@ async function createProviders(
 
     let created = 0
     await db.transaction(async (tx) => {
-      // 批量添加默认不设默认模型；若个别输入要求默认，先统一取消现有默认
+      // Bulk add does not set a default model; if any input requests one, clear the current default first
       if (valid.some((i) => i.is_default)) {
         await tx
           .update(llm_providers)
@@ -254,7 +254,7 @@ async function createProviders(
       }
 
       for (const input of valid) {
-        // 跳过与现有供应商重复的 (provider, model)
+        // Skip (provider, model) combinations that duplicate existing providers
         const dup = await tx
           .select({ id: llm_providers.id })
           .from(llm_providers)
@@ -278,7 +278,7 @@ async function createProviders(
 }
 
 /**
- * 更新供应商
+ * Update a provider
  */
 async function updateProvider(id: number, updates: Partial<LlmProviderInput>): Promise<boolean> {
   return withOrm('updateProvider', async (db) => {
@@ -287,7 +287,7 @@ async function updateProvider(id: number, updates: Partial<LlmProviderInput>): P
     if (updates.name !== undefined) patch.name = updates.name
     if (updates.provider !== undefined) patch.provider = updates.provider
     if (updates.base_url !== undefined) patch.base_url = updates.base_url
-    // 空字符串视为删除key
+    // An empty string is treated as deleting the key
     if (updates.api_key !== undefined) {
       patch.api_key_encrypted = updates.api_key ? encryptApiKey(updates.api_key) : null
     }
@@ -298,7 +298,7 @@ async function updateProvider(id: number, updates: Partial<LlmProviderInput>): P
     if (updates.top_k !== undefined) patch.top_k = updates.top_k
     if (updates.thinking_mode !== undefined) patch.thinking_mode = updates.thinking_mode
     if (updates.reasoning_effort !== undefined) {
-      // 空串/null 都视为「未设置」：清掉档位，回到模型默认
+      // Empty string/null is treated as "unset": clear the tier and fall back to the model default
       patch.reasoning_effort = updates.reasoning_effort?.trim() || null
     }
     if (updates.max_tool_rounds !== undefined) patch.max_tool_rounds = updates.max_tool_rounds
@@ -306,7 +306,7 @@ async function updateProvider(id: number, updates: Partial<LlmProviderInput>): P
       patch.extra_config = updates.extra_config ? JSON.stringify(updates.extra_config) : null
     }
     if (updates.metadata !== undefined) {
-      // null 或空对象都清空元数据
+      // null or an empty object clears the metadata
       patch.metadata =
         updates.metadata && Object.keys(updates.metadata).length > 0
           ? JSON.stringify(updates.metadata)
@@ -322,7 +322,7 @@ async function updateProvider(id: number, updates: Partial<LlmProviderInput>): P
       patch.is_default = updates.is_default
     }
     if (updates.is_enabled !== undefined) patch.is_enabled = updates.is_enabled
-    // 置顶开关：开 → 由 SQL 取当前最大排序值 +1（置于最前）；关 → 归零（退回未置顶）
+    // Pin toggle: on → SQL takes the current max sort value + 1 (place first); off → reset to 0 (back to unpinned)
     if (updates.pinned !== undefined) patch.sort_order = updates.pinned ? NEXT_PIN_ORDER : 0
 
     if (Object.keys(patch).length === 0) {
@@ -343,7 +343,7 @@ async function updateProvider(id: number, updates: Partial<LlmProviderInput>): P
 }
 
 /**
- * 删除供应商
+ * Delete a provider
  */
 async function deleteProvider(id: number): Promise<boolean> {
   return withOrm('deleteProvider', async (db) => {
@@ -357,9 +357,9 @@ async function deleteProvider(id: number): Promise<boolean> {
 }
 
 /**
- * 批量删除供应商（按 ID 集合）。
- * 与批量创建对称：全部删除在同一个事务中完成，调用方只需清一次缓存、广播一次变更，
- * 避免逐个 deleteProvider 触发渲染进程反复全量刷新而卡死。
+ * Delete providers in bulk (by ID set).
+ * Symmetric to bulk create: all deletes complete in a single transaction, and the caller only clears the cache once and broadcasts one change,
+ * avoiding repeated full renderer refreshes (and freezes) triggered by calling deleteProvider one by one.
  */
 async function deleteProviders(ids: number[]): Promise<number> {
   return withOrm('deleteProviders', async (db) => {
@@ -379,7 +379,7 @@ async function deleteProviders(ids: number[]): Promise<number> {
 }
 
 /**
- * 设置默认供应商
+ * Set the default provider
  */
 async function setDefaultProvider(id: number): Promise<boolean> {
   return withOrm('setDefaultProvider', async (db) => {

@@ -10,8 +10,10 @@ import { notesEnUS } from './notes'
 import { enUSLattice } from './lattice'
 
 /**
- * `typeof zhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错。
- * harness / notes 已移出插件，词条随系统功能静态打包。
+ * `typeof zhCN` constraint: keys align one-to-one with the Chinese source language, so a missing
+ * or extra key fails at compile time.
+ * harness / notes have moved out of the plugin; their entries ship statically with the system
+ * features.
  */
 export const enUS: typeof zhCN = {
   common: enUSCommon,

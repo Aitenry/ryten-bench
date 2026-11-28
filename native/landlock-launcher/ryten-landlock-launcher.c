@@ -1,24 +1,26 @@
 /*
- * RytenBench 沙箱服务 —— Linux Landlock 启动器（自研，不依赖 bubblewrap）。
+ * RytenBench sandbox service — Linux Landlock launcher (custom-built, no bubblewrap dependency).
  *
- * 用法：
- *   ryten-landlock-launcher --ro <路径> [--ro <路径>...] --rw <路径> [--rw <路径>...] -- <命令> [参数...]
+ * Usage:
+ *   ryten-landlock-launcher --ro <path> [--ro <path>...] --rw <path> [--rw <path>...] -- <command> [args...]
  *
- * 语义：
- *   - `--ro`  该路径树下允许「读 + 执行」；
- *   - `--rw`  该路径树下允许「读 + 执行 + 写 + 删除 + 建对象」；
- *   - 未列出的路径**一律拒绝**（Landlock 是白名单：handled_access_fs 覆盖全部文件操作，
- *     只有显式加规则的地方才放行）。
+ * Semantics:
+ *   - `--ro`  the tree under this path allows "read + execute";
+ *   - `--rw`  the tree under this path allows "read + execute + write + remove + create objects";
+ *   - paths not listed are **always denied** (Landlock is a whitelist: handled_access_fs covers
+ *     all file operations, and only explicitly added rules are allowed).
  *
- * 做法：先按「本内核支持的 ABI」拼出 handled 掩码，建 ruleset，把每条路径作为
- * PATH_BENEATH 规则加进去，然后 PR_SET_NO_NEW_PRIVS + landlock_restrict_self 限制自身，
- * 最后 execvp 目标命令。Landlock 的限制**跨 execve 继承**，因此整棵进程树都在限制下
- * （这正是我们不需要 bwrap 的原因：不需要 root、不需要 namespace、不需要任何外部程序）。
+ * Approach: first assemble the handled mask from "the ABI supported by this kernel", create the
+ * ruleset, add each path as a PATH_BENEATH rule, then PR_SET_NO_NEW_PRIVS + landlock_restrict_self
+ * to restrict itself, and finally execvp the target command. Landlock restrictions are
+ * **inherited across execve**, so the whole process tree stays restricted
+ * (which is exactly why we don't need bwrap: no root, no namespaces, no external programs).
  *
- * 失败契约：任何一步失败都往 stderr 打 `ryten-landlock-launcher: <详情>` 并以 125 退出，
- * **绝不执行目标命令**（故障关闭；调用方据此判定「沙箱坏了」，而不是「命令失败了」）。
+ * Failure contract: any failure in any step prints `ryten-landlock-launcher: <detail>` to stderr
+ * and exits with 125, **never executing the target command** (fail closed; callers use this to
+ * decide "the sandbox is broken" rather than "the command failed").
  *
- * 构建：`node native/landlock-launcher/build.mjs`（需要 cc；只在 Linux 上产出二进制）。
+ * Build: `node native/landlock-launcher/build.mjs` (needs cc; only produces a binary on Linux).
  */
 
 #define _GNU_SOURCE
@@ -42,14 +44,14 @@
 #include <sys/syscall.h>
 
 #define LAUNCHER_NAME "ryten-landlock-launcher"
-/** 启动器自身失败的退出码（与任何命令退出码区分开） */
+/** Launcher's own failure exit code (distinguished from any command exit code) */
 #define LAUNCHER_FAILURE_EXIT 125
-/** PATH_BENEATH 规则里最多允许的路径条数（够用即可，超出直接失败而不是静默截断） */
+/** Maximum number of paths allowed in PATH_BENEATH rules (enough for our needs; overflow fails instead of silently truncating) */
 #define MAX_PATHS 256
 
 #if !defined(RYTEN_HAVE_LANDLOCK_HEADERS)
-/* 头文件缺失（老发行版）：直接编译成「永远失败」的启动器，
-   让上层探针判为不可用并故障关闭，而不是给出一个假沙箱。 */
+/* Headers missing (old distros): compile straight into an "always fails" launcher so the
+   upper-layer probe marks it unavailable and fails closed, instead of presenting a fake sandbox. */
 int main(int argc, char **argv)
 {
   (void)argc;
@@ -59,7 +61,7 @@ int main(int argc, char **argv)
 }
 #else
 
-/* 老版本头文件里可能没有这些常量：按内核 ABI 逐级补齐 */
+/* Older headers may lack these constants: fill them in level by level according to the kernel ABI */
 #ifndef LANDLOCK_ACCESS_FS_REFER
 #define LANDLOCK_ACCESS_FS_REFER 0
 #endif
@@ -87,7 +89,7 @@ static inline int landlock_restrict_self(int ruleset_fd, uint32_t flags)
 }
 #endif
 
-/** 读权限 + 执行（“看得见、跑得动”） */
+/** Read + execute permissions ("can see it, can run it") */
 static uint64_t read_mask(uint32_t abi)
 {
   (void)abi;
@@ -95,7 +97,7 @@ static uint64_t read_mask(uint32_t abi)
          LANDLOCK_ACCESS_FS_EXECUTE;
 }
 
-/** 写权限：创建/删除/改名/截断，按 ABI 逐级加（老内核不支持的能力不请求） */
+/** Write permissions: create/remove/rename/truncate, added level by level per ABI (capabilities unsupported by old kernels are not requested) */
 static uint64_t write_mask(uint32_t abi)
 {
   uint64_t mask = LANDLOCK_ACCESS_FS_WRITE_FILE |
@@ -124,7 +126,7 @@ static void fail_fmt(const char *what, const char *detail)
   fprintf(stderr, LAUNCHER_NAME ": %s: %s\n", what, detail);
 }
 
-/** 给一条路径加 PATH_BENEATH 规则（路径不存在直接失败：白名单写错不该静默降级） */
+/** Add a PATH_BENEATH rule for one path (a nonexistent path fails immediately: a wrong whitelist must not silently degrade) */
 static int add_path_rule(int ruleset_fd, const char *path, uint64_t allowed)
 {
   int path_fd = open(path, O_PATH | O_CLOEXEC);
@@ -203,7 +205,7 @@ int main(int argc, char **argv)
     return LAUNCHER_FAILURE_EXIT;
   }
 
-  /* 1) 问内核支持哪个 Landlock ABI（不支持会返回 ENOSYS / EOPNOTSUPP） */
+  /* 1) Ask the kernel which Landlock ABI is supported (unsupported returns ENOSYS / EOPNOTSUPP) */
   int abi = landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
   if (abi < 1)
   {
@@ -212,13 +214,16 @@ int main(int argc, char **argv)
   }
   if (abi < 3)
   {
-    /* ABI 1/2 缺少 TRUNCATE：如实报出来（上层据此把强制完整度标为 partial），但仍然施加限制。
-       前缀刻意**不是**致命签名 `ryten-landlock-launcher:`——那是「沙箱坏了」的判定依据；
-       成功运行的信息性提示若带同一前缀，会被工具层误判成后端故障（2026-09-27 容器验证实测踩到）。 */
+    /* ABI 1/2 lack TRUNCATE: report that faithfully (the upper layer marks enforcement
+       completeness as partial based on it), but still apply the restriction. The prefix is
+       deliberately **not** the fatal signature `ryten-landlock-launcher:` — that is the basis for
+       deciding "the sandbox is broken"; an informational message on a successful run carrying the
+       same prefix would be misread as a backend failure by the tool layer (measured during
+       container verification on 2026-09-27). */
     fprintf(stderr, "[ryten-sandbox] partial enforcement (Landlock ABI %d < 3)\n", abi);
   }
 
-  /* 2) 建 ruleset：handled 掩码 = 本内核支持的全部文件操作（白名单语义） */
+  /* 2) Create the ruleset: handled mask = all file operations supported by this kernel (whitelist semantics) */
   struct landlock_ruleset_attr ruleset_attr;
   memset(&ruleset_attr, 0, sizeof(ruleset_attr));
   ruleset_attr.handled_access_fs = read_mask((uint32_t)abi) | write_mask((uint32_t)abi);
@@ -229,7 +234,7 @@ int main(int argc, char **argv)
     return LAUNCHER_FAILURE_EXIT;
   }
 
-  /* 3) 加规则：--ro 只给读+执行，--rw 再叠加写 */
+  /* 3) Add rules: --ro grants read+execute only, --rw additionally stacks write permissions */
   for (size_t i = 0; i < ro_count; i++)
   {
     if (add_path_rule(ruleset_fd, ro_paths[i], read_mask((uint32_t)abi)) != 0)
@@ -247,7 +252,7 @@ int main(int argc, char **argv)
     }
   }
 
-  /* 4) 自我限制：no_new_privs 是 Landlock 的前置条件 */
+  /* 4) Restrict self: no_new_privs is a prerequisite for Landlock */
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
   {
     fail("prctl(PR_SET_NO_NEW_PRIVS)");
@@ -262,7 +267,7 @@ int main(int argc, char **argv)
   }
   close(ruleset_fd);
 
-  /* 5) 执行目标命令（限制跨 execve 继承到整棵进程树） */
+  /* 5) Execute the target command (restrictions are inherited across execve into the whole process tree) */
   execvp(argv[index], &argv[index]);
   fail("execvp");
   return LAUNCHER_FAILURE_EXIT;

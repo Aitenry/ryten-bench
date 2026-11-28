@@ -2,7 +2,7 @@ import { getChunks } from '@codemirror/merge'
 import { type EditorState } from '@codemirror/state'
 import type { FileChangeView } from '../../types/harness/file-change'
 
-/** 差异规模：处数 / 新增行 / 删除行 */
+/** Diff size: chunk count / added lines / removed lines */
 export interface MergeStats {
   chunks: number
   added: number
@@ -10,36 +10,43 @@ export interface MergeStats {
 }
 
 /**
- * 差异工具条上那行统计的**唯一算法**（`{{count}} 处差异 · +{{added}} −{{removed}}`）。
+ * The **single algorithm** behind the stats line in the diff toolbar
+ * (`{{count}} changes · +{{added}} −{{removed}}`).
  *
- * 抽成纯函数是为了能脱离 React 直接验证：`getChunks` 在各种情形下到底返回什么，
- * 必须在**真编辑器**上量过，不能靠读代码推断（工装：scripts/probe-diff-stats.mjs）。
+ * It is extracted as a pure function so it can be verified outside React: what `getChunks`
+ * actually returns in each situation has to be measured on a **real editor**, not inferred
+ * from reading the code (tooling: scripts/probe-diff-stats.mjs).
  *
- * 唯一的「算不出差异」情形：**没有改动前快照**（`hasBefore=false`——新建文件、
- * 命令执行期间被文件监听捕获的写入）。差异视图在这一支压根不装 `unifiedMergeView`，
- * `getChunks(state)` 直接返回 `null`，于是统计只能回落用**改动记录自带的统计**
- * （落库时算的那份，与历史列表、资源管理器徽标同源）。
+ * The only "cannot compute the diff" case: **no pre-change snapshot** (`hasBefore=false` — a new
+ * file, or a write captured by the file watcher while a command was running). The diff view
+ * doesn't mount `unifiedMergeView` on that branch at all, so `getChunks(state)` returns `null`
+ * directly and the stats can only fall back to the **stats carried by the change record**
+ * (computed when persisting, the same source as the history list and the explorer badges).
  *
- * 用户 2026-09-23 报的「新建文件显示 0 处差异 · +0 −0」就是它：右侧正文整篇标成新增，
- * 统计行却是 0 —— 旧实现见 `!result` 就写死 `{chunks:0, added:0, removed:0}`，
- * 把「这里没有合并视图」误当成「这里没有改动」。
+ * This is exactly the "new file shows 0 changes · +0 −0" report from the user on 2026-09-23:
+ * the whole body is marked as added while the stats line says 0 — the old implementation wrote
+ * `{chunks:0, added:0, removed:0}` whenever `!result`, mistaking "there is no merge view here"
+ * for "there are no changes here".
  *
- * `Array.isArray` 守卫是纯防御：库文档写明 `getChunks` 可能返回 `{ chunks: null }`
- * （`ChunkField.create` 的初值就是 null），实测 6.12.2 的 `unifiedMergeView` 走
- * `ChunkField.init` 在构造时同步建好 chunks，构造态就已经是数组，所以这一支目前到不了。
+ * The `Array.isArray` guard is pure defence: the library docs say `getChunks` may return
+ * `{ chunks: null }` (the initial value of `ChunkField.create` is null), but in 6.12.2
+ * `unifiedMergeView` builds chunks synchronously in the constructor through `ChunkField.init`,
+ * so the constructed state is already an array and this branch is currently unreachable.
  */
 export function computeMergeStats(
   state: EditorState | null,
   original: string | null,
   fallback: Pick<FileChangeView, 'added' | 'removed'>
 ): MergeStats {
-  // 没有编辑器实例（首帧）/ 没有 original（快照还没读回来）：如实报 0，别谎报记录里的数
+  // No editor instance (first frame) / no original (snapshot not read back yet): honestly report
+  // 0, don't claim the numbers from the record
   if (!state || original === null) return { chunks: 0, added: 0, removed: 0 }
 
   const result = getChunks(state)
-  // 没有合并视图（不装 unifiedMergeView）：回落到记录自带的统计。
-  // 处数记 1：这份记录在语义上就是**一整块**改动（整份文件都是新增/删除），
-  // 报 0 会与「+14」自相矛盾（用户看到的正是「0 处差异 · +0 −0」这种读不通的话）。
+  // No merge view (unifiedMergeView not mounted): fall back to the stats carried by the record.
+  // The chunk count is 1: this record semantically is **one whole** change (the entire file is
+  // added/removed), and reporting 0 would contradict "+14" (exactly the unreadable
+  // "0 changes · +0 −0" the user saw).
   if (!result || !Array.isArray(result.chunks)) {
     return { chunks: 1, added: fallback.added, removed: fallback.removed }
   }

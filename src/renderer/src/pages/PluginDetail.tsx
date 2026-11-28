@@ -43,10 +43,10 @@ import type {
 import type { PluginListEntry } from '@shared/plugin/types'
 import { isVersionNewer } from '@shared/plugin/version'
 
-/** 版本号：semver（允许 1.2.3 / 1.2.3-beta.1）；平台服务端还会做严格校验 */
+/** Version: semver (allows 1.2.3 / 1.2.3-beta.1); the platform server also validates strictly */
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 
-/** 发布时间本地化展示（ISO → `YYYY-MM-DD HH:mm`；无法解析时原样显示） */
+/** Localized publish time (ISO → `YYYY-MM-DD HH:mm`; shown as-is when unparseable) */
 function formatPublishedAt(value?: string): string {
   if (!value) return '—'
   const date = new Date(value)
@@ -58,16 +58,15 @@ function formatPublishedAt(value?: string): string {
 }
 
 /**
- * 插件详情页（系统页面 `/plugins/:pluginId`）。
+ * Plugin detail page (system page `/plugins/:pluginId`).
  *
- * 契约 v2（见 `lattice/.dev/ryten-lattice-contract-v2.md` §3）：
- * - 版本表：版本 / 大小 / 源码有无 + 大小 / 发布时间 / changelog / 下载安装包 / 下载源码；
- * - 已安装时显示本机版本与源码路径（`lattice.sourcePath`）；
- * - 「在对话中修改」→ `lattice.openSource`（返回 `opened:'folder'` 时如实提示只打开了文件夹）；
- * - 「发布新版本」→ 版本号 + 更新说明 Modal → `lattice.republish`，成功后刷新并提示；
- * - 本地安装包（平台上没有）→「发布到插件中心」，沿用 `lattice.pickAndUpload`；
- * - 卸载 / 启停 / 打开插件页面 / 插件设置保留原能力；
- * - 远程来源只有插件中心（Lattice 平台），没有额外的外部仓库入口。
+ * - Version table: version / size / source available + size / publish time / changelog / download installer / download source;
+ * - When installed, show the local version and source path (`lattice.sourcePath`);
+ * - "Modify in chat" → `lattice.openSource` (when it returns `opened:'folder'`, truthfully say only the folder was opened);
+ * - "Publish new version" → version + release notes Modal → `lattice.republish`, then refresh and notify on success;
+ * - Local installer (not on the platform) → "Publish to plugin hub", reusing `lattice.pickAndUpload`;
+ * - Uninstall / enable-disable / open plugin page / plugin settings keep their original capabilities;
+ * - The only remote source is the plugin hub (Lattice platform); there is no extra external repository entry.
  */
 const PluginDetail: React.FC = () => {
   const { pluginId = '' } = useParams<{ pluginId: string }>()
@@ -82,38 +81,38 @@ const PluginDetail: React.FC = () => {
   const [entry, setEntry] = useState<PluginListEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  /** 插件自己的设置弹窗（设置类内容一律用弹窗，不铺在页面里） */
+  /** The plugin's own settings modal (settings content always goes in a modal, never laid out in the page) */
   const [settingsOpen, setSettingsOpen] = useState(false)
-  /** 打开源码 / 下载 / 发布进行中的互斥态（按钮 loading） */
+  /** Mutually exclusive busy state for open source / download / publish (button loading) */
   const [openSourceBusy, setOpenSourceBusy] = useState(false)
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null)
-  /** 版本表里「安装此版本」进行中的版本号（与主安装按钮的 busy 分开，避免互相卡 loading） */
+  /** Version currently installing from the version table ("install this version"), separate from the main install button's busy so they do not block each other's loading */
   const [installingVersion, setInstallingVersion] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
-  /** 发布新版本 Modal */
+  /** Publish-new-version modal */
   const [republishOpen, setRepublishOpen] = useState(false)
   const [republishVersion, setRepublishVersion] = useState('')
   const [republishChangelog, setRepublishChangelog] = useState('')
-  /** 版本号字段的校验错误（只红框 + 显示在输入框下方） */
+  /** Validation error for the version field (red border + shown below the input only) */
   const [republishVersionError, setRepublishVersionError] = useState<string | null>(null)
-  /** 发布动作本身的错误（构建/打包/上传；显示在表单底部，不红框版本号） */
+  /** Error of the publish action itself (build/package/upload; shown at the bottom of the form, no red border on the version) */
   const [republishError, setRepublishError] = useState<string | null>(null)
   const [republishing, setRepublishing] = useState(false)
   /**
-   * 卸载确认框（用户 2026-11-23：「卸载的时候没有清除本地数据的勾选，之前是有的」）。
+   * Uninstall confirmation (user 2026-11-23: "uninstalling no longer has the checkbox to clear local data, it used to").
    *
-   * 用受控 Modal 而不是 `modal.confirm`：勾选项决定传给主进程的 `purgeData`，
-   * 必须有真实状态；确认按钮还要有 loading（卸载会先撤云端安装记录，最长几秒）。
+   * A controlled Modal instead of `modal.confirm`: the checkbox decides the `purgeData` passed to the main process,
+   * so it needs real state; the confirm button also needs a loading state (uninstall first revokes the cloud install record, up to a few seconds).
    */
   const [uninstallOpen, setUninstallOpen] = useState(false)
   const [purgeData, setPurgeData] = useState(false)
   const [uninstalling, setUninstalling] = useState(false)
 
   /**
-   * 插件中心（登录后才可用）：
-   * - `hubDetail`：该插件在平台上的最新版本 / 版本清单 / 源码信息（未发布时为空，静默忽略）；
-   * - 发布动作：已发布走 `republish`（源码目录重新打包），未发布走 `pickAndUpload`。
+   * Plugin hub (available only after login):
+   * - `hubDetail`: the plugin's latest version / version list / source info on the platform (empty when unpublished, silently ignored);
+   * - Publish action: already published goes through `republish` (repackages the source directory), unpublished goes through `pickAndUpload`.
    */
   const {
     available: latticeReady,
@@ -132,12 +131,12 @@ const PluginDetail: React.FC = () => {
   } = useLattice()
   const [hubDetail, setHubDetail] = useState<HubDetailV2 | null>(null)
   /**
-   * 平台详情当前处于什么状态。
+   * Current state of the platform detail.
    *
-   * 以前只有 `hubDetail === null` 一个信号，把「正在加载 / 未登录 / 网络失败 / 真的没发布
-   * （404）」混成同一件事：从插件仓库点开一个未安装的插件时，本机清单先回来、平台详情还在
-   * 请求中，页面就先渲染「插件不存在或已被卸载」；网络失败则永远停在那儿。已安装并已发布的
-   * 插件还会在加载窗口里闪一下「本地安装 / 发布到插件中心」。
+   * Previously `hubDetail === null` was the only signal, conflating "loading / not logged in / network failure / truly unpublished
+   * (404)" into one thing: opening an uninstalled plugin from the plugin repository, the local list came back first while the platform detail was still
+   * in flight, so the page rendered "plugin does not exist or has been uninstalled"; a network failure then stayed there forever. An installed and published
+   * plugin would also briefly flash "installed locally / publish to plugin hub" during the loading window.
    */
   const [hubDetailState, setHubDetailState] = useState<
     'idle' | 'loading' | 'loaded' | 'notFound' | 'error' | 'unauthenticated' | 'unavailable'
@@ -146,11 +145,11 @@ const PluginDetail: React.FC = () => {
   const [sourceInfo, setSourceInfo] = useState<LatticeSourcePathResult>({ path: null })
   const [localSourcePath, setLocalSourcePath] = useState<string | null>(null)
   /**
-   * 任意一个安装/卸载/发布/下载动作正在进行（ref 版，回调里读到最新值）。
+   * Any install/uninstall/publish/download action is in progress (ref version, so callbacks read the latest value).
    *
-   * 详情页有一排互斥动作：更新、安装指定版本、启用/停用、卸载、发布、下载、打开源码。
-   * 以前每个按钮只管自己的 loading，于是「点更新 → 立刻卸载」会让卸载先删完、安装后落地，
-   * 界面提示还互相矛盾（卸载成功，几秒后插件又自动装回来了）。
+   * The detail page has a row of mutually exclusive actions: update, install specific version, enable/disable, uninstall, publish, download, open source.
+   * Previously each button only managed its own loading, so "click update → immediately uninstall" let the uninstall finish first while the install landed later,
+   * and the UI messages contradicted each other (uninstall succeeded, then the plugin auto-installed again seconds later).
    */
   const actionBusyRef = useRef(false)
   actionBusyRef.current =
@@ -163,7 +162,7 @@ const PluginDetail: React.FC = () => {
     downloadingKey !== null
   const anyActionBusy = actionBusyRef.current
 
-  /** 安装清单 → 当前插件（未安装时为 null，但可能仍能从平台详情看到它） */
+  /** Install list → current plugin (null when not installed, but it may still be visible from the platform detail) */
   const loadEntry = useCallback(async (): Promise<PluginListEntry | null> => {
     try {
       const list = await window.api.plugin.list()
@@ -176,7 +175,7 @@ const PluginDetail: React.FC = () => {
     }
   }, [pluginId])
 
-  /** 本机源码路径 / 本机安装目录：已安装时读一次（v2 通道未就绪时静默为空） */
+  /** Local source path / local install directory: read once when installed (silently empty while the v2 channel is not ready) */
   const loadSourceInfo = useCallback(
     async (found: PluginListEntry | null): Promise<void> => {
       if (!found) {
@@ -222,7 +221,7 @@ const PluginDetail: React.FC = () => {
     )
     setHubDetailError(null)
     try {
-      // 未发布到平台 → 主进程把 404 归一成 null；网络失败抛错（要区别于「真的没有」）
+      // Not published to the platform → the main process normalizes 404 to null; a network failure throws (must be distinguished from "really absent")
       const detail = await detailHub(pluginId)
       if (detail) {
         setHubDetail(detail)
@@ -233,7 +232,7 @@ const PluginDetail: React.FC = () => {
       }
     } catch (err) {
       setHubDetailError(latticeErrorMessage(err))
-      // 保留上一次成功拿到的详情（刷新失败不该把整页降级成「不存在」）
+      // Keep the last successfully fetched detail (a failed refresh should not downgrade the whole page to "does not exist")
       setHubDetailState('error')
     }
   }, [detailHub, latticeReady, loggedIn, pluginId])
@@ -248,7 +247,7 @@ const PluginDetail: React.FC = () => {
     void loadHubDetail()
   }, [loadHubDetail])
 
-  // 原生窗口标题：插件详情页显示插件名
+  // Native window title: the plugin detail page shows the plugin name
   const pageName = entry?.name ?? hubDetail?.name ?? pluginId
   useEffect(() => {
     setWindowTitleSource('plugin', pageName)
@@ -261,9 +260,9 @@ const PluginDetail: React.FC = () => {
   )
   const route = useMemo(() => routes.find((r) => r.pluginId === pluginId), [routes, pluginId])
   /**
-   * 该插件注册的设置页：插件自己的配置项从「设置」挪进插件详情（用户 2026-11-19 口径
-   * 「移除设置里面的这两个内容，放到插件仓库里面设置」）。插件停用/卸载后注册表里就没有它，
-   * 这里自然为空。
+   * Settings pages registered by this plugin: the plugin's own config items moved from "Settings" into the plugin detail (user wording 2026-11-19
+   * "remove these two items from settings and put them in the plugin repository"). Once the plugin is disabled/uninstalled it is gone from the registry,
+   * so this is naturally empty here.
    */
   const allSettingsSections = usePluginSettingsSections()
   const settingsSections = useMemo(
@@ -275,18 +274,18 @@ const PluginDetail: React.FC = () => {
   const enabled = Boolean(entry?.enabled)
   const failed = descriptor?.state === 'error'
   /**
-   * 能不能真的清数据：只有装载中的插件才注册了 `plugin.purge` 贡献（停用/卸载后
-   * 贡献被摘掉）。没有贡献时主进程只会删代码、数据原样保留——勾选框必须如实反映。
+   * Whether data can really be purged: only a loaded plugin registers the `plugin.purge` contribution (after disabling/uninstalling
+   * the contribution is removed). Without the contribution the main process only deletes the code and keeps the data as-is — the checkbox must reflect this.
    */
   const canPurgePluginData = Boolean(entry?.purgeLabel)
   const localVersion = entry?.version
   const hubLatestVersion = hubDetail?.latest_version
   /**
-   * 可更新 = 中心最新版**严格新于**本机版本。
+   * Update available = the hub's latest version is **strictly newer** than the local version.
    *
-   * 不能用「版本号字符串不相等」：本机 v0.4.1、中心最新 v0.3.0 时字符串不等，页面会打
-   * 「可更新」并给出「更新到 v0.3.0」的降级入口（2026-11-23 用户反馈
-   * 「明明本地版本号更高，为什么要更新」）。按 semver 比，本机更新时这里为 null。
+   * "Version strings differ" must not be used: with local v0.4.1 and hub latest v0.3.0 the strings differ, so the page would show
+   * "update available" and offer a downgrade entry "update to v0.3.0" (2026-11-23 user feedback
+   * "the local version is obviously higher, why update"). With a semver comparison this is null when the local version is newer.
    */
   const updateVersion =
     installed && isVersionNewer(hubLatestVersion, localVersion) ? (hubLatestVersion ?? null) : null
@@ -299,16 +298,16 @@ const PluginDetail: React.FC = () => {
   const publishedOnHub = Boolean(hubDetail)
   const hubConfirmedNotPublished = hubDetailState === 'notFound'
   const versions = hubDetail?.versions ?? []
-  /** 平台版本清单按时间倒序，`latest_version` 指向的那条才是「最新」；没有就取第一条 */
+  /** The platform version list is in reverse chronological order; the entry `latest_version` points at is the "latest", otherwise take the first one */
   const latestVersionEntry =
     versions.find((item) => item.version === hubDetail?.latest_version) ?? versions[0]
   const latestVersionHasSource = Boolean(hubDetail?.has_source || latestVersionEntry?.has_source)
   const resolvedSourcePath = sourceInfo.path ?? null
   /**
-   * 「运行状态」一句话：未安装 / 加载失败 / 使用中 / 已停用。
+   * "Runtime status" in one phrase: not installed / load failed / in use / disabled.
    *
-   * 之前只要不是 error 就显示「使用中」，卸载后的插件（没有 descriptor）也显示绿色「使用中」，
-   * 和同一张卡片里的「未安装」互相打架（用户 2026-11-23 反馈「大堆问题」）。
+   * Previously anything not in error showed "in use", and an uninstalled plugin (no descriptor) also showed a green "in use",
+   * conflicting with "not installed" in the same card (2026-11-23 user feedback "a pile of problems").
    */
   const runtimeLabel = !installed
     ? t('settings.plugins.notInstalledState')
@@ -334,14 +333,14 @@ const PluginDetail: React.FC = () => {
     } catch (err) {
       message.error(t('settings.plugins.switchFail'))
       console.error('[plugins] Failed to switch enabled state:', err)
-      // 主进程失败时会回滚状态：重新读一次，别让按钮停在错误方向
+      // The main process rolls back state on failure: read again so the button does not stay in the wrong direction
       await load()
     } finally {
       setBusy(false)
     }
   }, [entry, load, message, t])
 
-  /** 安装 / 更新：走平台 `lattice.install`（主进程会同时下载并解压源码） */
+  /** Install / update: goes through the platform `lattice.install` (the main process downloads and extracts the source too) */
   const installOrUpdate = useCallback(async (): Promise<void> => {
     if (actionBusyRef.current) return
     if (!loggedIn) {
@@ -388,11 +387,11 @@ const PluginDetail: React.FC = () => {
   ])
 
   /**
-   * 版本表里安装**指定版本**（升级/降级都走这里）。
+   * Install a **specific version** from the version table (both upgrade and downgrade go through here).
    *
-   * 用户口径「需要版本管理」：光能下载历史版本不够——插件中心的最新版可能是坏的/不兼容，
-   * 用户要能把机器上的插件固定到某个已验证版本。主进程 `lattice.install` 本来就接受
-   * `version` 参数（契约 v2），这里只是把入口暴露出来，并如实提示源码下载失败。
+   * User wording "needs version management": being able to download historical versions is not enough — the hub's latest version may be broken/incompatible,
+   * and the user must be able to pin the plugin on the machine to a verified version. The main process `lattice.install` already accepts
+   * a `version` parameter, so this just exposes the entry point and truthfully reports source download failures.
    */
   const installSpecificVersion = useCallback(
     async (targetVersion: string): Promise<void> => {
@@ -432,11 +431,11 @@ const PluginDetail: React.FC = () => {
   )
 
   /**
-   * 发布到插件中心（本机已安装、平台上还没有这个插件）。
+   * Publish to the plugin hub (installed locally, not yet on the platform).
    *
-   * 默认**直接发**：安装包目录（`userData/plugins/<id>`）与源码目录都是现成的，不需要
-   * 再弹系统目录选择框（用户 2026-11-23：「为什么发布本地插件还要用户自己去选择」）。
-   * 只有旧主进程没有 `publishInstalled` 通道时，才退回「选目录发布」。
+   * Defaults to **publishing directly**: the installer directory (`userData/plugins/<id>`) and the source directory are already there, no need to
+   * pop a system directory picker (user 2026-11-23: "why does publishing a local plugin still require the user to pick one").
+   * Only when the old main process lacks the `publishInstalled` channel does it fall back to "pick a directory and publish".
    */
   const handlePublish = useCallback(async (): Promise<void> => {
     clearUploadProgress()
@@ -462,7 +461,7 @@ const PluginDetail: React.FC = () => {
           ? t('lattice.upload.submitted', { name: result.plugin_id, version: result.version })
           : t('lattice.upload.success', { name: result.plugin_id, version: result.version })
       )
-      // 发布成功后刷新平台最新版本（首次发布后这里从「尚未发布」变成具体版本）
+      // Refresh the platform's latest version after a successful publish (after the first publish this changes from "not published yet" to a concrete version)
       await loadHubDetail()
     } catch (err) {
       setUploadOpen(false)
@@ -482,7 +481,7 @@ const PluginDetail: React.FC = () => {
     t
   ])
 
-  /** 在对话中修改：主进程优先建/复用源码工作区并开一条插件会话，失败回退文件管理器 */
+  /** Modify in chat: the main process creates/reuses the source workspace first and opens a plugin session; on failure falls back to the file manager */
   const handleOpenSource = useCallback(async (): Promise<void> => {
     if (actionBusyRef.current) return
     if (!capabilities.openSource) {
@@ -497,13 +496,13 @@ const PluginDetail: React.FC = () => {
         return
       }
       if (isFolderFallback(result)) {
-        // 如实告知：只打开了文件夹，没有自动创建对话
+        // Truthfully report: only the folder was opened, no chat was created automatically
         message.info(t('plugins.hub.openSource.folderFallback'))
         return
       }
       message.success(t('plugins.hub.openSource.success'))
       if (isChatOpened(result)) {
-        // 侧栏收到这个事件后按 pluginId+topicId 直接切到插件会话（主进程已把设置写盘）
+        // After receiving this event the sidebar switches to the plugin session by pluginId+topicId (the main process has already persisted the settings)
         window.dispatchEvent(
           new CustomEvent('lattice-open-source', {
             detail: {
@@ -529,10 +528,10 @@ const PluginDetail: React.FC = () => {
   const openRepublishModal = useCallback((): void => {
     if (actionBusyRef.current) return
     /**
-     * 版本号**回填本机当前版本**（用户 2026-11-23：「发布版本号应该回填」）。
+     * **Pre-fill the local current version** into the version field (user 2026-11-23: "the publish version number should be pre-filled").
      *
-     * 发布对话框要填的是「这次要发布的版本」：本机源码的版本通常已经改好了，回填省得
-     * 用户对着空框猜；输入框下方仍会提示「需高于插件中心当前最新版本 vX」。
+     * The publish dialog asks for "the version to publish this time": the version in the local source is usually already changed, so pre-filling saves
+     * the user from guessing into an empty box; the input still hints "must be higher than the plugin hub's current latest vX".
      */
     setRepublishVersion(entry?.version ?? '')
     setRepublishChangelog('')
@@ -541,7 +540,7 @@ const PluginDetail: React.FC = () => {
     setRepublishOpen(true)
   }, [entry])
 
-  /** 发布新版本：校验 semver → 主进程读源码目录重打包（安装包 + 源码）并上传 */
+  /** Publish a new version: validate semver → the main process re-packages the source directory (installer + source) and uploads it */
   const submitRepublish = useCallback(async (): Promise<void> => {
     if (actionBusyRef.current) return
     const nextVersion = republishVersion.trim()
@@ -580,7 +579,7 @@ const PluginDetail: React.FC = () => {
     }
   }, [load, loadHubDetail, message, pluginId, republish, republishChangelog, republishVersion, t])
 
-  /** 下载某个版本的安装包 / 源码包（主进程弹保存框） */
+  /** Download the installer / source package of a version (the main process opens a save dialog) */
   const handleDownload = useCallback(
     async (target: HubVersionV2, kind: LatticeDownloadKind): Promise<void> => {
       if (actionBusyRef.current) return
@@ -610,16 +609,16 @@ const PluginDetail: React.FC = () => {
     [capabilities.downloadAsset, downloadAsset, message, pluginId, t]
   )
 
-  /** 打开卸载确认框：每次打开都重置勾选（默认**保留**数据） */
+  /** Open the uninstall confirmation: reset the checkbox on every open (default is to **keep** data) */
   const openUninstall = useCallback((): void => {
     setPurgeData(false)
     setUninstallOpen(true)
   }, [])
 
   /**
-   * 卸载：移除插件代码（+ 可选清除该插件数据）→ 主进程撤云端安装记录 → 回插件仓库。
+   * Uninstall: remove the plugin code (+ optionally purge that plugin's data) → the main process revokes the cloud install record → back to the plugin repository.
    *
-   * 成功提示按勾选口径区分（`uninstallDone` / `uninstallKeptData`），不再固定「数据已保留」。
+   * The success message is chosen by the checkbox state (`uninstallDone` / `uninstallKeptData`), no longer always "data kept".
    */
   const confirmUninstall = useCallback(async (): Promise<void> => {
     if (!entry || actionBusyRef.current) return
@@ -732,7 +731,7 @@ const PluginDetail: React.FC = () => {
     </div>
   )
 
-  /** 版本表：版本 / 大小 / 源码 / 发布时间 / 更新说明 / 下载 */
+  /** Version table: version / size / source / publish time / release notes / download */
   const versionColumns = useMemo<NonNullable<TableProps<HubVersionV2>['columns']>>(() => {
     const downloadUnsupported = !capabilities.downloadAsset
     return [
@@ -918,7 +917,7 @@ const PluginDetail: React.FC = () => {
     token.colorTextSecondary
   ])
 
-  /** 整页状态卡（加载 / 未登录 / 网络失败 / 不存在共用一套骨架） */
+  /** Whole-page state card (loading / not logged in / network failure / not found share one skeleton) */
   const pageNotice = (
     title: string,
     action?: React.ReactNode,
@@ -1002,12 +1001,12 @@ const PluginDetail: React.FC = () => {
         t('plugins.hub.unavailableDesc')
       )
     }
-    // 已登录且平台明确返回 404：这才叫「不存在或未发布」
+    // Logged in and the platform explicitly returned 404: only this counts as "not found or unpublished"
     return pageNotice(t('settings.plugins.pluginNotFound'))
   }
 
   const infoRows: React.ReactNode[] = [
-    // 已安装：本机版本；未安装：头部已经写了版本，不再重复一行
+    // Installed: local version; not installed: the header already shows a version, so do not repeat the row
     ...(installed && localVersion
       ? [infoRow(t('plugins.hub.detail.localVersion'), `v${localVersion}`)]
       : []),
@@ -1060,7 +1059,7 @@ const PluginDetail: React.FC = () => {
   ]
 
   /**
-   * 页面级 CSS 变量：返回按钮的常态/悬停配色随主题走，不把 hover 写成内联事件。
+   * Page-level CSS variables: the back button's normal/hover colors follow the theme, without writing hover as inline events.
    */
   const pageVars = {
     '--plugin-detail-back-color': token.colorTextTertiary,
@@ -1075,7 +1074,7 @@ const PluginDetail: React.FC = () => {
         display: 'flex',
         flexDirection: 'column',
         boxSizing: 'border-box',
-        /* 与插件仓库完全一致：顶部不留白，左右 9px、上下 6px（用户 2026-11-23 口径） */
+        /* Exactly the same as the plugin repository: no top gutter, 9px left/right and 6px top/bottom (user wording 2026-11-23) */
         padding: '6px 9px',
         background: token.colorBgContainer,
         borderTopLeftRadius: token.borderRadiusLG,
@@ -1093,8 +1092,8 @@ const PluginDetail: React.FC = () => {
         }}
       >
         {/*
-         * 头部：返回入口**合并进同一张卡片**（用户 2026-11-23：「返回插件仓库这个按钮
-         * 需要和其下面内容合并」）——不再单独占一行 33px 的工具条。
+         * Header: the back entry is **merged into the same card** (user 2026-11-23: "the back-to-plugin-repository button
+         * needs to be merged with the content below it") — it no longer takes a separate 33px toolbar row.
          */}
         <section
           style={{
@@ -1268,7 +1267,7 @@ const PluginDetail: React.FC = () => {
           </div>
         </section>
 
-        {/* 主体：左「操作」；右「信息」+「运行状态」 */}
+        {/* Body: "Actions" on the left; "Information" + "Runtime status" on the right */}
         <div
           style={{
             display: 'grid',
@@ -1361,7 +1360,7 @@ const PluginDetail: React.FC = () => {
                     () => setSettingsOpen(true)
                   )
                 : null}
-              {/* 源码/发布流程说明：安装自动带源码 → 对话修改 → 发布新版本 */}
+              {/* Source/publish flow explanation: install brings the source automatically → modify in chat → publish a new version */}
               <div
                 style={{
                   marginTop: 14,
@@ -1461,7 +1460,7 @@ const PluginDetail: React.FC = () => {
           </div>
         </div>
 
-        {/* 插件说明：平台 README（Markdown，已做 sanitize），长文限高滚动 */}
+        {/* Plugin description: platform README (Markdown, already sanitized), long content scrolls within a max height */}
         {publishedOnHub && hubDetail?.readme?.trim() ? (
           <section
             style={{
@@ -1494,7 +1493,7 @@ const PluginDetail: React.FC = () => {
           </section>
         ) : null}
 
-        {/* 版本历史（平台版本管理 + 安装包/源码包下载） */}
+        {/* Version history (platform version management + installer/source package downloads) */}
         {publishedOnHub && (
           <section
             style={{
@@ -1561,7 +1560,7 @@ const PluginDetail: React.FC = () => {
         )}
       </div>
 
-      {/* 发布新版本：版本号 + 更新说明 → lattice.republish（读本机源码目录重打包） */}
+      {/* Publish a new version: version + release notes → lattice.republish (re-packages the local source directory) */}
       <Modal
         open={republishOpen}
         title={t('plugins.hub.publish.title')}
@@ -1613,9 +1612,9 @@ const PluginDetail: React.FC = () => {
               maxLength={2000}
             />
             {/*
-              字数统计自己画（不要 antd 的 `showCount`）：它把计数绝对定位在输入框**下方**
-              （`bottom: -22px`），弹窗正文高度不够时下半截会被底部按钮栏盖住
-              （2026-11-23 用户反馈「下面描述的数字被遮挡」）。放进正常流里，位置就是稳的。
+              Draw the character count ourselves (not antd's `showCount`): it absolutely positions the count **below** the input
+              (`bottom: -22px`), so when the modal body is not tall enough the lower half is covered by the bottom button bar
+              (2026-11-23 user feedback "the number below the description is covered"). In the normal flow the position is stable.
             */}
             <div
               style={{
@@ -1628,9 +1627,9 @@ const PluginDetail: React.FC = () => {
               {republishChangelog.length} / 2000
             </div>
             {/*
-              发布动作本身的报错（构建 / 打包 / 上传）放表单底部：它不是版本号的问题，
-              之前错误地显示在版本输入框下面 + 红框，看起来像「版本号填错了」
-              （2026-11-23 用户反馈：「plugin.json 的 entry 缺少 main / renderer」为何出现在版本号下）。
+              The error of the publish action itself (build / package / upload) goes at the bottom of the form: it is not a version problem,
+              but it used to be shown below the version input with a red border, looking like "the version is wrong"
+              (2026-11-23 user feedback: why did "plugin.json entry is missing main / renderer" appear under the version field).
             */}
             {republishError && (
               <div
@@ -1649,7 +1648,7 @@ const PluginDetail: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 插件自己的设置页（弹窗）：原先在「设置」弹窗里，用户 2026-11-19 要求挪到插件仓库 */}
+      {/* The plugin's own settings page (modal): originally inside the "Settings" modal, moved here at the user's 2026-11-19 request */}
       <Modal
         open={settingsOpen}
         onCancel={() => setSettingsOpen(false)}
@@ -1670,7 +1669,7 @@ const PluginDetail: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 卸载确认：代码与数据分开（勾选项决定要不要连数据一起清）——默认不勾 = 保留数据 */}
+      {/* Uninstall confirmation: code and data are separate (the checkbox decides whether to purge data too) — unchecked by default = keep data */}
       <Modal
         open={uninstallOpen}
         title={t('settings.plugins.uninstallTitle', { name })}
@@ -1696,7 +1695,7 @@ const PluginDetail: React.FC = () => {
             onChange={(event) => setPurgeData(event.target.checked)}
             style={{ marginTop: 1 }}
           />
-          {/* 文案区域整块可点：点标题/说明与点方框等价（不必精确点中 16px 的方框） */}
+          {/* The whole text area is clickable: clicking the title/description is equivalent to clicking the box (no need to hit the 16px box precisely) */}
           <div
             style={{
               cursor: canPurgePluginData ? 'pointer' : 'not-allowed',
@@ -1728,7 +1727,7 @@ const PluginDetail: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 发布到插件中心的上传进度（与插件仓库页共用同一个弹窗组件） */}
+      {/* Upload progress for publishing to the plugin hub (shares the same modal component as the plugin repository page) */}
       <UploadProgressModal open={uploadOpen} />
     </div>
   )

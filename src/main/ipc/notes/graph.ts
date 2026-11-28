@@ -20,29 +20,37 @@ import {
 } from '../../database/mapper/notes/graph'
 
 /**
- * 知识图谱 IPC 处理器表（资料库的第 5 个域：数据查询/构建/追加）。
+ * Knowledge graph IPC handler map (the library's fifth domain: data query/build/append).
  *
- * 通道名一律 `notes:<channel>`；其中构建入口是普通 invoke 通道（只有 handle 一种注册方式），
- * 因此渲染层从 `ipcRenderer.send` 改成了 invoke。进度/完成/错误三件事由主进程广播，
- * 渲染层经 preload 的系统桥（`window.api.system.on`）订阅——通道前缀 `notes:` 即可放行，
- * 不需要再登记白名单。
+ * All channel names are `notes:<channel>`; the build entry point is a regular invoke channel
+ * (handle is its only registration form), so the renderer uses invoke instead of
+ * `ipcRenderer.send`. Progress / completion / error are broadcast by the main process, and the
+ * renderer subscribes through the preload system bridge (`window.api.system.on`) — the `notes:`
+ * channel prefix is allowed, so no extra whitelist entry is needed.
  *
- * 广播目标：原实现用 `event.sender`（发起构建的那个 frame）；处理器拿不到事件对象，
- * 改为发给所有存活窗口——本应用只有一个主窗口，语义等价。
+ * Broadcast target: the original implementation used `event.sender` (the frame that started the
+ * build); the handler has no event object, so it sends to all live windows — the app has a single
+ * main window, so this is semantically equivalent.
  */
 export const HOME_GRAPH_BUILD_START_CHANNEL = 'notes:graph-build-start'
 export const HOME_GRAPH_BUILD_PROGRESS_CHANNEL = 'notes:graph-build-progress'
 export const HOME_GRAPH_BUILD_COMPLETE_CHANNEL = 'notes:graph-build-complete'
 export const HOME_GRAPH_BUILD_ERROR_CHANNEL = 'notes:graph-build-error'
 
-/** 图谱构建进度事件广播（发给所有存活窗口，等价于原来的 event.sender） */
+/**
+ * Graph build progress event broadcast (sent to all live windows, equivalent to the former
+ * event.sender).
+ */
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     safeSend(win.webContents, channel, payload)
   }
 }
 
-/** 按系统设置构造图谱构建模型；未配置默认模型时返回 null（调用方下发错误事件） */
+/**
+ * Build the graph model from system settings; returns null when no default model is configured (the
+ * caller emits an error event).
+ */
 async function createGraphModel(): Promise<BaseChatModel | null> {
   try {
     const defaultModelId = settingsStore.get('defaultModelId') as number | undefined
@@ -53,12 +61,14 @@ async function createGraphModel(): Promise<BaseChatModel | null> {
   }
 }
 
-/** 图谱构建启动（原 `ipcMain.on('graph-build-start')`，现为普通 invoke 通道） */
+/** Graph build start (formerly `ipcMain.on('graph-build-start')`, now a regular invoke channel) */
 const graphBuildStartHandler: IpcHandlerMap = {
   'notes:graph-build-start': async (wikiId: number, config?: Record<string, unknown>) => {
-    // 整段包 try（原实现说明保留：任何未捕获的抛错都会让渲染端收不到错误事件）
+    // The whole body is wrapped in try (any uncaught throw would keep the renderer from receiving
+    // the error event)
     try {
-      // 未配置图谱构建模型时，不进入构建流程——通过错误事件通知渲染层弹出友好提醒
+      // When no graph build model is configured, skip the build and emit an error event so the
+      // renderer can show a friendly notice
       const model = await createGraphModel()
       if (!model) {
         broadcast(HOME_GRAPH_BUILD_ERROR_CHANNEL, {
@@ -68,7 +78,7 @@ const graphBuildStartHandler: IpcHandlerMap = {
         return
       }
       const graphService = new KnowledgeGraphService(model)
-      // 从系统设置读取图谱构建默认值，用户传入的config可覆盖
+      // Read graph build defaults from system settings; values passed by the caller override them
       const graphSettings = settingsStore.get('graph') as GraphSettings | undefined
       const mergedConfig: BuildConfig = {
         maxConcurrency: (config?.maxConcurrency as number) ?? graphSettings?.maxConcurrency ?? 8,
@@ -189,7 +199,8 @@ export const graphIpcHandlers: IpcHandlerMap = {
   },
 
   'notes:graph-docs-append': async (wikiId: number, docIds: number[]) => {
-    // 未配置图谱构建模型时，不进入追加流程——通过错误事件通知渲染层弹出友好提醒
+    // When no graph build model is configured, skip the append flow and emit an error event so the
+    // renderer can show a friendly notice
     const model = await createGraphModel()
     if (!model) {
       broadcast(HOME_GRAPH_BUILD_ERROR_CHANNEL, {

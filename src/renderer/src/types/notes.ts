@@ -9,20 +9,23 @@ import type {
 } from '../../../shared/notes/types'
 
 /**
- * notes 插件的渲染层类型：**纯前端**的形状与常量，跨进程 DTO 在 ../shared/types.ts。
+ * Renderer-layer types for the notes plugin: **pure frontend** shapes and constants; cross-process
+ * DTOs live in ../shared/types.ts.
  *
- * 内容来源（本轮迁移的三处 core 收编，原文件已删除）：
- * - `@renderer/types/knowledge.ts` → 图谱图表数据、实体类型配色与词条键映射；
- * - `@renderer/types/models.ts` → 文档/待办/知识库的渲染层包装类型；
- * - `@renderer/types/components.ts` 里 notes 自己的组件 props；
- * - `@renderer/plugins/notes/types.ts` → 首页三栏布局的选中态类型。
+ * Content origins (three pieces absorbed from core in this migration; the original files were
+ * deleted):
+ * - `@renderer/types/knowledge.ts` → graph chart data, entity type colors and entry key mappings;
+ * - `@renderer/types/models.ts` → renderer-layer wrapper types for documents / todos / wikis;
+ * - the notes component props that were mixed into `@renderer/types/components.ts`;
+ * - `@renderer/plugins/notes/types.ts` → selection state types for the three-column home layout.
  *
- * core 不再反向 import 这些类型：插件专属类型必须留在插件里，否则「插件可停用」的边界失真。
+ * core no longer imports these types in reverse: plugin-specific types must stay in the plugin,
+ * otherwise the "plugins are disableable" boundary is blurred.
  */
 
-/* ──────────── 首页（三栏布局）选中态 ──────────── */
+/* ──────────── Home page (three-column layout) selection state ──────────── */
 
-/** 左侧树中打开文档时携带的来源信息（用于面包屑） */
+/** Source info carried when a document is opened in the left tree (used for the breadcrumb) */
 export interface DocSourceInfo {
   wikiId: number
   dirId?: number
@@ -37,44 +40,44 @@ export type Selection =
   | { kind: 'doc-graph'; wikiId: number; docId: number }
   | null
 
-/* ──────────── 文档 / 待办 / 知识库的渲染层包装 ──────────── */
+/* ──────────── Renderer-layer wrappers for documents / todos / wikis ──────────── */
 
-/** 待办事项（等价于主进程行类型，保留旧名以减少改动面） */
+/** Todo item (equivalent to the main-process row type; the old name is kept to limit churn) */
 export type TodoItem = TodoItemRow
 
-/** 文档项（含内容和置顶），用于 DocumentCard 和 DocumentPreviewModal */
+/** Document item (including content and pinned state), used by DocumentCard and DocumentPreviewModal */
 export interface DocItem extends DocListItem {
   content?: string | null
   isPinned?: boolean
 }
 
-/** 目录下的文档详情 */
+/** Details of a document within a directory */
 export interface DirectoryDocWithDetail extends DocListItem {
   directory_id: number
   content?: string | null
 }
 
-/** 树节点（首页左侧树、选择器共用） */
+/** Tree node (shared by the home page left tree and selectors) */
 export interface TreeNode {
   key: number
   title: string
   children: TreeNode[]
 }
 
-/** 文档选项（用于知识图谱工具栏） */
+/** Document option (used by the knowledge graph toolbar) */
 export interface DocOption {
   id: number
   title: string
 }
 
-/** 目录树节点（antd Tree 友好形状） */
+/** Directory tree node (shape friendly to antd Tree) */
 export interface TreeNodeData {
   key: React.Key
   title: React.ReactNode
   children?: TreeNodeData[]
 }
 
-/** 带子节点的目录 */
+/** Directory with child nodes */
 export interface DirectoryWithChildren {
   id: number
   wiki_id: number
@@ -87,7 +90,7 @@ export interface DirectoryWithChildren {
   children?: DirectoryWithChildren[]
 }
 
-/** 百科编辑数据 */
+/** Wiki edit data */
 export interface WikiEditData {
   title: string
   summary: string | null
@@ -95,7 +98,7 @@ export interface WikiEditData {
   image: string | null
 }
 
-/* ──────────── 知识图谱：图表数据与类型映射 ──────────── */
+/* ──────────── Knowledge graph: chart data and type mappings ──────────── */
 
 export interface GraphChartNode {
   id: string
@@ -123,7 +126,7 @@ export interface GraphChartData {
   categories: GraphChartCategory[]
 }
 
-/** 实体类型 → 颜色映射 */
+/** Entity type → color mapping */
 export const ENTITY_TYPE_COLORS: Record<string, string> = {
   person: '#FF6B6B',
   organization: '#4ECDC4',
@@ -148,9 +151,10 @@ export const ENTITY_TYPE_COLORS: Record<string, string> = {
 }
 
 /**
- * 实体类型 → 词条键映射。
- * 本模块不持有 `t`，而 i18next 的 `t()` 只接受字面量键，所以这里存「数据值 → 字面量词条键」，
- * 由调用方（GraphView / EntityDetail）用 `t()` 求值；表里未收录的类型回退成原始 type 字符串。
+ * Entity type → entry key mapping.
+ * This module does not hold `t`, and i18next's `t()` only accepts literal keys, so this stores
+ * "data value → literal entry key" and lets callers (GraphView / EntityDetail) resolve it with
+ * `t()`; types not listed in the table fall back to the raw type string.
  */
 export type GraphEntityTypeLabelKey =
   | 'graph.entityType.person'
@@ -197,7 +201,7 @@ export const ENTITY_TYPE_LABEL_KEYS: Partial<Record<string, GraphEntityTypeLabel
   realm: 'graph.entityType.realm'
 }
 
-/** 关系类型 → 词条键映射（同上，取值同样收窄成字面量联合） */
+/** Relation type → entry key mapping (same as above; the values are narrowed to a literal union too) */
 export type GraphRelationTypeLabelKey =
   | 'graph.relationType.contains'
   | 'graph.relationType.part_of'
@@ -251,9 +255,9 @@ export const RELATION_TYPE_LABEL_KEYS: Partial<Record<string, GraphRelationTypeL
   kills: 'graph.relationType.kills'
 }
 
-/* ──────────── 组件 props（原先混在 core 的 @renderer/types/components.ts 里） ──────────── */
+/* ──────────── Component props (previously mixed into core's @renderer/types/components.ts) ──────────── */
 
-/** 文档预览弹窗（图谱里点来源文档时打开） */
+/** Document preview modal (opened when a source document is clicked in the graph) */
 export interface DocPreviewModalProps {
   open: boolean
   onCancel: () => void
@@ -296,7 +300,7 @@ export interface GraphToolbarProps {
   addedDocIds: Set<number>
   isAppending: boolean
   docFilter: number[]
-  /** 文档级子图模式：隐藏搜索框右侧的文档筛选/追加/重建操作 */
+  /** Document-level subgraph mode: hides the document filter / append / rebuild actions on the right of the search box */
   isDocGraph?: boolean
   onSearchChange: (value: string) => void
   onTypeFilterChange: (value: string | undefined) => void
@@ -316,18 +320,18 @@ export interface EntityDetailProps {
 
 export interface GraphViewProps {
   selectedWiki: WikiRow
-  /** 点击来源文档时直接打开文档编辑器（由宿主传入；不传则回退预览弹窗） */
+  /** Open the document editor directly when a source document is clicked (provided by the host; falls back to the preview modal when omitted) */
   onOpenDocInEditor?: (docId: number) => void
-  /** 初始文档筛选（文档级子图：只显示指定文档抽取的实体） */
+  /** Initial document filter (document-level subgraph: only show entities extracted from the given documents) */
   initialDocFilter?: number[]
 }
 
-/** 待办列表（可选初始数据；不传则自行加载） */
+/** Todo list (optional initial data; loads on its own when omitted) */
 export interface TodoListProps {
   initialTodos?: TodoItemRow[]
 }
 
-/** 图谱构建进度弹窗 */
+/** Graph build progress modal */
 export interface BuildProgressProps {
   open: boolean
   wikiId: number
@@ -345,5 +349,5 @@ export interface BuildProgressProps {
   onMinimize: () => void
 }
 
-/** 图谱视图内部复用的图谱数据别名（与主进程 mapper 同源） */
+/** Graph data alias reused inside the graph view (same source as the main-process mapper) */
 export type { GraphData }

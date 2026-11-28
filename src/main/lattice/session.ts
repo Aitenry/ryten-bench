@@ -6,30 +6,36 @@ import { getLatticeBaseUrl } from './settings'
 import { normalizeLatticeAvatar, type LatticeUser } from './types'
 
 /**
- * Lattice 会话（`userData/lattice-session.json`）。
+ * Lattice session (`userData/lattice-session.json`).
  *
- * 存储口径（契约 §4）：
- * - **access token 只在内存**：短寿命（平台 TTL 900s），落盘没有意义，反而扩大泄露面；
- * - **refresh token 持久化**：有 `safeStorage` 时用系统钥匙串加密后存 base64；不可用时
- *   （Linux 缺 keyring / 启动早期）退回明文并 **warn**，开发环境下这是可接受的降级；
- * - 同时缓存 `user` / `role` / `deviceId` / 登录时的 `baseUrl`：
- *   冷启动只有 refresh token 时先用缓存把账号区点亮，再用 `/v1/me` 校正（平台 v0.14 已补
- *   `username`/`display_name`，不必再查 `/v1/users/{id}`）。
+ * Storage policy:
+ * - **access token stays in memory only**: short-lived (900s platform TTL), persisting it serves no
+ *   purpose and only widens the leak surface;
+ * - **refresh token is persisted**: encrypted with the system keychain via `safeStorage` and stored
+ *   as base64; when unavailable (Linux without keyring / early startup) it falls back to plaintext
+ *   with a **warn**, an acceptable degradation in development;
+ * - `user` / `role` / `deviceId` / the `baseUrl` at login are cached too: a cold start with only a
+ *   refresh token lights up the account area from the cache first, then corrects it via `/v1/me`
+ *   (the platform already supplies `username`/`display_name`, so `/v1/users/{id}` is not needed).
  *
- * 基址变化会让会话失效：token 是某个节点签发的，换服务器后拿旧 token 去刷新只会 401；
- * `loadLatticeSession()` 发现文件里记的 baseUrl 与当前生效基址不一致时直接丢弃会话。
+ * A base URL change invalidates the session: tokens are issued by a specific node, so refreshing
+ * an old token after switching servers only yields 401; `loadLatticeSession()` discards the
+ * session when the baseUrl recorded in the file differs from the effective one.
  */
 
 const SESSION_FILE = 'lattice-session.json'
 const SESSION_VERSION = 1
 
-/** 落盘形状（只有 refresh token 需要加密，其余字段非敏感） */
+/** On-disk shape (only the refresh token needs encryption; the other fields are not sensitive) */
 interface StoredLatticeSession {
   version: number
-  /** true = `refreshToken` 是 safeStorage 密文的 base64；false = 明文（safeStorage 不可用） */
+  /**
+   * true = `refreshToken` is base64 of the safeStorage ciphertext; false = plaintext (safeStorage
+   * unavailable)
+   */
   encrypted: boolean
   refreshToken: string
-  /** 登录时生效的基址；与当前基址不同 → 会话作废 */
+  /** Base URL in effect at login; differing from the current one -> session invalid */
   baseUrl?: string
   user?: LatticeUser | null
   role?: string | null
@@ -37,11 +43,11 @@ interface StoredLatticeSession {
   savedAt?: number
 }
 
-/** 内存态会话 */
+/** In-memory session */
 interface SessionState {
   loaded: boolean
   accessToken: string | null
-  /** access token 过期时间（毫秒时间戳） */
+  /** Access token expiry (ms timestamp) */
   expiresAt: number | null
   refreshToken: string | null
   user: LatticeUser | null
@@ -60,16 +66,18 @@ const state: SessionState = {
 }
 
 /**
- * 会话代际：每次「登录 / 退出」自增。
+ * Session epoch: incremented on every login / logout.
  *
- * 用途：refresh 是异步网络请求，响应可能在用户已经退出登录（甚至换了账号）之后才回来。
- * 没有代际校验时，迟到的 `applyLatticeRefresh` 会把新的 refresh token 写回内存并重建
- * `lattice-session.json`——用户明明点了退出，重启后又变回已登录（轮换后的 token 仍有效）。
- * `client.ts` 在请求返回后比对代际：不一致就丢弃响应，不写会话。
+ * Purpose: refresh is an async network request whose response may arrive after the user has
+ * already logged out (or even switched accounts). Without an epoch check, a late
+ * `applyLatticeRefresh` would write the new refresh token back into memory and recreate
+ * `lattice-session.json` - the user clicked logout but comes back logged in after a restart (the
+ * rotated token is still valid). `client.ts` compares the epoch once the request returns: on
+ * mismatch it drops the response and does not write the session.
  */
 let sessionEpoch = 0
 
-/** 当前会话代际（refresh 响应落地前比对） */
+/** Current session epoch (compared before a refresh response is applied) */
 export function getLatticeSessionEpoch(): number {
   return sessionEpoch
 }
@@ -78,7 +86,7 @@ function sessionPath(): string {
   return path.join(app.getPath('userData'), SESSION_FILE)
 }
 
-/** 平台用户对象 → 会话里的最小身份（字段可能来自 login/refresh/me 三处之一） */
+/** Platform user object -> minimal session identity (fields may come from login/refresh/me) */
 function normalizeUser(raw: unknown): LatticeUser | null {
   if (typeof raw !== 'object' || raw === null) return null
   const obj = raw as Record<string, unknown>
@@ -87,7 +95,8 @@ function normalizeUser(raw: unknown): LatticeUser | null {
   const username = typeof obj.username === 'string' ? obj.username : ''
   if (!id && !username) return null
   const displayName = typeof obj.display_name === 'string' ? obj.display_name : null
-  // 落盘的 user 里没有 avatar（旧主进程/旧平台）→ null（界面回退首字母），不报错
+  // The persisted user has no avatar (old main process/platform) -> null (UI falls back to
+  // initials), no error
   return {
     id,
     username,
@@ -97,10 +106,12 @@ function normalizeUser(raw: unknown): LatticeUser | null {
 }
 
 /**
- * 合并「新的平台身份」到会话缓存：
- * - id/username 缺失时保留旧值（`/v1/me` 早期只有 user_id 等兼容场景）；
- * - `display_name` 用 `??`（null 视为「沿用旧值」，保持原有口径）；
- * - `avatar` 区分 undefined（旧平台没这个字段 → 保留缓存）与 null（明确无头像 → 清空）。
+ * Merges a new platform identity into the session cache:
+ * - keep the old id/username when missing (compatibility cases such as `/v1/me` returning only
+ *   user_id);
+ * - `display_name` uses `??` (null means "keep the old value", preserving the existing rule);
+ * - `avatar` distinguishes undefined (old platform lacks the field -> keep the cache) from null
+ *   (explicitly no avatar -> clear).
  */
 function mergeUser(previous: LatticeUser | null, next: LatticeUser): LatticeUser {
   const avatar = normalizeLatticeAvatar(next.avatar)
@@ -112,7 +123,10 @@ function mergeUser(previous: LatticeUser | null, next: LatticeUser): LatticeUser
   }
 }
 
-/** 是否可安全加解密（Linux 上取决于 keyring；不可用时降级明文） */
+/**
+ * Whether encryption/decryption is available (on Linux it depends on keyring; falls back to
+ * plaintext)
+ */
 function encryptionAvailable(): boolean {
   try {
     return safeStorage.isEncryptionAvailable()
@@ -159,7 +173,10 @@ function decryptRefreshToken(stored: StoredLatticeSession): string | null {
   }
 }
 
-/** 删除会话文件（失败只告警：内存态清掉后功能已经不可用，不该因此抛错） */
+/**
+ * Deletes the session file (only warns on failure: once the in-memory state is cleared the feature
+ * is already unusable)
+ */
 function removeSessionFile(): void {
   try {
     fs.rmSync(sessionPath(), { force: true })
@@ -168,7 +185,7 @@ function removeSessionFile(): void {
   }
 }
 
-/** 清空内存态会话 */
+/** Clears the in-memory session */
 function resetState(): void {
   state.accessToken = null
   state.expiresAt = null
@@ -178,7 +195,10 @@ function resetState(): void {
   state.deviceId = null
 }
 
-/** 从磁盘恢复会话（幂等；启动时调用一次）。返回是否恢复出 refresh token */
+/**
+ * Restores the session from disk (idempotent; called once at startup). Returns whether a refresh
+ * token was restored
+ */
 export function loadLatticeSession(): boolean {
   if (state.loaded) return state.refreshToken !== null
   state.loaded = true
@@ -202,7 +222,7 @@ export function loadLatticeSession(): boolean {
     return false
   }
 
-  // 基址变了：旧 token 属于别的节点，直接丢弃
+  // Base URL changed: the old token belongs to another node; discard it
   const currentBaseUrl = getLatticeBaseUrl()
   if (stored.baseUrl && stored.baseUrl !== currentBaseUrl) {
     logger.info(
@@ -226,7 +246,7 @@ export function loadLatticeSession(): boolean {
   return true
 }
 
-/** 会话快照（状态广播用；不含 token） */
+/** Session snapshot (for status broadcasts; contains no token) */
 export interface LatticeSessionSnapshot {
   loggedIn: boolean
   user: LatticeUser | null
@@ -265,14 +285,14 @@ export function getLatticeDeviceId(): string | null {
   return state.deviceId
 }
 
-/** access token 是否还可直接用（提前 30s 视为过期，避免请求发出时恰好过期） */
+/** Whether the access token is still usable (treat as expired 30s early to avoid racing expiry) */
 export function isLatticeAccessTokenFresh(skewMs = 30_000): boolean {
   if (!state.accessToken) return false
   if (state.expiresAt === null) return true
   return Date.now() < state.expiresAt - skewMs
 }
 
-/** 登录成功的会话落地（内存 + 文件；access 只在内存） */
+/** Persists a successful login (memory + file; access token stays in memory) */
 export function applyLatticeLogin(data: {
   accessToken: string
   refreshToken: string
@@ -281,7 +301,8 @@ export function applyLatticeLogin(data: {
   role?: string | null
   deviceId?: string | null
 }): void {
-  // 新的登录 = 新会话代际：之前那次账号的 refresh 响应即使迟到，也不能再写进来
+  // A new login = a new session epoch: a late refresh response for the previous account must not
+  // be written
   sessionEpoch += 1
   state.accessToken = data.accessToken
   state.expiresAt = Number.isFinite(data.expiresIn) ? Date.now() + data.expiresIn * 1000 : null
@@ -292,7 +313,10 @@ export function applyLatticeLogin(data: {
   persistLatticeSession()
 }
 
-/** 刷新成功后的会话更新（轮换式 refresh：旧 token 立即失效，必须同步落盘新值） */
+/**
+ * Session update after a successful refresh (rotating refresh: the old token dies immediately, so
+ * the new one must be persisted)
+ */
 export function applyLatticeRefresh(data: {
   accessToken: string
   refreshToken: string
@@ -302,16 +326,19 @@ export function applyLatticeRefresh(data: {
   state.accessToken = data.accessToken
   state.expiresAt = Number.isFinite(data.expiresIn) ? Date.now() + data.expiresIn * 1000 : null
   state.refreshToken = data.refreshToken
-  // refresh 响应可能不带 avatar（旧平台）：merge 保留缓存头像，不误清空
+  // A refresh response may omit avatar (old platform): merge keeps the cached avatar instead of
+  // clearing it
   if (data.user) state.user = mergeUser(state.user, data.user)
   persistLatticeSession()
 }
 
 /**
- * 用 `/v1/me` 校正身份（补 role / display_name / avatar；username 缺失时保留原值）。
+ * Corrects the identity via `/v1/me` (fills in role / display_name / avatar; keeps the old
+ * username when missing).
  *
- * `avatar` 口径：平台返回 null = 用户已清空头像 → 清空；旧平台没有该字段
- * （undefined）= 保留缓存，避免一次 `/v1/me` 把还能用的头像误删。
+ * `avatar` rule: the platform returning null means the user cleared the avatar -> clear it; an old
+ * platform without the field (undefined) -> keep the cache, so one `/v1/me` does not delete a
+ * still-usable avatar.
  */
 export function updateLatticeIdentity(user: LatticeUser, role?: string | null): void {
   state.user = mergeUser(state.user, user)
@@ -319,7 +346,10 @@ export function updateLatticeIdentity(user: LatticeUser, role?: string | null): 
   persistLatticeSession()
 }
 
-/** 把 refresh token 与身份写盘（幂等；无 refresh token 时删除文件） */
+/**
+ * Writes the refresh token and identity to disk (idempotent; deletes the file when there is no
+ * refresh token)
+ */
 export function persistLatticeSession(): void {
   if (!state.refreshToken) {
     removeSessionFile()
@@ -341,12 +371,14 @@ export function persistLatticeSession(): void {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(tmp, `${JSON.stringify(stored, null, 2)}\n`, 'utf-8')
-    // 收紧权限（安全审计 S20）：refresh token 即使被 safeStorage 加密，在多用户机器上
-    // 也不该让同机其它账户读到会话文件；POSIX 下 0600 只允许本人读写。
+    // Tighten permissions: even with the refresh token encrypted by safeStorage, other accounts on
+    // the same multi-user machine should not read the session file; on POSIX, 0600 allows only the
+    // owner.
     try {
       fs.chmodSync(tmp, 0o600)
     } catch {
-      // Windows / 只读介质上 chmod 可能失败：不影响功能，权限收紧只是纵深防御
+      // chmod may fail on Windows / read-only media: functionality is unaffected; tightening is
+      // defense in depth
     }
     fs.renameSync(tmp, file)
   } catch (err) {
@@ -354,20 +386,24 @@ export function persistLatticeSession(): void {
     try {
       fs.rmSync(tmp, { force: true })
     } catch {
-      // 清理临时文件失败无意义
+      // Failing to clean up the temp file is not worth reporting
     }
   }
 }
 
-/** 退出登录：清内存 + 删文件 */
+/** Logs out: clear memory + delete the file */
 export function clearLatticeSession(): void {
-  // 代际先自增：正在飞的 refresh 响应回来时会发现自己已经过期，不会把会话写回来
+  // Bump the epoch first: an in-flight refresh response will find itself stale and not write the
+  // session back
   sessionEpoch += 1
   resetState()
   removeSessionFile()
 }
 
-/** 基址变化后丢弃旧会话（返回是否真的清掉了登录态） */
+/**
+ * Discards the old session after a base URL change (returns whether the login state was actually
+ * cleared)
+ */
 export function clearLatticeSessionIfBaseUrlChanged(previousBaseUrl: string): boolean {
   if (!state.refreshToken) return false
   if (previousBaseUrl === getLatticeBaseUrl()) return false

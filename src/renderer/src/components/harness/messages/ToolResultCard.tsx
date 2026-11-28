@@ -22,23 +22,28 @@ import type {
 } from '../../../../../shared/harness/types'
 
 /**
- * 内置工具的结果卡片（read_file / write_file / edit_file / ls / glob / grep / execute）。
+ * Result cards for built-in tools (read_file / write_file / edit_file / ls / glob / grep / execute).
  *
- * 与旧实现的区别（2026-09-19）：这些工具的结果**不再进入 IPC/数据库**，聊天里只留
- * 这张卡片；要看内容就点卡片——文件类工具在右侧面板打开真实文件，ls 定位目录，
- * glob/grep/execute 打开结果详情页签（主进程按 topicId+callId 按需返回）。
+ * Difference from the old implementation (2026-09-19): the results of these tools **no longer go
+ * through IPC/the database**; only this card stays in the chat. To see the content, click the card
+ * — file tools open the real file in the right panel, ls locates the directory, and
+ * glob/grep/execute open a result detail tab (the main process returns them on demand by
+ * topicId+callId).
  *
- * 因此卡片必须自己把「这次调用干了什么、结果多大」讲清楚：
- * 路径/模式/命令一行，右侧是行数/字节/条目数/命中数/退出码，失败时显示原因。
+ * So the card must explain "what this call did and how big the result is":
+ * path/pattern/command on one line, line/byte/item/match count or exit code on the right, and the
+ * reason on failure.
  *
- * 2026-09-23 追加（用户报「明明编辑了文件，聊天里找不到编辑卡片」）：**写改类卡片
- * 必须一眼可辨**——它们此前和 read_file 一样是「眼睛 + 路径」，扫一眼分不出哪张是改动。
- * 现在 write_file / edit_file 用铅笔系图标 + 琥珀色强调（错误仍是红色），
- * 并在左侧加一条 2px 强调边，扫读时改动卡片自己会跳出来。
+ * Added 2026-09-23 (the user reported "I clearly edited a file but cannot find the edit card in
+ * the chat"): **write/mutate cards must be identifiable at a glance** — previously they looked
+ * like read_file ("eye + path") and scanning could not tell which card was a change.
+ * Now write_file / edit_file use pencil-family icons + an amber accent (errors are still red) and
+ * a 2px accent edge on the left, so mutate cards jump out while scanning.
  *
- * 同日再追加（用户原话「并且编辑后，需要在卡片显示差异：+12 -6」）：写改卡片的右侧
- * 多一段差异规模「+N −M」（见 DiffStat）——处数/字节数说的是「做了什么」，
- * 差异规模说的是「这个文件实际变了多少行」，两件事都要看得见。
+ * Added the same day (the user's words: "and after editing, the card needs to show the diff: +12
+ * -6"): write/mutate cards gain a diff-size segment "+N −M" on the right (see DiffStat) — the
+ * count/bytes say "what was done", the diff size says "how many lines actually changed in this
+ * file"; both must be visible.
  */
 
 export interface ToolCardStyle {
@@ -50,7 +55,7 @@ export interface ToolCardStyle {
   colorBorderSecondary: string
 }
 
-/** 工具进行中（参数构建中 / 执行中）时能立刻显示的参数摘要 */
+/** Summary of the parameters that can be shown immediately while the tool is in progress (building parameters / executing) */
 function inputSummary(name: string, input: Record<string, unknown> | undefined): string {
   const value = (key: string): string =>
     typeof input?.[key] === 'string' ? (input[key] as string) : ''
@@ -71,35 +76,36 @@ function inputSummary(name: string, input: Record<string, unknown> | undefined):
   }
 }
 
-/** 人类可读字节数：见 utils/toolIcons（卡片与详情页签共用） */
+/** Human-readable byte count: see utils/toolIcons (shared by the card and the detail tab) */
 
 /**
- * 写改类卡片的强调色（左侧 2px 边 + 图标）。
- * 琥珀色是全局唯一「未保存 / 待处理」语义色（页签的未保存圆点、状态条的「磁盘已变化」
- * 都是它），写改卡片复用它，用户不需要再学一套新颜色。
+ * Accent color for write/mutate cards (2px left edge + icon).
+ * Amber is the single global semantic color for "unsaved / pending" (the tab's unsaved dot and the
+ * status bar's "disk changed" use it too), so mutate cards reuse it instead of teaching users a
+ * new color.
  */
 const MUTATE_COLOR = '#c98a2b'
-/** 写改工具：完成态必须与 read_file 一眼可分（此前全都是同一个眼睛图标） */
+/** Write/mutate tools: the completed state must be distinguishable from read_file at a glance (previously all used the same eye icon) */
 const MUTATE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
 
-/** 卡片外壳：图标 + 主文本（单行截断 + 悬停全文）+ 右侧元信息 + 悬停动作提示 */
+/** Card shell: icon + primary text (single-line truncation + full text on hover) + right-side metadata + hover action hint */
 const CardShell: React.FC<{
   style: ToolCardStyle
   isNested: boolean
   icon: React.ReactNode
   primary: string
   meta?: React.ReactNode
-  /** 有 onClick 即表示可点开：悬停变底色并显示右侧箭头 */
+  /** Having an onClick means it can be opened: hovering changes the background and shows the right arrow */
   onClick?: () => void
   actionTitle?: string
   primaryColor?: string
-  /** 工具名（落在 data 属性上，供离线工装清点「哪些工具的卡片真的渲染了」） */
+  /** Tool name (written to a data attribute for offline fixtures to check "which tool cards actually rendered") */
   toolName?: string
-  /** 这张卡片是不是「进行中」形态（工装按 data-tool-progress 清点进行中的卡片） */
+  /** Whether this card is in the "in progress" state (fixtures count in-progress cards by data-tool-progress) */
   progress?: boolean
-  /** 主文本是否带光泽扫过（进行中卡片才需要：与左侧图标的亮面同步） */
+  /** Whether the primary text has a shiny sweep (only needed for in-progress cards: synchronized with the shine on the left icon) */
   shinyText?: boolean
-  /** 写改类卡片：左侧 2px 强调边（扫读时自己跳出来） */
+  /** Write/mutate cards: 2px accent edge on the left (jumps out while scanning) */
   mutate?: boolean
 }> = ({
   style,
@@ -131,7 +137,7 @@ const CardShell: React.FC<{
       style={{
         background: hover && onClick ? hoverBg : bg,
         border: 'var(--ant-line-width) var(--ant-line-type) var(--ant-color-border)',
-        // 只加左侧一条强调边：区分写改卡片，又不改变卡片本身的形状语言
+        // Only add the left accent edge: distinguishes mutate cards without changing the card's shape language
         borderLeft: mutate ? `2px solid ${MUTATE_COLOR}` : undefined,
         marginBottom: isNested ? '4px' : '6px',
         borderRadius: '8px',
@@ -147,10 +153,12 @@ const CardShell: React.FC<{
       <TruncatedTooltipText
         text={primary}
         /**
-         * 进行中卡片：主文本与左侧图标**同一套亮面**（同一个基色，光泽同步扫过）。
-         * 2026-09-27 用户报「只有图标会显示亮面的动效，而文字没有」——此前这里没传
-         * `shinyBaseColor`，`TruncatedTooltipText` 就不挂 `.shiny-text`，文字自然是静的。
-         * 完成态卡片不传（`shinyText` 缺省 false）：静止的卡片不该一直闪。
+         * In-progress card: the primary text and the left icon share **the same shine** (same base
+         * color, gloss sweeps in sync). The user reported on 2026-09-27 that "only the icon shows
+         * the shine animation, while the text does not" — `shinyBaseColor` was not passed here, so
+         * `TruncatedTooltipText` did not attach `.shiny-text` and the text stayed static.
+         * Not passed for completed cards (`shinyText` defaults to false): a static card should not
+         * keep flashing.
          */
         shinyBaseColor={shinyText ? style.colorTextSecondary : undefined}
         style={{ color: primaryColor ?? style.colorText, fontSize }}
@@ -163,7 +171,7 @@ const CardShell: React.FC<{
             color: style.colorTextTertiary,
             opacity: hover ? 1 : 0,
             transition: 'opacity 0.15s',
-            // 进展开的入口不能被文字/元信息挤扁（收缩压力大时它会被压成一条线）
+            // The expand entry must not be squeezed flat by text/metadata (it collapses to a line under shrink pressure)
             flexShrink: 0
           }}
         />
@@ -173,19 +181,22 @@ const CardShell: React.FC<{
 }
 
 /**
- * 右侧元信息：数字用等宽字形（与「任务段步数胶囊」同一套排版口径）。
+ * Right-side metadata: numbers use a monospace face (same typography as the "task segment step
+ * count pill").
  *
- * `shrinkable`（2026-09-27 用户报「这个内容还是超出，没有出现省略号」）：
- * 失败原因这类**长度不可控**的元信息必须能收缩并出省略号。
- * 此前这里是 `flexShrink: 0` + `whiteSpace: nowrap` —— 既不许它变窄、又没有省略号，
- * 一条长原因（沙箱拦截那种整句说明）就把卡片内容顶出容器，再被卡片的 `overflow: hidden` 裁掉：
- * 用户看到的就是「内容超出，却没有省略号」。原生 `title` 保证裁掉的部分仍能看到全文
- * （卡片本身的 `title` 是给「点开」这种动作提示用的，两者可能同时存在，靠嵌套元素分开）。
+ * `shrinkable` (the user reported on 2026-09-27: "this content still overflows, no ellipsis
+ * appears"): metadata with **uncontrolled length**, such as failure reasons, must be able to
+ * shrink and show an ellipsis. Previously this was `flexShrink: 0` + `whiteSpace: nowrap` — it
+ * could not narrow and had no ellipsis, so a long reason (a whole-sentence sandbox-blocked
+ * explanation) pushed the card content out of the container and it was then cut off by the card's
+ * `overflow: hidden`: the user saw "content overflows, no ellipsis". The native `title` keeps the
+ * full text visible for the clipped part (the card's own `title` is the action hint for "open",
+ * and both may coexist, separated by nesting elements).
  */
 const Meta: React.FC<{
   isNested: boolean
   color: string
-  /** true = 允许收缩 + 省略号（长度不可控的内容用它，如失败原因） */
+  /** true = allow shrinking + ellipsis (use it for content of uncontrolled length, such as failure reasons) */
   shrinkable?: boolean
   children: React.ReactNode
 }> = ({ isNested, color, shrinkable = false, children }) => (
@@ -198,7 +209,7 @@ const Meta: React.FC<{
       whiteSpace: 'nowrap',
       ...(shrinkable
         ? {
-            // 收缩到内容宽度以下必须有 min-width: 0；裁剪交给省略号
+            // Below the content width, shrinking requires min-width: 0; truncation is handled by the ellipsis
             flex: '0 1 auto',
             minWidth: 0,
             overflow: 'hidden',
@@ -212,36 +223,41 @@ const Meta: React.FC<{
 )
 
 /**
- * 计数用的等宽字形包裹。
+ * Monospace wrapper for counters.
  *
- * 必须显式渲染 children：`<Trans components={{ mono: ... }}>` 是把占位组件**克隆**
- * 出来并把插值文本作为 children 塞进去的，一个忽略 children 的组件会把数字吞掉
- * （实测：`const Mono = () => <span/>` → 卡片上只剩「项」，数字不见）。
+ * It must explicitly render children: `<Trans components={{ mono: ... }}>` **clones** the
+ * placeholder component and inserts the interpolated text as children, so a component that ignores
+ * children swallows the number (verified: `const Mono = () => <span/>` → only the unit word remains
+ * on the card and the number disappears).
  */
 const Mono: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
   <span style={{ fontFamily: MONO_FONT }}>{children}</span>
 )
 
 /**
- * 差异规模语义色：新增绿 / 删除红（与差异视图历史列表、资源管理器徽标同一套）。
- * 深色下用同一族色的亮档——`#4a8f5b` / `#b3452f` 在深底上会糊成一团灰，
- * 这两档就是 FileExplorer 的改动徽标在深色下用的那两个值。
+ * Semantic colors for diff size: additions green / deletions red (same as the diff view history
+ * list and the file explorer badge). Dark mode uses brighter shades of the same hue family —
+ * `#4a8f5b` / `#b3452f` turn into a muddy gray on a dark background, and these two shades are
+ * exactly the values FileExplorer's change badge uses in dark mode.
  */
 const DIFF_ADDED_COLOR = { light: '#4a8f5b', dark: '#9ecf8a' }
 const DIFF_REMOVED_COLOR = { light: '#b3452f', dark: '#e08a70' }
 
 /**
- * 写改卡片上的差异规模「+N −M」。
+ * Diff size "+N −M" on write/mutate cards.
  *
- * 用户 2026-09-23 要求（原话）：「并且编辑后，需要在卡片显示差异：+12 -6」。
+ * The user asked on 2026-09-23 (verbatim): "and after editing, the card needs to show the diff: +12 -6".
  *
- * 它与卡片上原有的数字**不是一回事，两个都要**：
- *  - 「N 处」= 这次替换了几处（edit_file 的返回值口径）；
- *  - 「+N −M」= 这个文件实际变了多少行（与改动记录、差异视图同一份数字，见主进程 line-diff）。
- * 一次 replace_all 替换 3 处却动了 40 行时，只看处数会让人以为这是个小改动。
+ * It is **not the same thing** as the existing number on the card, and both are needed:
+ *  - "N replacements" = how many spots this call replaced (edit_file's return value semantics);
+ *  - "+N −M" = how many lines actually changed in this file (the same numbers as the change log
+ *    and the diff view; computed by the main process's line-diff).
+ * When a single replace_all changes 3 spots but touches 40 lines, the spot count alone makes it
+ * look like a small change.
  *
- * 数字缺失（老数据里落的卡片、写失败）或两边都是 0（内容其实没变）时**整块不渲染**：
- * 宁可这一行短一点，也不摆一个「+0 −0」让人读不通。
+ * When the numbers are missing (cards persisted in old data, failed writes) or both are 0 (content
+ * actually unchanged), **the whole block is not rendered**: better a shorter line than a "+0 −0"
+ * that makes no sense.
  */
 const DiffStat: React.FC<{ added?: number; removed?: number; isDarkMode: boolean }> = ({
   added,
@@ -266,7 +282,7 @@ const DiffStat: React.FC<{ added?: number; removed?: number; isDarkMode: boolean
   )
 }
 
-/** 卡片右侧元信息（按工具语义给出「结果有多大」） */
+/** Right-side card metadata (describes "how big the result is" per tool semantics) */
 const ToolCardMeta: React.FC<{
   tool: ToolCall
   card: ToolCard
@@ -275,9 +291,11 @@ const ToolCardMeta: React.FC<{
   isDarkMode: boolean
 }> = ({ tool, card, isNested, color, isDarkMode }) => {
   const { t } = useTranslation()
-  // 失败且有失败原因：原因优先（egress 文本比「exit 1」更能说明问题）。
-  // 没有 message 的失败态（如 execute 非零退出）继续走下面的按工具元信息——退出码不能丢。
-  // 失败原因长度不可控（沙箱拦截那种整句说明），必须可收缩 + 出省略号（见 Meta 的 shrinkable）。
+  // Failure with a reason: the reason takes priority (egress text explains the problem better
+  // than "exit 1"). Failures without a message (e.g. a non-zero execute exit) fall through to the
+  // per-tool metadata below — the exit code must not be lost.
+  // Failure reasons have uncontrolled length (a whole-sentence sandbox-blocked explanation) and
+  // must be shrinkable with an ellipsis (see Meta's shrinkable).
   if (card.status === 'error' && card.message) {
     return (
       <Meta isNested={isNested} color={color} shrinkable>
@@ -304,7 +322,7 @@ const ToolCardMeta: React.FC<{
       )
     }
     case 'write_file':
-      // `card.message` 这条兜底（失败但没投影出字节数）长度不可控，同失败原因一样要能收缩
+      // The `card.message` fallback (failed but no byte count projected) has uncontrolled length and must be shrinkable like a failure reason
       return (
         <Meta isNested={isNested} color={color} shrinkable={card.bytes === undefined}>
           {card.bytes !== undefined ? formatBytes(card.bytes) : card.message}
@@ -360,7 +378,7 @@ const ToolCardMeta: React.FC<{
         </Meta>
       )
     case 'execute':
-      // 后台运行：没有退出码，显示任务 id（状态/日志在顶部栏「后台任务」入口里）
+      // Background run: no exit code, show the job id (status/logs are in the "background jobs" entry in the top bar)
       if (card.jobId) {
         return (
           <Meta isNested={isNested} color={color}>
@@ -380,10 +398,10 @@ const ToolCardMeta: React.FC<{
   }
 }
 
-/** 完成态卡片：按工具语义决定点击行为 */
+/** Completed-state card: click behavior depends on tool semantics */
 export const ToolResultCard: React.FC<{
   tool: ToolCall
-  /** 当前话题 id（结果详情按 topicId + callId 取回） */
+  /** Current topic id (result details are fetched by topicId + callId) */
   topicId: number | null
   isNested?: boolean
   style: ToolCardStyle
@@ -396,9 +414,10 @@ export const ToolResultCard: React.FC<{
   const size = isNested ? 14 : 16
   const kind: ToolCardKind = card.kind ?? (tool.name === 'execute' ? 'command' : 'file')
   /**
-   * 写改类卡片：图标与颜色都换成「我改了这个文件」的一套。
-   * 此前它们落进 `kind === 'file'` 分支，跟 read_file 共用同一个眼睛图标 + 次要色，
-   * 于是聊天里**看不出哪张卡片是改动**——用户的原话就是「明明编辑了文件，找不到编辑卡片」。
+   * Write/mutate cards: switch the icon and color to the "I changed this file" set.
+   * Previously they fell into the `kind === 'file'` branch and shared the same eye icon + secondary
+   * color as read_file, so **you could not tell which card was a change** in the chat — the user's
+   * words were exactly "I clearly edited a file but cannot find the edit card".
    */
   const isMutate = MUTATE_TOOLS.has(tool.name) && card.status !== 'error'
   const MutateIcon = tool.name === 'write_file' ? RiFileEditLine : RiPencilLine
@@ -406,7 +425,7 @@ export const ToolResultCard: React.FC<{
     card.status === 'error' ? RiErrorWarningLine : isMutate ? MutateIcon : TOOL_CARD_ICONS[kind]
   const iconColor =
     card.status === 'error' ? '#ef4444' : isMutate ? MUTATE_COLOR : style.colorTextSecondary
-  /** 主文本：路径 / 模式 / 命令 */
+  /** Primary text: path / pattern / command */
   const primary =
     kind === 'command'
       ? card.command || ''
@@ -423,8 +442,8 @@ export const ToolResultCard: React.FC<{
     onClick = () => bridge.openFile(card.path as string)
     actionTitle = t('harness.assistantMessage.toolOpenFile')
   } else if (kind === 'dir' && card.path && bridge) {
-    // 目录：优先在资源管理器里定位（能一眼看到同级内容）；
-    // 不在工作区内（如 /memories/...）时退回结果详情页签
+    // Directories: prefer locating in the file explorer (sibling contents visible at a glance);
+    // fall back to the result detail tab when outside the workspace (e.g. /memories/...)
     onClick = () => {
       if (!bridge.revealPath(card.path as string) && canDetail) {
         bridge.openToolDetail({
@@ -471,7 +490,7 @@ export const ToolResultCard: React.FC<{
   )
 }
 
-/** 进行中卡片（参数构建中 / 执行中）：同款外形，仅状态后缀 + 光泽扫过 */
+/** In-progress card (building parameters / executing): same shape, only a status suffix + glossy sweep */
 export const ToolProgressCard: React.FC<{
   tool: ToolCall
   progress: 'preparing' | 'executing'
@@ -485,7 +504,7 @@ export const ToolProgressCard: React.FC<{
     progress === 'preparing'
       ? ` · ${t('harness.assistantMessage.toolPreparing')}`
       : ` · ${t('harness.assistantMessage.toolExecuting')}`
-  // MCP / mnemon 这类运行期才知道名字的工具走前缀兜底；仍认不出退到终端图标（与旧行为一致）
+  // Tools whose names are only known at runtime, such as MCP / mnemon, fall back by prefix; if still unrecognized, use the terminal icon (same as the old behavior)
   const Icon = toolIconFor(tool.name) || RiTerminalBoxLine
   return (
     <CardShell
@@ -501,10 +520,11 @@ export const ToolProgressCard: React.FC<{
   )
 }
 /**
- * 工具结果图像条（read_image / 其它媒体工具）：缩略图 + 点击大图预览。
+ * Tool result image strip (read_image / other media tools): thumbnail + click for a large preview.
  *
- * 图像来自工具结果里持久化的 data URL（对话 blocks），因此历史消息、重启后的会话都能
- * 直接显示，不依赖磁盘上的原文件（原文件可能已被移动或删除）。
+ * The images come from the data URLs persisted in the tool result (conversation blocks), so
+ * historical messages and sessions after a restart can display them directly without depending on
+ * the original files on disk (which may have been moved or deleted).
  */
 export const ToolImageStrip: React.FC<{
   images: ToolImageData[]
@@ -546,16 +566,19 @@ export const ToolImageStrip: React.FC<{
 }
 
 /**
- * `present` 卡片：模型声明的交付文件列表，点击直接在右侧面板打开。
+ * `present` card: the delivery file list declared by the model; clicking opens the file directly in
+ * the right panel.
  *
- * 列表来自工具**入参**（不是输出文本）：入参随对话 blocks 一起落库，历史重载后卡片
- * 仍能还原；输出只是给模型的确认文案，不参与渲染。
+ * The list comes from the tool **input** (not the output text): the input is persisted with the
+ * conversation blocks, so the card can be restored after a historical reload; the output is only
+ * the confirmation text for the model and does not participate in rendering.
  */
 /**
- * 动作卡（propose_action）：回答下方的可点选按钮。
+ * Action card (propose_action): clickable buttons below the answer.
  *
- * 点选后通过 `harness-propose-action` 事件把 reply（缺省为 label）交给会话发送逻辑——
- * 与手动发消息同一条路径（生成中则入队）。点过之后本卡片就地禁用并显示所选文本。
+ * On click it hands the reply (defaulting to label) to the conversation send logic through the
+ * `harness-propose-action` event — the same path as sending a message manually (queued if
+ * generating). After clicking, the card is disabled in place and shows the selected text.
  */
 export const PresentedFilesCard: React.FC<{
   tool: ToolCall

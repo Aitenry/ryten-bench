@@ -37,18 +37,18 @@ import {
 } from '../../runtime/harness/image-replay'
 
 /**
- * 数据库中的对话记录（精简版视图，避免循环依赖）。
- * 类型仍从 drizzle schema 推导，不再手抄字段。
+ * Dialogue record from the database (trimmed view, avoids circular dependencies).
+ * Types are still derived from the drizzle schema; no more hand-copied fields.
  */
 export type HistoryDialogue = Pick<
   HarnessDialogueRow,
   'id' | 'topic_id' | 'role' | 'content' | 'blocks' | 'created_at'
 >
 
-/** 历史加载回调：根据 topicId 返回对话记录 */
+/** History loader callback: returns dialogue records for a topicId */
 export type LoadHistoryFn = (topicId: number) => Promise<HistoryDialogue[]>
 
-/** 适配 DeepSeek-R1 等模型在 additional_kwargs 中返回的推理内容 */
+/** Adapts reasoning content that models such as DeepSeek-R1 return in additional_kwargs */
 interface ReasoningMessage {
   additional_kwargs?: {
     reasoning_content?: string
@@ -57,13 +57,13 @@ interface ReasoningMessage {
 }
 
 /**
- * 从消息列表中提取结构化的消息输出
+ * Extract structured message output from the message list
  */
 export function extractStructuredMessages(messages: BaseMessage[]): StructuredMessage[] {
   const result: StructuredMessage[] = []
   const toolOutputs = new Map<string, string>()
 
-  // 第一遍：收集所有工具输出
+  // First pass: collect all tool outputs
   for (const msg of messages) {
     if (msg.type === 'tool') {
       const tm = msg as unknown as { tool_call_id: string; content: unknown }
@@ -73,24 +73,24 @@ export function extractStructuredMessages(messages: BaseMessage[]): StructuredMe
     }
   }
 
-  // 第二遍：提取内容和工具调用
+  // Second pass: extract content and tool calls
   for (const msg of messages) {
     if (msg.type === 'human') continue
 
-    // 推理内容
+    // Reasoning content
     const reasoningContent = (msg as unknown as ReasoningMessage).additional_kwargs
       ?.reasoning_content
     if (reasoningContent) {
       result.push({ reasoning_content: reasoningContent })
     }
 
-    // 文本内容
+    // Text content
     const content = typeof msg.content === 'string' ? msg.content : ''
     if (content) {
       result.push({ content })
     }
 
-    // 工具调用
+    // Tool calls
     const toolCalls = (
       msg as unknown as {
         tool_calls?: Array<{ name: string; args: Record<string, unknown>; id: string }>
@@ -113,86 +113,93 @@ export function extractStructuredMessages(messages: BaseMessage[]): StructuredMe
 }
 
 /**
- * 历史上下文默认字符预算：未配置模型上下文窗口时的默认值（20,000 字符）。
- * 实际预算随当前模型的上下文窗口动态调整（见 HistoryConvertOptions.contextBudget），
- * 字符 ≈ token 的保守换算（中文 1:1，英文更保守）。
+ * Default character budget for historical context: the default when no model context window is
+ * configured (20,000 chars). The actual budget adjusts dynamically with the current model's
+ * context window (see HistoryConvertOptions.contextBudget); chars ≈ tokens is a conservative
+ * conversion (1:1 for Chinese, more conservative for English).
  */
 export const DEFAULT_HISTORY_BUDGET = 20_000
 
-/** 摘要请求超窗（prompt too long）时的最多拆分重试次数 */
+/** Maximum number of split retries when a summary request exceeds the window (prompt too long) */
 const MAX_PTL_RETRIES = 3
-/** 连续压缩失败达到这个次数后停止自动压缩（熔断），避免每轮白烧 token（Claude Code 同款） */
+/** After this many consecutive compaction failures, stop auto-compaction (circuit breaker) to avoid burning tokens every turn */
 const MAX_CONSECUTIVE_COMPACTION_FAILURES = 3
-/** 压缩后重注入：最多恢复这么多个最近读/改过的文件 */
+/** Post-compaction re-injection: restore at most this many recently read/modified files */
 const RESTORE_MAX_FILES = 5
-/** 重注入单文件上限（字符；1 字符 ≈ 1 token 的保守口径） */
+/** Per-file limit for re-injection (chars; conservative 1 char ≈ 1 token) */
 const RESTORE_PER_FILE_CHARS = 5_000
-/** 重注入总上限（字符） */
+/** Total limit for re-injection (chars) */
 const RESTORE_TOTAL_CHARS = 25_000
 
 /**
- * 话题 → 连续压缩失败次数（进程级）。
+ * Topic → consecutive compaction failure count (process-level).
  *
- * 为什么需要：压缩失败后会回退字符截断，但下一轮压力仍然超标，会再次调用摘要模型；
- * 某些会话（超大单条输出、模型不支持长输入）会每轮都失败，白烧 token。连续失败到
- * 上限就跳过自动压缩，直到出现一次成功或用户手动触发。
+ * Why needed: after a compaction failure it falls back to character truncation, but the next
+ * turn's pressure is still over the limit and the summary model is called again; some sessions
+ * (huge single output, model does not support long input) fail every turn and burn tokens. Once
+ * consecutive failures reach the limit, automatic compaction is skipped until a success occurs or
+ * the user triggers it manually.
  */
 const compactionFailureStreak = new Map<number, number>()
 
-/** 历史上下文转换结果 */
+/** History context conversion result */
 export interface HistoryContext {
   messages: BaseMessage[]
-  /** 是否发生了截断（更早的对话被省略；摘要压缩可用时不再发生） */
+  /** Whether truncation happened (earlier dialogues omitted; no longer happens when summary compaction is available) */
   truncated: boolean
-  /** 是否发生了摘要压缩（早期对话被压缩为 checkpoint 摘要） */
+  /** Whether summary compaction happened (early dialogues compressed into a checkpoint summary) */
   compacted?: boolean
-  /** 本轮新发生的摘要压缩信息（仅边界推进/首次压缩时携带，供前端展示卡片） */
+  /** Summary compaction info newly produced this turn (only carried on boundary advance / first compaction, for the frontend card) */
   compaction?: HistoryCompaction
 }
 
-/** 历史转换选项（摘要压缩可选开启） */
+/** History conversion options (summary compaction can be opted in) */
 export interface HistoryConvertOptions {
-  /** 字符预算（默认 DEFAULT_HISTORY_BUDGET；由当前模型的上下文窗口换算注入） */
+  /** Character budget (defaults to DEFAULT_HISTORY_BUDGET; injected as converted from the current model's context window) */
   maxChars?: number
-  /** 摘要回调：由 HarnessService 用当前模型注入；缺省时超预算回退为字符截断 */
+  /** Summarizer callback: injected by HarnessService using the current model; when absent, over-budget history falls back to character truncation */
   summarizer?: SummarizerFn
-  /** 话题 ID（缓存键） */
+  /** Topic ID (cache key) */
   topicId?: number
-  /** 读取既有压缩 checkpoint（持久化表；缺省视为无） */
+  /** Read an existing compaction checkpoint (persisted table; absent = none) */
   getCheckpoint?: (topicId: number) => Promise<CompactionCheckpoint | undefined>
-  /** 落库压缩 checkpoint（持久化表；缺省不保存） */
+  /** Persist the compaction checkpoint (persisted table; absent = not saved) */
   saveCheckpoint?: (topicId: number, checkpoint: CompactionCheckpoint) => Promise<void>
-  /** 压缩开始回调：确认本轮将产生新的压缩事件时、LLM 摘要调用前立即调用 */
+  /** Compaction start callback: called immediately before the LLM summary call once this turn is confirmed to produce a new compaction event */
   onCompactionStart?: () => void
-  /** 取消信号：中止/取消时跳过摘要压缩，且不落库 checkpoint（前端「停止」贯通到压缩链路） */
+  /** Cancellation signal: on abort/cancel, skip summary compaction and do not persist a checkpoint (the frontend "stop" reaches the compaction chain) */
   signal?: AbortSignal
   /**
-   * 上一轮模型调用真实回传的上下文规模（token）：有则压缩压力按真实 token 判定
-   * （窗口 × 79%），否则退回字符启发式（预算 × 0.7）。见 context-pressure.ts。
+   * Context size actually returned by the previous model call (tokens): when present, compaction
+   * pressure is judged by real tokens (window × 79%), otherwise it falls back to the character
+   * heuristic (budget × 0.7). See context-pressure.ts.
    */
   measuredContextTokens?: number | null
-  /** 当前模型上下文窗口（token）；与 measuredContextTokens 一起换算压力，缺一即退回字符口径 */
+  /** Current model context window (tokens); converted together with measuredContextTokens to pressure; missing either falls back to the character measure */
   contextWindowTokens?: number | null
-  /** 压缩后重注入用：读取虚拟路径的文件内容（失败返回 error；缺省则不恢复文件） */
+  /** For post-compaction re-injection: read a file by virtual path (returns error on failure; absent = do not restore files) */
   readFile?: (virtualPath: string) => { content: string } | { error: string }
-  /** 压缩后重注入用：当前的待办/计划等短状态（可为空；缺省则不注入） */
+  /** For post-compaction re-injection: current short state such as todos/plan (may be empty; absent = no injection) */
   restoreNote?: () => string
 }
 
-/** 单条对话的字符成本（正文 + blocks；用户行里的图片按估算值计入，见 image-replay） */
+/** Character cost of one dialogue (content + blocks; images in user rows count as an estimate, see image-replay) */
 function dialogueChars(d: HistoryDialogue): number {
   return dialogueBudgetChars(d)
 }
 
 /**
- * 是否为「回合内插话」行（用户在我们正在生成回复时插进来的一句话）。
+ * Whether this is an "in-turn interjection" row (a user message inserted while a reply was being
+ * generated).
  *
- * 判定依据是落库时写入的 blocks 标记（`{type:'interjection'}`）——不靠内容或时间猜。
- * blocks 解析失败时按普通对话处理（宁可多带一次上下文，也不要丢掉用户消息）。
+ * The criterion is the blocks marker written at persistence time (`{type:'interjection'}`) — not
+ * content or timing guesses. When blocks parsing fails, treat it as a normal dialogue (better to
+ * carry the context once too often than to drop a user message).
  *
- * 现状：插话走**纯注入**（不落库、不进对话流），所以目前没有任何行会带这个标记，
- * 这里恒为 false——纯防御：若将来把插话也落库留痕，回放必须能排除它，
- * 否则同一诉求会被重复送进模型（且回放顺序会变成「先答复再提问」）。
+ * Current state: interjections are **injection-only** (not persisted, not part of the dialogue
+ * stream), so no row carries this marker right now and this always returns false — purely
+ * defensive: if interjections are persisted later, replay must exclude them, otherwise the same
+ * request would be sent to the model twice (and replay order would become "reply then question").
  */
 export function isInterjectionRow(d: HistoryDialogue): boolean {
   if (!d.blocks) return false
@@ -206,12 +213,12 @@ export function isInterjectionRow(d: HistoryDialogue): boolean {
   }
 }
 
-/** 压缩熔断是否已打开（连续失败达到上限） */
+/** Whether the compaction circuit breaker is open (consecutive failures reached the limit) */
 function compactionCircuitOpen(topicId: number): boolean {
   return (compactionFailureStreak.get(topicId) ?? 0) >= MAX_CONSECUTIVE_COMPACTION_FAILURES
 }
 
-/** 记一次压缩失败：达到上限时打一行日志（只打一次，避免刷屏） */
+/** Record one compaction failure: log one line when the limit is reached (only once, to avoid log spam) */
 function noteCompactionFailure(topicId: number): void {
   const next = (compactionFailureStreak.get(topicId) ?? 0) + 1
   compactionFailureStreak.set(topicId, next)
@@ -222,40 +229,49 @@ function noteCompactionFailure(topicId: number): void {
   }
 }
 
-/** 压缩成功：清零失败计数，恢复自动压缩 */
+/** Compaction succeeded: reset the failure count and resume automatic compaction */
 function noteCompactionSuccess(topicId: number): void {
   compactionFailureStreak.delete(topicId)
 }
 
 /**
- * 将数据库中的对话记录转换为 BaseMessage 数组。
+ * Convert database dialogue records into a BaseMessage array.
  *
- * 上下文压缩策略（参考 dsh-compaction-basic 的阈值/保留机制）：
- * 1. 压力达标且提供了摘要器时：把最老一段对话用一次（或分段多次）LLM 调用
- *    压缩为 checkpoint 摘要（topic_compactions 表持久化，每话题一行）。
- *    压力优先按**真实 token** 判定：上一轮模型调用实际用掉的上下文 ÷ 模型窗口 ≥ 79%
- *    （含系统提示词、工具 schema、注入记忆）；拿不到 usage_metadata 才退回
- *    「历史字符 ≥ 预算 × 0.7」的启发式。判定逻辑见 runtime/harness/context-pressure.ts。
- *    后续轮次只要「既有摘要 + 未压缩新内容」未超预算就直接复用，不重复压缩
- *    （真实 token 已超阈值时除外：复用出来的上下文一样大，必须增量合并才会变小）；
- *    只有再次超预算才把新内容最老部分增量合并进摘要（一次调用，过长时分块）；
- * 2. 无摘要器或摘要失败：回退为原有字符预算截断（省略更早对话 + 头部说明）；
- * 3. 工具结果统一经智能裁剪（pruneToolOutput），原始内容保留在数据库中可精确回放。
+ * Context compaction strategy (threshold/retention mechanism):
+ * 1. When pressure is reached and a summarizer is provided: compact the oldest stretch of
+ *    dialogue with one (or several chunked) LLM calls into a checkpoint summary (persisted in the
+ *    topic_compactions table, one row per topic). Pressure is preferably judged by **real
+ *    tokens**: the context actually consumed by the previous model call ÷ the model window ≥ 79%
+ *    (including system prompt, tool schemas, injected memory); only when usage_metadata is
+ *    unavailable does it fall back to the heuristic "history chars ≥ budget × 0.7". See
+ *    runtime/harness/context-pressure.ts for the decision logic.
+ *    Subsequent turns reuse the existing summary directly as long as "existing summary +
+ *    uncompacted new content" stays within budget, without re-compacting (except when real tokens
+ *    are already over the threshold: the reused context is just as large, so only incremental
+ *    merging makes it smaller); only when over budget again is the oldest part of the new content
+ *    incrementally merged into the summary (one call, chunked when too long);
+ * 2. No summarizer or summary failure: fall back to the original character-budget truncation
+ *    (omit earlier dialogues + a header note);
+ * 3. Tool results all go through pruning (pruneToolOutput); the original content stays in the
+ *    database for exact replay.
  */
 export async function convertDialoguesToMessages(
   dialogues: HistoryDialogue[],
   options?: HistoryConvertOptions
 ): Promise<HistoryContext> {
   const maxChars = options?.maxChars ?? DEFAULT_HISTORY_BUDGET
-  // 回合内插话（steering）行不进模型上下文：它已经作为 HumanMessage 在本轮回合中
-  // 被模型读到、并已体现在同一轮助手的输出里；回放会重复一遍同一诉求
-  //（且它落库在助手行之前，重放顺序会把「先答复再提问」颠倒）。前端仍按原样渲染。
+  // In-turn interjection (steering) rows do not enter model context: they were already read by
+  // the model as a HumanMessage during this turn and are already reflected in the same turn's
+  // assistant output; replaying them would repeat the same request (and since they are persisted
+  // before the assistant row, replay order would invert "reply then question"). The frontend
+  // still renders them as-is.
   const replayable = dialogues.filter((d) => !isInterjectionRow(d))
   const totalChars = replayable.reduce((sum, d) => sum + dialogueChars(d), 0)
 
-  // 压缩压力：优先用上一轮真实回传的 token（含系统提示词 / 工具 schema / 注入记忆，
-  // 那才是模型真正看到的占用），拿不到再退回字符启发式。每轮一行日志，便于现场核对
-  //「为什么这轮压了 / 为什么没压」。
+  // Compaction pressure: prefer the real tokens returned by the previous turn (including system
+  // prompt / tool schema / injected memory — that is what the model actually saw); fall back to
+  // the character heuristic when unavailable. One log line per turn makes it easy to check in the
+  // field "why did this turn compact / why not".
   const pressure = decideContextPressure({
     totalChars,
     maxChars,
@@ -271,10 +287,11 @@ export async function convertDialoguesToMessages(
       ` (threshold ${(pressure.threshold * 100).toFixed(0)}%, triggered=${pressure.triggered})`
   )
 
-  // 摘要压缩路径：压力达标且有摘要器
+  // Summary compaction path: pressure reached and a summarizer is available
   if (options?.summarizer && options.topicId != null && pressure.triggered) {
     if (compactionCircuitOpen(options.topicId)) {
-      // 连续失败已熔断：跳过自动压缩（回退下面的字符截断），等一次成功或手动触发再恢复
+      // Circuit open after consecutive failures: skip automatic compaction (fall back to the
+      // character truncation below) and wait for one success or a manual trigger to recover
       logger.warn(
         `[History] Skipping auto compaction topic=${options.topicId}: circuit open after ${MAX_CONSECUTIVE_COMPACTION_FAILURES} consecutive failures`
       )
@@ -286,14 +303,16 @@ export async function convertDialoguesToMessages(
           return result
         }
       } catch (err) {
-        // 摘要失败：回退字符截断；已落库的旧 checkpoint 保留，后续轮次仍可复用
+        // Summary failed: fall back to character truncation; the previously persisted old
+        // checkpoint is kept and can still be reused by later turns
         noteCompactionFailure(options.topicId)
         compactionError(err)
       }
     }
   }
 
-  // 回退路径：从后往前选取最近的对话，直到累计字符数超过预算（至少保留最后一条）
+  // Fallback path: select the most recent dialogues backwards until the accumulated chars exceed
+  // the budget (keep at least the last one)
   const selected: HistoryDialogue[] = []
   let total = 0
   let truncated = false
@@ -309,7 +328,7 @@ export async function convertDialoguesToMessages(
 
   const messages: BaseMessage[] = []
 
-  // 截断说明：置于最前，告知模型早期历史被省略
+  // Truncation note: placed first to tell the model that early history was omitted
   if (truncated) {
     messages.push(
       new SystemMessage(
@@ -322,7 +341,7 @@ export async function convertDialoguesToMessages(
   return { messages, truncated }
 }
 
-/** 按字符预算从尾部切分对话：返回 { old, recent }（old 为最老部分，可为空） */
+/** Split dialogues from the tail by character budget: returns { old, recent } (old is the oldest part, possibly empty) */
 function splitByBudget(
   dialogues: HistoryDialogue[],
   budget: number
@@ -338,9 +357,10 @@ function splitByBudget(
 }
 
 /**
- * 感知取消的摘要调用：signal 已中止或请求途中被中止（AbortError）时返回 null，
- * 由调用方跳过压缩与 checkpoint 落库（用户取消不留压缩副作用，也不误报失败）；
- * 其余错误照常抛出（走「摘要失败回退字符截断」兜底）。
+ * Cancellation-aware summary call: returns null when signal is already aborted or the request is
+ * aborted mid-flight (AbortError), and the caller skips compaction and checkpoint persistence (a
+ * user cancel leaves no compaction side effects and is not reported as a failure); other errors
+ * are thrown as usual (handled by the "summary failed → character truncation" fallback).
  */
 async function summarizeForTurn(
   options: HistoryConvertOptions,
@@ -357,21 +377,27 @@ async function summarizeForTurn(
 }
 
 /**
- * 摘要压缩编排（checkpoint 持久化于 topic_compactions 表，压缩一次后续复用）：
+ * Summary compaction orchestration (checkpoint persisted in the topic_compactions table; compact
+ * once and reuse afterwards):
  *
- * - 无 checkpoint 或边界倒退（对话被删除）：初始全量摘要（按保留预算切分最老段），
- *   落库，上报压缩卡片；
- * - 既有摘要 + 未压缩新内容 ≤ 总预算：直接复用既有摘要，把未压缩对话整体带进
- *   上下文，不调用 LLM、不上报压缩卡片——这是「压缩一次，后续复用」的核心：
- *   新对话只是让未压缩段变大，只要总量未满预算就绝不重复压缩；
- *   **例外**：压力由真实 token 判定且已超阈值时不能复用（复用出来的上下文一样大），
- *   必须走下面的增量合并，否则每轮都会「超阈值 → 复用 → 仍超阈值」原地打转；
- * - 总量超预算（又满了）：只把未压缩段中最老的部分（超出保留预算的部分）增量合并
- *   进既有摘要，一次调用后落库、上报压缩卡片，之后又能吸收大量新对话；
- *   待合并段超过单次转录上限时按块顺序摘要（每块都带上前一块的结果），
- *   避免压缩请求本身超窗。
+ * - No checkpoint, or boundary moved backwards (dialogues deleted): initial full summary (split
+ *   the oldest stretch by the retention budget), persist, report the compaction card;
+ * - Existing summary + uncompacted new content ≤ total budget: reuse the existing summary
+ *   directly, bring all uncompacted dialogues into the context, no LLM call, no compaction card —
+ *   this is the core of "compact once, reuse after": new dialogues only grow the uncompacted
+ *   stretch, and as long as the total stays within budget it never compacts twice;
+ *   **Exception**: when pressure is judged by real tokens and is over the threshold, reuse is not
+ *   allowed (the reused context is just as large), so the incremental merge below must run,
+ *   otherwise every turn would loop "over threshold → reuse → still over threshold";
+ * - Total over budget (full again): only the oldest part of the uncompacted stretch (the part
+ *   beyond the retention budget) is incrementally merged into the existing summary; after one
+ *   call it is persisted and the compaction card is reported, and it can then absorb a lot of new
+ *   dialogue; when the pending stretch exceeds the per-call transcript limit, summarize in order
+ *   by chunk (each chunk carries the previous chunk's result), so the compaction request itself
+ *   never exceeds the window.
  *
- * 返回 null 表示无需要压缩的最老段（由调用方回退常规路径）。
+ * Returning null means there is no oldest stretch that needs compaction (the caller falls back to
+ * the regular path).
  */
 async function compactWithSummarizer(
   dialogues: HistoryDialogue[],
@@ -382,22 +408,26 @@ async function compactWithSummarizer(
   const topicId = options.topicId!
   const retainBudget = Math.max(1, Math.floor(maxChars * RETAIN_RATIO))
   /**
-   * 单次摘要调用的转录上限：不超过字符预算的一半（预算是窗口按 1 字符 ≈ 1 token 换算的），
-   * 再封顶 COMPACTION_CHUNK_CHARS。
+   * Transcript limit for one summary call: no more than half the character budget (the budget is
+   * the window converted at 1 char ≈ 1 token), capped by COMPACTION_CHUNK_CHARS.
    *
-   * 为什么需要分块：真实 token 口径触发得比字符口径晚，待压缩段可能是旧实现的数倍
-   * （英文 4 字符/token 时尤其明显），一次性塞进摘要模型会直接把压缩请求本身撑爆。
+   * Why chunking is needed: real-token triggering happens later than the character measure, so
+   * the stretch to compact can be several times larger than the old implementation handled
+   * (especially at 4 chars/token for English); stuffing it all into one summary model call would
+   * blow up the compaction request itself.
    */
   const chunkLimit = Math.max(8_000, Math.min(COMPACTION_CHUNK_CHARS, Math.floor(maxChars / 2)))
   const lastDialogueId = dialogues[dialogues.length - 1].id
   const prior = options.getCheckpoint ? await options.getCheckpoint(topicId) : undefined
 
-  // 无 checkpoint / 边界倒退（对话被删除，摘要含已删除内容）：初始或全量重摘要
+  // No checkpoint / boundary moved backwards (dialogues deleted, summary contains deleted
+  // content): initial or full re-summary
   if (!prior || prior.boundaryId > lastDialogueId) {
     const { old, recent } = splitByBudget(dialogues, retainBudget)
     if (old.length === 0) return null
     options.onCompactionStart?.()
-    // 用户已取消（onCompactionStart 推送后、调用前中止）：跳过压缩与落库，交回常规路径
+    // User already cancelled (aborted after onCompactionStart was pushed, before the call): skip
+    // compaction and persistence, return to the regular path
     if (options.signal?.aborted) return null
     const chunks = chunkByChars(old, dialogueChars, chunkLimit)
     const summary = await summarizeChunks(options, chunks)
@@ -417,23 +447,26 @@ async function compactWithSummarizer(
     }
   }
 
-  // 既有 checkpoint 有效：未压缩的新内容 = 边界之后的全部对话
+  // Existing checkpoint valid: uncompacted new content = all dialogues after the boundary
   const pending = dialogues.filter((d) => d.id > prior.boundaryId)
   const pendingChars = pending.reduce((sum, d) => sum + dialogueChars(d), 0)
 
-  // 复用分支：摘要 + 未压缩新内容未超总预算 → 直接复用，不调用 LLM。
-  // 未压缩对话（即使远超保留预算）整体进上下文，直到总量再次超预算才压缩。
+  // Reuse branch: summary + uncompacted new content within the total budget → reuse directly, no
+  // LLM call. The uncompacted dialogues (even far beyond the retention budget) all go into the
+  // context, and compaction happens only once the total is over budget again.
   //
-  // 例外：按真实 token 判定已经超阈值时**不能**复用——复用出来的上下文和现在一样大，
-  // 下一轮还是超阈值，结果是一轮轮空转（不调 LLM、也不缩小），压缩永远不会发生。
-  // 这时必须走增量合并，把最老的一段真正并进摘要。
+  // Exception: when real tokens already exceed the threshold, reuse is **not** allowed — the
+  // reused context is just as large as now and the next turn is still over the threshold, so it
+  // spins (no LLM call, no shrink) and compaction never happens. In that case the incremental
+  // merge must run to actually fold the oldest stretch into the summary.
   if (!pressure.tokenBased && prior.summary.length + pendingChars <= maxChars) {
     logger.info(
       `[History] Reusing existing compaction summary topicId=${topicId} (boundary ${prior.boundaryId}, uncompacted ${pending.length} messages / ${pendingChars} chars, summary + uncompacted ${prior.summary.length + pendingChars} <= ${maxChars})`
     )
     const messages: BaseMessage[] = [buildCheckpointMessage(prior.summary)]
     appendDialogueMessages(messages, pending, topicId)
-    // 复用不是一次新的压缩事件：不重复重注入（否则每轮都多背 25K 字符的旧文件）
+    // Reuse is not a new compaction event: do not re-inject again (otherwise every turn would
+    // carry an extra 25K chars of old files)
     return { messages, truncated: false, compacted: true }
   }
   if (pressure.tokenBased && prior.summary.length + pendingChars <= maxChars) {
@@ -442,13 +475,16 @@ async function compactWithSummarizer(
     )
   }
 
-  // 又满了：把未压缩段中最老的部分（超出保留预算）增量合并进既有摘要
+  // Full again: incrementally merge the oldest part of the uncompacted stretch (beyond the
+  // retention budget) into the existing summary
   const { old, recent } = splitByBudget(pending, retainBudget)
   if (old.length === 0) {
-    // 极端情况：单条对话就超保留预算，未压缩段全部保留也超总预算——
-    // 直接全量重摘要（含既有摘要的转录会失真，走增量语义最接近：整段并入）
-    // 但 old 为空意味着 retainBudget 覆盖 pending 全部，此时不压缩直接带上
-    //（预算检查已通过的前提不存在），保守回退常规路径。
+    // Edge case: a single dialogue exceeds the retention budget, so keeping the entire
+    // uncompacted stretch also exceeds the total budget — a full re-summary would be needed (a
+    // transcript including the existing summary would be distorted; incremental semantics are
+    // closest: merge the whole stretch), but old being empty means retainBudget covers all of
+    // pending, so nothing is compacted and it is carried as-is (the premise that the budget check
+    // passed does not hold), falling back conservatively to the regular path.
     return null
   }
   options.onCompactionStart?.()
@@ -456,7 +492,8 @@ async function compactWithSummarizer(
   const chunks = chunkByChars(old, dialogueChars, chunkLimit)
   const summary = await summarizeChunks(options, chunks, prior.summary)
   if (summary === null || options.signal?.aborted) return null
-  // 旧上下文里本来就有 prior.summary，比较时算进去，否则小段增量合并会被误判为“没变小”
+  // The old context already contained prior.summary, so count it in the comparison; otherwise a
+  // small incremental merge would be misjudged as "did not shrink"
   assertSummaryShrinks(summary, old, prior.summary.length)
   const boundaryId = old[old.length - 1].id
   await saveCheckpointSafe(topicId, { boundaryId, summary }, options)
@@ -472,12 +509,12 @@ async function compactWithSummarizer(
   }
 }
 
-/** 日志用的压力描述：`tokens 82.4%` / `chars 71.2%` */
+/** Pressure description for logs: `tokens 82.4%` / `chars 71.2%` */
 function formatPressure(pressure: ContextPressure): string {
   return `${pressure.tokenBased ? 'tokens' : 'chars'} ${(pressure.ratio * 100).toFixed(1)}%`
 }
 
-/** 判断摘要请求是否因“上下文超长（prompt too long）”被拒（各家措辞不同，统一兜住） */
+/** Whether a summary request was rejected for "context too long (prompt too long)" (wording differs per provider; catch them all) */
 function isPromptTooLongError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
   return /context (length|window)|maximum context|too many tokens|prompt is too long|context_length_exceeded|CONTEXT_WINDOW_EXCEEDED|reduce the length|request too large|413/i.test(
@@ -486,14 +523,17 @@ function isPromptTooLongError(err: unknown): boolean {
 }
 
 /**
- * 分块摘要：逐块调用摘要器，后一块把前一块的结果当 priorSummary 增量合并。
+ * Chunked summary: call the summarizer chunk by chunk, each chunk carrying the previous result as
+ * priorSummary for incremental merging.
  *
- * 任意一块失败（null）或用户取消时整体返回 null——**不落半份 checkpoint**：
- * 边界只能对应一份完整摘要，半份会让下一轮的边界与摘要内容对不上。
+ * When any chunk fails (null) or the user cancels, the whole thing returns null — **never persist
+ * a half checkpoint**: the boundary must correspond to a complete summary, and half of one would
+ * make the next turn's boundary mismatch its summary content.
  *
- * 超窗重试：分块上限只是估算，真实 token 可能仍超（中文/JSON 低估）。命中
- * “prompt too long” 时把当前块**对半拆开**重试（最多 [`MAX_PTL_RETRIES`] 次），
- * 而不是丢掉最老内容——摘要的价值就在老内容里，丢了不如不压。
+ * Over-window retry: the chunk limit is only an estimate and real tokens may still exceed it
+ * (Chinese/JSON underestimated). On "prompt too long", **split the current chunk in half** and
+ * retry (at most [`MAX_PTL_RETRIES`] times) rather than dropping the oldest content — the value of
+ * a summary is in the old content, so dropping it is worse than not compacting.
  */
 async function summarizeChunks(
   options: HistoryConvertOptions,
@@ -527,7 +567,7 @@ async function summarizeChunks(
   return summary ?? null
 }
 
-/** 落库 checkpoint（失败不阻断本轮，仅丢失持久化复用能力） */
+/** Persist the checkpoint (failure does not block this turn, only loses persistence for reuse) */
 async function saveCheckpointSafe(
   topicId: number,
   checkpoint: CompactionCheckpoint,
@@ -544,7 +584,7 @@ async function saveCheckpointSafe(
   }
 }
 
-/** 组装压缩后的消息：checkpoint → 最近对话 → 重注入（最近文件 + 待办） */
+/** Assemble compacted messages: checkpoint → recent dialogues → re-injection (recent files + todos) */
 async function assembleCompactedMessages(
   summary: string,
   recent: HistoryDialogue[],
@@ -553,16 +593,19 @@ async function assembleCompactedMessages(
 ): Promise<BaseMessage[]> {
   const messages: BaseMessage[] = [buildCheckpointMessage(summary)]
   appendDialogueMessages(messages, recent, options.topicId)
-  // 最近窗口里已经有的文件不再重复注入（否则同一文件在上下文里出现两份，还可能一旧一新）
+  // Files already present in the recent window are not injected again (otherwise the same file
+  // appears twice in the context, possibly one stale and one fresh)
   await appendRestoredContext(messages, summarized, options, new Set(recentFilePaths(recent)))
   return messages
 }
 
 /**
- * 摘要必须比它替换掉的内容更小，否则放弃本次压缩（DSH / Gemini 的“通胀熔断”）。
+ * A summary must be smaller than the content it replaces, otherwise give up this compaction (the
+ * "inflation circuit breaker").
  *
- * 摘要模型偶尔会输出比原文还长的内容（复述全文、格式失控）；这种摘要落库后会让
- * 下一轮直接又超阈值，等于白烧一次调用。抛错交给调用方回退字符截断。
+ * The summary model occasionally emits content longer than the original (restating the whole
+ * text, runaway formatting); persisting such a summary makes the next turn exceed the threshold
+ * again immediately, wasting a call. Throw and let the caller fall back to character truncation.
  */
 function assertSummaryShrinks(summary: string, replaced: HistoryDialogue[], priorChars = 0): void {
   const replacedChars = priorChars + replaced.reduce((sum, d) => sum + dialogueChars(d), 0)
@@ -574,12 +617,13 @@ function assertSummaryShrinks(summary: string, replaced: HistoryDialogue[], prio
 }
 
 /**
- * 压缩后重注入：把最近读/改过的文件内容与当前待办放回上下文。
+ * Post-compaction re-injection: put the recent read/modified file contents and current todos back
+ * into the context.
  *
- * 为什么需要：摘要是有损的——模型刚读过 300 行的文件，压缩后只剩摘要里一句
- * “改过 app.ts”，不重注入就得重新探索。Claude Code 压缩后会重读最多 5 个最近
- * 文件，Cursor 则给一个 history 文件引用；这里用同一份工作区快照重读，单文件
- * 5K 字符、总计 25K 字符封顶。
+ * Why needed: a summary is lossy — the model just read a 300-line file, and after compaction all
+ * that remains is one sentence in the summary saying "app.ts was modified"; without re-injection
+ * it has to explore again. After compaction, re-read up to 5 recent files from the same workspace
+ * snapshot, capped at 5K chars per file and 25K chars in total.
  */
 async function appendRestoredContext(
   messages: BaseMessage[],
@@ -613,11 +657,12 @@ async function appendRestoredContext(
   const note = (options.restoreNote?.() ?? '').trim()
   if (blocks.length === 0 && !note) return
   const header = mainFormat(getFsToolTexts().compaction.restoredContext, {})
-  // 紧跟在 checkpoint 之后、最近对话之前：模型先读摘要，再读恢复的文件
+  // Right after the checkpoint and before the recent dialogues: the model reads the summary
+  // first, then the restored files
   messages.splice(1, 0, new SystemMessage([header, ...blocks, note].filter(Boolean).join('\n\n')))
 }
 
-/** 压缩段里最近读过/改过的文件路径（按时间倒序去重，最多 [`RESTORE_MAX_FILES`] 个） */
+/** Paths recently read/modified in the compacted stretch (deduplicated in reverse chronological order, at most [`RESTORE_MAX_FILES`]) */
 function recentFilePaths(dialogues: HistoryDialogue[]): string[] {
   const seen = new Set<string>()
   const paths: string[] = []
@@ -638,18 +683,18 @@ function recentFilePaths(dialogues: HistoryDialogue[]): string[] {
   return paths
 }
 
-/** 解析后的对话块（清理计划与消息组装共用一次解析） */
+/** Parsed dialogue blocks (one parse shared by the cleanup plan and message assembly) */
 type DialogueBlocks = { type: string; text?: string; tool?: ToolCallDetail; reasoning?: string }[]
 
 interface ParsedDialogue {
   dialogue: HistoryDialogue
-  /** blocks 解析失败时为 null（回退纯文本，不构造工具结构） */
+  /** null when blocks parsing fails (falls back to plain text, no tool structure) */
   blocks: DialogueBlocks | null
   toolBlocks: DialogueBlocks
   content: string
 }
 
-/** 解析一条对话的 blocks（只解析一次，避免清理计划与组装各解析一遍） */
+/** Parse one dialogue's blocks (parse once, so the cleanup plan and assembly do not each parse again) */
 function parseDialogue(d: HistoryDialogue): ParsedDialogue {
   if (d.role !== 'assistant') {
     return { dialogue: d, blocks: [], toolBlocks: [], content: d.content }
@@ -669,7 +714,7 @@ function parseDialogue(d: HistoryDialogue): ParsedDialogue {
   return { dialogue: d, blocks, toolBlocks, content }
 }
 
-/** 占位符里的调用描述：工具名 + 关键参数（路径/命令/模式），截断到 120 字符 */
+/** Call description for the placeholder: tool name + key argument (path/command/pattern), truncated to 120 chars */
 function describeToolCall(tool: ToolCallDetail): string {
   const input = tool.input ?? {}
   for (const key of ['path', 'file_path', 'command', 'pattern', 'query', 'url']) {
@@ -683,12 +728,15 @@ function describeToolCall(tool: ToolCallDetail): string {
 }
 
 /**
- * 将选中的对话追加为消息对象。
+ * Append the selected dialogues as message objects.
  *
- * 工具结果分三档处理（策略见 runtime/harness/observation-mask.ts）：
- * - 最近窗口（最近 N 对工具调用 / 最近 2 个用户回合）：保留内容，超长按 head/tail 裁剪；
- * - 更早、可重放的结果：整段换成占位符（保留 tool_call 的 id 与参数，绝不破坏配对）；
- * - blocks 解析失败的行：回退纯文本（宁可少一点结构，也不要丢消息）。
+ * Tool results are handled in three tiers (strategy in runtime/harness/observation-mask.ts):
+ * - Recent window (last N tool-call pairs / last 2 user turns): keep the content, clipping long
+ *   ones by head/tail;
+ * - Older, replayable results: replace the whole thing with a placeholder (keeping the tool_call
+ *   id and args, never breaking the pairing);
+ * - Rows whose blocks fail to parse: fall back to plain text (better a bit less structure than a
+ *   lost message).
  */
 function appendDialogueMessages(
   messages: BaseMessage[],
@@ -708,7 +756,8 @@ function appendDialogueMessages(
 
   let placeholderChars = 0
   const replayImages = planReplayImages(selected)
-  // 被观测清理替换掉的旧工具结果不再回放图像（图像只跟随「还看得见」的工具结果）
+  // Old tool results replaced by observation cleanup no longer replay their images (images follow
+  // only tool results that are still visible)
   const maskedToolKeys = new Set<string>()
   for (let i = 0; i < parsed.length; i++) {
     const masked = plan.masked.get(i)
@@ -720,7 +769,8 @@ function appendDialogueMessages(
     const p = parsed[i]
     const d = p.dialogue
     if (d.role === 'user') {
-      // 图片按预算回放（最近 N 张）：此前这里只回放文本，导致「用户贴的图只在第一轮有效」
+      // Images replay by budget (the most recent N): previously only text was replayed here, so
+      // "an image the user posted was only valid in the first turn"
       messages.push(new HumanMessage({ content: userMessageContent(d, replayImages.has(d.id)) }))
       continue
     }
@@ -751,14 +801,16 @@ function appendDialogueMessages(
         })
         placeholderChars += content.length
       } else {
-        // 智能裁剪：超长结果只留 head/中间标记/tail（完整内容在数据库 blocks 里）
+        // Smart pruning: long results keep only head / middle marker / tail (the full content is
+        // in the database blocks)
         content = pruneToolOutput(tool.output ?? '')
       }
       messages.push(new ToolMessage({ content, tool_call_id: toolCalls[ti].id }))
     }
 
-    // 工具结果图像（read_image）：与实时执行时一致——在本条助手消息的全部工具结果之后
-    // 追加一条 user 图像消息，保证后续轮次仍能看到图（受 image-replay 的预算约束）。
+    // Tool result images (read_image): same as real-time execution — append one user image
+    // message after all tool results of this assistant message so later turns can still see the
+    // images (subject to image-replay's budget).
     const toolImages = replayToolImages.get(d.id)
     if (toolImages && toolImages.length > 0) {
       const fsTexts = getFsToolTexts()

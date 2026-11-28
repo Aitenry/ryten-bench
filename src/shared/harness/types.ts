@@ -1,18 +1,23 @@
 /**
- * harness 插件的跨进程 DTO：主进程 IPC 的入参/出参形状，渲染层只读同一份定义。
+ * Cross-process DTOs for the harness plugin: shapes of main-process IPC inputs/outputs; the
+ * renderer reads the same definitions.
  *
- * 分两部分：
- * 1. **行类型与视图类型**：沿袭 planner/notes 的做法，由**主进程模块推导**（mapper 内部再用
- *    drizzle schema 的 `$inferSelect` 推导），不手工维护第二份字段表——schema 改一处即两端口径
- *    一致。这里只 `export type`，编译后不留任何运行期依赖：渲染层不会因此把 drizzle、main
- *    目录或 electron 打进产物（契约见 src/main/plugins/context.ts）。
- * 2. **消息块形状**：`MessageBlock` / `ToolCard` 等是随流式 chunk 与落库 `blocks` 列跨进程的
- *    契约，原先放在 `src/renderer/src/types/harness.ts`（core），本轮随插件搬来。
+ * Two parts:
+ * 1. **Row types and view types**: following the approach of planner/notes, they are **derived
+ *    by the main process modules** (the mappers in turn derive them with drizzle schema's
+ *    `$inferSelect`), so there is no second hand-maintained field table — change the schema in
+ *    one place and both sides agree. Only `export type` here, so no runtime dependency is left
+ *    after compilation: the renderer doesn't pull drizzle, the main directory or electron into
+ *    its bundle because of this (contract in src/main/plugins/context.ts).
+ * 2. **Message block shapes**: `MessageBlock` / `ToolCard` etc. are the contract that travels
+ *    across processes with stream chunks and the persisted `blocks` column; they used to live in
+ *    `src/renderer/src/types/harness.ts` (core) and moved here with the plugin this round.
  *
- * 纯前端类型（`Message` / `Attachment` 等渲染端自造的模型）在 `../renderer/types.ts`。
+ * Pure frontend types (`Message` / `Attachment` etc., models made by the renderer) are in
+ * `../renderer/types.ts`.
  */
 
-/* ── 主进程行类型（话题 / 对话 / 用量 / 工作区） ── */
+/* ── Main process row types (topic / dialogue / usage / workspace) ── */
 export type {
   HarnessTopicRow,
   HarnessDialogueRow,
@@ -21,21 +26,21 @@ export type {
   PaginatedResult
 } from '../../main/database/mapper/harness/harness'
 
-/* ── 智能体配置（子智能体） ── */
+/* ── Agent config (subagents) ── */
 export type {
   AgentConfigRow,
   AgentConfigInput,
   PaginatedResult as AgentPaginatedResult
 } from '../../main/database/mapper/harness/agent'
 
-/* ── 运行时视图（计划清单 / 目标 / 后台任务 / 子代理 / 提问 / 记忆整理） ── */
+/* ── Runtime views (plan list / goals / background jobs / subagents / questions / memory consolidation) ── */
 export type { TodoItem } from '../../main/runtime/harness/todo'
 export type { GoalView } from '../../main/runtime/harness/goal'
 export type { JobSnapshot, JobOutputView } from '../../main/runtime/harness/jobs'
 export type { SubagentSessionRow } from '../../main/runtime/harness/subagent-sessions'
 export type { TeamModeView } from '../../main/runtime/harness/team-mode'
 
-/** Agent Teams 任务事件（IPC 最近活动视图；见 main/database/mapper/harness/team-task-event） */
+/** Agent Teams task event (IPC recent-activity view; see main/database/mapper/harness/team-task-event) */
 export interface TeamTaskEventView {
   id: number
   taskId: string
@@ -62,35 +67,36 @@ export type {
 export type { PendingQuestionView, AskAnswer } from '../../main/runtime/harness/ask'
 export type { StartMemoryAgentResult } from '../../main/runtime/harness/memory-agent'
 
-/** 计划模式状态（按话题持久化；输入框徽标与命令面共用） */
+/** Plan mode state (persisted per topic; shared by the input box badge and the command surface) */
 export interface PlanModeView {
   topicId: number
   active: boolean
 }
 
 /**
- * 计划评审（exit_plan_mode）的跨进程契约。
+ * Cross-process contract for plan review (exit_plan_mode).
  *
- * 答案用稳定标记而不是按钮文案：界面语言切换不会影响主进程对「批准 / 继续规划」的判定。
- * 放在 shared 是因为渲染层的评审弹窗与主进程的退出工具都要用到，且不能把主进程模块
- * （electron / 数据库 / 提问服务）打进渲染层产物。
+ * Answers use stable markers instead of button copy: switching the UI language doesn't affect
+ * the main process's judgement of "approve / keep planning". It lives in shared because both the
+ * renderer's review modal and the main process's exit tool need it, and the main process modules
+ * (electron / database / question service) must not be bundled into the renderer.
  */
 export const PLAN_REVIEW_KIND = 'plan-review'
 export const PLAN_REVIEW_APPROVE = 'plan-approve'
 export const PLAN_REVIEW_KEEP_PLANNING = 'plan-keep-planning'
 
-/* ── 沙箱权限（档位 + 审批弹窗视图） ── */
+/* ── Sandbox permissions (tier + approval modal view) ── */
 export type { PermissionMode, DenyReason } from '../../main/runtime/harness/permission'
 export type {
   ApprovalRequestView,
   ApprovalDecision
 } from '../../main/runtime/harness/permission-gate'
 
-/* ── 工作区文件改动史与文件监听 ── */
+/* ── Workspace file change history and file watching ── */
 export type { FileChangeView, FileChangeContent } from '../../main/workspace/file-history'
 export type { WorkspaceFsChange } from '../../main/workspace/watcher'
 
-/* ── MCP 服务器（配置 / 状态 / 工具，设置 → MCP 页与工具集装的公用契约） ── */
+/* ── MCP servers (config / status / tools; shared contract of the Settings → MCP page and tool assembly) ── */
 export type {
   McpServerConfig,
   McpServerInput,
@@ -101,20 +107,22 @@ export type {
   MainAgentConfig
 } from './mcp'
 
-/* ── 流式 chunk（主进程 StructuredMessage + 注入的 topicId） ── */
+/* ── Stream chunks (main-process StructuredMessage + injected topicId) ── */
 export type { StreamChunk } from '../../main/services/harness/types'
 
 /**
- * 本轮终局标记（主进程给出的权威结论，渲染端只读不猜）：
- * `harness-stream-done` 载荷的一部分，真源在 main/service/answer-boundary.ts。
+ * Final status marker of a turn (authoritative conclusion from the main process; the renderer
+ * only reads it, never guesses): part of the `harness-stream-done` payload, source of truth in
+ * main/service/answer-boundary.ts.
  */
 export type { TurnFinal } from '../../main/services/harness/answer-boundary'
 
 /**
- * 生成中的插话队列条目（主进程为单一真源，广播视图不含附件正文）。
+ * Queued interjection entry during generation (the main process is the single source of truth;
+ * the broadcast view doesn't include attachment bodies).
  *
- * 原先定义在 `src/renderer/resource/types/window.d.ts`（core 的 window/api 类型表）里，
- * 只被 harness 的 QueueDock 与 useHarnessHandlers 使用，随本轮搬进插件。
+ * Originally defined in `src/renderer/resource/types/window.d.ts` (core's window/api type table),
+ * used only by harness's QueueDock and useHarnessHandlers, and moved into the plugin this round.
  */
 export interface QueuedMessageView {
   id: string
@@ -122,16 +130,17 @@ export interface QueuedMessageView {
   text: string
   createdAt: number
   attachments: { fileName: string; isImage: boolean }[]
-  /** 点过插话但本轮没等到注入边界：留在队列里，随下一次发送带出 */
+  /** Interjection clicked but this turn never reached the injection boundary: kept in the queue and sent with the next send */
   held?: boolean
 }
 
 /**
- * 生成中本轮累计用量（`harness-turn-usage` 事件载荷）。
+ * Accumulated usage for the current turn during generation (`harness-turn-usage` event payload).
  *
- * 一次模型往返结束推一条，`calls` 与各 token 数都是**本轮累计**（不是最近一次），
- * 供输入框底栏在生成中显示「本轮 N 次调用 · X tok」。它只是过程信号：
- * 流结束后淘汰，改读 harness_dialogue_usage 里的权威账本。
+ * One is pushed after each model round-trip; `calls` and the token counts are **accumulated for
+ * the turn** (not the latest one), used by the input box footer to show "N calls this turn · X
+ * tok" while generating. It is only a progress signal: discarded after the stream ends, when the
+ * authoritative ledger in harness_dialogue_usage is read instead.
  */
 export interface TurnUsageView {
   topicId: number
@@ -142,9 +151,9 @@ export interface TurnUsageView {
   totalTokens: number
 }
 
-/* ── Mnemon 三层记忆（记忆设置页读的 IPC 返回形状） ── */
+/* ── Mnemon three-layer memory (IPC return shapes read by the memory settings page) ── */
 
-/** 热记忆条目（USER 用户画像 / MEMORY 项目记忆） */
+/** Hot memory entry (USER user profile / MEMORY project memory) */
 export interface MnemonRuntimeEntry {
   content: string
   created_at: string
@@ -153,7 +162,7 @@ export interface MnemonRuntimeEntry {
   importance: 'critical' | 'normal' | 'low'
 }
 
-/** 某一层热记忆的容量占用 */
+/** Capacity usage of one hot memory layer */
 export interface MnemonTargetUsage {
   target: 'user' | 'memory'
   used: number
@@ -162,7 +171,7 @@ export interface MnemonTargetUsage {
   markdownPath: string
 }
 
-/** 长期记忆空间（Memory Space）条目 */
+/** Long-term memory space (Memory Space) entry */
 export interface MnemonBodyItem {
   id: string
   name: string
@@ -178,7 +187,7 @@ export interface MnemonBodyItem {
   }
 }
 
-/** 记忆空间创建/更新的回执体 */
+/** Receipt body for creating/updating a memory space */
 export interface MnemonBodyRef {
   id: string
   name: string
@@ -186,7 +195,7 @@ export interface MnemonBodyRef {
   active: boolean
 }
 
-/** 项目档案（Project Documents）条目 */
+/** Project Documents entry */
 export interface MnemonDocumentItem {
   id: string
   title: string
@@ -200,7 +209,7 @@ export interface MnemonDocumentItem {
   excerpt: string
 }
 
-/** `harness:mnemon-snapshot` 的返回（未配置记忆目录时只有 configured:false） */
+/** Return of `harness:mnemon-snapshot` (only configured:false when no memory directory is configured) */
 export interface MnemonSnapshot {
   configured: boolean
   error?: string
@@ -225,7 +234,7 @@ export interface MnemonSnapshot {
   }
 }
 
-/** `harness:mnemon-bodies` 的返回 */
+/** Return of `harness:mnemon-bodies` */
 export interface MnemonBodiesView {
   items: MnemonBodyItem[]
   total: number
@@ -233,7 +242,7 @@ export interface MnemonBodiesView {
   directory?: string
 }
 
-/** 记忆空间内容浏览行（`harness:mnemon-body-list`） */
+/** Memory space content browse row (`harness:mnemon-body-list`) */
 export interface MnemonBodyInsight {
   id: string
   content: string
@@ -242,16 +251,17 @@ export interface MnemonBodyInsight {
   createdAt?: string
 }
 
-/* ── 消息块（流式 chunk / 落库 blocks 列的两端契约） ── */
+/* ── Message blocks (contract of both ends: stream chunks / persisted blocks column) ── */
 
-/** 工具卡片语义分类：决定图标、元信息与「点击后打开什么」 */
+/** Tool card semantic category: decides the icon, the meta info and "what opens on click" */
 export type ToolCardKind = 'file' | 'dir' | 'search' | 'command'
 
 /**
- * 工具定制化卡片数据（内置文件/命令工具专用）。
+ * Customized tool card data (for built-in file/command tools only).
  *
- * 这些工具的结果不再随流下发/落库（见 main/service/tool-presentation.ts）：
- * 聊天里只有这张卡片，点开才去右侧面板看真实文件或结果详情。
+ * Results of these tools are no longer streamed/persisted with the stream (see
+ * main/service/tool-presentation.ts): the chat only has this card, and clicking it opens the
+ * real file or result detail in the right panel.
  */
 export interface ToolCard {
   kind?: ToolCardKind
@@ -259,49 +269,49 @@ export interface ToolCard {
   pattern?: string
   count?: number
   command?: string
-  /** 结果状态；error 时卡片显示失败原因 */
+  /** Result status; on error the card shows the failure reason */
   status?: 'ok' | 'error'
-  /** 失败原因 / 结果摘要（单行展示） */
+  /** Failure reason / result summary (single line) */
   message?: string
-  /** read_file：文件总行数 */
+  /** read_file: total line count of the file */
   lines?: number
-  /** read_file / execute：结果字符数 */
+  /** read_file / execute: number of characters in the result */
   chars?: number
-  /** read_file：文件比内联上限长，输出被截断 */
+  /** read_file: file is longer than the inline limit, output was truncated */
   truncated?: boolean
-  /** read_file：按 offset/limit 读取的行区间（1 基，闭区间） */
+  /** read_file: line range read by offset/limit (1-based, inclusive) */
   range?: { start: number; end: number; total: number }
-  /** write_file：写入字节数 */
+  /** write_file: number of bytes written */
   bytes?: number
-  /** write_file / edit_file：本次改动新增的行数（与改动记录同源；缺失时不显示） */
+  /** write_file / edit_file: lines added in this change (same source as the change record; hidden when missing) */
   added?: number
-  /** write_file / edit_file：本次改动删除的行数 */
+  /** write_file / edit_file: lines removed in this change */
   removed?: number
-  /** ls：子目录数 */
+  /** ls: number of subdirectories */
   dirs?: number
-  /** ls / glob：文件数 */
+  /** ls / glob: number of files */
   files?: number
-  /** grep：命中的文件数（去重） */
+  /** grep: number of matching files (deduped) */
   fileCount?: number
-  /** execute：退出码 */
+  /** execute: exit code */
   exitCode?: number
-  /** execute：后台任务的 job id（run_in_background=true 时） */
+  /** execute: job id of the background job (when run_in_background=true) */
   jobId?: string
-  /** execute：这条调用只是把命令放到了后台，结果/退出码在后台任务里 */
+  /** execute: this call only put the command in the background; result/exit code live in the background job */
   background?: boolean
-  /** 有完整结果详情，点卡片可在右侧面板打开 */
+  /** Full result detail exists; clicking the card opens it in the right panel */
   detail?: boolean
 }
 
-/** 工具结果里的图像（data URL：UI 直接渲染，历史回放也用它） */
+/** Images in tool results (data URL: rendered directly by the UI, also used for history replay) */
 export interface ToolImageData {
   dataUrl: string
-  /** 虚拟路径（卡片标题/历史回放文案用） */
+  /** Virtual path (used in card title / history replay copy) */
   path: string
   mimeType?: string
 }
 
-/** 工具调用 */
+/** Tool call */
 export interface ToolCall {
   name: string
   input: object
@@ -309,16 +319,16 @@ export interface ToolCall {
   status?: 'preparing' | 'executing' | 'completed'
   id?: string
   card?: ToolCard
-  /** 本次工具结果携带的图像（read_image 等媒体工具）；UI 渲染缩略图，历史回放重新注入 */
+  /** Images carried by this tool result (media tools such as read_image); the UI renders thumbnails and history replay re-injects them */
   images?: ToolImageData[]
 }
 
-/** 智能体活动事件 */
+/** Agent activity event */
 export interface SubAgentEvent {
   name: string
-  /** 派遣此智能体的 task 工具调用唯一 ID */
+  /** Unique ID of the task tool call that dispatched this agent */
   causeId?: string
-  /** dispatched=后台任务已派发（轻量卡：仅名称+简述+会话 id，结果在顶部栏查看） */
+  /** dispatched = background job dispatched (lightweight card: name + brief + session id only, result viewable in the top bar) */
   status: 'started' | 'running' | 'dispatched' | 'completed' | 'error'
   output?: string
   message?: string
@@ -326,41 +336,41 @@ export interface SubAgentEvent {
   content?: string
   reasoning_content?: string
   tool?: ToolCall
-  /** task 工具调用时携带的任务描述（仅由前端从 task 工具输入转换而来） */
+  /** Task description carried by the task tool call (only converted by the frontend from the task tool input) */
   taskDescription?: string
-  /** 后台派发（status='dispatched'）时的会话 ID（subagent-N） */
+  /** Session ID when dispatched in the background (status='dispatched') (subagent-N) */
   subagentId?: string
 }
 
-/** 记忆注入块数据（主进程 MemoryInjection 透传） */
+/** Memory injection block data (relayed from the main-process MemoryInjection) */
 export interface MemoryInjectionBlock {
-  /** 用户画像条目（USER） */
+  /** User profile entries (USER) */
   user: string[]
-  /** 项目记忆条目（MEMORY） */
+  /** Project memory entries (MEMORY) */
   memory: string[]
-  /** 容量信息展示串 */
+  /** Capacity info display string */
   usage: { user: string; memory: string }
 }
 
-/** 早期对话摘要压缩块数据（主进程 HistoryCompaction 透传） */
+/** Early conversation summary compaction block data (relayed from the main-process HistoryCompaction) */
 export interface HistoryCompactionBlock {
-  /** 被压缩为 checkpoint 摘要的早期对话条数 */
+  /** Number of early conversation entries compressed into a checkpoint summary */
   compressedCount: number
-  /** 保持原样的最近对话条数 */
+  /** Number of recent conversation entries kept as is */
   retainedCount: number
-  /** 压缩边界（被压缩段最后一条对话的 ID） */
+  /** Compaction boundary (ID of the last conversation entry in the compressed segment) */
   boundaryId: number
 }
 
-/** 模型请求失败后自动重试进度（retrying 过渡块：仅当轮展示，不落库） */
+/** Automatic retry progress after a model request fails (retrying transition block: shown only for the turn, not persisted) */
 export interface RetryInfoBlock {
-  /** 当前第几次重试（从 1 开始，如 1/2、2/2） */
+  /** Current retry attempt (starts at 1, e.g. 1/2, 2/2) */
   attempt: number
-  /** 本轮最多重试次数 */
+  /** Maximum retries for this turn */
   retries: number
 }
 
-/** 消息块 */
+/** Message block */
 export interface MessageBlock {
   type:
     | 'text'
@@ -374,7 +384,7 @@ export interface MessageBlock {
     | 'historyCompacted'
     | 'goalRound'
     | 'retrying'
-    /** 回合内插话标记：主进程按它把该行排除出模型上下文（只作展示与留痕） */
+    /** In-turn interjection marker: the main process uses it to exclude this row from the model context (display and audit trail only) */
     | 'interjection'
   text?: string
   tool?: ToolCall
@@ -382,16 +392,16 @@ export interface MessageBlock {
   image_url?: string
   fileName?: string
   subAgent?: SubAgentEvent
-  /** 本轮注入的热记忆内容（memoryInjected 类型使用） */
+  /** Hot memory content injected this turn (used by the memoryInjected type) */
   memory?: MemoryInjectionBlock
-  /** 本轮早期对话摘要压缩信息（historyCompacted 类型使用） */
+  /** Early conversation summary compaction info for this turn (used by the historyCompacted type) */
   compaction?: HistoryCompactionBlock
-  /** 目标自动续跑轮次号（goalRound 类型使用） */
+  /** Goal auto-continuation round number (used by the goalRound type) */
   round?: number
-  /** 该续跑轮对应的目标原文（goalRound 类型使用，随消息落库，渲染端直接展示） */
+  /** The goal objective for that continuation round (used by the goalRound type; persisted with the message, shown directly by the renderer) */
   objective?: string
-  /** 模型请求失败后自动重试进度（retrying 类型使用，过渡块不落库） */
+  /** Automatic retry progress after a model request fails (used by the retrying type; a transition block that is not persisted) */
   retrying?: RetryInfoBlock
-  /** 智能体嵌套的子块（仅 subAgent 类型使用，用于流式构建智能体的 text/tool/reasoning） */
+  /** Nested sub-blocks of the agent (only for the subAgent type, used to build the agent's text/tool/reasoning while streaming) */
   children?: MessageBlock[]
 }

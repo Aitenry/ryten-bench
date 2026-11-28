@@ -33,20 +33,25 @@ import { setHostUiExports } from '../plugins/host-ui-bridge'
 import { installPluginFromLocalPath, pickLocalPluginSource } from '../plugins/local-install'
 
 /**
- * 插件管理 IPC（core，始终注册）。
+ * Plugin management IPC (core, always registered).
  *
- * 列表口径：**一切以 `userData/plugins/<id>/` 里装了什么为准**。应用不再分发任何插件
- * （没有「内置插件」），因此清单里只有用户自己装的插件：默认停用，装完由宿主自动启用。
+ * Source of truth for the list: **whatever is installed under `userData/plugins/<id>/`**. The app
+ * no longer ships any plugins (there is no "built-in plugin"), so the list only contains plugins
+ * the user installed: disabled by default, enabled automatically by the host after installation.
  *
- * 启停/安装/卸载都会广播 `plugin-state-changed`，渲染层据此重新拉清单并 diff 装载。
+ * Enable/disable/install/uninstall all broadcast `plugin-state-changed`; the renderer re-fetches
+ * the list and diffs the loaded set in response.
  */
 
 /**
- * 磁盘上这份插件包的**内容戳**：入口文件与 `plugin.css` 的 mtime 最大值。
+ * **Content stamp** of this plugin package on disk: the max mtime of the entry file and
+ * `plugin.css`.
  *
- * 用途：渲染层据此判断「包换了，要重新 fetch renderer.mjs + 重新注入 plugin.css」。
- * 不能用版本号代替——「重新安装」与本地/仓库的原地升级常常版本号不变（实测：升完级
- * 界面还是旧的，因为渲染层看到「同一个 id 已登记」就跳过了重新装载）。
+ * Used by the renderer to decide "the package changed, so re-fetch renderer.mjs and re-inject
+ * plugin.css". A version number cannot replace it — reinstall and in-place upgrade from a local or
+ * repository source often keep the same version (observed: after the upgrade the UI still ran the
+ * old code because the renderer saw "an entry with the same id is already registered" and skipped
+ * reloading).
  */
 function packageStamp(dir: string, entry?: { main?: string; renderer?: string }): string {
   const files = [
@@ -60,13 +65,13 @@ function packageStamp(dir: string, entry?: { main?: string; renderer?: string })
     try {
       max = Math.max(max, fs.statSync(path.join(dir, file)).mtimeMs)
     } catch {
-      // 缺文件就忽略（老包没有 plugin.css 是正常的）
+      // Ignore missing files (it is normal for older packages to have no plugin.css)
     }
   }
   return String(Math.round(max))
 }
 
-/** 已安装插件与启用态（默认停用，用户装完由宿主显式启用） */
+/** Installed plugins and their enabled state (disabled by default; the host enables them explicitly after installation) */
 function listEntries(): PluginListEntry[] {
   return scanExternalPlugins().map((ext) => {
     const enabled = isEnabledPlugin(ext.id)
@@ -79,28 +84,30 @@ function listEntries(): PluginListEntry[] {
       enabled,
       state: enabled ? 'active' : 'inactive',
       entry: ext.manifest.entry,
-      // 包内容戳：渲染层据此决定「要不要重新装载这个插件」（见 packageStamp 的说明）
+      // Package content stamp: the renderer uses it to decide whether to reload this plugin (see packageStamp)
       stamp: packageStamp(ext.dir, ext.manifest.entry),
-      // 清单里的路由/菜单元数据：渲染层首帧据此声明式预注册（见 shared/plugin/types.ts）
+      // Route/menu metadata from the manifest: the renderer pre-registers it declaratively on the first frame (see shared/plugin/types.ts)
       routes: ext.manifest.routes,
       menu: ext.manifest.menu,
-      // 「卸载会删掉什么」：插件自己的 plugin.purge 贡献（停用/未装载时拿不到，面板有兜底文案）
+      // "What uninstall would delete": the plugin's own plugin.purge contribution (unavailable while disabled/unloaded; the panel has fallback copy)
       purgeLabel: pluginPurge(ext.id)?.label
     }
   })
 }
 
 /**
- * 插件状态变化的**内部旁听者**（不暴露给渲染层，也不改变 `plugin-state-changed` 通道契约）。
+ * **Internal observer** of plugin state changes (not exposed to the renderer and does not change
+ * the `plugin-state-changed` channel contract).
  *
- * 用途：插件中心的数据同步要在「安装/卸载/启停」后做 5s 防抖 push（契约 §4），
- * 而广播发生在这里——用一个小钩子比让同步模块去轮询插件清单可靠。
- * 与 `webContents.send` 一样同步调用，异常只记日志（一个旁听者失败不该影响别的）。
+ * Purpose: the plugin center's data sync needs a 5s debounced push after "install/uninstall/
+ * enable/disable", and the broadcast happens here — a small hook is more reliable than making the
+ * sync module poll the plugin list. Called synchronously like `webContents.send`; exceptions are
+ * only logged (one failing observer must not affect the others).
  */
 type PluginStateListener = () => void
 const pluginStateListeners = new Set<PluginStateListener>()
 
-/** 订阅插件状态变化（返回取消订阅函数） */
+/** Subscribe to plugin state changes (returns an unsubscribe function) */
 export function onPluginStateChanged(listener: PluginStateListener): () => void {
   pluginStateListeners.add(listener)
   return () => {
@@ -108,7 +115,7 @@ export function onPluginStateChanged(listener: PluginStateListener): () => void 
   }
 }
 
-/** 广播插件启用态变化（含安装/卸载后的重扫通知） */
+/** Broadcast plugin enabled-state changes (including rescan notifications after install/uninstall) */
 export function broadcastPluginStateChanged(): void {
   for (const listener of pluginStateListeners) {
     try {
@@ -125,10 +132,12 @@ export function broadcastPluginStateChanged(): void {
 }
 
 /**
- * 启停某插件的主进程侧：装载/卸载它的磁盘包主模块。
+ * Main-process side of enabling/disabling a plugin: load/unload the main module of its on-disk
+ * package.
  *
- * 未安装的 id 不在这里判：`loadExternalMain` 找不到目录会抛「外部插件 '<id>' 未找到」，
- * 而调用方（面板开关）只在已安装的条目上触发。
+ * Uninstalled ids are not checked here: `loadExternalMain` throws "external plugin '<id>' not
+ * found" when the directory is missing, and callers (the panel switch) only fire for installed
+ * entries.
  */
 function applyEnabled(id: string, enabled: boolean): void {
   if (enabled) loadExternalMain(id)
@@ -136,21 +145,26 @@ function applyEnabled(id: string, enabled: boolean): void {
 }
 
 /**
- * 卸载插件。
+ * Uninstall a plugin.
  *
- * @param purgeData 用户口径：卸载本身 = **移除插件代码**（删 `userData/plugins/<id>/`）；
- *                  `purgeData` 只决定**是否同时清除插件的数据**（表内记录 + 应用托管的文件），
- *                  因此 `false` 也照样卸载，只是把数据留着（重装后还能用）。
+ * @param purgeData User-facing semantics: uninstall itself = **remove plugin code** (delete
+ *                  `userData/plugins/<id>/`); `purgeData` only controls **whether plugin data is
+ *                  also cleared** (table records + app-managed files). So `false` still
+ *                  uninstalls, it just keeps the data around (still usable after reinstall).
  *
- * 顺序有讲究：
- * ① `plugin.purge` 贡献必须在**插件仍装载**时调用（它要读自己的 mapper / 托管目录）；
- * ② 摘除 IPC（`unloadExternalMain`）：渲染层随后由广播驱动卸载；
- * ③ 删 `userData/plugins/<id>/`；④ 记「用户显式卸载」、清启用覆写；⑤ 广播。
+ * Order matters:
+ * 1. The `plugin.purge` contribution must be invoked while the **plugin is still loaded** (it
+ *    reads its own mapper / managed directories);
+ * 2. Tear down IPC (`unloadExternalMain`): the renderer then unloads driven by the broadcast;
+ * 3. Delete `userData/plugins/<id>/`; 4. record "user explicitly uninstalled", clear the enabled
+ *    override; 5. broadcast.
  */
 async function uninstallPlugin(id: string, purgeData: boolean): Promise<PluginListEntry[]> {
   /**
-   * 与安装同一把互斥锁：卸载删目录、安装覆盖目录，两者并发的结果完全取决于完成顺序。
-   * 典型现场：点「更新」后马上点「卸载」，卸载先完成、安装后落地 → 插件又回来了。
+   * Same mutex as installation: uninstall deletes the directory while install overwrites it, so
+   * the result under concurrency depends entirely on completion order. Typical case: click
+   * "update" then immediately "uninstall", uninstall finishes first and install lands afterwards,
+   * so the plugin comes back.
    */
   if (isProfileSwitchInProgress() || !profileMatchesSession()) {
     throw new Error('账号数据空间正在切换，请稍候再卸载')
@@ -163,8 +177,9 @@ async function uninstallPluginInner(id: string, purgeData: boolean): Promise<Plu
     throw new Error(`插件 '${id}' 未安装，无法卸载`)
   }
 
-  // ① 清数据（插件自己实现；没贡献 purge 的插件跳过）。不清时留一句日志，
-  //    免得日后看到「卸载了但库里还有行」时怀疑是 purge 没跑
+  // 1. Clear data (implemented by the plugin itself; plugins without a purge contribution are
+  //    skipped). When not clearing, log a line so that seeing "uninstalled but rows remain in the
+  //    DB" later does not suggest purge failed to run
   if (!purgeData) {
     logger.info(
       `[Plugins] Uninstalling ${id} with data preserved: plugin code only; table records and managed files kept intact`
@@ -176,13 +191,17 @@ async function uninstallPluginInner(id: string, purgeData: boolean): Promise<Plu
         await purge.run()
         logger.info(`[Plugins] ${id} data purged (${purge.label})`)
         /**
-         * 本机数据（表行 / 托管文件）已清，但云端数据快照保留。通知插件中心丢掉本地
-         * `data_rev` 缓存：否则重新安装后 pull 会拿旧 rev 与云端比较，误判「已是最新」，
-         * 云端数据永远不回来（用户 2026-11-23：「不然以后的数据同步怎么办」）。
+         * Local data (table rows / managed files) is cleared, but the cloud data snapshot is
+         * kept. Notify the plugin center to drop its local `data_rev` cache: otherwise after a
+         * reinstall, pull compares the stale rev against the cloud, wrongly concludes "already up
+         * to date", and cloud data never comes back (user, 2026-11-23: "what about data sync from
+         * now on").
          */
         emitAppEvent(APP_EVENT_PLUGIN_DATA_PURGED, { pluginId: id })
       } catch (err) {
-        // 清数据失败不阻断卸载：目录/通道该摘的仍要摘，否则会留下「装不了也卸不掉」的死状态
+        // A purge failure must not block uninstall: the directory/channels still have to be
+        // removed, otherwise the plugin is left in a dead state where it can be neither
+        // installed nor uninstalled
         logger.error(`[Plugins] Failed to purge ${id} data (continuing uninstall):`, err)
       }
     } else {
@@ -192,27 +211,32 @@ async function uninstallPluginInner(id: string, purgeData: boolean): Promise<Plu
     }
   }
 
-  // ② 摘除主进程装载（磁盘包模块）
+  // 2. Tear down the main-process load (on-disk package module)
   unloadExternalMain(id)
 
-  // ③ 删目录 + ④ 记账（清启用覆写）
+  // 3. Delete the directory + 4. bookkeeping (clear the enabled override)
   //
-  // 卸载**只动本地**：云端安装记录与数据快照一律保留。用户显式卸载要留一笔标记，
-  // 否则插件中心按用户保存的安装记录会在下次同步时把刚卸载的插件「自动补齐」回来
-  // （用户 2026-11-23 反馈「卸载后状态对不上」）。
+  // Uninstall touches **local state only**: the cloud install record and data snapshot are always
+  // kept. An explicit user uninstall leaves a marker; otherwise the plugin center, following the
+  // user's saved install record, would "auto-restore" the just-uninstalled plugin on the next sync
+  // (user feedback 2026-11-23: "state does not match after uninstall").
   uninstallExternalPlugin(id)
   markInstallRemoved(id)
   clearEnabledOverride(id)
 
   /**
-   * 卸载**只动本地**：云端安装记录与数据快照一律保留。
+   * Uninstall touches **local state only**: the cloud install record and data snapshot are always
+   * kept.
    *
-   * 原因（用户 2026-11-23 明确口径）：「卸载不能把云存储的数据卸载了，只卸载本地的数据，
-   * 不然用户以后的数据同步怎么办」。云端是按用户的备份（换机/重装后恢复插件与设置），
-   * 挂在卸载的勾选框上会悄悄丢数据；「同时删除该插件的全部数据」只清**本机**表行与托管文件。
+   * Reason (explicit user position, 2026-11-23): "uninstalling must not uninstall data in cloud
+   * storage, only local data, otherwise what about the user's data sync later". The cloud is a
+   * per-user backup (restores plugins and settings after switching machines / reinstall); tying it
+   * to the uninstall checkbox would silently lose data; "also delete all data for this plugin"
+   * only clears **this machine's** table rows and managed files.
    *
-   * 普通卸载后不会自动复活：本机的 `removedInstalls` 标记会让换机自动补齐跳过它，
-   * 插件仓库/详情按本机口径显示「未安装」；重新安装会清掉标记并继续用云端数据同步。
+   * A normal uninstall does not resurrect automatically: the local `removedInstalls` marker makes
+   * machine-switch auto-restore skip it, and the plugin repository/details page shows "not
+   * installed" based on local state; reinstalling clears the marker and keeps syncing cloud data.
    */
 
   logger.info(`[Plugins] Plugin uninstalled: ${id} (cloud install record and data are kept)`)
@@ -221,13 +245,16 @@ async function uninstallPluginInner(id: string, purgeData: boolean): Promise<Plu
 }
 
 /**
- * 装好之后的统一收尾：启用 + 装载主模块。
+ * Common post-install finishing: enable + load the main module.
  *
- * 装载失败不掩盖「已经装上了」这个事实：抛出的错误里写明目录已就位，避免用户以为
- * 什么都没发生（与插件中心的安装同一口径）。
+ * A load failure must not hide the fact that "it is already installed": the thrown error says the
+ * directory is in place, so the user does not think nothing happened (same position as install in
+ * the plugin center).
  *
- * 这里必须是**重载**：升级（同 id 已在跑）时磁盘包刚被覆盖，直接 load 会因「已装载」
- * 提前返回，主进程继续跑旧模块——正是「插件刚刚更新，但主进程还在跑旧版本」的来源。
+ * This must be a **reload**: on upgrade (same id already running) the on-disk package was just
+ * overwritten, and a plain load returns early because it is "already loaded", leaving the main
+ * process running the old module — exactly the source of "the plugin was just updated but the main
+ * process still runs the old version".
  */
 function enableInstalled(id: string): void {
   setEnabledOverride(id, true)
@@ -241,7 +268,7 @@ function enableInstalled(id: string): void {
   }
 }
 
-/** 本地安装（压缩包 / 文件夹）→ 启用装载 → 广播；失败返回 `{ ok: false, error }` */
+/** Local install (archive / folder) -> enable and load -> broadcast; on failure returns `{ ok: false, error }` */
 async function installLocalAndEnable(source: string): Promise<{
   ok: boolean
   canceled?: boolean
@@ -272,9 +299,11 @@ async function installLocalAndEnable(source: string): Promise<{
 export function registerPluginsIpc(): void {
   ipcMain.handle(IPC_PLUGINS_LIST, () => listEntries())
 
-  // 同步取启用清单：渲染层首帧要靠它决定「只装载用户启用的插件」，
-  // 否则会先按默认值装载一遍再卸载（见 protocol.ts 里该常量的说明）。
-  // listEntries 本身是同步的（读 electron-store + 同步扫插件目录），可以直接当返回值。
+  // Fetch the enabled list synchronously: the renderer's first frame relies on it to decide "only
+  // load plugins the user enabled", otherwise it would load defaults once and unload them
+  // afterwards (see the comment on this constant in protocol.ts).
+  // listEntries itself is synchronous (reads electron-store + scans the plugin directory
+  // synchronously), so it can be used directly as the return value.
   ipcMain.on(IPC_PLUGINS_LIST_SYNC, (event) => {
     try {
       event.returnValue = listEntries()
@@ -284,7 +313,8 @@ export function registerPluginsIpc(): void {
     }
   })
 
-  // 渲染层启动最早期上报宿主 UI 表的「键 → 导出名」（plugin://host/ui.js 桥据此生成）
+  // The renderer reports the host UI table's "key -> export name" mapping very early at startup
+  // (the plugin://host/ui.js bridge is generated from it)
   ipcMain.on(IPC_PLUGIN_HOST_UI_EXPORTS, (_event, names: unknown) => {
     setHostUiExports(names)
     logger.info(
@@ -292,7 +322,7 @@ export function registerPluginsIpc(): void {
     )
   })
 
-  // 只读诊断：插件主模块的装载来源（工装核对「handler 是否由磁盘包提供」）
+  // Read-only diagnostics: load source of a plugin main module (tooling checks whether the handler is provided by the on-disk package)
   ipcMain.handle(IPC_PLUGINS_LOADED_FROM, () => pluginLoadInfo())
 
   ipcMain.handle(IPC_PLUGINS_SET_ENABLED, (_event, id: unknown, enabled: unknown) => {
@@ -305,11 +335,13 @@ export function registerPluginsIpc(): void {
     }
     if (entry.enabled === enabled) return listEntries()
     /**
-     * 先真正装载/卸载，成功后才落盘启用态。
+     * Load/unload for real first, and only persist the enabled state on success.
      *
-     * 旧顺序是先 `setEnabledOverride` 再 `applyEnabled`：装载失败时 IPC 抛错、界面提示
-     * 「切换失败」，但启用态已经写进去了——刷新后按钮显示「已启用」，运行状态却是 error；
-     * 重启后应用还会去装载一个坏插件。这里失败回滚到原状态并广播，让落盘状态与实际一致。
+     * The old order was `setEnabledOverride` then `applyEnabled`: when loading failed the IPC call
+     * threw and the UI said "switch failed", but the enabled state had already been written, so
+     * after a refresh the button showed "enabled" while the runtime state was error, and on
+     * restart the app would try to load a broken plugin. Here failures roll back to the previous
+     * state and broadcast, keeping the persisted state consistent with reality.
      */
     try {
       applyEnabled(id, enabled)
@@ -342,11 +374,12 @@ export function registerPluginsIpc(): void {
   })
 
   /**
-   * 从**本地路径**安装插件（`.zip` 或插件包目录）。
+   * Install a plugin from a **local path** (a `.zip` or a plugin package directory).
    *
-   * 与插件中心的安装共用同一套落地与校验（`package-install.ts`），因此这里的
-   * 语义完全一致：装完即启用 + 装载 + 广播；失败返回 `{ ok: false, error }` 而不是抛错，
-   * 面板据此提示（路径不存在、包里没有 plugin.json 等都走这条）。
+   * Shares the same landing and validation flow as installation from the plugin center
+   * (`package-install.ts`), so the semantics are identical: enable + load + broadcast right after
+   * installation; on failure returns `{ ok: false, error }` instead of throwing, and the panel
+   * shows the hint from it (missing path, no plugin.json in the package, etc. all take this path).
    */
   ipcMain.handle(IPC_PLUGINS_INSTALL_LOCAL, async (_event, source: unknown) => {
     if (typeof source !== 'string' || source === '') {
@@ -356,11 +389,13 @@ export function registerPluginsIpc(): void {
   })
 
   /**
-   * 弹系统选择框挑一个本地来源并安装（面板**唯一**的本地安装入口）。
+   * Open a system picker to choose a local source and install it (the panel's **only** local
+   * install entry point).
    *
-   * 一个对话框两个筛选器：`.zip` 压缩包，或插件文件夹里的 `plugin.json`
-   * （Windows 的系统选择框不能同时选文件与目录，见 local-install.ts 的说明）。
-   * 取消返回 `{ ok: true, canceled: true }`——取消不是失败，面板不弹错误。
+   * One dialog, two filters: a `.zip` archive, or the `plugin.json` inside a plugin folder
+   * (Windows system dialogs cannot select files and directories at the same time, see the notes in
+   * local-install.ts). Cancel returns `{ ok: true, canceled: true }` — cancel is not failure, so
+   * the panel shows no error.
    */
   ipcMain.handle(IPC_PLUGINS_PICK_LOCAL, async () => {
     const source = await pickLocalPluginSource()

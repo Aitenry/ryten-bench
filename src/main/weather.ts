@@ -9,11 +9,11 @@ import { getIp } from './address'
 import { formatDate } from './shared/weather-utils'
 
 const DEFAULT_REFRESH_MIN = 60
-/** 请求超时上限（open-meteo 无 AbortSignal 支持，用竞速兜底，防 IPC invoke 永久悬挂） */
+/** Request timeout cap (open-meteo has no AbortSignal support; race a timer so IPC does not hang) */
 const FETCH_TIMEOUT_MS = 15_000
 let weatherTimer: ReturnType<typeof setInterval> | null = null
 
-/** 给无超时机制的请求加墙钟超时（底层请求无法中止，但调用方能按时返回） */
+/** Add a wall-clock timeout to a request without one (the request cannot be aborted, but the caller returns on time) */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     promise,
@@ -74,7 +74,8 @@ async function fetchWeatherData(
       const dayTime = new Date((startTime + i * dayInterval) * 1000)
       const dateStr = formatDate(dayTime)
       ;(result.daily as Record<string, unknown>[]).push({
-        // 只存结构化数据（日期 + 天气码），文案由 localizeWeather 在下发前按语言渲染
+        // Store structured data only (date + weather code); localizeWeather renders the text
+        // in the current language before sending
         date: dateStr,
         weatherCode: Math.round(wc[i]),
         tempMax: tMax[i].toFixed(0),
@@ -89,14 +90,15 @@ async function fetchWeatherData(
   return result
 }
 
-/** 星期索引 → 词条键（Date.getDay()：0 = 周日） */
+/** Weekday index → message key (Date.getDay(): 0 = Sunday) */
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
 /**
- * 下发前按当前语言渲染天气文案。
+ * Render the weather text in the current language before sending.
  *
- * 缓存里只存**结构化数据**（天气码 + 日期）：把文案写死在缓存里的话，切语言后要等
- * 下一次刷新（默认 60 分钟）才会更新。旧缓存里的 label/weatherDesc 作为兜底保留。
+ * The cache stores **structured data only** (weather code + date): text baked into the cache
+ * would only update on the next refresh (default 60 minutes) after a language switch.
+ * label/weatherDesc from older caches are kept as a fallback.
  */
 export function localizeWeather(data: Record<string, unknown>): Record<string, unknown> {
   const w = mainMessages().weather
@@ -134,15 +136,17 @@ export function localizeWeather(data: Record<string, unknown>): Record<string, u
 }
 
 /**
- * 自动刷新最近一次失败原因。
+ * Most recent auto-refresh failure reason.
  *
- * 天气接口依赖外网（离线 / 被墙 / 临时故障都很常见），失败不是应用错误：
- * - 不写 `logger.error`（主进程日志里会带整段堆栈，像崩了一样）；
- * - 同一个原因只记一次，失败持续期间不按刷新周期反复刷日志；成功一次后重置。
+ * The weather API depends on the external network (offline / blocked / temporary outages are
+ * common), so a failure is not an application error:
+ * - no `logger.error` (the main-process log would carry a full stack trace and look like a crash);
+ * - the same reason is logged once, not once per refresh cycle while the failure persists; reset
+ *   after one success.
  */
 let lastAutoRefreshError: string | null = null
 
-/** 天气自动刷新（创建主窗口后调用） */
+/** Automatic weather refresh (called after the main window is created) */
 export function startWeatherAutoRefresh(): void {
   const ip = settingsStore.get('ip') as Record<string, unknown> | undefined
   if (!ip) return
@@ -155,7 +159,7 @@ export function startWeatherAutoRefresh(): void {
   const refreshMin = (settingsStore.get('weatherRefreshInterval') as number) || DEFAULT_REFRESH_MIN
   const lastFetched = settingsStore.get('weatherLastFetched') as number | undefined
 
-  // 先推送缓存数据
+  // Push cached data first
   const cached = settingsStore.get('weatherData') as Record<string, unknown> | undefined
   const mainWindow = getMainWindow()
   if (cached && mainWindow && !mainWindow.isDestroyed()) {
@@ -164,7 +168,8 @@ export function startWeatherAutoRefresh(): void {
 
   let fetching = false
   const doFetch = async (): Promise<void> => {
-    // 并发互斥（修复：手动刷新与自动定时叠加、上次请求超过刷新间隔时重复发起）
+    // Mutual exclusion (a manual refresh can overlap the timer, and a request older than the
+    // refresh interval could otherwise be started twice)
     if (fetching) return
     fetching = true
     try {
@@ -176,7 +181,8 @@ export function startWeatherAutoRefresh(): void {
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      // 同一失败原因只记一条 warn（离线/被墙时天气接口不可达是常态，不该刷 error + 堆栈）
+      // Log one warning per distinct reason (an unreachable weather API while offline/blocked is
+      // normal; it should not produce errors with stack traces)
       if (reason !== lastAutoRefreshError) {
         lastAutoRefreshError = reason
         logger.warn(`Weather auto-refresh failed (will retry later): ${reason}`)
@@ -186,18 +192,18 @@ export function startWeatherAutoRefresh(): void {
     }
   }
 
-  // 启动时检查是否需要立即拉取
+  // On start, check whether an immediate fetch is needed
   const shouldFetchNow = !lastFetched || Date.now() - lastFetched > 3 * 60 * 60 * 1000
   if (shouldFetchNow) {
     doFetch()
   }
 
-  // 定时器
+  // Timer
   if (weatherTimer) clearInterval(weatherTimer)
   weatherTimer = setInterval(doFetch, refreshMin * 60 * 1000)
 }
 
-/** 注册天气 IPC（手动刷新） */
+/** Register the weather IPC (manual refresh) */
 export function registerWeatherIpc(): void {
   ipcMain.handle(
     'weather-get',
@@ -208,13 +214,13 @@ export function registerWeatherIpc(): void {
       }
 
       let ip = settingsStore.get('ip') as Record<string, unknown> | undefined
-      // 如果 IP 数据在初始化时没取到，尝试现场获取
+      // If IP data was not obtained at init, try fetching it on demand
       if (!ip) {
         try {
           ip = (await getIp()) as unknown as Record<string, unknown> | undefined
           if (ip) settingsStore.set('ip', ip)
         } catch {
-          // getIp 失败（超时等），静默处理
+          // getIp failed (timeout, etc.); handle silently
         }
         if (!ip) return {}
       }
@@ -223,15 +229,15 @@ export function registerWeatherIpc(): void {
       const city = (ip.city as string) || (ip.regionName as string) || ''
       if (!lat || !lon) return {}
       const data = await fetchWeatherData(lat, lon, city)
-      // 现场取到 IP 后补建自动刷新定时器（修复：冷启动时 ip 未就绪，
-      // startWeatherAutoRefresh 提前 return，定时器本会话永不建立）
+      // Recreate the auto-refresh timer after fetching the IP on demand (on cold start the ip was
+      // not ready, startWeatherAutoRefresh returned early and the timer was never established)
       startWeatherAutoRefresh()
       return localizeWeather(data)
     }
   )
 }
 
-/** 注册天气 IPC 并启动自动刷新（与 createMainWindow 原调用位置保持一致） */
+/** Register the weather IPC and start auto refresh (same call site as createMainWindow) */
 export function setupWeather(): void {
   registerWeatherIpc()
   startWeatherAutoRefresh()

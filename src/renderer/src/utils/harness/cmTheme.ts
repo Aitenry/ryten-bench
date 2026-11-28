@@ -4,29 +4,30 @@ import { tags as t } from '@lezer/highlight'
 import type { Extension } from '@codemirror/state'
 
 /**
- * 编辑器主题（浅色 / 深色）。
+ * Editor theme (light / dark).
  *
- * 语法色板对齐参考设计（VS Code Dark+ / Light+ 的官方取值）：
- * 关键字蓝 `#569CD6`、控制流紫 `#C586C0`、类型青 `#4EC9B0`、函数黄 `#DCDCAA`、
- * 变量/属性浅蓝 `#9CDCFE`、字符串橙 `#CE9178`、数字浅绿 `#B5CEA8`、注释绿 `#6A9955`。
- * 外壳（页签、行号槽、滚动条）同样按参考设计的取值走，底色仍跟随应用主题 token。
+ * Syntax palette follows VS Code Dark+ / Light+ official values: keyword blue `#569CD6`,
+ * control-flow purple `#C586C0`, type teal `#4EC9B0`, function yellow `#DCDCAA`, variable /
+ * property light blue `#9CDCFE`, string orange `#CE9178`, number light green `#B5CEA8`, comment
+ * green `#6A9955`. The chrome (tabs, line-number gutter, scrollbar) uses the same values, while
+ * the base colors still follow the app theme tokens.
  */
 
 export interface EditorPaletteInput {
   dark: boolean
-  /** 编辑器底色（= 面板底色，保证与页签栏无缝） */
+  /** Editor background (= panel background, so it blends seamlessly with the tab bar) */
   background: string
-  /** 正文颜色 */
+  /** Body text color */
   foreground: string
-  /** 次要文字（行号、占位） */
+  /** Secondary text (line numbers, placeholders) */
   muted: string
-  /** 分隔线 */
+  /** Separator line */
   border: string
-  /** 强调色（光标 / 选中行号 / 补全选中项） */
+  /** Accent color (cursor / active line number / selected completion) */
   accent: string
 }
 
-/** 语法高亮色板（VS Code Dark+ / Light+） */
+/** Syntax highlight palette (VS Code Dark+ / Light+) */
 function syntaxColors(dark: boolean): Record<string, string> {
   return dark
     ? {
@@ -69,7 +70,7 @@ function syntaxColors(dark: boolean): Record<string, string> {
       }
 }
 
-/** 主题扩展：编辑器外壳 + 差异视图 + 查找面板 + 补全弹层 */
+/** Theme extension: editor chrome + diff view + search panel + autocomplete popup */
 export function editorTheme(input: EditorPaletteInput): Extension {
   const c = syntaxColors(input.dark)
   const { dark, background, foreground, muted, border, accent } = input
@@ -78,7 +79,7 @@ export function editorTheme(input: EditorPaletteInput): Extension {
   const selection = dark ? 'rgba(122,170,255,0.24)' : 'rgba(80,130,220,0.18)'
   const selectionMatch = dark ? 'rgba(217,176,106,0.22)' : 'rgba(217,176,106,0.34)'
   const searchMatch = dark ? 'rgba(224,138,112,0.28)' : 'rgba(224,138,112,0.3)'
-  /** 行号槽与正文同底（VS Code 的 gutter 没有分隔线、没有底色差） */
+  /** Gutter shares the body background (VS Code's gutter has no separator line and no background difference) */
   const gutterBg = 'transparent'
   const lineNumber = dark ? '#858585' : '#9a9a9a'
   const lineNumberActive = dark ? '#c6c6c6' : '#3b3b3b'
@@ -97,9 +98,10 @@ export function editorTheme(input: EditorPaletteInput): Extension {
         fontSize: '13px'
       },
       '&.cm-focused': { outline: 'none' },
-      // 原生滚动条隐藏：改由 EditorScrollbars 悬浮绘制在内容区之上（VS Code 观感）。
-      // 原生滚动条会占掉 10px 宽度、看起来像「编辑器外面的另一条槽」——用户两轮反馈的正是这个。
-      // 滚轮/键盘/触控板仍然走原生滚动，这里只隐藏「绘制」。
+      // Native scrollbars are hidden: EditorScrollbars draws floating ones above the content
+      // area instead (VS Code look). A native scrollbar takes 10px of width and looks like
+      // "another gutter outside the editor" — exactly what users reported across two rounds of
+      // feedback. Wheel/keyboard/touchpad still scroll natively; only the painting is hidden.
       '.cm-scroller': {
         fontFamily:
           "'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace",
@@ -153,7 +155,7 @@ export function editorTheme(input: EditorPaletteInput): Extension {
         borderRadius: '2px'
       },
       '.cm-nonmatchingBracket': { color: c.invalid },
-      // 面板（查找/替换）与弹层
+      // Panel (search/replace) and popups
       '.cm-panels': { backgroundColor: panelBg, color: foreground },
       '.cm-panels.cm-panels-top': { borderBottom: `1px solid ${border}` },
       '.cm-panels.cm-panels-bottom': { borderTop: `1px solid ${border}` },
@@ -191,7 +193,7 @@ export function editorTheme(input: EditorPaletteInput): Extension {
       },
       '.cm-completionLabel': { fontSize: '12.5px' },
       '.cm-completionDetail': { color: muted, fontStyle: 'normal', marginLeft: '8px' },
-      // 差异视图
+      // Diff view
       '&.cm-merge-b .cm-changedLine': { backgroundColor: insertedBg },
       '&.cm-merge-b .cm-changedLineGutter, .cm-changeGutter': { backgroundColor: changedGutter },
       '&.cm-merge-b .cm-changedText': {
@@ -208,17 +210,20 @@ export function editorTheme(input: EditorPaletteInput): Extension {
       },
       '.cm-deletedLine del': { textDecoration: 'none', opacity: '0.85' },
       /**
-       * 逐处取舍按钮（见 utils/cmChunkActions.ts）：画在行号槽 / 改动槽之上，
-       * 一处差异一组（保留 ✓ / 撤销 ✕），**只有图标**——与工具条、状态条同一套语言。
+       * Per-chunk accept/reject buttons (see utils/cmChunkActions.ts): drawn above the
+       * line-number / change gutter, one group per diff chunk (keep ✓ / revert ✕), **icons
+       * only** — the same language as the toolbar and status bar.
        *
-       * 之前是 @codemirror/merge 自带的文字按钮，被 `insetInlineEnd: 5px` 塞在删除块内部：
-       * 随块滚动、压在正文右端、还是两坨文字。现在由本层接管。
+       * They used to be @codemirror/merge's built-in text buttons, squeezed inside the deleted
+       * block via `insetInlineEnd: 5px`: scrolling with the block, covering the right edge of
+       * the body text, and still two lumps of text. This layer now owns them.
        */
       '.cm-chunkActionLayer': {
         position: 'absolute',
         top: 0,
         bottom: 0,
-        // 与改动槽右缘对齐：层过宽会盖住正文的可点区域，过窄按钮会飘到行号上
+        // Align with the right edge of the change gutter: too wide a layer covers the clickable
+        // body area, too narrow and the buttons drift onto the line numbers
         insetInlineStart: 0,
         insetInlineEnd: 'calc(100% - 48px)',
         zIndex: 4,
@@ -248,7 +253,8 @@ export function editorTheme(input: EditorPaletteInput): Extension {
         color: foreground,
         transition: 'background 0.12s, color 0.12s'
       },
-      // 悬停才上语义色：平时保持中性，一屏几十处差异时才不会花
+      // Semantic colors only on hover: neutral at rest, so dozens of diffs on one screen don't
+      // look busy
       '.cm-chunkAction-accept:hover': { background: insertedBg, color: c.string },
       '.cm-chunkAction-reject:hover': { background: deletedBg, color: c.keyword },
       '.cm-chunkAction:focus-visible': { outline: `1px solid ${accent}`, outlineOffset: 1 },
@@ -260,7 +266,7 @@ export function editorTheme(input: EditorPaletteInput): Extension {
         cursor: 'pointer'
       },
       '.cm-collapsedLines:hover': { color: foreground },
-      // 折叠槽里的内联 SVG（remixicon）与行号垂直对齐
+      // Inline SVG (remixicon) in the fold gutter, vertically aligned with line numbers
       '.cm-foldGutter .cm-gutterElement svg': { display: 'block' }
     },
     { dark }
@@ -270,28 +276,31 @@ export function editorTheme(input: EditorPaletteInput): Extension {
 }
 
 /**
- * 语法配色（单独导出，便于离线测试用真实组件量「哪些 token 真的上了色」）。
+ * Syntax colors (exported separately so offline tests can measure with real components which
+ * tokens actually get colored).
  *
- * 两条必须遵守的规则：
- * 1. **只写具体标签，绝不写 `t.name` / `t.variableName` 这类祖先标签**：
- *    Lezer 的标签集包含祖先（propertyName 的标签集是 [propertyName, name]），
- *    祖先规则会和具体规则一起命中，同优先级下样式表里后者胜——
- *    一条 `t.name → 正文色` 就能把属性名、类型名、类名一起拉回正文色。
- * 2. **没被任何规则命中的 token 根本不会生成 span**（CodeMirror 直接输出纯文本），
- *    所以「看起来没高亮」往往不是颜色错，而是**规则漏了**——Markdown 尤其明显：
- *    标题/行内代码/引用/列表标记漏一条，整篇就是一片墨色。
+ * Two rules that must be followed:
+ * 1. **Only write concrete tags, never ancestor tags like `t.name` / `t.variableName`**: Lezer
+ *    tag sets include ancestors (propertyName's tag set is [propertyName, name]), so an ancestor
+ *    rule fires together with the concrete rule; at equal priority the later one in the
+ *    stylesheet wins — a single `t.name → body color` rule pulls property names, type names and
+ *    class names back to body color.
+ * 2. **Tokens matched by no rule never produce a span at all** (CodeMirror just outputs plain
+ *    text), so "looks unhighlighted" is often not a wrong color but a **missing rule**:
+ *    Markdown especially — miss one rule for headings/inline code/quotes/list markers and the
+ *    whole document is a sea of ink.
  */
 export function editorHighlightStyle(dark: boolean, foreground: string): HighlightStyle {
   const c = syntaxColors(dark)
   return HighlightStyle.define([
-    // ── 通用代码（取值对齐 VS Code Dark+ / Light+）──
+    // ── General code (values follow VS Code Dark+ / Light+) ──
     {
       tag: [t.comment, t.lineComment, t.blockComment, t.docComment, t.quote],
       color: c.comment
     },
-    // 声明类关键字（const/let/function/class/interface/import…）与类型原语：蓝
+    // Declaration keywords (const/let/function/class/interface/import…) and type primitives: blue
     { tag: [t.keyword, t.operatorKeyword, t.self, t.unit, t.definitionKeyword], color: c.keyword },
-    // 控制流与模块关键字（if/return/await/export/from…）：紫
+    // Control-flow and module keywords (if/return/await/export/from…): purple
     { tag: [t.controlKeyword, t.moduleKeyword], color: c.control },
     { tag: [t.string, t.special(t.string), t.character, t.docString], color: c.string },
     { tag: [t.number, t.bool, t.null, t.atom], color: c.number },
@@ -321,7 +330,7 @@ export function editorHighlightStyle(dark: boolean, foreground: string): Highlig
     { tag: [t.meta, t.processingInstruction, t.annotation], color: c.meta },
     { tag: [t.invalid], color: c.invalid },
 
-    // ── Markdown（源码视图）：标题加粗、行内代码用类型青、链接蓝且带下划线 ──
+    // ── Markdown (source view): headings bold, inline code type teal, links blue and underlined ──
     { tag: [t.heading, t.heading1], color: c.keyword, fontWeight: '700' },
     {
       tag: [t.heading2, t.heading3, t.heading4, t.heading5, t.heading6],

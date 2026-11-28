@@ -10,40 +10,41 @@ import { assertDraftId, draftDir, hasPluginsRoot } from '../workshop/paths'
 import type { LatticeSourceManaged } from './types'
 
 /**
- * 插件**源码**在本机的生命周期（契约 v2 §2）：
+ * Plugin **source** lifecycle on this machine (contract v2 §2):
  *
- * - 下载的源码目录优先级（用户 2026-11-21 追加口径）：
- *   1. 用户配置的「插件存放路径」`<pluginsPath>/<插件 id>/`（= workshop 草稿目录）——
- *      插件模式侧栏能看到它、能开「插件」会话让模型改代码；
- *   2. 未配置 pluginsPath（或该目录已被用户自己的同名源码占用）时回退
- *      `userData/plugin-sources/<插件 id>/<版本>/`。
- * - 每个源码目录根写 `source.json`（plugin_id/version/sha256/downloaded_at/layout/dir_sha256），
- *   它是「这份源码是应用下载并托管的」的标记，也用于判断之后是否被用户改过；
- * - `userData/lattice-sources.json` 是**快速索引**（插件 id → 当前源码目录/版本/sha），
- *   索引丢失/损坏时按目录里的 source.json 重新扫回来；
- * - 换入新源码前：同插件旧版本目录清掉（只保留当前）；目标目录里已有用户改过的内容时，
- *   先整份备份到 `userData/plugin-source-backups/<id>/<时间戳>/` 再替换（可恢复，不静默丢改动）。
+ * - Priority order for downloaded source directories (rule added 2026-11-21):
+ *   1. The user-configured "plugin storage path" `<pluginsPath>/<plugin id>/` (= the workshop draft directory) —
+ *      it is visible in the plugin-mode sidebar and can open a "plugin" session so the model can edit the code;
+ *   2. When pluginsPath is not configured (or the directory is already occupied by the user's own source of the same name), fall back to
+ *      `userData/plugin-sources/<plugin id>/<version>/`.
+ * - Each source directory root gets a `source.json` (plugin_id/version/sha256/downloaded_at/layout/dir_sha256);
+ *   it marks "this source was downloaded and is managed by the app" and is also used to tell whether it was modified later by the user;
+ * - `userData/lattice-sources.json` is a **fast index** (plugin id → current source directory/version/sha);
+ *   when the index is lost/corrupted, it is rebuilt by scanning the source.json files in the directories;
+ * - Before swapping in new source: clear the same plugin's old version directories (keep only the current one); when the target
+ *   directory already contains user-modified content, back it up wholesale to `userData/plugin-source-backups/<id>/<timestamp>/`
+ *   first and then replace it (recoverable, no silent loss of changes).
  *
- * 安全边界：
- * - 解压复用 `extractZipToTemp()`（拒绝绝对路径 / `..` 穿越 / 空包，剥「压缩整个文件夹」的顶层目录）；
- * - 插件 id / 版本号都只允许安全字符，禁止拼出 `../`；
- * - 所有删除动作都只针对本模块算出来的绝对路径（userData 下的源码根 / 插件存放路径下的单个插件目录）。
+ * Security boundaries:
+ * - Extraction reuses `extractZipToTemp()` (rejects absolute paths / `..` traversal / empty archives, and strips the top-level directory of a "zip the whole folder" archive);
+ * - Plugin ids / version numbers only allow safe characters, so `../` cannot be assembled;
+ * - All deletions target only absolute paths computed by this module (the source root under userData / a single plugin directory under the plugin storage path).
  */
 
-/** 应用数据目录下的源码根（未配置 pluginsPath 时的回退位置） */
+/** Source root under the app data directory (fallback location when pluginsPath is not configured) */
 const SOURCE_ROOT_DIR = 'plugin-sources'
-/** 替换前备份根（不在源码根里，避免被当成「旧版本目录」清掉） */
+/** Backup root used before replacement (kept outside the source root so it is not cleaned up as an "old version directory") */
 const BACKUP_ROOT_DIR = 'plugin-source-backups'
-/** 插件 id → 当前源码目录的索引文件 */
+/** Index file mapping plugin id → current source directory */
 const REGISTRY_FILE = 'lattice-sources.json'
-/** 每个源码目录根里的元数据文件名 */
+/** Metadata file name at the root of each source directory */
 const SOURCE_META_FILE = 'source.json'
-/** source.json 的归属标记（没有这个标记的目录不认为是应用托管的） */
+/** Ownership marker in source.json (directories without it are not considered app-managed) */
 const SOURCE_META_MARKER = 'ryten-bench-lattice'
-/** source.json 结构版本（当前只是透传记录，不做迁移） */
+/** source.json schema version (currently recorded as-is, no migration is performed) */
 const SOURCE_META_VERSION = 1
 
-/** 压缩工具/版本库产生的噪音条目（与 package-install.ts 同口径；.git 不算源码内容） */
+/** Noise entries produced by archivers/VCS (same policy as package-install.ts; .git is not source content) */
 const NOISE_NAMES: ReadonlySet<string> = new Set([
   '.DS_Store',
   'Thumbs.db',
@@ -52,63 +53,63 @@ const NOISE_NAMES: ReadonlySet<string> = new Set([
   '.git'
 ])
 
-/** 插件 id 安全规则（与平台一致；同时保证能作为目录名） */
+/** Plugin id safety rule (consistent with the platform; also guarantees it can be used as a directory name) */
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/
-/** 版本号作为目录名的安全规则（semver 及其预发布/构建标记，不允许路径分隔符） */
+/** Safety rule for version numbers used as directory names (semver plus prerelease/build tags, no path separators) */
 const VERSION_SAFE_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
 
-/** 源码目录里的元数据（契约 §2 要求 plugin_id/version/sha256/downloaded_at） */
+/** Metadata stored inside a source directory (contract §2 requires plugin_id/version/sha256/downloaded_at) */
 export interface PluginSourceMeta {
   plugin_id: string
   version: string
-  /** 平台源码 zip 的 sha256（小写 hex） */
+  /** sha256 of the platform source zip (lowercase hex) */
   sha256: string
-  /** 下载时间（ISO 字符串） */
+  /** Download time (ISO string) */
   downloaded_at: string
-  /** 归属标记；不是这个值的 source.json 视为用户自己的文件 */
+  /** Ownership marker; a source.json with any other value is treated as the user's own file */
   managed_by: string
-  /** 落地位置（pluginsPath / userData） */
+  /** On-disk location (pluginsPath / userData) */
   layout: LatticeSourceManaged
-  /** 平台源码包的 asset_name（有就记下来，下载/排障用） */
+  /** asset_name of the platform source package (recorded when available, for downloads/troubleshooting) */
   source_asset_name?: string
   /**
-   * 解压完成那一刻的目录内容指纹。
-   * 之后重新下载/更新时对比它判断「用户改过没有」：改过就先备份再替换。
+   * Fingerprint of the directory contents at the moment extraction finished.
+   * Later downloads/updates compare against it to tell whether "the user has modified it": if so, back up before replacing.
    */
   dir_sha256?: string
   meta_version?: number
 }
 
-/** 解析出来的「某插件当前源码」 */
+/** A resolved "current source for a plugin" */
 export interface ResolvedPluginSource {
   path: string
   version?: string
   managed: LatticeSourceManaged
-  /** true = 该目录就是 workshop 草稿目录（插件模式侧栏可见、可开插件会话） */
+  /** true = the directory is the workshop draft directory (visible in the plugin-mode sidebar, a plugin session can be opened) */
   inWorkshop: boolean
-  /** 平台源码 zip 的 sha256（有元数据时） */
+  /** sha256 of the platform source zip (when metadata is available) */
   sha256?: string
 }
 
-/** `installSourceBytes` 入参 */
+/** `installSourceBytes` parameters */
 export interface InstallSourceOptions {
   pluginId: string
   version: string
-  /** 平台源码 zip 的原始字节 */
+  /** Raw bytes of the platform source zip */
   bytes: Buffer
-  /** 实际下载字节的 sha256（小写 hex；调用方已校验过） */
+  /** sha256 of the actually downloaded bytes (lowercase hex; already verified by the caller) */
   sha256: string
-  /** 平台源码包 asset_name（可选） */
+  /** asset_name of the platform source package (optional) */
   assetName?: string
 }
 
-/** `installSourceBytes` 返回值 */
+/** `installSourceBytes` return value */
 export interface InstalledPluginSource {
   path: string
   version: string
   managed: LatticeSourceManaged
   sha256: string
-  /** 覆盖前备份到的目录（没触发备份则没有） */
+  /** Directory the previous source was backed up to before overwriting (absent when no backup was triggered) */
   backupPath?: string
 }
 
@@ -128,7 +129,7 @@ interface SourceRegistryFile {
 
 let registryCache: SourceRegistryFile | null = null
 
-// ---------- 基础工具 ----------
+// ---------- Basic utilities ----------
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -138,7 +139,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
 }
 
-/** 插件 id 校验（非法直接抛可读错误） */
+/** Validate a plugin id (throws a readable error when invalid) */
 export function assertSourcePluginId(value: unknown): string {
   const id = typeof value === 'string' ? value.trim() : ''
   if (!id) throw new Error('缺少插件 id')
@@ -147,7 +148,7 @@ export function assertSourcePluginId(value: unknown): string {
   return id
 }
 
-/** 版本号校验（作为目录名用；合法但非 semver 的由平台在发布时再校验） */
+/** Validate a version number (used as a directory name; legally formatted but non-semver versions are re-validated by the platform at publish time) */
 function assertSafeVersion(value: unknown): string {
   const version = typeof value === 'string' ? value.trim() : ''
   if (!version) throw new Error('缺少版本号')
@@ -184,7 +185,7 @@ function writeJsonAtomic(file: string, value: unknown): void {
   fs.renameSync(tmp, file)
 }
 
-/** 迁移目录（跨盘时 rename 会 EXDEV，退回拷贝 + 删除） */
+/** Move a directory (rename yields EXDEV across drives, fall back to copy + delete) */
 function moveDir(from: string, to: string): void {
   fs.mkdirSync(path.dirname(to), { recursive: true })
   try {
@@ -197,10 +198,10 @@ function moveDir(from: string, to: string): void {
   fs.rmSync(from, { recursive: true, force: true })
 }
 
-/** 目录替换失败时的重试节奏（Windows 杀软/索引器/资源管理器短暂占用目录，通常几十~几百毫秒后放开） */
+/** Retry schedule for failed directory replacement (Windows antivirus/indexer/Explorer hold a directory briefly, usually releasing it after tens to hundreds of milliseconds) */
 const FS_RETRY_DELAYS_MS = [0, 60, 180, 400, 800]
 
-/** 这些错误码在 Windows 上通常是「目录/文件正被占用」，值得等一会儿再试 */
+/** These error codes usually mean "directory/file is in use" on Windows and are worth retrying after a short wait */
 function isRetryableFsError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | null)?.code
   return (
@@ -216,7 +217,7 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** 带重试地执行一步文件操作；最后一次失败原样抛出（错误信息带可读步骤名） */
+/** Run one file operation step with retries; the last failure is rethrown as-is (with a readable step name in the message) */
 async function withFsRetry<T>(step: string, action: () => T): Promise<T> {
   let lastError: unknown = null
   for (const delay of FS_RETRY_DELAYS_MS) {
@@ -234,10 +235,10 @@ async function withFsRetry<T>(step: string, action: () => T): Promise<T> {
 }
 
 /**
- * 把新源码目录的内容**原地**合并进旧目录，并清掉旧版本多出来的文件。
+ * Merge the contents of the new source directory **in place** into the old directory and remove files only the old version had.
  *
- * 只在「旧目录连改名都做不到」（资源管理器/编辑器/索引器打开着它）时作为最后手段：
- * 直接覆盖内容不需要删除/改名被占用的根目录，Windows 上不会撞 EPERM。
+ * Only used as a last resort when "the old directory cannot even be renamed" (Explorer/editor/indexer has it open):
+ * overwriting the contents in place does not require deleting/renaming the busy root directory, so Windows does not hit EPERM.
  */
 function mergeDirContents(staging: string, target: string): void {
   fs.mkdirSync(target, { recursive: true })
@@ -245,7 +246,7 @@ function mergeDirContents(staging: string, target: string): void {
   pruneMissingEntries(target, staging)
 }
 
-/** 删掉 target 里 staging 没有的条目（旧版本遗留文件；递归） */
+/** Delete entries in target that staging does not have (leftovers from the old version; recursive) */
 function pruneMissingEntries(target: string, staging: string, prefix = ''): void {
   let entries: fs.Dirent[]
   try {
@@ -269,14 +270,14 @@ function pruneMissingEntries(target: string, staging: string, prefix = ''): void
 }
 
 /**
- * 用 staging 目录替换 target（安装新源码的最后一步）。
+ * Replace target with the staging directory (the last step of installing new source).
  *
- * 首选原子改名：旧目录先改名到隐藏的 `.lattice-source-old-*`，再把 staging 改名到位，
- * 最后尽力删掉旧目录。这样既不会出现「旧目录已删、新目录还没到位」的空窗，也不会
- * 因为目标名被系统短暂保留而 EPERM。
+ * Atomic rename is preferred: rename the old directory to a hidden `.lattice-source-old-*`, then rename staging into place,
+ * and finally delete the old directory on a best-effort basis. This avoids the window where "the old directory is already
+ * deleted but the new one is not yet in place", and avoids EPERM when the target name is briefly retained by the system.
  *
- * 兜底：旧目录连改名都失败（被别的进程打开）→ 原地覆盖 + 清理多余文件；下次安装
- * 会通过 `cleanupStaleArtifacts` 清掉遗留的 `.lattice-source-old-*` 目录。
+ * Fallback: the old directory cannot be renamed at all (opened by another process) → overwrite in place + prune extra files;
+ * the next install removes leftover `.lattice-source-old-*` directories via `cleanupStaleArtifacts`.
  */
 async function replaceSourceDirectory(
   staging: string,
@@ -289,8 +290,9 @@ async function replaceSourceDirectory(
       await withFsRetry(`把解压好的源码移动到 ${target}`, () => fs.renameSync(staging, target))
       return 'renamed'
     } catch (err) {
-      // 目标本来不存在也挪不过去（父目录/杀软占用，或检查后被别的进程抢先建出来）：
-      // 退回原地创建 + 拷贝，至少把源码落地，不让用户卡在「安装成功但没源码」。
+      // The target did not exist yet still could not be moved (parent directory/antivirus holding it, or another process
+      // created it first after the check): fall back to creating it in place + copying, so the source at least lands on disk
+      // and the user is not stuck with "install succeeded but no source".
       logger.warn(
         `[Lattice] Could not move the staged source into place, copying its contents instead: ${target}`,
         err
@@ -315,7 +317,8 @@ async function replaceSourceDirectory(
   try {
     await withFsRetry(`把新源码目录移动到 ${target}`, () => fs.renameSync(staging, target))
   } catch (err) {
-    // 新目录没能到位：把旧目录挪回原处，再尝试原地覆盖（有些占用只锁最终名字，不锁旧目录）
+    // The new directory could not be placed: move the old directory back, then try an in-place overwrite
+    // (some locks only cover the final name, not the old directory)
     try {
       await withFsRetry(`恢复旧源码目录 ${target}`, () => fs.renameSync(trash, target))
     } catch (restoreErr) {
@@ -348,10 +351,10 @@ async function replaceSourceDirectory(
 }
 
 /**
- * 目录内容指纹：排序后的（相对路径 + 内容）拼起来算 sha256（逐文件读，50MiB 上限可接受）。
+ * Directory content fingerprint: sha256 over the sorted concatenation of (relative path + contents) (read file by file, a 50MiB cap is acceptable).
  *
- * 跳过 `source.json`：它记录的是「解压那一刻」的指纹，之后会被重写（新下载/发布成功），
- * 把它算进去会让指纹永远对不上、每次更新都误判成「用户改过」而多备份一份。
+ * `source.json` is skipped: it records the fingerprint "at the moment of extraction" and is rewritten later (new download/publish success),
+ * so including it would make the fingerprint never match and every update would be misjudged as "modified by the user", causing an extra backup.
  */
 function computeDirHash(dir: string): string {
   const files: string[] = []
@@ -376,7 +379,7 @@ function computeDirHash(dir: string): string {
   return hash.digest('hex')
 }
 
-/** 读目录里的 plugin.json（拿版本/名称；缺失或坏 JSON 返回 null） */
+/** Read plugin.json from the directory (for version/name; returns null when missing or when the JSON is invalid) */
 function readManifestInfo(dir: string): { version?: string; name?: string } | null {
   const file = path.join(dir, 'plugin.json')
   try {
@@ -394,7 +397,7 @@ function readManifestInfo(dir: string): { version?: string; name?: string } | nu
   }
 }
 
-/** 目录里是否有源码内容（有 source.json / plugin.json / workshop.json 任一即算） */
+/** Whether the directory has source content (any of source.json / plugin.json / workshop.json counts) */
 function dirHasSourceContent(dir: string): boolean {
   return (
     fs.existsSync(path.join(dir, SOURCE_META_FILE)) ||
@@ -403,9 +406,9 @@ function dirHasSourceContent(dir: string): boolean {
   )
 }
 
-// ---------- 位置约定 ----------
+// ---------- Location conventions ----------
 
-/** 应用数据目录下的源码根（`userData/plugin-sources`） */
+/** Source root under the app data directory (`userData/plugin-sources`) */
 export function pluginSourcesRoot(): string {
   const root = path.join(app.getPath('userData'), SOURCE_ROOT_DIR)
   fs.mkdirSync(root, { recursive: true })
@@ -413,10 +416,10 @@ export function pluginSourcesRoot(): string {
 }
 
 /**
- * 该插件在「插件存放路径」里的目录（`<pluginsPath>/<id>`），不可用返回 null。
+ * The plugin's directory under the "plugin storage path" (`<pluginsPath>/<id>`); returns null when unavailable.
  *
- * 不可用的两种情况：用户还没配置 pluginsPath；插件 id 不满足 workshop 的目录名规则
- * （平台允许点号/下划线，workshop 只允许小写 kebab——这类插件只能落在 userData）。
+ * Two unusable cases: the user has not configured pluginsPath yet; the plugin id does not satisfy the workshop
+ * directory-name rule (the platform allows dots/underscores, workshop allows only lowercase kebab — such plugins can only land in userData).
  */
 export function workshopDraftDirFor(pluginId: string): string | null {
   if (!hasPluginsRoot()) return null
@@ -430,7 +433,7 @@ export function workshopDraftDirFor(pluginId: string): string | null {
 
 // ---------- source.json ----------
 
-/** 读目录里的 source.json（不存在/损坏/缺字段返回 null） */
+/** Read source.json from the directory (returns null when missing/corrupt/with missing fields) */
 export function readSourceMeta(dir: string): PluginSourceMeta | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(path.join(dir, SOURCE_META_FILE), 'utf-8')) as unknown
@@ -464,22 +467,23 @@ function writeSourceMeta(dir: string, meta: PluginSourceMeta): void {
   })
 }
 
-/** 这个源码目录是本应用下载并托管的吗（有归属标记且 plugin_id 匹配） */
+/** Whether this source directory was downloaded and is managed by this app (ownership marker present and plugin_id matches) */
 function isManagedSourceDir(dir: string, pluginId: string): boolean {
   const meta = readSourceMeta(dir)
   return meta !== null && meta.managed_by === SOURCE_META_MARKER && meta.plugin_id === pluginId
 }
 
 /**
- * 这个目录能不能被应用当成「插件源码/草稿」使用。
+ * Whether this directory can be used by the app as "plugin source/draft".
  *
- * 判据与 `resolvePluginSource` 的草稿分支一致：有 `source.json`（应用托管）、
- * 有 `plugin.json`（插件包/草稿）、或有 `workshop.json`（工坊草稿）。
+ * Criteria match the draft branch of `resolvePluginSource`: it has `source.json` (app-managed),
+ * `plugin.json` (plugin package/draft), or `workshop.json` (workshop draft).
  *
- * 为什么需要它：用户删源码时经常只删掉文件（甚至删一半），目录里只剩空文件夹或
- * 零散文件——这样的目录既不是可用草稿，又会被「不是本应用托管的，别覆盖」的保护挡住，
- * 导致重装后的源码被放到 userData、`在对话中修改` 永远走「打开文件夹」回退
- * （用户 2026-11-23：「卸载并删除源码后重装，在对话中修改会失败，重启才好」）。
+ * Why this is needed: when deleting source, users often delete only the files (or even half of them), leaving
+ * only empty folders or scattered files — such a directory is neither a usable draft nor overwritable, and it is blocked
+ * by the "not managed by this app, do not overwrite" protection, so the source after reinstalling is placed in userData and
+ * "edit in conversation" always falls back to "open folder" (user, 2026-11-23: "after uninstalling and deleting the source,
+ * reinstalling makes edit-in-conversation fail; only a restart fixes it").
  */
 function isUsableDraftDir(dir: string): boolean {
   return (
@@ -489,7 +493,7 @@ function isUsableDraftDir(dir: string): boolean {
   )
 }
 
-// ---------- 索引文件（userData/lattice-sources.json） ----------
+// ---------- Index file (userData/lattice-sources.json) ----------
 
 function registryPath(): string {
   return path.join(app.getPath('userData'), REGISTRY_FILE)
@@ -547,7 +551,7 @@ function updateRegistryEntry(entry: SourceRegistryEntry): void {
   })
 }
 
-// ---------- 目标位置 / 备份 / 清理 ----------
+// ---------- Target location / backup / cleanup ----------
 
 interface SourceTargetPlan {
   target: string
@@ -557,10 +561,11 @@ interface SourceTargetPlan {
 }
 
 /**
- * 决定这次源码落哪：优先 `<pluginsPath>/<id>/`，否则 `<userData>/plugin-sources/<id>/<version>/`。
+ * Decide where this source lands: prefer `<pluginsPath>/<id>/`, otherwise `<userData>/plugin-sources/<id>/<version>/`.
  *
- * 若 `<pluginsPath>/<id>/` 已存在且**不是**应用托管的源码目录（用户自己的草稿/别的工具建的），
- * 不覆盖它（那是用户的工作，可能没提交）——本次源码改存 userData，并告警。
+ * If `<pluginsPath>/<id>/` already exists and is **not** an app-managed source directory (the user's own draft or one
+ * created by another tool), do not overwrite it (that is the user's work and may be uncommitted) — this source is stored
+ * under userData instead, with a warning.
  */
 function planSourceTarget(pluginId: string, version: string): SourceTargetPlan {
   const draft = workshopDraftDirFor(pluginId)
@@ -569,10 +574,10 @@ function planSourceTarget(pluginId: string, version: string): SourceTargetPlan {
       return { target: draft, managed: 'pluginsPath', existing: false, existingMeta: null }
     }
     /**
-     * 只保护「能被应用认出来的草稿」（plugin.json / workshop.json / source.json）。
-     * 只剩空文件夹/半删文件的残留目录不是可用草稿，直接当本次安装的落点：
-     * `installSourceBytes` 会先备份再替换，既不会丢用户数据，也不会把源码挤到
-     * userData 导致后续「在对话中修改」失败。
+     * Only protect "drafts the app can recognize" (plugin.json / workshop.json / source.json).
+     * A leftover directory with only empty folders/half-deleted files is not a usable draft, so it becomes the landing
+     * spot for this install: `installSourceBytes` backs up before replacing, so no user data is lost and the source is not
+     * pushed to userData, which would make the subsequent "edit in conversation" fail.
      */
     if (isManagedSourceDir(draft, pluginId) || !isUsableDraftDir(draft)) {
       return {
@@ -596,7 +601,7 @@ function planSourceTarget(pluginId: string, version: string): SourceTargetPlan {
   }
 }
 
-/** 把旧源码目录整份备份到 `userData/plugin-source-backups/<id>/<时间戳>/`（返回备份路径） */
+/** Back up the whole old source directory to `userData/plugin-source-backups/<id>/<timestamp>/` (returns the backup path) */
 function backupExistingSource(pluginId: string, dir: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const base = path.join(app.getPath('userData'), BACKUP_ROOT_DIR, pluginId, stamp)
@@ -612,9 +617,9 @@ function backupExistingSource(pluginId: string, dir: string): string {
 }
 
 /**
- * 清掉同插件 userData 源码根下的旧版本目录。
+ * Remove old version directories under the same plugin's userData source root.
  *
- * @param keepDirName 保留的版本目录名；null = 全部清掉（源码已迁到 pluginsPath 时用）
+ * @param keepDirName version directory name to keep; null = remove all (used when the source has already been migrated to pluginsPath)
  */
 function cleanupUserDataVersions(pluginId: string, keepDirName: string | null): void {
   const root = path.join(app.getPath('userData'), SOURCE_ROOT_DIR, pluginId)
@@ -642,12 +647,12 @@ function cleanupUserDataVersions(pluginId: string, keepDirName: string | null): 
     try {
       fs.rmdirSync(root)
     } catch {
-      // 不空/不存在都无所谓
+      // Empty/non-existent makes no difference
     }
   }
 }
 
-/** 清掉之前安装中断留下的 staging / 旧目录（只清本插件前缀的隐藏目录） */
+/** Remove staging / old directories left behind by an interrupted install (only hidden directories with this plugin's prefix) */
 function cleanupStaleArtifacts(parent: string, pluginId: string): void {
   let entries: fs.Dirent[]
   try {
@@ -661,17 +666,17 @@ function cleanupStaleArtifacts(parent: string, pluginId: string): void {
     try {
       fs.rmSync(path.join(parent, entry.name), { recursive: true, force: true })
     } catch {
-      // 清不掉就留着，不影响本次
+      // If it cannot be removed, leave it; it does not affect this install
     }
   }
 }
 
 /**
- * 源码包根目录没有 plugin.json 时，用**已安装包**的清单补一份。
+ * When the source package root has no plugin.json, add one from the **installed package** manifest.
  *
- * 为什么：插件模式的侧栏只列 `<pluginsPath>` 下「有 plugin.json 或 workshop.json」的目录
- * （见 workshop/store.listDraftIds）。契约允许源码包是工程目录（不强制带 plugin.json），
- * 不补的话这份源码在插件模式里根本看不见，用户也就没法「在对话中修改」。
+ * Why: the plugin-mode sidebar only lists directories under `<pluginsPath>` that "have plugin.json or workshop.json"
+ * (see workshop/store.listDraftIds). The contract allows the source package to be a project directory (plugin.json is
+ * not mandatory), so without this the source would not be visible in plugin mode at all and the user could not "edit in conversation".
  */
 function ensureRootManifest(dir: string, pluginId: string): void {
   if (fs.existsSync(path.join(dir, 'plugin.json'))) return
@@ -693,15 +698,16 @@ function ensureRootManifest(dir: string, pluginId: string): void {
   }
 }
 
-// ---------- 安装（下载后的字节 → 本机源码目录） ----------
+// ---------- Install (downloaded bytes → local source directory) ----------
 
 /**
- * 把平台源码 zip 解压到本机源码目录（契约 §2）。
+ * Extract the platform source zip into the local source directory (contract §2).
  *
- * 流程：解压（拒绝路径穿越/剥顶层目录）→ 拷到目标同盘 staging → 补 plugin.json →
- * 算目录指纹 + 写 source.json → （必要时备份旧目录）→ 换入 → 清理旧版本/更新索引。
+ * Flow: extract (reject path traversal/strip the top-level directory) → copy to staging on the same drive as the target →
+ * add plugin.json → compute the directory fingerprint + write source.json → (back up the old directory when necessary) →
+ * swap in → clean up old versions/update the index.
  *
- * 失败会抛可读错误（调用方把它记成安装结果的 `sourceError`，不影响插件安装本身）。
+ * Throws a readable error on failure (the caller records it as the install result's `sourceError`; the plugin installation itself is unaffected).
  */
 export async function installSourceBytes(
   options: InstallSourceOptions
@@ -713,9 +719,9 @@ export async function installSourceBytes(
   const plan = planSourceTarget(pluginId, version)
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ryten-lattice-src-'))
   /**
-   * 目标目录可能正是当前活动的「插件工作区」：Windows 上 `fs.watch` 的目录句柄不允许
-   * 删除/改名它（表现为 `EPERM: rename '.lattice-source-stage-…' -> '…/plugins/<id>'`，
-   * 用户 2026-11-25 现场，重启应用才恢复）。替换前先放掉监听，结束后再挂回去。
+   * The target directory may be the currently active "plugin workspace": on Windows the directory handle held by `fs.watch`
+   * does not allow it to be deleted/renamed (manifesting as `EPERM: rename '.lattice-source-stage-…' -> '…/plugins/<id>'`,
+   * field report 2026-11-25; only an app restart recovered it). Release the watcher before replacing and reattach it afterwards.
    */
   const releaseWatcher = releaseWorkspaceWatcherFor(plan.target)
 
@@ -764,10 +770,11 @@ export async function installSourceBytes(
       }
     }
     /**
-     * 不再 `rmSync(target)` 后直接 rename：Windows 上目标目录即使被删掉，只要还有别的
-     * 进程（资源管理器/编辑器/索引器）开着它，目录名会短暂保留，紧接着的 rename 就会
-     * EPERM。replaceSourceDirectory 用「旧目录先改名挪开 → 新目录改名到位」的原子顺序，
-     * 挪不动时退回原地覆盖，两种情况下都不会把用户卡在「必须重启应用」。
+     * No `rmSync(target)` followed directly by rename anymore: on Windows, even after the target directory is deleted, as long
+     * as another process (Explorer/editor/indexer) has it open the directory name is briefly retained and the following rename
+     * hits EPERM. replaceSourceDirectory uses the atomic order "rename the old directory aside first → rename the new directory
+     * into place", falling back to an in-place overwrite when it cannot be moved; neither path leaves the user stuck with
+     * "must restart the app".
      */
     const replacement = await replaceSourceDirectory(staging, plan.target, pluginId)
     staging = null
@@ -802,27 +809,27 @@ export async function installSourceBytes(
       try {
         fs.rmSync(staging, { recursive: true, force: true })
       } catch {
-        // staging 是隐藏临时目录，清不掉也不影响
+        // staging is a hidden temp directory; failing to remove it does no harm
       }
     }
     if (extracted) {
       try {
         fs.rmSync(extracted, { recursive: true, force: true })
       } catch {
-        // 临时目录清不掉无所谓
+        // It does not matter if the temp directory cannot be removed
       }
     }
     try {
       fs.rmSync(workDir, { recursive: true, force: true })
     } catch {
-      // 同上
+      // Same as above
     }
   }
 }
 
-// ---------- 查询 / 迁移 / 记录 ----------
+// ---------- Query / migration / recording ----------
 
-/** 扫 `userData/plugin-sources/<id>/<version>/`，按 downloaded_at 取最新一份 */
+/** Scan `userData/plugin-sources/<id>/<version>/` and pick the newest one by downloaded_at */
 function scanUserDataSource(pluginId: string): ResolvedPluginSource | null {
   const root = path.join(app.getPath('userData'), SOURCE_ROOT_DIR, pluginId)
   let entries: fs.Dirent[]
@@ -850,9 +857,9 @@ function scanUserDataSource(pluginId: string): ResolvedPluginSource | null {
 }
 
 /**
- * 某插件当前可用的源码目录（找不到返回 null）。
+ * The plugin's currently usable source directory (returns null when none is found).
  *
- * 优先级：workshop 草稿目录（`<pluginsPath>/<id>`，用户可编辑面）→ 索引 → 扫 userData 版本目录。
+ * Priority: workshop draft directory (`<pluginsPath>/<id>`, the user-editable surface) → index → scan userData version directories.
  */
 export function resolvePluginSource(rawPluginId: unknown): ResolvedPluginSource | null {
   const pluginId = typeof rawPluginId === 'string' ? rawPluginId.trim() : ''
@@ -889,12 +896,12 @@ export function resolvePluginSource(rawPluginId: unknown): ResolvedPluginSource 
 }
 
 /**
- * 把 userData 回退目录里的源码**迁移**到用户配置的插件存放路径（`<pluginsPath>/<id>/`）。
+ * **Migrate** the source from the userData fallback directory to the user-configured plugin storage path (`<pluginsPath>/<id>/`).
  *
- * 触发时机：用户在安装之后才配置 pluginsPath，再点「在对话中修改」。只有迁移过去，
- * 它才是 workshop 草稿、才能在插件模式里开对话。
+ * Trigger: the user configures pluginsPath after installation and then clicks "edit in conversation". Only after migration
+ * is it a workshop draft, and only then can a conversation be opened in plugin mode.
  *
- * 返回迁移后/当前可用的源码（迁移失败返回原目录，不阻塞「打开文件夹」回退）。
+ * Returns the migrated/currently usable source (returns the original directory when migration fails, without blocking the "open folder" fallback).
  */
 export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSource | null {
   const pluginId = typeof rawPluginId === 'string' ? rawPluginId.trim() : ''
@@ -902,16 +909,17 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
   const draft = workshopDraftDirFor(pluginId)
   if (!draft) return null
   if (dirExists(draft)) {
-    // 可用草稿（用户自己的源码 / 已托管源码）：不动它，直接用现有源码
+    // Usable draft (the user's own source / already-managed source): leave it alone and use the existing source
     if (isUsableDraftDir(draft)) return resolvePluginSource(pluginId)
     /**
-     * 不可用的残留目录（用户删源码后只剩空文件夹/零散文件）：它会让下面的迁移
-     * 直接放弃，于是「在对话中修改」永远只打开文件夹（用户 2026-11-23 的现场）。
-     * 备份后清掉，把 userData 里的源码迁回插件存放路径；清不掉就退回现有源码。
+     * Unusable leftover directory (after the user deletes the source, only empty folders/scattered files remain): it makes
+     * the migration below give up immediately, so "edit in conversation" only ever opens a folder (field report 2026-11-23).
+     * Back it up and remove it, then migrate the source from userData back to the plugin storage path; if removal fails, fall
+     * back to the existing source.
      */
     try {
       const backup = isDirEmpty(draft) ? null : backupExistingSource(pluginId, draft)
-      // 这个残留目录可能正被工作区监听（插件模式打开着它）：先放掉监听再删
+      // This leftover directory may be watched by a workspace (plugin mode has it open): release the watcher before deleting
       withWorkspaceWatcherReleased(draft, () => fs.rmSync(draft, { recursive: true, force: true }))
       logger.warn(
         `[Lattice] Removed unusable leftover source directory before migrating: ${draft}` +
@@ -929,7 +937,7 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
   if (!current || current.inWorkshop) return current
   try {
     fs.mkdirSync(path.dirname(draft), { recursive: true })
-    // 目标草稿目录若正被工作区监听，Windows 上 rename 会 EPERM：迁移期间先放掉监听
+    // If the target draft directory is watched by a workspace, rename hits EPERM on Windows: release the watcher during migration
     withWorkspaceWatcherReleased(draft, () => moveDir(current.path, draft))
     const meta = readSourceMeta(draft)
     if (meta) writeSourceMeta(draft, { ...meta, layout: 'pluginsPath' })
@@ -962,9 +970,9 @@ export function promoteSourceToWorkshop(rawPluginId: unknown): ResolvedPluginSou
 }
 
 /**
- * 发布成功后记录源码的版本/指纹（republish 用）：
- * - 目录里已有 source.json（应用托管的源码）→ 更新 version/sha256/目录指纹；
- * - 只有 workshop 草稿目录或 userData 源码根下的目录才写索引（**不碰用户自己的任意工程目录**）。
+ * Record the source's version/fingerprint after a successful publish (used by republish):
+ * - The directory already has source.json (app-managed source) → update version/sha256/directory fingerprint;
+ * - Write the index only for the workshop draft directory or a directory under the userData source root (**never touch the user's arbitrary project directories**).
  */
 export function recordPublishedSource(
   rawPluginId: string,

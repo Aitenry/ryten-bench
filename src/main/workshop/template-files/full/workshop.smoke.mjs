@@ -1,13 +1,15 @@
 /**
- * 草稿自带的冒烟用例（工坊验收电池会执行它）。
+ * Smoke cases shipped with the draft (the workshop acceptance battery runs them).
  *
- * 语义：`channels` 里的每一项都会用**真实装载的插件**调用对应 IPC 处理器，
- * 参数是 args 数组，返回值交给 expect 断言（返回 true = 通过，返回字符串 = 失败原因）。
- * 加新通道时在这里补一条——它比「装上去点一下」更早发现问题。
+ * Semantics: every entry in `channels` calls the matching IPC handler on the **actually loaded
+ * plugin**; the argument is the args array and the return value goes to the expect assertion
+ * (true = pass, a string = failure reason). When adding a channel, add an entry here - it catches
+ * problems earlier than "install it and click around".
  *
- * 这几条连起来就是一条业务路径：**建一条记录 → 列出来能看见它 → 设置能存住**。
- * `cleanup` 会把这些操作写进用户库/设置文件的东西还原（验收不该留下 smoke-item，
- * 也不该把用户的开关改成 false）：参数里的 `$result:<通道名>#<字段>` 指向前面的返回值。
+ * Together these form one business path: **create a record -> list it and see it -> settings
+ * persist**. `cleanup` restores whatever these operations wrote into the user database / settings
+ * file (acceptance must not leave a smoke-item behind, nor turn the user's configuration into
+ * smoke): `$result:<channel>#<field>` in the arguments refers to an earlier return value.
  */
 export default {
   channels: {
@@ -24,8 +26,8 @@ export default {
       expect: (value) => Array.isArray(value) && value.some((item) => item.title === 'smoke-item')
     },
     'plugin:${vars.id}:settings-set': {
-      args: [{ enabled: false, note: 'smoke' }],
-      expect: (value) => value && value.enabled === false && value.note === 'smoke'
+      args: [{ hideDone: true, note: 'smoke' }],
+      expect: (value) => value && value.hideDone === true && value.note === 'smoke'
     }
   },
   cleanup: [

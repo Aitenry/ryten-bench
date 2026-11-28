@@ -5,21 +5,25 @@ import type { WorkshopPublishResult } from '../../../../../shared/harness/worksh
 import { harnessApi } from '../../../api/harness'
 
 /**
- * 草稿行上的动作（构建 / 验收 / 安装）。
+ * Actions on a draft row (build / verify / install).
  *
- * 为什么抽成 hook：侧栏「插件」模式的行与设置 → 插件工坊的行都要这三个动作，
- * 两处各写一份的话，忙碌态、失败原文、成功提示的口径迟早会分叉（这个仓库里
- * 「同一功能两个入口两套行为」的教训已经有过）。
+ * Why a hook: both the sidebar "plugins" mode rows and the Settings → Plugin Workshop rows need
+ * these three actions; writing them twice would sooner or later let the busy state, raw failure
+ * text and success toasts drift apart (this repo has already had its lesson about "one feature,
+ * two entries, two behaviors").
  *
- * 约定与设置页一致：
- * - **忙碌态按草稿 id 记**（`busyIds` 集合）：不同草稿可以各跑各的，同一草稿重复点击
- *   直接忽略（以前是单个 `busyId`，点 A 再点 B 会把 A 的忙碌态覆盖掉，A 还在构建时
- *   行的删除/再次构建按钮就重新可点了）；
- * - 失败**显示主进程原话**（构建诊断/验收失败项是给用户看的，不要吞掉）；
- * - 动作成功后回调 `onChanged`（调用方各自刷新列表 / 重开抽屉）。
+ * Conventions match the settings page:
+ * - **busy state is tracked per draft id** (the `busyIds` set): different drafts can run
+ *   independently, and repeated clicks on the same draft are ignored (it used to be a single
+ *   `busyId`, so clicking A then B overwrote A's busy state and while A was still building the
+ *   row's delete / rebuild buttons became clickable again);
+ * - failures **show the main process's exact wording** (build diagnostics / verification failures
+ *   are meant for the user; don't swallow them);
+ * - after a successful action call `onChanged` (each caller refreshes its own list / reopens the
+ *   drawer).
  */
 export function useDraftActions(opts: {
-  /** 动作成功后的刷新（列表重拉、抽屉重开等） */
+  /** Refresh after a successful action (re-fetch the list, reopen the drawer, etc.) */
   onChanged: (id: string) => void | Promise<void>
 }): {
   busyIds: ReadonlySet<string>
@@ -39,16 +43,18 @@ export function useDraftActions(opts: {
   const { t } = useTranslation()
   const { onChanged } = opts
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set())
-  /** 最新忙碌集合（回调里判断重复点击，不依赖渲染闭包） */
+  /** Latest busy set (used in callbacks to detect duplicate clicks without relying on the render closure) */
   const busyIdsRef = useRef<ReadonlySet<string>>(busyIds)
   busyIdsRef.current = busyIds
 
   /**
-   * 统一执行一次工坊动作：置忙 → 调主进程 → 失败提示原文 → 成功后刷新。
+   * Run one workshop action uniformly: mark busy → call the main process → show the raw failure
+   * text → refresh on success.
    *
-   * `onSuccess` 拿到的是动作的真实返回值（构建诊断 / 验收报告），用于给更强的反馈
-   * （例如验收未通过时把失败项数报出来）——刻意**不重复调用**接口：
-   * 构建/验收都是重活，调两次等于干两遍。
+   * `onSuccess` receives the action's real return value (build diagnostics / verification report)
+   * to allow stronger feedback (e.g. reporting the number of failed checks when verification
+   * fails) — deliberately **without calling** the API again: build / verify are heavy, calling
+   * twice means doing the work twice.
    */
   const run = useCallback(
     async <T>(

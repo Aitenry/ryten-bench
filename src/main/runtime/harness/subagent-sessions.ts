@@ -37,28 +37,34 @@ import type {
 } from './subagent-conversation'
 
 /**
- * 子代理续接会话（continuable subagent sessions）— 对应 deepseek-harness 的
- * dsh-subagent / dsh-subagent-spawn-in-process / dsh-tool-subagent-control 体系
+ * Continuable subagent sessions.
  *
- * 机制（参考 DSH，适配 RytenBench 按 topicId 组织的对话）：
- * - task(background=true) 启动一个「可续接」的子代理会话：持久消息历史 + 收件箱队列，
- *   跨主代理轮次存续；
- * - 会话快照持久化到 `subagent_session` 表（事件流/消息历史/配置快照/终态/模型 descriptor/用量）：
- *   重启后历史记录仍在，恢复的会话标记为 `inactive`；第一次续聊（UI 输入框 / send_message）
- *   会按快照重建模型/工具/prompt（冷恢复）后转回 idle，继续正常收件箱语义；
- * - send_message 向会话投递下一轮消息：运行中则排队（FIFO 收件箱），空闲则唤醒；
- *   只返回投递确认 {messageId}，不等待子代理回复（父经 job_output/job_list 观察）；
- * - interrupt_agent 取消当前运行（keepInbox 语义：排队消息保留，可 send_message 唤醒）；
- * - list_agents 列出全部会话与状态（running=当前轮运行中 / idle=空闲待命 /
- *   inactive=重启后恢复的历史会话）；
- * - 每次会话运行都注册为同名后台任务（job id = 会话 id），job_output/job_kill 复用；
- * - 权限：控制工具只注入主代理，且仅能操作本话题的会话（owner 按 topicId 隔离）。
+ * Mechanics (adapted to conversations organized by topicId):
+ * - task(background=true) starts a "continuable" subagent session: persistent message
+ *   history + an inbox queue that survives across main-agent turns;
+ * - the session snapshot is persisted to the `subagent_session` table (event stream /
+ *   message history / config snapshot / terminal state / model descriptor / usage): the
+ *   history is still there after a restart, and restored sessions are marked `inactive`;
+ *   the first continuation (UI input box / send_message) rebuilds model/tools/prompt from
+ *   the snapshot (cold resume), then returns to idle with the normal inbox semantics;
+ * - send_message delivers the next turn's message to the session: queued when running
+ *   (FIFO inbox), wakes it when idle; it returns only a delivery confirmation
+ *   {messageId} without waiting for the subagent reply (the parent observes through
+ *   job_output/job_list);
+ * - interrupt_agent cancels the current run (keepInbox semantics: queued messages are
+ *   kept and can be resumed with send_message);
+ * - list_agents lists all sessions and statuses (running = current turn in progress /
+ *   idle = waiting / inactive = historical session recovered after a restart);
+ * - every session run is registered as a background job with the same name (job id =
+ *   session id), reusing job_output/job_kill;
+ * - permissions: control tools are only injected into the main agent and can only operate
+ *   on sessions of this topic (owners are isolated by topicId).
  */
 
-/** 会话状态：running / idle 是进程内活跃态；inactive = 重启后从数据库恢复的历史会话 */
+/** Session status: running / idle are active in-process; inactive = historical session recovered from the database after a restart */
 export type SubagentSessionStatus = 'running' | 'idle' | 'inactive'
 
-/** 会话状态行（list_agents 输出） */
+/** Session status row (list_agents output) */
 export interface SubagentSessionRow {
   id: string
   name: string
@@ -67,18 +73,18 @@ export interface SubagentSessionRow {
   queuedMessages: number
   createdAt: number
   lastRunAt?: number
-  /** 最近一轮运行的终态（顶部栏「进行中 > 已完成/失败/已停止」） */
+  /** Terminal state of the most recent run (top bar "in progress > completed/failed/stopped") */
   lastStatus?: 'completed' | 'failed' | 'killed'
-  /** 会话累计真实 token 用量（所有轮次 usage_metadata 累加；0 = 未采集到） */
+  /** Cumulative real token usage for the session (sum of usage_metadata across all turns; 0 = not collected) */
   totalTokens: number
-  /** 是否采集到过真实用量（模型没回传 usage 时不显示） */
+  /** Whether real usage was ever collected (hidden when the model does not return usage) */
   hasUsage: boolean
 }
 
-/** 单会话事件上限：超出后按整轮丢弃最旧事件（长会话不能无限占内存、快照也不能无限大） */
+/** Per-session event cap: when exceeded, drop the oldest events by whole turns (long sessions must not use unbounded memory, and snapshots must not grow without bound) */
 const MAX_CONVERSATION_EVENTS = 4000
 
-/** JSON 列解析失败时按缺失处理（历史脏数据不应让整个恢复流程失败） */
+/** Treat a failed JSON column parse as missing (bad historical data must not fail the whole restore path) */
 function parseJson<T>(raw: string | null): T | null {
   if (!raw) return null
   try {
@@ -97,52 +103,55 @@ interface SessionRecord {
   id: string
   topicId: number
   config: SubAgentConfig
-  /** spawn 时主模型描述符（冷恢复用；旧会话可能为空） */
+  /** Main model descriptor at spawn time (used by cold resume; may be empty for older sessions) */
   mainModelDescriptor?: SubAgentMainModelDescriptor
   label: string
-  /** 启动时的原始任务指令（弹窗顶部展示；send 后续轮次为追加对话） */
+  /** Original task instruction at start (shown at the top of the dialog; later send turns are appended conversation) */
   prompt: string
-  /** 会话消息历史（systemPrompt 不入历史；入图时动态注入） */
+  /** Session message history (systemPrompt is not stored in history; it is injected dynamically when entering the graph) */
   messages: BaseMessage[]
-  /** 收件箱队列（运行中投递的消息排队） */
+  /** Inbox queue (messages delivered while running are queued) */
   inbox: string[]
   status: SubagentSessionStatus
   createdAt: number
   lastRunAt?: number
-  /** 最近一轮运行的终态（顶部栏列表展示「进行中 > 已完成/失败/已停止」） */
+  /** Terminal state of the most recent run (shown in the top-bar list as "in progress > completed/failed/stopped") */
   lastStatus?: 'completed' | 'failed' | 'killed'
-  /** 累计真实 token 用量（跨轮累加；各字段 0 = 未采集） */
+  /** Cumulative real token usage (summed across turns; 0 = not collected for each field) */
   usageInputTokens: number
   usageOutputTokens: number
   usageTotalTokens: number
   usageCalls: number
-  /** 最近一轮运行的最终输出（终态后查看结果） */
+  /** Final output of the most recent run (view the result after the terminal state) */
   lastOutput: string
-  /** 当前运行中的增量输出（running 时实时查看） */
-  /** 当前运行的取消控制器（interrupt 用） */
+  /** Incremental output of the current run (viewed live while running) */
+  /** Cancel controller of the current run (used by interrupt) */
   currentAbort?: AbortController
-  /** 话题删除后置位：禁止投递与收件箱续跑（防僵尸会话继续执行） */
+  /** Set after the topic is deleted: delivery and inbox continuation are forbidden (prevents zombie sessions from continuing to execute) */
   dead?: boolean
-  /** 轮次编号（turn_start 事件 id / 会话视图里的回合序号） */
+  /** Turn number (turn_start event id / turn index in the session view) */
   turnCounter: number
-  /** 会话事件流序号（增量事件的单调递增游标） */
+  /** Session event-stream sequence (monotonically increasing cursor for incremental events) */
   conversationSeq: number
   /**
-   * 会话事件流（打开子代理会话时全量重放；进程内、主题隔离，重启丢弃）。
+   * Session event stream (replayed in full when opening a subagent session; in-process,
+   * isolated per topic, discarded on restart).
    *
-   * 只追加不修改：turn_start → chunk* → turn_end。渲染层用与主对话相同的
-   * chunk reducer 重放，得到与主对话一致的流式 block。
+   * Append-only: turn_start → chunk* → turn_end. The renderer replays it with the same
+   * chunk reducer as the main conversation, producing the same streaming blocks.
    */
   conversation: SubagentConversationEvent[]
 }
 
 export type SubagentSessionsListener = (topicId: number, rows: SubagentSessionRow[]) => void
 
-/** 会话输出更新回调（IPC 层节流后推送前端；输出以增量形式持续追加） */
+/** Session output update callback (the IPC layer throttles and pushes it to the frontend; output keeps appending incrementally) */
 
 /**
- * 会话事件回调（IPC 层消费，节流后把增量事件推给正在查看该子代理的渲染进程）。
- * 事件已带 seq；未 watch 的会话由 IPC 层直接丢弃，不产生成本。
+ * Session event callback (consumed by the IPC layer, which throttles and pushes increment
+ * events to the renderer process currently viewing this subagent).
+ * Events already carry seq; events for unwatched sessions are dropped by the IPC layer at
+ * no cost.
  */
 export type SubagentConversationListener = (
   topicId: number,
@@ -150,26 +159,26 @@ export type SubagentConversationListener = (
   event: SubagentConversationEvent
 ) => void
 
-/** 启动子代理会话所需的运行上下文（复用主运行时组件） */
+/** Runtime context required to start a subagent session (reuses main runtime components) */
 export interface SubagentSessionRuntime {
   mainModel: BaseChatModel
-  /** spawn 时主模型描述符（父 Runtime 注入；后台会话持久化后用） */
+  /** Main model descriptor at spawn time (injected by the parent Runtime; used after background sessions are persisted) */
   mainModelDescriptor?: SubAgentMainModelDescriptor
   resolveModel: (spec: string | undefined) => Promise<BaseChatModel | undefined>
   buildTools: (subAgent: SubAgentConfig) => StructuredToolInterface[]
   recursionLimit: number
-  /** 工具调用总次数上限（模型级「工具调用轮数」；与主图共用同一模型设置） */
+  /** Total tool call limit (model-level "tool call rounds"; shares the same model setting as the main graph) */
   maxToolCalls: number
   spillRef?: { current?: SpillStore }
-  /** 子代理系统提示词扩展（专属记忆/技能），与 task 工具同源 */
+  /** Subagent system prompt extension (dedicated memory/skills), from the same source as the task tool */
   extendSystemPrompt: (sa: SubAgentConfig) => string
 }
 
-/** 子代理续接会话注册表（进程级单例，按 topicId 隔离） */
-/** 会话视图默认分页轮数：首屏/向前加载都以 turn_start 为界，避免大历史会话一次性 IPC */
+/** Subagent continuable session registry (process-level singleton, isolated by topicId) */
+/** Default turns per page in the session view: both first screen and backward loading are bounded by turn_start, avoiding one huge IPC for large-history sessions */
 const CONVERSATION_PAGE_TURNS = 20
 
-/** 取最后 maxTurns 轮的完整事件（从 turn_start 切起）；返回是否还有更早轮次 */
+/** Take the last maxTurns complete turns (starting from turn_start); return whether older turns remain */
 function sliceRecentConversationTurns(
   events: SubagentConversationEvent[],
   maxTurns = CONVERSATION_PAGE_TURNS
@@ -184,26 +193,27 @@ function sliceRecentConversationTurns(
 
 export class SubagentSessionRegistry {
   private readonly sessions = new Map<string, SessionRecord>()
-  /** 是否已从数据库恢复过历史会话（账号切换时重置，切库后重新恢复） */
+  /** Whether historical sessions have been restored from the database yet (reset on account switch and re-restored after switching database) */
   private restored = false
 
   onChange?: SubagentSessionsListener
-  /** 输出增量更新（IPC 节流推送；仅在有前端关注该 agent 时消费） */
-  /** 会话事件增量（IPC 节流推送；仅供正在查看该子代理会话的前端） */
+  /** Incremental output update (throttled IPC push; consumed only when some frontend watches the agent) */
+  /** Incremental session events (throttled IPC push; only for frontends currently viewing this subagent session) */
   onConversationEvent?: SubagentConversationListener
-  /** 话题删除/账号切换时通知上层清理按 topicId 持有的 watch/定时器（IPC 层用） */
+  /** Notify upper layers to clean up per-topicId watches/timers when a topic is deleted or the account switches (used by the IPC layer) */
   onTopicCleared?: (topicId: number) => void
   onAllCleared?: () => void
   /**
-   * 冷恢复 runtime 工厂：恢复的 inactive 会话在第一次 send 时按话题/配置重建 runtime。
-   * 由系统启动装配（`system/harness.ts`），注册表本身不依赖模型/设置模块。
+   * Cold-resume runtime factory: a restored inactive session rebuilds its runtime from the
+   * topic/config on the first send. Wired up at system startup (`system/harness.ts`); the
+   * registry itself does not depend on model/settings modules.
    */
   private runtimeFactory?: (
     topicId: number,
     descriptor?: SubAgentMainModelDescriptor
   ) => Promise<SubagentSessionRuntime | undefined>
 
-  /** 注入/撤销冷恢复 runtime 工厂 */
+  /** Inject/remove the cold-resume runtime factory */
   setRuntimeFactory(
     factory?: (
       topicId: number,
@@ -213,7 +223,7 @@ export class SubagentSessionRegistry {
     this.runtimeFactory = factory
   }
 
-  /** 启动新会话（spawn 语义：全新上下文），首条消息立即开始运行 */
+  /** Start a new session (spawn semantics: fresh context); the first message starts running immediately */
   start(
     topicId: number,
     config: SubAgentConfig,
@@ -234,9 +244,10 @@ export class SubagentSessionRegistry {
       prompt: firstMessage,
       messages: [],
       inbox: [],
-      // 初始 idle：run() 内有「running 则入队返回」的防御守卫，若此处直接置 running，
-      // 首条消息会被守卫吞回收件箱、任务永不注册（job_output 报「任务不存在」、
-      // list_agents 卡 running+queuedMessages=1 的根因）。由 run() 统一置 running。
+      // Initially idle: run() has a defensive guard that queues and returns when status is
+      // running; if we set running here the first message would be swallowed back into the
+      // inbox and the task would never be registered (the root cause of job_output saying
+      // "task not found" and list_agents being stuck at running+queuedMessages=1). run() sets running uniformly.
       status: 'idle',
       usageInputTokens: 0,
       usageOutputTokens: 0,
@@ -249,13 +260,13 @@ export class SubagentSessionRegistry {
       conversation: []
     }
     this.sessions.set(id, record)
-    // 先落一条快照：即使首轮中途崩溃/退出，重启后仍能看到这个会话（历史只读）
+    // Persist a snapshot first: even if the first turn crashes/exits midway, the session is still visible after a restart (history read-only)
     this.persist(record)
     void this.run(record, firstMessage, rt)
     return this.row(record)
   }
 
-  /** 投递消息：空闲立即运行；运行中入队（FIFO）。返回投递确认 */
+  /** Deliver a message: run immediately when idle; enqueue when running (FIFO). Returns a delivery confirmation */
   async send(id: string, topicId: number, message: string): Promise<{ messageId: string }> {
     const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const record = this.sessions.get(id)
@@ -265,8 +276,9 @@ export class SubagentSessionRegistry {
     if (record.dead) {
       throw new Error(mainFormat(getAgentToolTexts().subagentSessions.deletedWithTopic, { id }))
     }
-    // 冷恢复：重启后恢复的 inactive 会话 / 没有 runtime 的空闲会话，第一次投递时
-    // 按持久化配置重建模型/工具/prompt/runtime，再转成 idle 继续正常收件箱语义。
+    // Cold resume: for an inactive session restored after a restart / an idle session with
+    // no runtime, the first delivery rebuilds model/tools/prompt/runtime from the persisted
+    // config, then switches to idle and continues with normal inbox semantics.
     let rt = this.lastRuntime(record)
     if (!rt) {
       if (!this.runtimeFactory) {
@@ -284,7 +296,7 @@ export class SubagentSessionRegistry {
       if (record.status === 'inactive') record.status = 'idle'
     }
     record.inbox.push(message)
-    // 排队条数要能实时出现在会话视图里：运行中投递时先广播一次行快照
+    // The queued count must appear in the session view in real time: broadcast a row snapshot first when delivering while running
     this.broadcast(record.topicId)
     this.persist(record)
     if (record.status === 'idle') {
@@ -294,17 +306,17 @@ export class SubagentSessionRegistry {
     return { messageId }
   }
 
-  /** 取消当前运行（keepInbox：排队消息保留）。缺席/已空闲 = no-op 接受 */
+  /** Cancel the current run (keepInbox: queued messages are kept). Absent/already idle = accepted no-op */
   interrupt(id: string, topicId: number): { accepted: boolean } {
     const record = this.sessions.get(id)
-    if (!record || record.topicId !== topicId) return { accepted: true } // 缺席/已结束 = no-op
+    if (!record || record.topicId !== topicId) return { accepted: true } // absent/finished = no-op
     if (record.status === 'running') {
       record.currentAbort?.abort()
     }
     return { accepted: true }
   }
 
-  /** 全部会话行（按创建顺序） */
+  /** All session rows (in creation order) */
   list(topicId: number): SubagentSessionRow[] {
     return [...this.sessions.values()]
       .filter((s) => s.topicId === topicId)
@@ -312,7 +324,7 @@ export class SubagentSessionRegistry {
       .map((s) => this.row(s))
   }
 
-  /** 话题删除时清理（先中断全部会话，并置 dead 阻止在途闭包续跑收件箱） */
+  /** Clean up when a topic is deleted (interrupt all sessions first, then set dead to stop in-flight closures from continuing the inbox) */
   clearTopic(topicId: number): void {
     for (const [id, record] of this.sessions) {
       if (record.topicId !== topicId) continue
@@ -322,7 +334,7 @@ export class SubagentSessionRegistry {
       this.sessions.delete(id)
     }
     this.onTopicCleared?.(topicId)
-    // 持久化快照随话题删除（外键级联是主路径；这里显式删一次，防旧版本库/异常半删）
+    // Persisted snapshots are deleted with the topic (FK cascade is the main path; delete explicitly here too to guard against old-version databases / partial deletions)
     void deleteSubagentSessionsByTopic(topicId).catch((err) =>
       logger.warn('[SubagentSessions] Failed to delete persisted sessions for topic:', err)
     )
@@ -344,10 +356,11 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 读取子代理会话快照（打开会话视图时拉一次）。
+   * Read a subagent session snapshot (fetched once when opening the session view).
    *
-   * 返回事件流 + 当前 seq：渲染层重放事件得到与主对话一致的流式 block 列表，
-   * 之后按 seq 合并增量事件。会话不存在 / 不属于该话题时返回 undefined。
+   * Returns the event stream + current seq: the renderer replays events to get the same
+   * streaming block list as the main conversation, then merges increment events by seq.
+   * Returns undefined when the session does not exist / does not belong to the topic.
    */
   readConversation(id: string, topicId: number): SubagentConversationSnapshot | undefined {
     const record = this.sessions.get(id)
@@ -369,8 +382,9 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 向前翻页：取 `beforeSeq` 之前最近的一页完整轮次（以 turn_start 为界）。
-   * 打开会话时只返回最近 CONVERSATION_PAGE_TURNS 轮，滚动到顶部再按需加载更早历史。
+   * Page backwards: take the most recent page of complete turns before `beforeSeq`
+   * (bounded by turn_start). Opening a session returns only the latest
+   * CONVERSATION_PAGE_TURNS turns; older history is loaded on demand when scrolling to the top.
    */
   readOlderConversation(
     id: string,
@@ -388,10 +402,11 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 清空全部会话（切换账号数据空间 / 退出时调用）。
+   * Clear all sessions (called when switching account data spaces / exiting).
    *
-   * 会话按 topicId 索引，换库后同一个 id 可能指向另一条话题；不清理会出现
-   * 「新账号里点开后台子代理却看到上一个账号的会话」的串号现象（与 jobs 同源问题）。
+   * Sessions are indexed by topicId, so after switching databases the same id may point at
+   * another topic; without clearing, opening a background subagent in the new account could
+   * show a session from the previous account (the same class of problem as jobs).
    */
   clearAll(): void {
     for (const record of this.sessions.values()) {
@@ -401,15 +416,17 @@ export class SubagentSessionRegistry {
     }
     this.sessions.clear()
     this.onAllCleared?.()
-    // 账号空间切换后要能从新库重新恢复历史会话（旧库数据不删：只清内存）
+    // After switching account spaces, historical sessions must be restorable from the new database (old database data is not deleted: only memory is cleared)
     this.restored = false
   }
 
   /**
-   * 把会话当前快照覆盖写入 `subagent_session`（失败只告警）。
+   * Overwrite the session's current snapshot into `subagent_session` (warn only on failure).
    *
-   * 为什么覆盖式而不是事件式：事件流/消息历史本来就在内存中累积，单会话体量很小；
-   * 一轮结束时整行写一次即可，避免每个 chunk 一次 DB 写。持久化失败不能影响会话运行。
+   * Why overwrite instead of event-by-event: the event stream / message history already
+   * accumulate in memory and a single session is small; writing the whole row once at the
+   * end of a turn is enough, avoiding one DB write per chunk. Persistence failures must not
+   * affect session execution.
    */
   private persist(record: SessionRecord): void {
     const messages = record.messages.map((message) => ({
@@ -441,11 +458,14 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 从数据库恢复历史会话（应用启动 / 账号切换后调用一次）。
+   * Restore historical sessions from the database (called once on app start / after an
+   * account switch).
    *
-   * 恢复出来的会话标记为 `inactive`：事件流/消息历史只读可看，且**不立即重建 runtime**
-   * （冷恢复是惰性的）；第一次 send/续聊时才按持久化快照重建模型/工具/prompt 并转回 idle，
-   * 避免启动时把所有历史会话的模型/工具都构建一遍。
+   * Restored sessions are marked `inactive`: the event stream / message history are
+   * viewable read-only, and the runtime is **not rebuilt immediately** (cold resume is
+   * lazy); only on the first send/continuation are the model/tools/prompt rebuilt from the
+   * persisted snapshot and the session returned to idle, avoiding building models/tools for
+   * all historical sessions at startup.
    */
   async restorePersistedSessions(): Promise<void> {
     if (this.restored) return
@@ -521,7 +541,7 @@ export class SubagentSessionRegistry {
     }
   }
 
-  /** 追加一条会话事件（seq 单调递增，IPC 层据此去重/续接） */
+  /** Append a session event (seq strictly increasing; the IPC layer relies on it for dedup/continuation) */
   private emitConversation(record: SessionRecord, event: SubagentConversationEventInput): void {
     record.conversationSeq += 1
     const full = { ...event, seq: record.conversationSeq } as SubagentConversationEvent
@@ -531,8 +551,10 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 事件流按整轮裁剪：渲染层重放依赖 turn_start → chunk → turn_end，不能从 chunk 中间截断，
-   * 所以丢弃最旧的完整轮次直到回到上限内（当前轮本身超限时保留，避免整轮消失）。
+   * Trim the event stream by whole turns: renderer replay depends on turn_start → chunk →
+   * turn_end, so it cannot cut inside a chunk; drop the oldest complete turns until back
+   * under the cap (keep the current turn even if it alone exceeds the cap, so it does not
+   * disappear mid-turn).
    */
   private trimConversation(record: SessionRecord): void {
     while (record.conversation.length > MAX_CONVERSATION_EVENTS) {
@@ -552,7 +574,7 @@ export class SubagentSessionRegistry {
     this.onChange?.(topicId, this.list(topicId))
   }
 
-  /** 会话运行一次的 runtime 引用缓存（send 唤醒时复用；start 时注入） */
+  /** Runtime reference cache for one session run (reused when send wakes it; injected at start) */
   private runtimes = new WeakMap<SessionRecord, SubagentSessionRuntime>()
 
   private lastRuntime(record: SessionRecord): SubagentSessionRuntime | undefined {
@@ -560,13 +582,15 @@ export class SubagentSessionRegistry {
   }
 
   /**
-   * 执行一轮会话运行：以会话历史为前缀 + 新消息，子图流式执行；
-   * 输出增量写入同名后台任务（job_output 可读）；结束后结算任务，
-   * 若有排队消息继续下一轮（FIFO）。
+   * Run one session turn: use the session history as prefix + the new message, stream the
+   * subgraph; write output increments to the same-named background job (readable via
+   * job_output); settle the job when done, then continue with the next queued message (FIFO).
    *
-   * 2026-11-26：同时把这一轮的流式 chunk 记成会话事件流（见 subagent-conversation），
-   * 供主对话区右上角「后台子代理」入口打开后实时查看。chunk 的生产复用主对话的
-   * stream-producers——增量形态、工具卡投影、执行/完成生命周期与主对话完全同源。
+   * 2026-11-26: also record this turn's streaming chunks as the session event stream (see
+   * subagent-conversation) so they can be viewed live after opening the "background
+   * subagents" entry in the top-right of the main conversation area. Chunk production reuses
+   * the main conversation's stream-producers — incremental shape, tool card projection, and
+   * the execution/completion lifecycle all come from the same source as the main conversation.
    */
   private async run(
     record: SessionRecord,
@@ -574,7 +598,7 @@ export class SubagentSessionRegistry {
     rt: SubagentSessionRuntime
   ): Promise<void> {
     if (record.status === 'running') {
-      // 理论不可达（send 只在 idle 时唤醒）；防御性入队
+      // Theoretically unreachable (send only wakes when idle); queue defensively
       record.inbox.unshift(message)
       return
     }
@@ -584,31 +608,33 @@ export class SubagentSessionRegistry {
     this.broadcast(record.topicId)
     const m = getAgentToolTexts()
 
-    // 本轮会话事件：用户消息 + 助手流（渲染层重放后就是与主对话同款的会话视图）
+    // Events for this turn: user message + assistant stream (replaying in the renderer yields a session view identical to the main conversation)
     record.turnCounter += 1
     const turnId = `turn-${record.turnCounter}`
     const startedAt = Date.now()
     this.emitConversation(record, { kind: 'turn_start', turnId, prompt: message, startedAt })
 
-    // 注册同名后台任务（job id = 会话 id；settlement first-wins）
+    // Register the same-named background job (job id = session id; settlement first-wins)
     const job = jobsRegistry.start(record.topicId, 'subagent', record.label, record.id)
     jobsRegistry.attachCancel(record.id, () => record.currentAbort?.abort())
     const abortSignal = record.currentAbort.signal
 
-    /** 本轮是否还在收集 chunk：中止/异常结算后，迟到的工具结果不再写进已结束的轮次 */
+    /** Whether this turn is still collecting chunks: after abort/error settlement, late tool results are no longer written into the finished turn */
     const collecting = { value: true }
     let fullText = ''
-    /** 本轮真实用量（每次模型调用一条；结算时累加进会话总用量并持久化） */
+    /** Real usage for this turn (one record per model call; accumulated into the session total and persisted at settlement) */
     const usageRecords: ModelUsageRecord[] = []
     let turnStatus: SubagentTurnStatus = 'completed'
     let turnNote: string | undefined
     let queue: RecordQueue | undefined
 
     /**
-     * 一路结构化 chunk：写入会话事件流 + 同名后台任务输出。
+     * Structured chunk pipeline: write to the session event stream + the same-named
+     * background job output.
      *
-     * 任务输出（job_output）的契约保持不变：正文增量 + 每个工具调用一行；父代理仍按
-     * job_output 观察子代理。会话视图则拿到与主对话完全同构的 chunk（含工具卡数据）。
+     * The job_output contract is unchanged: body increments + one line per tool call; the
+     * parent agent still observes the subagent through job_output. The session view instead
+     * receives chunks fully isomorphic to the main conversation (including tool card data).
      */
     const enqueue = (chunk: StructuredMessage): void => {
       if (!collecting.value) return
@@ -623,10 +649,10 @@ export class SubagentSessionRegistry {
           mainFormat(m.subagentSessions.toolCallLine, { name: chunk.tool.name, input: inputText })
         )
       }
-      // IPC 层消费（节流推送会话视图），仅在有关注者时才有成本
+      // Consumed by the IPC layer (throttled push to the session view); only costs anything when there are watchers
     }
 
-    /** 读工具结果：中断时把 AbortError 规范化（与主对话同款约定） */
+    /** Read a tool result: normalize AbortError on interruption (same convention as the main conversation) */
     const safeGetOutput = async (call: { output: unknown }): Promise<unknown> => {
       try {
         return await call.output
@@ -646,7 +672,7 @@ export class SubagentSessionRegistry {
       const tools = rt.buildTools(sa)
       const systemPrompt = rt.extendSystemPrompt(sa)
 
-      // 记录队列 + 三路生产者：把 RuntimeRecord 转成与主对话同构的 StructuredMessage
+      // Record queue + three-way producers: convert RuntimeRecord into StructuredMessages isomorphic to the main conversation
       queue = new RecordQueue()
       const queueRef: QueueRef = { current: queue }
       const graph = buildAgentGraph({
@@ -656,7 +682,7 @@ export class SubagentSessionRegistry {
         queue: queueRef,
         spill: rt.spillRef?.current,
         maxToolCalls: rt.maxToolCalls,
-        // 真实用量：子代理图与主图共用 callModel，同样的 usageSink 采集口径
+        // Real usage: the subagent graph and the main graph share callModel and the same usageSink collection convention
         usageSink: { push: (record) => usageRecords.push(record) }
       })
 
@@ -685,7 +711,7 @@ export class SubagentSessionRegistry {
         record.topicId
       ).catch(() => {})
 
-      // 会话输入：历史 + 本轮消息
+      // Session input: history + this turn's message
       const input = [...record.messages, new HumanMessage(message)]
       const seenIndexes = new Set<number>()
       const stream = await graph.stream(
@@ -694,7 +720,7 @@ export class SubagentSessionRegistry {
           streamMode: ['messages'] as const,
           recursionLimit: rt.recursionLimit,
           signal: abortSignal,
-          // 团队身份：本会话就是 team board 上的 member（任务认领/更新记到会话 id 上）
+          // Team identity: this session is a member on the team board (task claims/updates are recorded against the session id)
           configurable: {
             topicId: record.topicId,
             teamAgent: {
@@ -714,8 +740,8 @@ export class SubagentSessionRegistry {
         const chunk = payload[0]
         const chunkType = chunk._getType?.()
         if (chunkType && chunkType !== 'ai') continue
-        // 模型 chunk 转成运行时记录（会话视图与后台任务输出同源）
-        // 会话视图拿不到任何流式内容；这里补上主对话同源的转换。
+        // Convert model chunks into runtime records (session view and background job output share one source)
+        // Otherwise the session view gets no streaming content; this adds the same conversion source as the main conversation.
         pushMessageRecords(chunk, queue, seenIndexes)
       }
       queue.close()
@@ -742,8 +768,9 @@ export class SubagentSessionRegistry {
       record.lastOutput = output
       job.settle('completed', output)
     } catch (err) {
-      // 中断（interrupt_agent/job_kill）在流式中途会以 AbortError 抛出——结算为 killed
-      // 而非 failed（修复：此前落入 failed 分支，英文中止错误文案混进历史且状态语义错误）
+      // An interruption (interrupt_agent/job_kill) during streaming throws AbortError — settle
+      // as killed rather than failed (fix: it previously fell into the failed branch, leaking an
+      // English abort error message into history and getting the status semantics wrong)
       if (abortSignal.aborted) {
         turnStatus = 'killed'
         turnNote = m.subagentSessions.interrupted
@@ -776,15 +803,15 @@ export class SubagentSessionRegistry {
       job.settle('failed', record.lastOutput, messageText)
     } finally {
       collecting.value = false
-      // 中止/异常路径下生产者可能还挂在队列迭代器上：关队列让它们收尾（不阻塞结算）
+      // On abort/error paths the producers may still be stuck on the queue iterator: close the queue so they finish (without blocking settlement)
       try {
         queue?.close()
       } catch {
-        /* 队列已关闭：忽略 */
+        /* The queue is already closed: ignore */
       }
       record.lastRunAt = Date.now()
       record.currentAbort = undefined
-      // 会话视图本轮结束：渲染层收流并把最后一条助手消息定格（失败/中断附说明）
+      // End of this turn in the session view: the renderer finalizes the stream and freezes the last assistant message (failures/interruptions get a note)
       this.emitConversation(record, {
         kind: 'turn_end',
         turnId,
@@ -793,20 +820,20 @@ export class SubagentSessionRegistry {
         note: turnNote
       })
       record.status = 'idle'
-      // 本轮真实用量累加进会话总量（失败/中断轮也保留已发生的模型调用）
+      // Accumulate this turn's real usage into the session total (failed/interrupted turns still keep the model calls that happened)
       const turnUsage = sumUsage(usageRecords)
       record.usageInputTokens += turnUsage.inputTokens
       record.usageOutputTokens += turnUsage.outputTokens
       record.usageTotalTokens += turnUsage.totalTokens
       record.usageCalls += turnUsage.calls
       this.broadcast(record.topicId)
-      // 一轮结束落一次快照：恢复后能回放完整历史 + 终态 + 累计用量
+      // Persist a snapshot at the end of each turn: after restore the full history + terminal state + accumulated usage can be replayed
       this.persist(record)
 
-      // 话题已删除（clearTopic 置位 dead）：不再续跑收件箱（僵尸会话闭包仍逐条跑完
-      // 收件箱、并在已删除话题下注册不可管理的幽灵任务——已修复）
+      // Topic already deleted (clearTopic set dead): no more inbox continuation (zombie session
+      // closures used to run through the inbox one by one and register unmanageable ghost jobs under a deleted topic — fixed)
       if (!record.dead) {
-        // 收件箱非空 → 继续下一轮（FIFO）
+        // Inbox non-empty → continue with the next turn (FIFO)
         const next = record.inbox.shift()
         if (next) {
           void this.run(record, next, rt)
@@ -816,10 +843,10 @@ export class SubagentSessionRegistry {
   }
 }
 
-/** 进程级单例 */
+/** Process-level singleton */
 export const subagentSessions = new SubagentSessionRegistry()
 
-/** 构建子代理续接控制工具（仅注入主代理；owner 按 topicId 隔离） */
+/** Build subagent continuation control tools (injected into the main agent only; owners isolated by topicId) */
 export function buildSubagentControlTools(
   registry: SubagentSessionRegistry,
   topicId: number

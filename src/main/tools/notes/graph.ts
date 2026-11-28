@@ -1,11 +1,14 @@
-// 图谱域处理器（统一由 manage_materials 工具调度）。
+// Graph domain handlers (dispatched uniformly by the manage_materials tool).
 //
-// 2026-11 资料整理改造：
-// - 搜索不再只给「名字」：补实体 ID、类型、别名、置信度、来源文档，模型拿到结果后
-//   可以直接用 doc.get 打开来源，或用 graph.entity 看关系；
-// - 修复「只搜前 10 个知识库」：getAllWikis 默认 pageSize=10，旧实现没传参，
-//   第 11 个及之后的知识库永远搜不到；
-// - 新增 graph.entity：实体详情 + 出入关系 + 来源文档，补上图谱「查到之后怎么用」这一环。
+// 2026-11 materials organization rework:
+// - Search no longer returns only "names": it adds entity ID, type, aliases, confidence and source
+//   documents, so after getting results the model can open the source via doc.get or inspect
+//   relations via graph.entity;
+// - Fix for "only the first 10 knowledge bases are searched": getAllWikis defaults to pageSize=10
+//   and the old implementation passed no arguments, so the 11th and later knowledge bases could
+//   never be found;
+// - New graph.entity: entity details + incoming/outgoing relations + source documents, completing
+//   the "what to do after a graph lookup" step.
 import { mainFormat, mainPlural } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
 
@@ -55,7 +58,7 @@ async function sourceDocsText(sourceIds: number[], max = 5): Promise<string> {
 }
 
 // ============================================================================
-// 搜索
+// Search
 // ============================================================================
 
 export async function searchGraphHandler(params: {
@@ -129,7 +132,7 @@ export async function searchGraphHandler(params: {
 }
 
 // ============================================================================
-// 实体详情
+// Entity details
 // ============================================================================
 
 export async function getGraphEntityHandler(params: {

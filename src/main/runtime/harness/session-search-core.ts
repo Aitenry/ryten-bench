@@ -1,22 +1,23 @@
 ﻿/**
- * 历史会话检索的纯格式化逻辑（无 electron / DB 依赖，可离线测试）。
+ * Pure formatting logic for session-history search (no electron / DB dependency,
+ * offline-testable).
  *
- * 对照 DSH 的 `dsh-tool-session-query`（session_search / session_event_read 一族）：
- * 本项目先落地两个最常用的只读工具——跨话题搜索历史消息、按话题读取最近消息。
- * 数据访问由工具层（DB mapper）完成，这里只负责「结果怎么排、片段怎么截」。
+ * This lands the two most useful read-only tools first — searching past messages across topics and
+ * reading recent messages of one topic. Data access is done by the tool layer (DB mapper); this
+ * module only decides how results are ordered and how snippets are clipped.
  */
 
-/** 一条搜索命中（工具层把 DB 行投影成这个形状） */
+/** One search hit (the tool layer projects a DB row into this shape) */
 export interface SessionSearchHit {
   topicId: number
   topicTitle: string
-  /** 'user' | 'assistant' | 其它（历史数据可能有别的角色） */
+  /** 'user' | 'assistant' | others (historical data may contain other roles) */
   role: string
   content: string
   createdAt?: string | null
 }
 
-/** 会话工具文案（由 i18n 按界面语言提供） */
+/** Session tool texts (provided by i18n per UI language) */
 export interface SessionToolTexts {
   sessionSearch: {
     header: string
@@ -46,16 +47,16 @@ export interface SessionToolTexts {
   }
 }
 
-/** 一条会话列表项（工具层从话题行投影） */
+/** One conversation list item (the tool layer projects it from a topic row) */
 export interface ConversationListEntry {
   topicId: number
   title: string
-  /** 更新时间（ISO；缺失则显示 none） */
+  /** Update time (ISO; shows none when missing) */
   updatedAt: string | null
   archived: boolean
 }
 
-/** 一条待展示的消息（conversation_read 用） */
+/** One message to display (used by conversation_read) */
 export interface ConversationMessage {
   role: string
   content: string
@@ -63,12 +64,12 @@ export interface ConversationMessage {
 
 type Format = (template: string, values: Record<string, string | number>) => string
 
-/** 单条消息在 conversation_read 里的展示上限（字符） */
+/** Display cap per message in conversation_read (characters) */
 export const MAX_MESSAGE_CHARS = 600
-/** 搜索片段两侧各保留的字符数 */
+/** Characters kept on each side of a search snippet */
 export const SNIPPET_RADIUS = 90
 
-/** 角色 → 本地化标签 */
+/** Role -> localized label */
 function roleLabel(texts: SessionToolTexts, role: string): string {
   if (role === 'user') return texts.sessionSearch.roleUser
   if (role === 'assistant') return texts.sessionSearch.roleAssistant
@@ -76,9 +77,12 @@ function roleLabel(texts: SessionToolTexts, role: string): string {
 }
 
 /**
- * 从正文里截出包含关键词的片段（两侧各 {@link SNIPPET_RADIUS} 字符）。
+ * Clip a snippet containing the keyword out of the body ({@link SNIPPET_RADIUS} characters on each
+ * side).
  *
- * 先折叠空白（历史消息里可能有代码块/多行），再按小写匹配定位；找不到关键词时退回开头。
+ * Whitespace is collapsed first (historical messages may contain code blocks / multiple lines),
+ * then the match is located case-insensitively; when the keyword is absent it falls back to the
+ * start.
  */
 export function buildSnippet(content: string, query: string, radius = SNIPPET_RADIUS): string {
   const collapsed = (content ?? '').replace(/\s+/g, ' ').trim()
@@ -94,7 +98,7 @@ export function buildSnippet(content: string, query: string, radius = SNIPPET_RA
   return `${start > 0 ? '…' : ''}${collapsed.slice(start, end)}${end < collapsed.length ? '…' : ''}`
 }
 
-/** 搜索结果列表 */
+/** Search result list */
 export function formatSessionSearch(
   format: Format,
   texts: SessionToolTexts,
@@ -117,7 +121,7 @@ export function formatSessionSearch(
   return [header, ...items].join('\n')
 }
 
-/** 单个话题最近消息 */
+/** Recent messages of one topic */
 export function formatConversation(  format: Format,
   texts: SessionToolTexts,
   args: {
@@ -149,9 +153,10 @@ export function formatConversation(  format: Format,
 }
 
 /**
- * 会话列表（`conversation_list`）：按更新时间倒序展示最近的话题。
+ * Conversation list (`conversation_list`): shows recent topics in reverse update order.
  *
- * 与搜索互补：先浏览再按 id 读取；归档话题保留但带标记（它们仍可被 conversation_read 读取）。
+ * Complements search: browse first, then read by id; archived topics are kept but tagged (they can
+ * still be read by conversation_read).
  */
 export function formatConversationList(
   format: Format,

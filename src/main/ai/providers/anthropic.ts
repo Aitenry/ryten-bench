@@ -1,8 +1,9 @@
 /**
- * Anthropic Messages API 实现（`POST {baseURL}/v1/messages` + SSE）。
+ * Anthropic Messages API implementation (`POST {baseURL}/v1/messages` + SSE).
  *
- * 覆盖官方接口与「自定义端点里的 Anthropic 兼容协议」（`anthropicApiUrl` 可指向任意兼容网关）。
- * 支持：文本 / 图片（base64 或 URL）/ 工具调用 / 扩展思考（thinking）/ 输出档位（output_config）。
+ * Covers the official API as well as the "Anthropic-compatible protocol on a custom endpoint"
+ * (`anthropicApiUrl` can point to any compatible gateway).
+ * Supports: text / images (base64 or URL) / tool calls / extended thinking / output config.
  */
 import {
   AIMessage,
@@ -40,7 +41,7 @@ export interface AnthropicThinking {
 export interface AnthropicFields {
   model?: string
   apiKey?: string
-  /** 自定义服务地址（旧实现字段名） */
+  /** Custom service URL (legacy field name) */
   anthropicApiUrl?: string
   baseURL?: string
   maxTokens?: number
@@ -48,9 +49,9 @@ export interface AnthropicFields {
   topP?: number
   topK?: number
   stopSequences?: string[]
-  /** 扩展思考配置（thinking-params 组装后经 fields 传入） */
+  /** Extended thinking config (assembled from thinking-params and passed in via fields) */
   thinking?: AnthropicThinking
-  /** 推理等级 / 输出配置（Anthropic `output_config`） */
+  /** Reasoning level / output config (Anthropic `output_config`) */
   output_config?: Record<string, unknown>
   streamUsage?: boolean
   timeout?: number
@@ -58,7 +59,7 @@ export interface AnthropicFields {
   [key: string]: unknown
 }
 
-/** Anthropic 各模型的默认输出上限（与旧实现保持一致） */
+/** Default output limits for each Anthropic model (consistent with the legacy implementation) */
 const MODEL_DEFAULT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-fable-5': 16384,
   'claude-mythos-5': 16384,
@@ -87,16 +88,16 @@ function defaultMaxOutputTokens(model: string): number {
   return match ? MODEL_DEFAULT_MAX_OUTPUT_TOKENS[match] : FALLBACK_MAX_OUTPUT_TOKENS
 }
 
-/** Anthropic 内容块 */
+/** Anthropic content block */
 type AnthropicBlock = Record<string, unknown>
 
-/** 单个 Anthropic 消息 */
+/** A single Anthropic message */
 interface AnthropicMessage {
   role: 'user' | 'assistant'
   content: AnthropicBlock[]
 }
 
-/** 图片块：data URL → base64 source；http(s) URL → url source */
+/** Image block: data URL → base64 source; http(s) URL → url source */
 function toImageBlock(block: MessageContentComplex): AnthropicBlock | null {
   const raw =
     typeof block.image_url === 'string'
@@ -116,7 +117,7 @@ function toImageBlock(block: MessageContentComplex): AnthropicBlock | null {
   return null
 }
 
-/** 工具声明：zod schema → Anthropic input_schema */
+/** Tool declaration: zod schema → Anthropic input_schema */
 function toAnthropicTools(tools: StructuredToolInterface[]): Array<Record<string, unknown>> {
   return tools.map((tool) => ({
     name: tool.name,
@@ -126,8 +127,9 @@ function toAnthropicTools(tools: StructuredToolInterface[]): Array<Record<string
 }
 
 /**
- * 消息序列 → Anthropic messages（system 单独返回）。
- * 工具结果并入 user 消息的 tool_result 块（连续工具结果合并进同一条 user 消息）。
+ * Message sequence → Anthropic messages (system is returned separately).
+ * Tool results are merged into tool_result blocks of user messages (consecutive tool results are
+ * merged into the same user message).
  */
 export function toAnthropicMessages(messages: BaseMessage[]): {
   system: string
@@ -213,7 +215,7 @@ export class ChatAnthropic extends BaseChatModel {
   private readonly outputConfig?: Record<string, unknown>
   private readonly timeoutMs?: number
   private readonly modelKwargs?: Record<string, unknown>
-  /** 是否使用流式请求（extra_config 可显式关闭，或流式失败时自动降级） */
+  /** Whether to use streaming (extra_config can disable it explicitly; auto-degrades on failure) */
   private readonly streaming: boolean
 
   constructor(fields: AnthropicFields) {
@@ -240,7 +242,7 @@ export class ChatAnthropic extends BaseChatModel {
     return 'anthropic'
   }
 
-  /** 组装请求体 */
+  /** Assemble the request body */
   private buildBody(
     messages: BaseMessage[],
     tools: StructuredToolInterface[],
@@ -254,7 +256,8 @@ export class ChatAnthropic extends BaseChatModel {
       stream: streaming
     }
     if (system) body.system = system
-    // 扩展思考开启时 Anthropic 不接受 temperature / top_k（会 400），与旧实现同规则
+    // Anthropic rejects temperature / top_k when extended thinking is enabled (400), same rule as
+    // the legacy implementation
     const thinkingEnabled =
       this.thinking && (this.thinking.type === 'enabled' || this.thinking.type === 'adaptive')
     if (!thinkingEnabled) {
@@ -280,7 +283,7 @@ export class ChatAnthropic extends BaseChatModel {
     }
   }
 
-  /** 处理一个 Anthropic 流式事件；返回 true 表示消息结束 */
+  /** Handle one Anthropic stream event; returning true means the message is complete */
   private handleEvent(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector,
@@ -366,7 +369,7 @@ export class ChatAnthropic extends BaseChatModel {
     return false
   }
 
-  /** 非流式响应 → 消息（部分兼容网关忽略 stream 参数） */
+  /** Non-streaming response → message (some compatible gateways ignore the stream parameter) */
   private handleFullResponse(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector
@@ -479,7 +482,7 @@ export class ChatAnthropic extends BaseChatModel {
     try {
       return this.finalize(collector, state, { contentType })
     } catch (err) {
-      // 空流：换非流式请求继续（与 Spring AI 默认的 stream:false 行为对齐）
+      // Empty stream: continue with a non-streaming request
       if (err instanceof ModelEmptyResponseError) {
         return await this.requestNonStreaming(
           messages,
@@ -492,7 +495,7 @@ export class ChatAnthropic extends BaseChatModel {
     }
   }
 
-  /** 非流式兜底：`stream:false` 返回标准 Messages JSON（部分兼容网关只实现了这条路径） */
+  /** Non-streaming fallback: `stream:false` returns standard Messages JSON (some gateways only support this path) */
   private async requestNonStreaming(
     messages: BaseMessage[],
     tools: StructuredToolInterface[],
@@ -515,7 +518,7 @@ export class ChatAnthropic extends BaseChatModel {
       if (payload.type === 'error') throw providerPayloadError('anthropic', payload, text)
       this.handleFullResponse(payload, collector)
     } else {
-      // 极端情况：非流式请求仍回了 SSE
+      // Edge case: the non-streaming request still returned SSE
       for await (const event of parseSseStream(response, options.signal, (chunk) =>
         collector.recordRaw(chunk)
       )) {
@@ -551,7 +554,7 @@ export class ChatAnthropic extends BaseChatModel {
     }
   }
 
-  /** 收尾：补 total_tokens 与缓存明细（Anthropic 不直接给总量），并守卫空响应 */
+  /** Finalize: fill in total_tokens and cache details (Anthropic gives no totals), guard empty responses */
   private finalize(
     collector: ModelStreamCollector,
     state: {

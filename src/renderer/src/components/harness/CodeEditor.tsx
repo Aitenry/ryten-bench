@@ -9,34 +9,34 @@ import { editorPhrases } from '../../utils/harness/cmPhrases'
 import { rytenFoldGutter } from '../../utils/harness/cmFoldGutter'
 import EditorScrollbars from './EditorScrollbars'
 
-/** 光标状态（底部状态条展示） */
+/** Caret state (shown in the status bar at the bottom) */
 export interface EditorCaret {
-  /** 1 起的行号 */
+  /** 1-based line number */
   line: number
-  /** 1 起的列号 */
+  /** 1-based column number */
   column: number
-  /** 文档总行数 */
+  /** Total number of lines in the document */
   lines: number
-  /** 选中字符数（0 = 无选区） */
+  /** Number of selected characters (0 = no selection) */
   selected: number
 }
 
-/** 切换页签时保留的阅读位置 */
+/** Reading position kept when switching tabs */
 export interface EditorRestoreState {
   scrollTop: number
   anchor: number
 }
 
 interface CodeEditorProps {
-  /** 文档内容（受控） */
+  /** Document content (controlled) */
   value: string
-  /** 文件路径（决定语法高亮；差异视图传真实文件路径） */
+  /** File path (determines syntax highlighting; the diff view passes the real file path) */
   filePath: string
   palette: EditorPaletteInput
   readOnly?: boolean
-  /** 自动换行（窄面板里看长行用） */
+  /** Soft wrap (for long lines in narrow panels) */
   wrap?: boolean
-  /** 额外扩展（差异视图的合并视图等） */
+  /** Extra extensions (e.g. the diff view's merge view) */
   extraExtensions?: Extension[]
   placeholder?: string
   onChange?: (value: string) => void
@@ -45,20 +45,24 @@ interface CodeEditorProps {
   onCaret?: (caret: EditorCaret) => void
   onViewReady?: (view: EditorView) => void
   onUpdate?: (update: ViewUpdate) => void
-  /** 挂载后恢复的滚动/光标位置 */
+  /** Scroll/caret position restored after mount */
   restore?: EditorRestoreState | null
-  /** 卸载前回调（用于把滚动/光标位置存回去） */
+  /** Called before unmount (to persist the scroll/caret position) */
   onPersist?: (state: EditorRestoreState) => void
 }
 
 /**
- * 代码编辑器（CodeMirror 6，经 @uiw/react-codemirror 挂载）。
+ * Code editor (CodeMirror 6, mounted through @uiw/react-codemirror).
  *
- * 替换了原先的 Monaco：
- * - **按需分包**：语言语法是动态 import 的独立 chunk（Monaco 时代是 ~6MB 一次性下载求值）；
- * - **主题跟随应用**：浅/深色由 palette 决定，与面板底色、分隔线、滚动条一致；
- * - **中文界面**：查找面板、差异按钮等内置 UI 文案走 EditorState.phrases；
- * - **可扩展**：差异视图通过 extraExtensions 注入合并视图，不用另起一套编辑器。
+ * Replaces the previous Monaco editor:
+ * - **On-demand chunks**: language grammars are dynamic imports in separate chunks (previously
+ *   ~6MB was downloaded and evaluated up front);
+ * - **Theme follows the app**: light/dark is decided by palette, consistent with the panel
+ *   background, separators and scrollbars;
+ * - **Localized built-in UI**: copy for the search panel, diff buttons, etc. goes through
+ *   EditorState.phrases;
+ * - **Extensible**: the diff view injects a merge view via extraExtensions instead of running a
+ *   separate editor.
  */
 const CodeEditor: React.FC<CodeEditorProps> = ({
   value,
@@ -79,10 +83,10 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const { i18n } = useTranslation()
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const [language, setLanguage] = useState<Extension | null>(null)
-  /** 编辑器实例：悬浮滚动条要读它的滚动几何（onCreateEditor 只会调一次，存 state 才能触发重渲染） */
+  /** Editor instance: the floating scrollbars need its scroll geometry (onCreateEditor only fires once, so storing state triggers a re-render) */
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
-  // 语言扩展异步加载（缓存命中的语言同步返回，不闪）
+  // Load the language extension asynchronously (cached languages resolve synchronously, no flicker)
   useEffect(() => {
     let cancelled = false
     loadLanguageExtension(filePath).then((ext) => {
@@ -93,7 +97,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     }
   }, [filePath])
 
-  // 用 ref 承接回调，避免回调身份变化导致扩展重建（编辑器重配）
+  // Hold callbacks in a ref so changing callback identity doesn't rebuild extensions (editor reconfiguration)
   const handlers = useRef({ onSave, onCaret, onUpdate, onViewReady, onChange })
   handlers.current = { onSave, onCaret, onUpdate, onViewReady, onChange }
 
@@ -113,8 +117,9 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   )
 
   /**
-   * 折行开关走 Compartment：只重配这一个扩展，不触发整编辑器 reconfigure——
-   * 整编辑器重配会把 history() 这类的字段重建，撤销历史就没了。
+   * The wrap toggle goes through a Compartment: only that one extension is reconfigured, without
+   * reconfiguring the whole editor — a full reconfiguration rebuilds fields like history() and
+   * loses the undo history.
    */
   const wrapCompartment = useRef(new Compartment()).current
 
@@ -123,18 +128,18 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       saveKeymap,
       editorPhrases(i18n.language),
       editorTheme(palette),
-      // 折叠槽用 remixicon 图标（basicSetup 里同名开关已关掉，避免出现两条折叠槽）
+      // Use the remixicon fold gutter (the same-named option in basicSetup is disabled to avoid two fold gutters)
       rytenFoldGutter,
       wrapCompartment.of(wrap ? EditorView.lineWrapping : [])
     ]
     if (extraExtensions) list.push(...extraExtensions)
     if (language) list.push(language)
     return list
-    // palette 由调用方 useMemo 保持稳定：它一变就整编辑器重配（换深浅色时需要）
+    // palette is kept stable by the caller's useMemo: when it changes the whole editor is reconfigured (needed for theme switches)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveKeymap, i18n.language, palette, language, extraExtensions, wrapCompartment])
 
-  // 只重配折行 compartment（保留撤销历史与滚动位置）
+  // Reconfigure only the wrap compartment (keeps undo history and scroll position)
   useEffect(() => {
     const view = cmRef.current?.view
     if (!view) return
@@ -163,7 +168,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       setEditorView(view)
       const restoreState = restore
       if (restoreState) {
-        // 恢复阅读位置：先定位光标（会带来滚动），再按记录的 scrollTop 校正
+        // Restore the reading position: place the caret first (which scrolls), then correct to the recorded scrollTop
         const pos = Math.min(restoreState.anchor, view.state.doc.length)
         view.dispatch({ selection: { anchor: pos } })
         view.scrollDOM.scrollTop = restoreState.scrollTop
@@ -173,7 +178,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     [restore]
   )
 
-  // 卸载前保存阅读位置
+  // Save the reading position before unmount
   const persistRef = useRef(onPersist)
   persistRef.current = onPersist
   useEffect(() => {
@@ -188,7 +193,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   }, [])
 
   return (
-    /* 外层只为悬浮滚动条提供定位上下文：编辑器本身仍然铺满 */
+    /* The outer element only provides a positioning context for the floating scrollbars: the editor itself still fills it */
     <div className="relative h-full min-h-0">
       <CodeMirror
         ref={cmRef}
@@ -203,7 +208,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         indentWithTab={!readOnly}
         basicSetup={{
           lineNumbers: true,
-          // 折叠槽换成 remixicon 版本（见 utils/cmFoldGutter.ts），这里关掉自带的
+          // Fold gutter is replaced by the remixicon version (see utils/cmFoldGutter.ts); disable the built-in one here
           foldGutter: false,
           highlightActiveLine: true,
           highlightActiveLineGutter: true,

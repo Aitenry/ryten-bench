@@ -7,16 +7,16 @@ import katex from 'katex'
 import { i18n } from '@renderer/i18n'
 
 /* ════════════════════════════════════════════════════════════
-   KaTeX 数学公式适配（$...$ 行内 / $$...$$ 块级）
-   - markdown-it 插件：$..$ → <span data-math>，$$..$$ → <div data-math-block>
-   - mathInline / mathBlock 为原子节点（attrs.tex），光标无法进入，
-     点击后在 NodeView 内弹出 textarea 原地编辑，KaTeX 实时渲染
-   - 序列化还原为 $..$ / $$..$$，与解析完全往返
+   KaTeX math adaptation ($...$ inline / $$...$$ block)
+   - markdown-it plugin: $..$ → <span data-math>, $$..$$ → <div data-math-block>
+   - mathInline / mathBlock are atom nodes (attrs.tex) the cursor cannot enter; clicking one
+     pops up a textarea inside the NodeView for in-place editing, with live KaTeX rendering
+   - serialization restores $..$ / $$..$$, a complete round trip with parsing
    ════════════════════════════════════════════════════════════ */
 
-/* ──────────── markdown-it 插件 ──────────── */
+/* ──────────── markdown-it plugin ──────────── */
 
-/** 块级规则：$$...$$（单行或多行，闭合行必须整行是 $$） */
+/** Block rule: $$...$$ (single or multiple lines; the closing line must be exactly $$) */
 function mathBlockRule(
   state: StateBlock,
   startLine: number,
@@ -27,11 +27,11 @@ function mathBlockRule(
   const max = state.eMarks[startLine]
   if (state.src.charCodeAt(start) !== 0x24 /* $ */) return false
   if (state.src.charCodeAt(start + 1) !== 0x24) return false
-  if (state.src.charCodeAt(start + 2) === 0x24) return false // 不支持 $$$
+  if (state.src.charCodeAt(start + 2) === 0x24) return false // $$$ is not supported
 
   const openLine = state.src.slice(start, max).trim()
 
-  // 单行形式：$$内容$$
+  // Single-line form: $$content$$
   const single = /^\$\$(.+)\$\$$/.exec(openLine)
   if (single) {
     if (silent) return true
@@ -42,7 +42,7 @@ function mathBlockRule(
     return true
   }
 
-  // 多行形式：开行必须恰好是 $$
+  // Multi-line form: the opening line must be exactly $$
   if (openLine !== '$$') return false
 
   let nextLine = startLine + 1
@@ -52,7 +52,7 @@ function mathBlockRule(
     if (/^\s*\$\$\s*$/.test(line)) break
     lines.push(line)
   }
-  if (nextLine >= endLine) return false // 未闭合：交给普通文本，避免误吞
+  if (nextLine >= endLine) return false // not closed: leave it to plain text so nothing is swallowed
 
   if (silent) return true
   const token = state.push('math_block', '', 0)
@@ -62,21 +62,21 @@ function mathBlockRule(
   return true
 }
 
-/** 行内规则：$...$（跳过 $$、\$、开头/结尾紧邻空白的情况，避免误伤货币等） */
+/** Inline rule: $...$ (skips $$, \$, and cases where whitespace sits right after the opening $ or before the closing one, so currency etc. is not matched by mistake) */
 function mathInlineRule(state: StateInline, silent: boolean): boolean {
   const start = state.pos
   const src = state.src
   const len = state.posMax
   if (src.charCodeAt(start) !== 0x24) return false
-  if (src.charCodeAt(start + 1) === 0x24) return false // $$ 交给块级
+  if (src.charCodeAt(start + 1) === 0x24) return false // $$ goes to the block rule
   if (
     start > 0 &&
     src.charCodeAt(start - 1) === 0x5c /* \ */ &&
     src.charCodeAt(start - 2) !== 0x5c
   ) {
-    return false // \$ 转义
+    return false // \$ escape
   }
-  if (start + 1 >= len || /\s/.test(src[start + 1])) return false // 开 $ 后不能是空白
+  if (start + 1 >= len || /\s/.test(src[start + 1])) return false // no whitespace allowed right after an opening $
 
   let pos = start + 1
   while (pos < len) {
@@ -98,7 +98,7 @@ function mathInlineRule(state: StateInline, silent: boolean): boolean {
   return false
 }
 
-/** markdown-it 插件入口（md.use(mathPlugin)） */
+/** markdown-it plugin entry (md.use(mathPlugin)) */
 export function mathPlugin(md: MarkdownIt): void {
   md.block.ruler.before('fence', 'math_block', mathBlockRule)
   md.inline.ruler.before('escape', 'math_inline', mathInlineRule)
@@ -109,7 +109,7 @@ export function mathPlugin(md: MarkdownIt): void {
     `<span data-math>${md.utils.escapeHtml(tokens[idx].content)}</span>`
 }
 
-/* ──────────── KaTeX NodeView（点击弹出 textarea 原地编辑） ──────────── */
+/* ──────────── KaTeX NodeView (click to pop up a textarea for in-place editing) ──────────── */
 
 function createMathNodeView(displayMode: boolean) {
   return (props: NodeViewRendererProps) => {
@@ -150,7 +150,7 @@ function createMathNodeView(displayMode: boolean) {
       textarea?.remove()
       textarea = null
       dom.classList.remove('tiptap-math-editing')
-      // 恢复渲染输出显示（enterEdit 时被隐藏，否则提交后公式消失）
+      // Restore the rendered output (hidden by enterEdit, otherwise the formula disappears after commit)
       outputEl.style.display = ''
       const pos = props.getPos()
       if (pos != null && tex !== props.node.attrs.tex) {
@@ -201,7 +201,8 @@ function createMathNodeView(displayMode: boolean) {
         }
       })
       textarea.addEventListener('blur', (e) => {
-        // 焦点只是移到节点内部（例如点击 textarea 自身）时不提交，防误触发
+        // Do not commit when focus merely moves inside the node (e.g. clicking the textarea
+        // itself), to avoid a false trigger
         const related = (e as FocusEvent).relatedTarget as globalThis.Node | null
         if (related && dom.contains(related)) return
         commit()
@@ -212,8 +213,8 @@ function createMathNodeView(displayMode: boolean) {
     }
 
     dom.addEventListener('mousedown', (e) => {
-      // 视图模式下拦截（避免 PM/浏览器在进入编辑前抢焦点）；
-      // 编辑模式下放行，保证 textarea 内可正常放置光标
+      // Intercept in view mode (so PM/the browser do not grab focus before editing starts);
+      // let it through in edit mode so the textarea can place the cursor normally
       if (!editing) e.preventDefault()
     })
     dom.addEventListener('click', (e) => {
@@ -229,7 +230,7 @@ function createMathNodeView(displayMode: boolean) {
         if (!editing) renderOutput()
         return true
       },
-      // 编辑态拦截 PM 事件（textarea 输入由自身处理）
+      // Intercept PM events while editing (textarea input is handled by the textarea itself)
       stopEvent() {
         return editing
       },
@@ -240,7 +241,7 @@ function createMathNodeView(displayMode: boolean) {
   }
 }
 
-/* ──────────── 节点定义 ──────────── */
+/* ──────────── Node definitions ──────────── */
 
 export const MathInline = Node.create({
   name: 'mathInline',
@@ -283,7 +284,7 @@ export const MathInline = Node.create({
   addInputRules() {
     return [
       new InputRule({
-        // 行内 $x$ + 空格（lookbehind 不消费前导字符，避免把空格一起删掉）
+        // Inline $x$ + space (the lookbehind does not consume the leading character, so the space is not removed with it)
         find: /(?<=^|[^$])\$([^$\n]+?)\$\s$/,
         handler: ({ state, range, match }) => {
           const tr = state.tr
@@ -337,7 +338,7 @@ export const MathBlock = Node.create({
   addInputRules() {
     return [
       new InputRule({
-        // 行首键入 $$内容$$ 立即转为块级公式
+        // Typing $$content$$ at the start of a line converts it into a block formula immediately
         find: /^\$\$([^$\n]*)\$\$$/,
         handler: ({ state, range, match }) => {
           const tr = state.tr

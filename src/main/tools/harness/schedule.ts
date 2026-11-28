@@ -1,9 +1,9 @@
 /**
- * 定时任务工具：`schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit`。
+ * Scheduled task tools: `schedule_create` / `schedule_list` / `schedule_view` / `schedule_edit`.
  *
- * 对照 DSH 的 `@deepseek-ai/dsh-tool-schedule`（RFC 5545 rrule + 会话目标）；本项目用
- * 显式子集（once / every / daily）表达重复规则，任务归属创建时所在的会话。真正的触发
- * 由主进程的 `schedule-runner` 负责（窗口存在时以无头 sender 启动一轮）。
+ * Recurrence rules use an explicit subset (once / every / daily) instead of RFC 5545 rrules; a
+ * task belongs to the conversation in which it was created. Actual firing is handled by the main
+ * process's `schedule-runner` (starts a turn with a headless sender while the window exists).
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -23,7 +23,7 @@ import {
   type ScheduleWhen
 } from '../../runtime/harness/schedule-core'
 
-/** 工具运行配置里只需要 topicId */
+/** Only topicId is needed from the tool invoke config */
 interface ScheduleToolConfig {
   configurable?: { topicId?: unknown }
 }
@@ -43,21 +43,21 @@ const whenSchema = z.discriminatedUnion('kind', [
   })
 ])
 
-/** 当前会话 id（创建任务时归属用；<=0 视为没有会话） */
+/** Current conversation id (used as task ownership at creation; <=0 means no conversation) */
 function topicIdOf(config: unknown): number {
   const cfg = config as ScheduleToolConfig | undefined
   const id = cfg?.configurable?.topicId
   return typeof id === 'number' && id > 0 ? id : 0
 }
 
-/** 触发规则校验失败 → 可读文案 */
+/** Trigger rule validation failure → readable text */
 function invalidWhenText(reason: ScheduleValidationFailure): string {
   const texts = getScheduleToolTexts()
   const detail = texts.reasons[reason] ?? reason
   return mainFormat(texts.invalidWhen, { reason: detail })
 }
 
-/** 执行状态 → 本地化标签 */
+/** Run state → localized label */
 function runStatusText(
   texts: ReturnType<typeof getScheduleToolTexts>,
   status: ScheduledTask['lastStatus']
@@ -68,7 +68,7 @@ function runStatusText(
   return texts.none
 }
 
-/** 单条任务的详情文本（执行记录由调用方按需读取） */
+/** Detail text for one task (run records are read by the caller as needed) */
 function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
   const texts = getScheduleToolTexts()
   const lines = [
@@ -102,7 +102,7 @@ function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
   return lines.join('\n')
 }
 
-/** 构造四个定时任务工具 */
+/** Build the four scheduled-task tools */
 export function buildScheduleTools(): StructuredToolInterface[] {
   const create = tool(
     async ({ title, prompt, when }, config) => {

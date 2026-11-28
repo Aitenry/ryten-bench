@@ -18,15 +18,18 @@ import {
 } from './types'
 
 /**
- * RuntimeMemoryController — 运行时热记忆唯一事实源
+ * RuntimeMemoryController — the single source of truth for runtime hot memory
  *
- * 移植自 dsh-mnemon 的 RuntimeMemoryController：
- * - `memories.json` 是唯一事实源；`USER.md` / `MEMORY.md` 是确定性派生投影；
- * - `add` 写入独立新事实（完全相同内容不重复添加）；`replace` / `remove` 用唯一子串定位；
- * - 容量：USER 4 KiB / MEMORY 10 KiB；`add` 溢出自动触发维护，`replace` 溢出直接报错；
- *   - USER 溢出：本地保守压缩（合并内容互为子串的 low 条目）；
- *   - MEMORY 溢出：归档钩子把条目写入长期层（mnemon-archive）；
- * - 写入经队列串行化（避免并发竞态）。
+ * - `memories.json` is the only source of truth; `USER.md` / `MEMORY.md` are deterministic
+ *   derived projections;
+ * - `add` writes a new independent fact (identical content is not added twice);
+ *   `replace` / `remove` locate an entry by a unique substring;
+ * - Capacity: USER 4 KiB / MEMORY 10 KiB; an overflowing `add` triggers maintenance
+ *   automatically, while an overflowing `replace` fails with an error;
+ *   - USER overflow: conservative local compaction (merges low entries whose content is a
+ *     substring of another entry);
+ *   - MEMORY overflow: an archive hook writes entries to the long-term layer (mnemon-archive);
+ * - Writes are serialized through a queue (to avoid concurrent races).
  */
 
 interface RuntimeMemoryFile {
@@ -36,9 +39,10 @@ interface RuntimeMemoryFile {
 
 export interface MemoryMaintenanceHooks {
   /**
-   * MEMORY 溢出时的归档回调：把条目写入长期层。
-   * 返回的 archivedIndexes 是「传入 entries 子数组内的局部索引」（而非数据文件全局索引），
-   * 调用方负责换算为全局索引后再删除条目。
+   * Archive callback for MEMORY overflow: writes entries to the long-term layer.
+   * The returned archivedIndexes are "local indexes within the passed entries sub-array"
+   * (not global indexes in the data file); the caller converts them to global indexes
+   * before removing entries.
    */
   archiveEntries?: (
     entries: RuntimeMemoryEntry[]
@@ -64,18 +68,18 @@ export class RuntimeMemoryController {
     this.initialize()
   }
 
-  /** 启动时确保目录与事实源存在，并修复被手工修改的投影 */
+  /** Ensures the directory and source of truth exist at startup, and repairs hand-edited projections */
   private initialize(): void {
     fs.mkdirSync(this.directory, { recursive: true })
     const data = this.readSource()
     if (!fs.existsSync(this.sourcePath)) {
-      // 首次初始化：写入空事实源
+      // First initialization: write an empty source of truth
       this.persist(data)
     }
     this.repairProjections(data.entries)
   }
 
-  /** 同步快照（prompt 组装时使用） */
+  /** Synchronous snapshot (used when assembling the prompt) */
   snapshot(): RuntimeMemorySnapshot {
     const data = this.readSource()
     const generatedAt = new Date().toISOString()
@@ -92,19 +96,19 @@ export class RuntimeMemoryController {
     }
   }
 
-  /** 组装 prompt 的紧凑上下文文本（USER + MEMORY 全部条目） */
+  /** Compact context text for prompt assembly (all USER + MEMORY entries) */
   contextText(): string {
     const data = this.readSource()
     if (data.entries.length === 0) return ''
     return data.entries.map((e) => `- ${e.content}`).join('\n')
   }
 
-  /** 变更热记忆（add / replace / remove），队列串行化；MEMORY 溢出时异步归档后重试 */
+  /** Mutates hot memory (add / replace / remove), serialized through the queue; on MEMORY overflow, archives asynchronously and retries */
   async mutate(request: RuntimeMemoryMutation): Promise<RuntimeMemoryMutationResult> {
     const run = async (): Promise<RuntimeMemoryMutationResult> => {
       const tm = mainToolMessages().mnemon
       let result = this.mutateLocked(request)
-      // MEMORY 溢出标记：执行异步归档后重试
+      // MEMORY overflow marker: run the asynchronous archive, then retry
       if (!result.success && result.message === '__NEEDS_ASYNC_ARCHIVE__') {
         const archived = await this.runArchive()
         if (!archived.ok) {
@@ -128,7 +132,7 @@ export class RuntimeMemoryController {
     return (await this.enqueue(run)) as RuntimeMemoryMutationResult
   }
 
-  /** 异步归档：把低优先级/最旧的 MEMORY 条目写入长期层并移除 */
+  /** Asynchronous archive: writes low-priority/oldest MEMORY entries to the long-term layer and removes them */
   private async runArchive(): Promise<
     { ok: true; count: number } | { ok: false; message: string }
   > {
@@ -141,7 +145,7 @@ export class RuntimeMemoryController {
       .map((e, i) => ({ entry: e, index: i }))
       .filter((x) => x.entry.target === 'memory')
 
-    // 优先归档 low；不够则追加最旧的 normal（按 created_at）
+    // Archive low entries first; if not enough, append the oldest normal entries (by created_at)
     const selected: Array<{ entry: RuntimeMemoryEntry; index: number }> = []
     const low = memoryItems.filter((x) => x.entry.importance === 'low')
     selected.push(...low)
@@ -160,9 +164,11 @@ export class RuntimeMemoryController {
       const { archivedIndexes, memoryBodyIds } = await this.hooks.archiveEntries(
         selected.map((x) => x.entry)
       )
-      // 钩子契约：archivedIndexes 是「传入子数组内的局部索引」，必须换算为 data.entries
-      // 的全局索引再删除——selected 不一定是文件最前的条目，user/memory 交错存放时
-      // 局部索引恰好等于全局索引只是巧合，直接使用会误删未归档条目（含 USER 画像）。
+      // Hook contract: archivedIndexes are "local indexes within the passed sub-array" and must
+      // be converted to global indexes in data.entries before removal — selected is not
+      // necessarily at the front of the file, and when user/memory entries interleave, a local
+      // index coinciding with the global index is only a coincidence; using it directly would
+      // remove entries that were not archived (including USER profiles).
       const removeSet = new Set(
         archivedIndexes
           .map((i) => selected[i]?.index)
@@ -186,7 +192,7 @@ export class RuntimeMemoryController {
   }
 
   // --------------------------------------------------------------------------
-  // 内部实现
+  // Internal implementation
   // --------------------------------------------------------------------------
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -209,13 +215,13 @@ export class RuntimeMemoryController {
           message: mainFormat(tm.errors.entryTooLarge, { limit: RUNTIME_ENTRY_MAX_BYTES })
         }
       }
-      // 完全相同内容不重复添加
+      // Never add identical content twice
       const duplicate = data.entries.some((e) => e.target === target && e.content === content)
       if (duplicate) {
         return { success: false, message: tm.errors.entryExists }
       }
 
-      // 容量检查：add 溢出时触发维护
+      // Capacity check: an overflowing add triggers maintenance
       const projected =
         this.usageOf(data.entries, target).used + Buffer.byteLength(content, 'utf-8')
       if (projected > RUNTIME_MEMORY_LIMITS[target]) {
@@ -272,7 +278,7 @@ export class RuntimeMemoryController {
       const content = request.content?.trim()
       if (!content) return { success: false, message: tm.errors.newContentRequired }
       const replaced = { from: existing.content, to: content }
-      // replace 溢出直接报错（调用方应先显式整理），与 dsh-mnemon 一致
+      // An overflowing replace fails with an error (the caller should tidy up explicitly first)
       const usage = this.usageOf(data.entries, target)
       const projected =
         usage.used -
@@ -310,7 +316,7 @@ export class RuntimeMemoryController {
     }
   }
 
-  /** add 溢出：USER 本地压缩（同步）或 MEMORY 归档（异步，经 enqueue 后重试） */
+  /** add overflow: USER local compaction (synchronous) or MEMORY archive (asynchronous, retried through enqueue) */
   private maintainAndRetryAdd(
     data: RuntimeMemoryFile,
     target: RuntimeMemoryTarget,
@@ -319,7 +325,7 @@ export class RuntimeMemoryController {
   ): RuntimeMemoryMutationResult {
     const tm = mainToolMessages().mnemon
     if (target === 'user') {
-      // USER 本地保守压缩：删除互为子串的 low 条目（保留较长者）
+      // Conservative USER local compaction: drop low entries whose content is a substring of a longer low entry (keep the longer one)
       const lowIndexes = data.entries
         .map((e, i) => (e.target === 'user' && e.importance === 'low' ? i : -1))
         .filter((i) => i >= 0)
@@ -339,7 +345,7 @@ export class RuntimeMemoryController {
         data.entries = data.entries.filter((_, i) => !removeSet.has(i))
         this.persist(data)
         this.repairProjections(data.entries)
-        // 重试 add
+        // Retry the add
         return this.mutateLocked({
           action: 'add',
           target,
@@ -353,7 +359,7 @@ export class RuntimeMemoryController {
       }
     }
 
-    // MEMORY 溢出：返回特殊标记，由 mutate() 执行异步归档后重试
+    // MEMORY overflow: return a special marker; mutate() runs the asynchronous archive and retries
     return {
       success: false,
       message: '__NEEDS_ASYNC_ARCHIVE__',
@@ -412,11 +418,11 @@ export class RuntimeMemoryController {
   }
 
   private revisionOf(data: RuntimeMemoryFile): string {
-    // 事实源内容哈希作为修订号（并发冲突检测）
+    // Content hash of the source of truth as the revision (concurrency conflict detection)
     return hashOf(JSON.stringify(data))
   }
 
-  /** 写入事实源（原子：临时文件 + rename） */
+  /** Writes the source of truth (atomic: temp file + rename) */
   private persist(data: RuntimeMemoryFile): void {
     this.cached = data
     const tmpPath = this.sourcePath + '.tmp'
@@ -424,7 +430,7 @@ export class RuntimeMemoryController {
     fs.renameSync(tmpPath, this.sourcePath)
   }
 
-  /** 从事实源重建 Markdown 投影（条目归一成单行，§ 分隔） */
+  /** Rebuilds the Markdown projections from the source of truth (entries normalized to single lines, separated by §) */
   private repairProjections(entries: RuntimeMemoryEntry[]): void {
     const render = (target: RuntimeMemoryTarget): string => {
       const lines = entries
@@ -443,7 +449,7 @@ export class RuntimeMemoryController {
   }
 }
 
-/** 简单字符串哈希（FNV-1a 32 位 hex） */
+/** Simple string hash (FNV-1a 32-bit hex) */
 export function hashOf(input: string): string {
   let h = 0x811c9dc5
   for (let i = 0; i < input.length; i++) {

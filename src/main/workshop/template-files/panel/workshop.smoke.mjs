@@ -1,12 +1,15 @@
 /**
- * 草稿自带的冒烟用例（工坊验收电池会执行它）。
+ * Smoke cases shipped with the draft (the workshop acceptance battery runs them).
  *
- * 语义：`channels` 里的每一项都会用**真实装载的插件**调用对应 IPC 处理器，
- * 参数是 args 数组，返回值交给 expect 断言（返回 true = 通过，返回字符串 = 失败原因）。
- * `cleanup` 在全部用例之后**无论如何都会执行**，用来把验收写进用户库/设置里的东西
- * 还原——参数里的 `$result:<通道名>#<字段>` 指向前面的用例返回值。
+ * Semantics: each entry in `channels` calls the matching IPC handler on the **really loaded
+ * plugin**; its arguments are the args array and the return value goes to the expect
+ * assertion (true = pass, a string = failure reason).
+ * `cleanup` runs **no matter what** after all cases, restoring whatever the acceptance run
+ * wrote into the user's database/settings — the `$result:<channel>#<field>` argument refers
+ * to an earlier case's return value.
  *
- * 没写这个文件时工坊只做契约级冒烟（能装载、通道命名合法、可回滚）。
+ * Without this file the workshop only runs contract-level smoke checks (loads, legal channel
+ * naming, rolls back).
  */
 export default {
   channels: {

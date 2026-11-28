@@ -1,27 +1,30 @@
 import logger from 'electron-log'
 
 /**
- * 主进程侧的极简应用事件总线（core 所有）。
+ * Minimal app event bus on the main-process side (owned by core).
  *
- * 用途：core 在固定时机「通知」插件（例如系统设置里切换了工作区），插件订阅后自己响应。
- * 与 `contributions.ts` 的分工：贡献点是**拉取**语义（宿主要在固定时机主动执行插件提供的钩子），
- * 事件是**推送**语义（时机由 core 触发，参与者数量不定、可为零）。两者互补，不互相替代。
+ * Purpose: core "notifies" plugins at fixed moments (e.g. the workspace was switched in system
+ * settings) and interested plugins respond themselves. Division of labor with `contributions.ts`:
+ * contribution points are **pull** semantics (the host actively runs plugin-provided hooks at fixed
+ * moments), events are **push** semantics (core decides when, subscriber count is arbitrary and may
+ * be zero). They complement each other and do not replace one another.
  *
- * 语义：
- * - **同步派发**：`emitAppEvent` 依次调用订阅者，订阅者若返回 Promise 不会被等待
- *   （钩子类时机用贡献点做，那里才需要等待）；
- * - **异常吞掉**：单个订阅者抛错只记 `logger.warn`，不影响后续订阅者、不影响 core 流程
- *   （插件出错不能把外壳拖下水）；
- * - **可逆**：`onAppEvent` 返回解绑函数，插件在 `ctx.effect(() => onAppEvent(...))` 里订阅，
- *   停用即自动解绑（不需要宿主知道有哪些插件在听）。
+ * Semantics:
+ * - **synchronous dispatch**: `emitAppEvent` calls subscribers in order and does not await a Promise
+ *   returned by a subscriber (hook-style moments use contribution points, which do need awaiting);
+ * - **errors swallowed**: a subscriber throwing only logs `logger.warn`, affecting neither later
+ *   subscribers nor the core flow (a buggy plugin must not drag the shell down);
+ * - **reversible**: `onAppEvent` returns an unbind function; plugins subscribe inside
+ *   `ctx.effect(() => onAppEvent(...))` and are unbound automatically on disable (the host never
+ *   needs to know which plugins listen).
  */
 
 type AppEventHandler = (payload: unknown) => void
 
-/** 事件名 → 订阅者集合（插入顺序派发） */
+/** Event name → subscriber set (dispatch in insertion order) */
 const handlers = new Map<string, Set<AppEventHandler>>()
 
-/** 订阅应用事件；返回解绑函数（幂等） */
+/** Subscribes to an app event; returns an unbind function (idempotent) */
 export function onAppEvent(name: string, handler: AppEventHandler): () => void {
   let set = handlers.get(name)
   if (!set) {
@@ -37,7 +40,7 @@ export function onAppEvent(name: string, handler: AppEventHandler): () => void {
   }
 }
 
-/** 派发应用事件（同步；单个订阅者异常只记日志） */
+/** Dispatches an app event (synchronously; a single subscriber error is only logged) */
 export function emitAppEvent(name: string, payload?: unknown): void {
   const set = handlers.get(name)
   if (!set || set.size === 0) return
@@ -50,7 +53,7 @@ export function emitAppEvent(name: string, payload?: unknown): void {
   }
 }
 
-/** 当前某事件的订阅者数量（仅供诊断/工装断言） */
+/** Current subscriber count for an event (diagnostics/test assertions only) */
 export function appEventListenerCount(name: string): number {
   return handlers.get(name)?.size ?? 0
 }

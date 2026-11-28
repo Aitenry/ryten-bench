@@ -2,10 +2,10 @@ import { and, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { withOrm, type Orm } from '../../orm'
 import { file_change } from '../../schema'
 
-/** 文件改动记录行（字段由 schema 推导） */
+/** File change record row (fields inferred from the schema) */
 export type FileChangeRow = typeof file_change.$inferSelect
 
-/** 新增一条改动记录的入参（统计与快照标记由调用方算好） */
+/** Input for inserting a change record (statistics and snapshot flags are computed by the caller) */
 export interface FileChangeInsert {
   workspace_id: number
   path: string
@@ -24,7 +24,7 @@ export interface FileChangeInsert {
   note?: string | null
 }
 
-/** 插入一条改动记录，返回落库后的整行 */
+/** Insert a change record and return the full persisted row */
 async function insertFileChange(input: FileChangeInsert): Promise<FileChangeRow> {
   return withOrm('insertFileChange', async (db: Orm) => {
     const [row] = await db
@@ -45,7 +45,7 @@ async function insertFileChange(input: FileChangeInsert): Promise<FileChangeRow>
         before_bytes: input.before_bytes,
         after_bytes: input.after_bytes,
         note: input.note ?? null,
-        // 直接以「已处理」状态落库的记录（如审查结果）同时记下处理时间
+        // Records persisted directly in a "processed" state (e.g. review results) also record the processing time
         ...(input.status && input.status !== 'pending' ? { reviewed_at: sql`now()` } : {})
       })
       .returning()
@@ -53,7 +53,7 @@ async function insertFileChange(input: FileChangeInsert): Promise<FileChangeRow>
   })
 }
 
-/** 某工作区下所有待审查的改动（按时间正序，便于「最早的一次」做整文件回滚） */
+/** All pending-review changes in a workspace (ascending by time, so the earliest can be used for whole-file rollback) */
 async function listPendingChanges(workspaceId: number): Promise<FileChangeRow[]> {
   return withOrm('listPendingChanges', async (db: Orm) => {
     return db
@@ -64,7 +64,7 @@ async function listPendingChanges(workspaceId: number): Promise<FileChangeRow[]>
   })
 }
 
-/** 某个文件的改动历史（倒序，最新在前） */
+/** Change history for a file (descending, newest first) */
 async function listFileChanges(filePath: string, limit = 60): Promise<FileChangeRow[]> {
   return withOrm('listFileChanges', async (db: Orm) => {
     return db
@@ -76,7 +76,7 @@ async function listFileChanges(filePath: string, limit = 60): Promise<FileChange
   })
 }
 
-/** 单条改动记录 */
+/** A single change record */
 async function getFileChange(id: number): Promise<FileChangeRow | null> {
   return withOrm('getFileChange', async (db: Orm) => {
     const rows = await db.select().from(file_change).where(eq(file_change.id, id)).limit(1)
@@ -85,8 +85,8 @@ async function getFileChange(id: number): Promise<FileChangeRow | null> {
 }
 
 /**
- * 批量置审查状态（保留 / 撤销 / 失效）。
- * 撤销与失效都写 reviewed_at：时间线里要能看出「什么时候被处理过」。
+ * Batch-set review status (kept / reverted / obsolete).
+ * Both revert and obsolete write reviewed_at: the timeline must show when a record was processed.
  */
 async function markChangesStatus(ids: number[], status: FileChangeRow['status']): Promise<number> {
   if (ids.length === 0) return 0
@@ -105,10 +105,10 @@ async function markChangesStatus(ids: number[], status: FileChangeRow['status'])
 }
 
 /**
- * 把同一文件上「晚于某次改动」的待审查记录标记为失效。
+ * Mark pending-review records on the same file that are "later than a given change" as obsolete.
  *
- * 撤销是「回到这次改动之前」的语义：它一并丢掉了该次之后的所有改动，
- * 那些记录不能再单独回溯（文件内容已经不是它们的前置状态了）。
+ * Revert means "go back to before this change": it discards all changes after it as well, so those
+ * records can no longer be traced back individually (the file content is no longer their prior state).
  */
 async function obsoleteChangesAfter(filePath: string, changeId: number): Promise<number> {
   return withOrm('obsoleteChangesAfter', async (db: Orm) => {
@@ -127,7 +127,7 @@ async function obsoleteChangesAfter(filePath: string, changeId: number): Promise
   })
 }
 
-/** 某个文件的待审查改动（正序，最早在前） */
+/** Pending-review changes for a file (ascending, earliest first) */
 async function listPendingChangesOfFile(filePath: string): Promise<FileChangeRow[]> {
   return withOrm('listPendingChangesOfFile', async (db: Orm) => {
     return db

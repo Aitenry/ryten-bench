@@ -31,7 +31,7 @@ import {
   LlmProviderInput
 } from '../database/mapper/provider'
 
-/** 通知所有窗口供应商列表已变更 */
+/** Notify all windows that the provider list changed */
 function broadcastProvidersChanged(): void {
   BrowserWindow.getAllWindows().forEach((w) => {
     if (!w.isDestroyed()) safeSend(w.webContents, 'providers-changed')
@@ -39,9 +39,10 @@ function broadcastProvidersChanged(): void {
 }
 
 /**
- * 渲染进程展示用配置：剥离解密后的 api_key。
- * 密钥只在主进程运行时（ProviderService / 拉取调用）解密使用，绝不发送到渲染进程；
- * 前端需要修改密钥时由用户在编辑表单重新输入，空值表示保持原密钥。
+ * Config for renderer display: the decrypted api_key is stripped.
+ * The key is only decrypted for use in the main-process runtime (ProviderService / fetch calls)
+ * and is never sent to the renderer; when the frontend needs to change the key the user re-enters
+ * it in the edit form, and an empty value means keep the existing key.
  */
 function stripApiKey(config: LlmProviderConfig | null): LlmProviderConfig | null {
   if (!config) return null
@@ -53,19 +54,21 @@ function stripApiKeys(list: LlmProviderConfig[]): LlmProviderConfig[] {
 }
 
 /**
- * 模型 Provider IPC（core 的 provider-* 通道：列表/增删改/默认/模型档案/拉取模型）。
+ * Model provider IPC (core's provider-* channels: list / create-update-delete / default / model
+ * profiles / fetch models).
  *
- * 归属变更（harness 轮）：原先混在本文件里的 8 个智能体通道
- * （agent-get-all / agent-get-paginated / agent-get-by-id / agent-create / agent-update /
- * agent-delete / main-agent-get / main-agent-update）已随 harness 插件搬进
- * `src/main/ipc/harness/agent.ts`（通道名 `harness:agent-*` /
- * `harness:main-agent-*`）——智能体配置挂在 harness 的 workspace 表下，属「AI 助手」。
- * 本文件只留模型 Provider；启动期供应商缓存仍归 core（见 src/main/provider/cache.ts）。
+ * Ownership change (harness round): the 8 agent channels previously mixed into this file
+ * (agent-get-all / agent-get-paginated / agent-get-by-id / agent-create / agent-update /
+ * agent-delete / main-agent-get / main-agent-update) moved with the harness plugin into
+ * `src/main/ipc/harness/agent.ts` (channel names `harness:agent-*` /
+ * `harness:main-agent-*`) — agent configuration lives under the harness workspace table and
+ * belongs to the "AI assistant". This file only keeps model providers; the startup provider cache
+ * still belongs to core (see src/main/provider/cache.ts).
  */
 export function registerProviderIpc(): void {
   ipcMain.handle('provider-get-all', async () => {
     try {
-      // 列表视图：mapper 层已保证不解密 api_key
+      // List view: the mapper layer already guarantees api_key is not decrypted
       return await getAllProviderList()
     } catch (error) {
       logger.error('Error in provider-get-all:', error)
@@ -121,8 +124,9 @@ export function registerProviderIpc(): void {
   })
 
   /**
-   * 批量创建供应商（一键添加拉取到的多个模型）。
-   * 单事务插入 + 只广播一次变更，避免 29 次逐个创建导致渲染进程反复全量刷新而卡死。
+   * Batch-create providers (one-click add of multiple fetched models).
+   * Single-transaction insert + a single change broadcast, avoiding 29 individual creates that
+   * make the renderer re-fetch everything repeatedly and freeze.
    */
   ipcMain.handle('provider-create-batch', async (_event, inputs: LlmProviderInput[]) => {
     try {
@@ -167,8 +171,9 @@ export function registerProviderIpc(): void {
   })
 
   /**
-   * 批量删除供应商（勾选多个模型后删除）。
-   * 单事务删除 + 只广播一次变更，与 provider-create-batch 同理避免刷新风暴。
+   * Batch-delete providers (delete after selecting multiple models).
+   * Single-transaction delete + a single change broadcast; same idea as provider-create-batch to
+   * avoid a refresh storm.
    */
   ipcMain.handle('provider-delete-batch', async (_event, ids: number[]) => {
     try {
@@ -196,8 +201,9 @@ export function registerProviderIpc(): void {
     }
   })
 
-  // 手动添加模型时按模型 ID 查询 models-profile 官方档案（未收录返回 null），
-  // 命中后由渲染端自动填充元数据，避免用户重复手填；查询失败返回 null 保持静默
+  // Look up the official models-profile entry by model id when adding a model manually (null when
+  // not listed). On a hit the renderer auto-fills the metadata so the user does not have to retype
+  // it; a failed lookup returns null silently
   ipcMain.handle('provider-lookup-profile', async (_event, modelId: string) => {
     try {
       if (!modelId || typeof modelId !== 'string') return null
@@ -208,14 +214,16 @@ export function registerProviderIpc(): void {
     }
   })
 
-  // 拉取供应商的模型列表（元数据来自 models-profile.json 档案，不做名称/接口能力推导；
-  // 档案未收录的模型用兜底档案补齐：最低档上下文窗口/最大输出 + 语言模型 + 可调用工具）
+  // Fetch the provider's model list (metadata comes from the models-profile.json profiles; no
+  // inference from name/API capabilities; models missing from the profiles are filled in with a
+  // fallback profile: lowest context window / max output + language model + tool calling)
   ipcMain.handle(
     'provider-fetch-models',
     async (_event, providerType: string, baseUrl?: string, apiKey?: string) => {
       try {
-        // 只接受 http(s) 基址（安全审计 S13）：此前任意字符串都会拼进 fetch，
-        // 渲染层注入后可用来探测非 HTTP 协议/畸形地址，错误信息也会把内部异常带出去。
+        // Accept only http(s) base URLs (security audit S13): previously any string was
+        // concatenated into fetch, so after renderer injection it could be used to probe non-HTTP
+        // protocols or malformed addresses, and the error message would leak internal exceptions.
         if (baseUrl) {
           let parsed: URL
           try {
@@ -251,10 +259,10 @@ export function registerProviderIpc(): void {
             models.push({ id, metadata: resolveFetchedModelMetadata(id) })
           }
         } else if (providerType === 'google-genai') {
-          // Gemini 原生接口: GET /v1beta/models?key=...
+          // Gemini native API: GET /v1beta/models?key=...
           const base = (baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '')
           const url = `${base}/v1beta/models` + (apiKey ? `?key=${encodeURIComponent(apiKey)}` : '')
-          // 脱敏（修复：此前把含 API key 的完整 URL 写进日志,密钥落盘）
+          // Redact (fix: the full URL containing the API key used to be written to the log, leaking the key to disk)
           logger.info(`[FetchModels] Gemini: ${base}/v1beta/models${apiKey ? '?key=***' : ''}`)
           const controller = new AbortController()
           const timeout = setTimeout(() => controller.abort(), 15000)
@@ -275,7 +283,7 @@ export function registerProviderIpc(): void {
             models.push({ id, metadata: resolveFetchedModelMetadata(id) })
           }
         } else {
-          // OpenAI 兼容协议: GET /v1/models
+          // OpenAI-compatible protocol: GET /v1/models
           const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
           const url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`
           logger.info(`[FetchModels] OpenAI-compatible: ${url}`)

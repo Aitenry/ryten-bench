@@ -66,7 +66,7 @@ import {
 import { SettingsPageHeader, SettingsSection } from './SettingsUI'
 import ProviderMark from '@renderer/components/provider/provider-mark'
 
-// 预置供应商（value/label/baseURL）；品牌色统一在 providerMeta.PROVIDER_BRAND_COLORS，避免两处漂移
+// Preset providers (value/label/baseURL); brand colors all live in providerMeta.PROVIDER_BRAND_COLORS so the two cannot drift
 const PROVIDER_TYPES = [
   { value: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1' },
   { value: 'deepseek', label: 'DeepSeek', baseURL: 'https://api.deepseek.com/v1' },
@@ -117,7 +117,7 @@ const PROVIDER_TYPES = [
 const getProviderConfig = (provider: string): (typeof PROVIDER_TYPES)[number] | undefined =>
   PROVIDER_TYPES.find((preset) => preset.value === provider)
 
-/** 供应商展示名：预设表里多数厂商本就是拉丁品牌名，只有国内厂商与「自定义」需要按语言取词条 */
+/** Provider display name: most vendors in the preset table already use Latin brand names; only the Chinese vendors and "Custom" need a localized label */
 type ProviderLabelKey =
   | 'modelSettings.provider.zhipu'
   | 'modelSettings.provider.aliyun'
@@ -142,10 +142,13 @@ const getProviderLabel = (t: TFunction, providerType: string, fallback: string):
 }
 
 /**
- * 共享常量（providerMeta / model-params）里的标签是中文字面量，而这些模块不持有 t。
- * 下面几张表把「数据键 → 本页词条键」的映射留在本页，由组件用 t() 求值。
- * i18next 的键受资源类型约束，所以键要在类型上收窄成字面量；
- * 表里未收录的取值（如档案里自定义的模型类型）由调用方回退成原始字符串。
+ * Labels in the shared constants (providerMeta / model-params) are literal strings, and those
+ * modules do not hold a `t`.
+ * The tables below keep the "data key → page translation key" mapping on this page, and the
+ * component resolves it with `t()`.
+ * i18next keys are constrained by the resource types, so the keys are narrowed to literals here;
+ * values not covered by a table (e.g. a custom model type from a profile) fall back to the raw
+ * string at the call site.
  */
 type ModelTypeLabelKey =
   | 'modelSettings.modelType.textGeneration'
@@ -181,14 +184,14 @@ const CAPABILITY_BADGE_KEYS: Partial<Record<string, CapabilityBadgeKey>> = {
   supports_embeddings: 'modelSettings.capabilityBadge.embeddings'
 }
 
-/** 思考模式（ThinkingMode）→ 本页词条键 */
+/** Thinking mode (ThinkingMode) → page translation key */
 const THINKING_MODE_KEYS = {
   auto: 'modelSettings.thinkingMode.auto',
   on: 'modelSettings.thinkingMode.on',
   off: 'modelSettings.thinkingMode.off'
 } as const
 
-/** 采样参数名 → 占位提示词条键 */
+/** Sampling parameter name → placeholder hint key */
 const SAMPLING_PLACEHOLDER_KEYS = {
   temperature: 'modelSettings.params.temperaturePlaceholder',
   top_p: 'modelSettings.params.topPPlaceholder',
@@ -196,13 +199,14 @@ const SAMPLING_PLACEHOLDER_KEYS = {
 } as const
 
 /**
- * 等宽字体栈（与路由骨架屏/编辑器同源）。
- * **只用于拉丁与数字**：等宽族缺中文字形时，Chromium 会回退到宋体/NSimSun 这类
- * 等宽中文字体，和页面其它中文（系统 UI 字体）明显不是一套字，看起来就是「字体坏了」。
+ * Monospace font stack (shared with the route skeleton and the editor).
+ * **Latin and digits only**: when a monospace family lacks CJK glyphs, Chromium falls back to
+ * monospace CJK fonts such as SimSun/NSimSun, which are clearly a different typeface from the rest
+ * of the page's text (the system UI font) and simply look broken.
  */
 const MONO_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
-// provider → @ant-design/icons 映射，无对应图标则为 null（降级为文字首字母）
+// provider → @ant-design/icons mapping; null when no icon matches (falls back to a letter mark)
 const providerIconMap: Record<string, React.ComponentType<{ style?: React.CSSProperties }> | null> =
   {
     openai: OpenAIFilled,
@@ -218,14 +222,14 @@ const ProviderLogo: React.FC<{ provider: string; size?: number }> = ({ provider,
   if (Icon) {
     return <Icon style={{ fontSize: size }} />
   }
-  // 没有 logo 的降级为「印字号」徽章：等宽 monogram + 发丝边框（品牌色由 providerMeta 统一供给）
+  // Providers without a logo fall back to a letter-mark badge: monospace monogram + hairline border (brand colors supplied by providerMeta)
   return <ProviderMark providerType={provider} size={size} />
 }
 
-/** 判断是否为向量/嵌入模型：由元数据（type/supports_embeddings）或名称/模型名兜底 */
+/** Whether this is an embedding model: derived from metadata (type/supports_embeddings) or, as a fallback, the name/model id */
 const isEmbeddingModel = (p: LlmProviderConfig): boolean => isEmbeddingProvider(p)
 
-/** 模型元数据简述（树行/拉取列表复用，不展示模型名称）；maxBadges 限制能力徽章数量防止挤行 */
+/** Compact model metadata summary (reused by tree rows and the fetch list; the model name is not shown); maxBadges caps the number of capability badges so rows do not overflow */
 const MetaSummary: React.FC<{ metadata: ModelMetadata | null; maxBadges?: number }> = ({
   metadata,
   maxBadges
@@ -267,10 +271,10 @@ const MetaSummary: React.FC<{ metadata: ModelMetadata | null; maxBadges?: number
   )
 }
 
-/* ── 弹窗表单原语 ──────────────────────────────────────────────────────────
-   编辑弹窗里原本散落着十几处「Form.Item + label + Space + 硬编码 width」的重复写法。
-   这里收敛成一套小组件：纯文本分组标签 + 参数行 + 档位胶囊，
-   所有行共用同一套排版，新增参数只需要写一行。 */
+/* ── Modal form primitives ────────────────────────────────────────────────
+   The edit modal used to contain a dozen scattered repetitions of "Form.Item + label + Space +
+   hardcoded width". They are consolidated into a small component set here: plain-text group label +
+   param row + preset chips. All rows share one layout, so a new parameter takes a single line. */
 
 const MODAL_FORM_CSS = `
 .ms-group { margin: 14px 0 4px; font-size: 13px; color: var(--ms-text); }
@@ -280,7 +284,7 @@ const MODAL_FORM_CSS = `
 .ms-label { width: 96px; flex: none; font-size: 13.5px; color: var(--ms-secondary); }
 .ms-control { flex: 1; min-width: 0; }
 .ms-chips { display: flex; gap: 4px; flex: none; }
-/* 等宽仅用于拉丁与数字（中文落进等宽族会回退成宋体，与页面其它中文不是一套字） */
+/* Mono is used for Latin and digits only (CJK in a mono family falls back to SimSun, a different typeface from the rest of the page) */
 .ms-chip { font-family: var(--ms-mono); font-size: 11.5px; line-height: 19px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--ms-hairline); background: transparent; color: var(--ms-tertiary); cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
 .ms-chip:hover { color: var(--ms-accent); border-color: var(--ms-accent); }
 .ms-chip[data-active='true'] { color: var(--ms-accent); border-color: var(--ms-accent); background: var(--ms-accent-soft); }
@@ -291,14 +295,16 @@ const MODAL_FORM_CSS = `
 `
 
 /**
- * 参数分组小标题：纯文本（对齐设计稿「上下文窗口（Token）」「采样参数」的写法）。
- * 不做圆点 + 发丝线那套装饰——分组本身不携带信息时，装饰只是噪声。
+ * Parameter group heading: plain text (following the design's wording for "context window (token)"
+ * and "sampling parameters").
+ * No dot + hairline decoration — when the group itself carries no information, decoration is just
+ * noise.
  */
 const GroupLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="ms-group">{children}</div>
 )
 
-/** 参数行：标签 + 控件 +（可选）右侧胶囊/说明；控件自身用 Form.Item noStyle 绑定 */
+/** Param row: label + control + (optional) right-side chips/note; the control itself binds via Form.Item noStyle */
 const ParamRow: React.FC<{
   label: string
   hint?: React.ReactNode
@@ -313,7 +319,7 @@ const ParamRow: React.FC<{
   </div>
 )
 
-/** 数值档位胶囊：点一下即填入（当前值命中档位时高亮） */
+/** Numeric preset chips: one click fills the value in (highlighted when the current value matches the preset) */
 const PresetChips: React.FC<{
   value: number | null | undefined
   presets: readonly number[]
@@ -335,14 +341,15 @@ const PresetChips: React.FC<{
 )
 
 /**
- * 推理档位胶囊：点一下把这个档位加进 / 移出「可选档位」。
+ * Reasoning effort chips: one click adds the level to / removes it from "available levels".
  *
- * 为什么是**多选开关**而不是像上下文窗口那样的单选回填：这里的字段本身是一个集合
- * （哪些档位能在输入框里选），胶囊就是集合成员的开关；模型档案没收录档位的模型，
- * 用户在这里自己点出该模型的档位表。
+ * Why a **multi-select toggle** instead of single-choice fill-in like the context window: this
+ * field is itself a set (which levels can be picked in the input box), and each chip toggles
+ * membership in it; for models whose profile lists no levels, the user builds the level table here.
  *
- * 只放最常用的四档（`REASONING_EFFORT_CHIPS`）：弹窗内容区约 500px，一排 7 个胶囊会把
- * 输入框挤没（实测胶囊因 `justify-content: flex-end` 反向溢出、盖住输入框边缘）。
+ * Only the four most common levels are shown (`REASONING_EFFORT_CHIPS`): the modal body is about
+ * 500px wide, and seven chips in a row push the input box out (measured: the chips overflow
+ * backwards because of `justify-content: flex-end` and cover the input's edge).
  */
 const EffortPresetChips: React.FC<{
   value: string[]
@@ -365,8 +372,9 @@ const EffortPresetChips: React.FC<{
 )
 
 /**
- * 「支持图片输入」单选：直接读写 metadata_capabilities 数组。
- * 面板只暴露这一个能力开关，档案里其余能力（工具调用/思考/嵌入…）原样保留，不被覆盖。
+ * "Supports image input" radio: reads and writes the metadata_capabilities array directly.
+ * The panel exposes only this one capability switch; the other capabilities in the profile (tool
+ * calling / thinking / embeddings …) are preserved as-is and not overwritten.
  */
 const ImageInputRadio: React.FC<{
   value?: string[]
@@ -402,7 +410,7 @@ const ModelSettings: React.FC = () => {
   const [editingProvider, setEditingProvider] = useState<LlmProviderConfig | null>(null)
   const [form] = Form.useForm()
 
-  // 拉取模型模态框
+  // Fetch-models modal
   const [fetchModalOpen, setFetchModalOpen] = useState(false)
   const [fetchProviderType, setFetchProviderType] = useState('ollama')
   const [fetchBaseUrl, setFetchBaseUrl] = useState('http://localhost:11434')
@@ -411,22 +419,22 @@ const ModelSettings: React.FC = () => {
   const [fetchLoading, setFetchLoading] = useState(false)
   const [checkedModels, setCheckedModels] = useState<string[]>([])
   const [addingModels, setAddingModels] = useState(false)
-  // 自定义拉取：供应商 ID（全英文小写，仅可包含数字与 -）
+  // Custom fetch: provider ID (lowercase ASCII, digits and - only)
   const [fetchCustomProviderId, setFetchCustomProviderId] = useState('')
 
-  // 树形目录：分组展开与勾选状态（勾选用于批量删除）
+  // Tree directory: group expansion and check state (checks drive batch delete)
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([])
   const [checkedKeys, setCheckedKeys] = useState<React.Key[]>([])
   const [deletingBatch, setDeletingBatch] = useState(false)
 
-  // 能力项来自档案自动填充与「支持图片输入」单选；用 useMemo 固定引用，避免每次渲染换新数组
+  // Capabilities come from profile autofill and the "supports image input" radio; useMemo keeps the reference stable so no new array is created per render
   const watchedCapsRaw = Form.useWatch('metadata_capabilities', form) as string[] | undefined
   const watchedCaps = useMemo<string[]>(() => watchedCapsRaw ?? [], [watchedCapsRaw])
   const watchedType: string | undefined = Form.useWatch('metadata_type', form)
   const watchedProviderType: string | undefined = Form.useWatch('provider', form)
   const watchedModel: string | undefined = Form.useWatch('model', form)
   const watchedApiFormat: string | undefined = Form.useWatch('api_format', form)
-  // 高级配置摘要与提示所需的实时值
+  // Live values needed by the advanced-settings summary and hints
   const watchedContext: number | null | undefined = Form.useWatch('metadata_context_window', form)
   const watchedMaxOutput: number | null | undefined = Form.useWatch(
     'metadata_max_output_tokens',
@@ -435,9 +443,10 @@ const ModelSettings: React.FC = () => {
   const watchedToolRounds: number | null | undefined = Form.useWatch('max_tool_rounds', form)
   const watchedReasoningEffort: string | null | undefined = Form.useWatch('reasoning_effort', form)
   /**
-   * 该模型的「可选档位」表（推理等级候选集）。
-   * 真源是模型档案的 `capabilities.reasoning_effort_levels`，但**用户可以自己改**：
-   * 档案没收录档位的模型（自建/小众模型）就在这里手填或点胶囊，输入框的档位菜单读的也是它。
+   * The model's "available levels" table (the candidate set of reasoning efforts).
+   * The source of truth is `capabilities.reasoning_effort_levels` in the model profile, but **the
+   * user may edit it**: for models whose profile has no levels (self-hosted / niche models), pick
+   * them here or click the chips; the level menu in the input box reads this same value.
    */
   const watchedEffortLevels: string[] | undefined = Form.useWatch(
     'metadata_reasoning_effort_levels',
@@ -450,18 +459,20 @@ const ModelSettings: React.FC = () => {
   const watchedTemperature: number | null | undefined = Form.useWatch('temperature', form)
   const watchedTopP: number | null | undefined = Form.useWatch('top_p', form)
   const watchedTopK: number | null | undefined = Form.useWatch('top_k', form)
-  /** 当前接口协议（含自定义端点的兼容协议）是否会被下发思考参数 */
+  /** Whether the current API protocol (including the compatible protocol of custom endpoints) is sent thinking parameters */
   const thinkingControllable = supportsThinkingControl(
     watchedProviderType ?? '',
     watchedApiFormat === 'anthropic'
   )
-  // 表单中是否将模型配置为嵌入模型（用于禁用“设为默认”）
+  // Whether the model is configured as an embedding model in the form (used to disable "set as default")
   const isEmbeddingInForm =
     watchedType === 'embedding' || watchedCaps.includes('supports_embeddings')
 
   /**
-   * 高级配置折叠标题上的一行摘要：只显示真正有值的项。
-   * 用拉丁缩写而不是中文——等宽字体族里中文会回退成宋体，跟页面其它中文不是一套字。
+   * A one-line summary in the advanced-settings collapse header: only items that actually have a
+   * value are shown.
+   * Latin abbreviations are used rather than CJK — CJK falls back to SimSun inside the monospace
+   * family, a different typeface from the rest of the page.
    */
   const advancedSummary = useMemo(() => {
     const parts: string[] = []
@@ -483,12 +494,12 @@ const ModelSettings: React.FC = () => {
     watchedTopK
   ])
 
-  /** 快捷档位：写入数值并标记「已触碰」，避免切换模型 ID 时被档案自动填充重置 */
+  /** Quick presets: write the number and mark it touched so switching the model ID does not reset it via profile autofill */
   const pickAdvancedNumber = (name: string, value: number): void => {
     form.setFields([{ name, value, touched: true }])
   }
 
-  /** 档位胶囊：把档位加进 / 移出「可选档位」，同样标记「已触碰」（用户的手动集合优先于档案） */
+  /** Level chips: add / remove a level from "available levels", also marking it touched (the user's manual set wins over the profile) */
   const toggleEffortLevel = (level: string): void => {
     const next = effortLevels.includes(level)
       ? effortLevels.filter((item) => item !== level)
@@ -498,7 +509,7 @@ const ModelSettings: React.FC = () => {
     ])
   }
 
-  /** 弹窗内的主题变量：表单原语共用一套色板（发丝线/等宽字/强调色） */
+  /** Theme variables inside the modal: the form primitives share one palette (hairline / mono / accent) */
   const modalVars = {
     '--ms-accent': token.colorPrimary,
     '--ms-accent-soft': token.colorFillQuaternary,
@@ -510,8 +521,9 @@ const ModelSettings: React.FC = () => {
     '--ms-mono': MONO_FONT
   } as React.CSSProperties
 
-  // 接口协议：单选 Select + 输入任意协议标识。
-  // 输入内容不匹配任何预置平台时，实时注入「自定义协议」选项供提交（未知协议按 OpenAI 兼容调用）。
+  // API protocol: a single-select Select plus free entry of any protocol id.
+  // When the input matches no preset platform, a "custom protocol" option is injected live for
+  // submission (unknown protocols are called as OpenAI-compatible).
   const [protocolSearch, setProtocolSearch] = useState('')
   const protocolOptions = useMemo(() => {
     const raw = protocolSearch.trim()
@@ -526,13 +538,13 @@ const ModelSettings: React.FC = () => {
       : presets
   }, [protocolSearch, t])
 
-  // ── 模型档案自动填充（仅「新增」流程）：输入模型 ID 命中 models-profile 即自动补齐元数据 ──
-  // 命中状态：idle 未查询 / matched 已命中 / missing 已查询未收录
+  // ── Model profile autofill (create flow only): a model ID hit in models-profile fills in metadata ──
+  // Hit status: idle = not queried / matched = found / missing = queried but not covered
   const [profileStatus, setProfileStatus] = useState<'idle' | 'matched' | 'missing'>('idle')
   const profileTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoFillRef = useRef<{ modelId: string; keys: string[] } | null>(null)
 
-  /** 清空自动填充痕迹：仅清除「由自动填充写入、且用户未手改过」的字段 */
+  /** Clear autofill traces: only clear fields "written by autofill and never edited by the user" */
   const resetProfileAutofill = useCallback((): void => {
     if (profileTimer.current) {
       clearTimeout(profileTimer.current)
@@ -554,7 +566,7 @@ const ModelSettings: React.FC = () => {
     form.setFieldsValue(empty)
   }, [form])
 
-  /** 新增：查询官方档案，仅补齐「当前仍为空」的字段（用户已填内容一律不覆盖） */
+  /** Create: query the official profile and fill only fields that are "still empty" (content the user already entered is never overwritten) */
   const applyProfileAutofill = useCallback(
     async (modelId: string): Promise<void> => {
       try {
@@ -565,14 +577,14 @@ const ModelSettings: React.FC = () => {
           setProfileStatus('missing')
           return
         }
-        // 查询期间用户已继续输入：旧结果作废，等新模型 ID 的下一次查询
+        // The user kept typing during the query: discard the old result and wait for the next query on the new model ID
         if (form.getFieldValue('model') !== modelId) return
         const cur = form.getFieldsValue()
         const patch: Record<string, unknown> = {}
         const fillIfEmpty = (key: string, value: string | number | string[]): void => {
           const now = cur[key]
           const empty =
-            now == null || now === '' || now === 0 || (Array.isArray(now) && now.length === 0) // 数组型字段（可选档位）空数组也算空
+            now == null || now === '' || now === 0 || (Array.isArray(now) && now.length === 0) // an empty array also counts as empty for array fields (available levels)
           if (empty) patch[key] = value
         }
         if (typeof profile.display_name === 'string' && profile.display_name.trim()) {
@@ -595,7 +607,7 @@ const ModelSettings: React.FC = () => {
         if (typeof profile.max_output_tokens === 'number' && profile.max_output_tokens > 0) {
           fillIfEmpty('metadata_max_output_tokens', profile.max_output_tokens)
         }
-        // 推理档位表：档案命中就回填（用户已手改过则不动——fillIfEmpty 只补空数组）
+        // Level table: backfilled when the profile hits (left alone if the user edited it — fillIfEmpty only fills empty arrays)
         const profileLevels = pc.reasoning_effort_levels
         if (Array.isArray(profileLevels) && profileLevels.length > 0) {
           fillIfEmpty('metadata_reasoning_effort_levels', sortReasoningEfforts(profileLevels))
@@ -604,13 +616,13 @@ const ModelSettings: React.FC = () => {
         setProfileStatus('matched')
         if (Object.keys(patch).length > 0) form.setFieldsValue(patch)
       } catch {
-        // 档案查询失败保持静默：不阻塞手动填写
+        // Stay silent when the profile query fails: do not block manual entry
       }
     },
     [form]
   )
 
-  /** 模型 ID 输入防抖调度（编辑流程不触发，避免覆盖已有档案） */
+  /** Debounced scheduling on model ID input (not triggered in the edit flow, to avoid overwriting the existing profile) */
   const scheduleProfileAutofill = useCallback(
     (modelId: string): void => {
       if (profileTimer.current) {
@@ -633,13 +645,13 @@ const ModelSettings: React.FC = () => {
     [editingProvider, applyProfileAutofill, resetProfileAutofill]
   )
 
-  /** Form 值变化入口：仅响应模型 ID 变化（setFieldsValue 不会触发，无自循环） */
+  /** Form value-change entry: reacts only to model ID changes (setFieldsValue does not fire it, so there is no loop) */
   const handleFormValuesChange = (changedValues: Record<string, unknown>): void => {
     if (!('model' in changedValues)) return
     scheduleProfileAutofill(String(changedValues.model ?? '').trim())
   }
 
-  /** 关闭编辑/新增弹窗的统一收尾（取消、保存成功共用） */
+  /** Shared teardown for closing the edit/create modal (used by both cancel and successful save) */
   const closeModal = useCallback((): void => {
     resetProfileAutofill()
     setModalOpen(false)
@@ -648,7 +660,7 @@ const ModelSettings: React.FC = () => {
     setProtocolSearch('')
   }, [form, resetProfileAutofill])
 
-  // 卸载时清理档案查询定时器
+  // Clear the profile query timer on unmount
   useEffect(() => {
     return () => {
       if (profileTimer.current) {
@@ -687,7 +699,7 @@ const ModelSettings: React.FC = () => {
     form.setFieldsValue({
       provider: 'deepseek',
       api_format: 'openai',
-      // 采样/思考全部留空 = 使用供应商最佳默认值；工具调用轮数给默认上限
+      // Leave sampling/thinking empty = use the provider's best defaults; give tool rounds the default cap
       temperature: null,
       top_p: null,
       top_k: null,
@@ -709,14 +721,14 @@ const ModelSettings: React.FC = () => {
     const meta = record.metadata ?? {}
     const caps = getCapabilities(record.metadata)
     form.setFieldsValue({
-      // 名称即展示名（含历史档案 display_name 的展示结果）；保存后统一收敛到 name
+      // The name is the display name (including the displayed result of a legacy display_name); after saving everything converges to name
       name: getProviderDisplayName(record),
       provider: record.provider,
       base_url: record.base_url,
-      // 密钥永不发送到渲染进程：编辑时恒为空，留空保持原密钥，重新输入才替换
+      // The key is never sent to the renderer: always empty when editing; leaving it empty keeps the old key, only re-entry replaces it
       api_key: '',
       model: record.model,
-      // 上下文窗口 → 输出：旧的独立「最大 Token」列作为回退读取，两者在保存时收敛为同一个值
+      // Context window → output: the old standalone "max tokens" column is read as a fallback; the two converge to one value on save
       metadata_context_window: typeof meta.context_window === 'number' ? meta.context_window : null,
       metadata_max_output_tokens:
         typeof meta.max_output_tokens === 'number' ? meta.max_output_tokens : record.max_tokens,
@@ -732,7 +744,7 @@ const ModelSettings: React.FC = () => {
           : 'openai',
       metadata_type: typeof meta.type === 'string' ? meta.type : undefined,
       metadata_capabilities: CAPABILITY_OPTIONS.filter((o) => caps[o.key]).map((o) => o.key),
-      // 已存元数据里的档位表：输入框的档位菜单与这里的选择器读的都是它
+      // Level table from the stored metadata: both the input box's level menu and the selector here read it
       metadata_reasoning_effort_levels: sortReasoningEfforts(caps.reasoning_effort_levels),
       is_enabled: record.is_enabled,
       pinned: record.is_pinned
@@ -743,15 +755,17 @@ const ModelSettings: React.FC = () => {
   const handleProviderTypeChange = (providerType: string): void => {
     const config = getProviderConfig(providerType)
     if (config) {
-      // 预置协议自动跟随其默认端点；自定义类型清空由用户填写（API 地址仅在自定义时展示）
+      // A preset protocol follows its default endpoint; the custom type clears it for the user to fill in (the API address is shown only for custom)
       form.setFieldsValue({ base_url: config.value === 'custom' ? '' : config.baseURL || '' })
     }
     setProtocolSearch('')
   }
 
   /**
-   * 由表单字段组装元数据对象：保留已有档案字段，覆盖用户编辑项。
-   * 厂商 ID 不再手填——按接口协议推导（自定义端点用其自定义 ID，即 provider 值）。
+   * Build the metadata object from the form fields: keep existing profile fields and override the
+   * ones the user edited.
+   * The vendor ID is no longer entered by hand — it is derived from the API protocol (a custom
+   * endpoint uses its custom ID, i.e. the provider value).
    */
   const buildMetadata = (
     values: Record<string, unknown>,
@@ -763,11 +777,11 @@ const ModelSettings: React.FC = () => {
         ? (existing.capabilities as Record<string, boolean | string[]>)
         : {})
     }
-    // 面板只暴露「支持图片输入」一个开关，其余能力按档案原样保留
+    // The panel exposes only the "supports image input" switch; other capabilities are kept as they are in the profile
     const selectedCaps = ((values.metadata_capabilities as string[]) ?? []).filter(Boolean)
     currentCaps.supports_image_input = selectedCaps.includes('supports_image_input')
 
-    // 可选档位（数组型能力）：用户手填/档案回填后整份写回；空表示该模型没有档位可选
+    // Available levels (an array capability): written back whole after manual entry / profile backfill; empty means the model offers no levels
     const levels = sortReasoningEfforts(
       (values.metadata_reasoning_effort_levels as string[] | undefined) ?? []
     )
@@ -780,7 +794,7 @@ const ModelSettings: React.FC = () => {
     const maxOut = values.metadata_max_output_tokens as number | null | undefined
 
     const metadata: ModelMetadata = { ...base, capabilities: currentCaps }
-    // 展示名统一收敛到表单 name 字段：历史档案遗留的 display_name 随编辑保存归一到 name
+    // Display names converge to the form's name field: a legacy display_name left in a profile is normalized to name when saved
     delete metadata.display_name
     if (vendor) metadata.vendor = vendor
     else delete metadata.vendor
@@ -805,7 +819,7 @@ const ModelSettings: React.FC = () => {
     try {
       const values = await form.validateFields()
 
-      // API 地址：仅「自定义」类型可输入；非自定义使用所选服务商的默认地址
+      // API address: only the "custom" type can enter one; other types use the selected provider's default
       const cfg = getProviderConfig(values.provider as string)
       const rawBaseUrl =
         typeof values.base_url === 'string'
@@ -815,7 +829,7 @@ const ModelSettings: React.FC = () => {
             : ''
       const defaultBaseUrl = cfg?.baseURL || undefined
       const modelId = String(values.model ?? '').trim()
-      // 名称留空默认使用模型 ID（与「拉取模型」批量添加一致；name 即展示名）
+      // An empty name defaults to the model ID (same as batch add in "fetch models"; name is the display name)
       const rawName = typeof values.name === 'string' ? values.name.trim() : ''
       const name = rawName || modelId
 
@@ -835,18 +849,18 @@ const ModelSettings: React.FC = () => {
         provider: values.provider as string,
         base_url: rawBaseUrl || defaultBaseUrl,
         model: modelId,
-        // 采样/思考留空即不下发（null），由供应商走最佳默认值
+        // Empty sampling/thinking is not sent (null), letting the provider apply its best defaults
         temperature: (values.temperature as number | null | undefined) ?? null,
-        // 请求输出上限与「上下文窗口 → 输出」是同一个值：一处填写，两处同步
+        // The request output cap and "context window → output" are the same value: enter it once, kept in sync in both places
         max_tokens: outputTokens != null && outputTokens > 0 ? outputTokens : null,
         top_p: (values.top_p as number | null | undefined) ?? null,
         top_k: (values.top_k as number | null | undefined) ?? null,
         thinking_mode: (values.thinking_mode as LlmProviderInput['thinking_mode']) ?? 'auto',
-        // 推理等级：留空 = 未设置（不下发档位参数，走模型默认）
+        // Reasoning effort: empty = unset (no effort parameter is sent; the model default applies)
         reasoning_effort: (values.reasoning_effort as string | null | undefined) ?? null,
         max_tool_rounds:
           (values.max_tool_rounds as number | null | undefined) ?? DEFAULT_MAX_TOOL_ROUNDS,
-        // 兼容协议仅对「自定义」类型生效，存入 extra_config.api_format；其余类型保留原 extra_config
+        // The compatible protocol only applies to the "custom" type and is stored in extra_config.api_format; other types keep their extra_config
         extra_config:
           (values.provider as string) === 'custom'
             ? {
@@ -859,7 +873,7 @@ const ModelSettings: React.FC = () => {
         metadata: buildMetadata(values, editingProvider?.metadata ?? null),
         is_enabled: values.is_enabled as boolean | undefined,
         is_default: values.is_default as boolean | undefined,
-        // 置顶由主进程用 SQL 取 max(sort_order)+1，前端只传开关
+        // Pinning is performed in the main process with SQL max(sort_order)+1; the frontend only sends the toggle
         pinned: values.pinned === true
       }
 
@@ -926,7 +940,7 @@ const ModelSettings: React.FC = () => {
     }
   }
 
-  // 拉取模型
+  // Fetch models
   const handleFetchModels = async (): Promise<void> => {
     setFetchLoading(true)
     setFetchModels([])
@@ -937,11 +951,11 @@ const ModelSettings: React.FC = () => {
         fetchBaseUrl || undefined,
         fetchApiKey || undefined
       )) as FetchedModel[]
-      // 过滤掉已存在的模型
+      // Filter out models that already exist
       const existingIds = new Set(providers.map((p) => p.model))
       const newModels = result.filter((m) => !existingIds.has(m.id))
       setFetchModels(newModels)
-      // 默认全选新拉取到的模型，用户可在列表中取消勾选后再一键添加
+      // Newly fetched models are selected by default; the user can uncheck some in the list and then add them in one go
       setCheckedModels(newModels.map((m) => m.id))
     } catch (error) {
       viewMessage(
@@ -965,16 +979,16 @@ const ModelSettings: React.FC = () => {
     }
   }
 
-  // 一键添加选中的模型（携带拉取时推导出的能力标签）。
-  // 走 provider-create-batch：主进程单事务插入 + 只广播一次变更，
-  // 避免逐个 create 触发渲染进程 29 次全量刷新导致程序卡死。
+  // Add the selected models in one click (carrying the capability tags derived during the fetch).
+  // Uses provider-create-batch: the main process inserts in a single transaction and broadcasts one
+  // change, instead of per-model creates causing 29 full renderer refreshes and freezing the app.
   const handleBatchAdd = async (): Promise<void> => {
     const msgKey = 'batch-add'
     if (checkedModels.length === 0) {
       viewMessage(msgKey, 'warning', t('modelSettings.messages.selectAtLeastOne'))
       return
     }
-    // 自定义类型必须填写供应商 ID（全英文小写，仅可包含数字与 -）
+    // The custom type requires a provider ID (lowercase ASCII, digits and - only)
     if (fetchProviderType === 'custom') {
       const pid = fetchCustomProviderId.trim()
       if (!/^[a-z0-9-]+$/.test(pid)) {
@@ -1022,9 +1036,9 @@ const ModelSettings: React.FC = () => {
     }
   }
 
-  // --- 树形目录（按模型供应商 / 接口协议分组） ---
+  // --- Tree directory (grouped by model provider / API protocol) ---
 
-  /** 分组归属：按模型供应商（接口协议）分组，如 OpenAI / DeepSeek / 智谱 GLM / 自定义 */
+  /** Group membership: grouped by model provider (API protocol), e.g. OpenAI / DeepSeek / Zhipu GLM / Custom */
   const groupOf = (p: LlmProviderConfig): { key: string; label: string } => {
     const cfg = getProviderConfig(p.provider)
     return {
@@ -1055,20 +1069,21 @@ const ModelSettings: React.FC = () => {
       children: entry.items.map((p) => ({
         key: String(p.id),
         record: p,
-        // 默认模型不可勾选（与单行删除一致：默认模型不能删）
+        // The default model cannot be checked (consistent with single-row delete: the default model cannot be deleted)
         disableCheckbox: p.is_default
       }))
     }))
   }, [providers, t])
 
-  /** 当前勾选中的模型 id（模型节点 key 为纯数字 id；分组节点 key 含冒号前缀） */
+  /** Currently checked model ids (model node keys are plain numeric ids; group node keys carry a colon prefix) */
   const selectedIds = useMemo(
     () => checkedKeys.filter((k) => !String(k).includes(':')).map((k) => Number(k)),
     [checkedKeys]
   )
 
-  // 数据加载 / 刷新后默认展开「新增」分组（修复：此前无条件把所有分组加回展开,
-  // 用户手动折叠过的分组每次刷新都被强制重新展开）
+  // Expand newly added groups by default after load / refresh (fix: previously all groups were
+  // unconditionally re-added to the expanded set, so groups the user had collapsed were forced open
+  // on every refresh)
   useEffect(() => {
     setExpandedKeys((prev) => {
       const known = new Set<React.Key>(prev)
@@ -1084,17 +1099,17 @@ const ModelSettings: React.FC = () => {
     })
   }, [treeData])
 
-  /** 树节点渲染：分组行 / 模型行（模型行自带操作按钮） */
+  /** Tree node rendering: group rows / model rows (model rows carry their own action buttons) */
   const renderTreeNodeTitle = (node: ProviderTreeNode): React.ReactNode => {
     const record = node.record
     if (!record) {
-      // 分组节点
+      // Group node
       const count = node.children?.length ?? 0
       return (
         <span className="inline-flex items-center" style={{ gap: 6 }}>
           <span style={{ fontWeight: 600 }}>{String(node.title)}</span>
           <span style={{ color: colorTextTertiary, fontSize: 12 }}>
-            {/* 数字走等宽、中文走默认 UI 字体（见文件顶部字体规则） */}
+            {/* Digits use mono, CJK uses the default UI font (see the font rule at the top of the file) */}
             <Trans
               i18nKey="modelSettings.list.groupCount"
               count={count}
@@ -1104,7 +1119,7 @@ const ModelSettings: React.FC = () => {
         </span>
       )
     }
-    // 模型节点
+    // Model node
     return (
       <span
         className="inline-flex items-center w-full"
@@ -1203,7 +1218,7 @@ const ModelSettings: React.FC = () => {
     )
   }
 
-  /** 批量删除勾选的模型（单事务 + 单广播，避免逐个删除触发刷新风暴） */
+  /** Delete the checked models in a batch (single transaction + single broadcast, avoiding a refresh storm from per-item deletes) */
   const handleBatchDelete = async (): Promise<void> => {
     const msgKey = 'provider-delete-batch'
     if (selectedIds.length === 0) return
@@ -1247,9 +1262,9 @@ const ModelSettings: React.FC = () => {
     })
   }
 
-  // 拉取列表中是否已全选（checkedModels 恒为 fetchModels 的子集，数量相等即全选）
+  // Whether everything in the fetch list is checked (checkedModels is always a subset of fetchModels, so equal counts mean all)
   const fetchAllChecked = fetchModels.length > 0 && checkedModels.length === fetchModels.length
-  /** 全选/取消全选按钮的提示与 aria 文案 */
+  /** Tooltip and aria label for the select-all / deselect-all button */
   const fetchAllLabel = fetchAllChecked
     ? t('modelSettings.fetch.deselectAll')
     : t('modelSettings.fetch.selectAll')
@@ -1272,7 +1287,7 @@ const ModelSettings: React.FC = () => {
       />
 
       <SettingsSection bodyPadding={0}>
-        {/* 目录头：统计 + 批量删除操作条 */}
+        {/* Directory header: counts + batch-delete action bar */}
         <div
           className="flex items-center justify-between px-4 py-2"
           style={{ borderBottom: `1px solid ${colorSplit}` }}
@@ -1309,7 +1324,7 @@ const ModelSettings: React.FC = () => {
           )}
         </div>
         {loading ? (
-          /* 厂商 / 模型是树形目录：先按行铺骨架，避免空白之后一次性「长出」整棵树 */
+          /* Vendors / models form a tree: lay out row skeletons first so the whole tree does not "grow" at once after a blank frame */
           <div style={{ padding: '8px 0' }}>
             <SkeletonSettingRows rows={6} />
           </div>
@@ -1370,7 +1385,7 @@ const ModelSettings: React.FC = () => {
         >
           <style>{MODAL_FORM_CSS}</style>
 
-          {/* ── 连接：每次真正要填的项 ── */}
+          {/* ── Connection: the fields actually filled in each time ── */}
           <Form.Item
             name="provider"
             label={t('modelSettings.form.protocol')}
@@ -1417,7 +1432,7 @@ const ModelSettings: React.FC = () => {
             </>
           )}
 
-          {/* ── 模型：ID / API Key / 名称（模型 ID 在编辑态锁定，厂商按接口协议推导） ── */}
+          {/* ── Model: ID / API key / name (the model ID is locked in edit mode; the vendor is derived from the API protocol) ── */}
           <Form.Item
             name="model"
             label={t('modelSettings.form.modelId')}
@@ -1471,7 +1486,7 @@ const ModelSettings: React.FC = () => {
             <Input placeholder={t('modelSettings.form.namePlaceholder')} allowClear />
           </Form.Item>
 
-          {/* 模型类型由档案自动填充并保留（面板不暴露，避免与能力重复） */}
+          {/* The model type is autofilled from the profile and preserved (not exposed in the panel, to avoid duplicating the capabilities) */}
           <Form.Item name="metadata_type" hidden>
             <Input />
           </Form.Item>
@@ -1482,7 +1497,7 @@ const ModelSettings: React.FC = () => {
             </div>
           )}
 
-          {/* ── 唯一的高级配置：对齐设计稿（上下文窗口 / 工具调用轮数 / 图片输入 / 思考模式 / 采样参数） ── */}
+          {/* ── The single advanced section: matching the design (context window / tool rounds / image input / thinking mode / sampling params) ── */}
           <Collapse
             size="small"
             className="mt-4"
@@ -1580,10 +1595,12 @@ const ModelSettings: React.FC = () => {
                       </Form.Item>
                     </ParamRow>
 
-                    {/* 可选档位：模型有哪些档位（档案命中自动回填，用户可自己增删）。
-                        排列与「上下文窗口 → 输入/输出」一致：控件在左、档位胶囊在右。
-                        当前用哪个档位不在这里选（输入框的模型菜单负责），但值要随表单原样带回，
-                        否则每次在设置里保存都会把用户在输入框选好的档位清掉。 */}
+                    {/* Available levels: which levels the model has (autofilled when the profile hits, the
+                        user can add or remove them). Layout matches "context window → input/output":
+                        control on the left, level chips on the right. The currently selected level is
+                        not chosen here (the input box's model menu handles that), but the value must
+                        round-trip with the form, otherwise every save in settings would clear the level
+                        the user picked in the input box. */}
                     <Form.Item name="reasoning_effort" hidden>
                       <Input />
                     </Form.Item>
@@ -1601,8 +1618,9 @@ const ModelSettings: React.FC = () => {
                         <Select
                           mode="tags"
                           allowClear
-                          // 档位多了不折行（折行会把整行撑高、还会跟右侧胶囊抢宽度）：
-                          // 放不下的档位收成「+N」，完整集合点开下拉就能看见与增删
+                          // Do not wrap when there are many levels (wrapping makes the row taller and
+                          // competes with the right-side chips for width): levels that do not fit
+                          // collapse into "+N", and the full set is visible and editable in the dropdown
                           maxTagCount="responsive"
                           maxTagPlaceholder={(omitted) => `+${omitted.length}`}
                           placeholder={t('modelSettings.form.reasoningEffortLevelsPlaceholder')}
@@ -1630,8 +1648,9 @@ const ModelSettings: React.FC = () => {
                       </ParamRow>
                     ))}
 
-                    {/* 状态开关（启用 / 置顶 / 没默认模型时的设为默认）也归高级配置：
-                        它们是模型自身的状态，不是主流程必填项，跟着下面这批开关走。 */}
+                    {/* Status switches (enabled / pinned / set-default when no default exists) also live in
+                        advanced settings: they are the model's own state, not required in the main path,
+                        so they go with this batch of switches. */}
                     <div className="ms-switches">
                       <span className="ms-switch">
                         {t('modelSettings.form.enabled')}
@@ -1672,7 +1691,7 @@ const ModelSettings: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* 拉取模型模态框 */}
+      {/* Fetch-models modal */}
       <Modal
         title={t('modelSettings.fetch.title')}
         open={fetchModalOpen}

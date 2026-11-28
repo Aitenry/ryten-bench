@@ -18,9 +18,9 @@ import {
 } from '../../services/harness/subagents'
 
 /**
- * 旧资料工具名（manage_docs/manage_todos/manage_wikis/search_graph）在 2026-11 合并成
- * manage_materials。子智能体配置把 tools 存成 JSON 字符串，这里读时顺手迁移，
- * 免得界面上「上次勾过的工具」显示为未选中。
+ * The legacy material tool names (manage_docs/manage_todos/manage_wikis/search_graph) were merged
+ * into manage_materials in 2026-11. Sub-agent configs store tools as a JSON string, so migrate
+ * them on read to keep previously checked tools from showing up unchecked in the UI.
  */
 function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
   if (!row.tools) return row
@@ -33,24 +33,24 @@ function normalizeAgentRow<T extends { tools?: string | null }>(row: T): T {
       }
     }
   } catch {
-    // 历史脏数据保持原样，交给上层展示
+    // Legacy dirty data is left as-is for upper layers to display
   }
   return row
 }
 
 /**
- * 智能体（子代理）配置 + 主智能体默认配置 IPC（harness 插件的第 5 个域）。
+ * Agent (sub-agent) config plus main-agent default config IPC (the harness plugin's fifth domain).
  *
- * 写入语义（校验/归一/缓存失效/记忆目录清理）已收敛到
- * `services/harness/subagents.ts`：设置页与主智能体的 `agent_create` 工具共用同一套规则，
- * 这里只做参数解析、读路径映射与错误日志。
+ * Write semantics (validation/normalization/cache invalidation/memory-directory cleanup) live in
+ * `services/harness/subagents.ts`: the settings page and the main agent's `agent_create` tool
+ * share one set of rules, so this file only parses arguments, maps read paths and logs errors.
  *
- * 通道名一律 `harness:<原扁平名>`（agent-* / main-agent-* 共 8 个），
- * 停用「AI 助手」后智能体配置页的通道一并消失。
+ * Channel names are always `harness:<original flat name>` (agent-* / main-agent-*, 8 in total);
+ * disabling the AI assistant plugin removes the agent config page's channels too.
  */
 export function agentIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：本插件的命名空间前缀只在这里出现 */
+  /** Channel sink: the plugin namespace prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
@@ -137,15 +137,16 @@ export function agentIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // 主智能体配置（electron-store）。形状含 tools / skills / mcpTools，见 shared/mcp.ts
+  // Main agent config (electron-store). The shape holds tools / skills / mcpTools.
   handle('main-agent-get', () => {
     const config = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {
       tools: [],
       skills: [],
       mcpTools: []
     }
-    // 返回前在主进程收敛：工具清单只留可勾选的真实工具（MCP / 分组项 / 模式工具由各自的
-    // 通道管理），渲染层直接展示，不做二次过滤。
+    // Normalize in the main process before returning: keep only real, selectable tools (MCP,
+    // grouped entries and mode tools are managed by their own channels), so the renderer can
+    // display the result directly without filtering again.
     return {
       ...config,
       tools: Array.from(
@@ -157,15 +158,17 @@ export function agentIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 主智能体页保存：只写 `tools` / `skills`。
+   * Main agent page save: writes only `tools` / `skills`.
    *
-   * **刻意不整对象覆盖**：`mcpTools` 由 MCP 页单独维护（通道 harness:mcp-tools-set），
-   * 整覆盖会在「MCP 页刚勾好、智能体页随后保存」时把勾选抹掉。
+   * **Deliberately not a whole-object overwrite**: `mcpTools` is maintained separately by the MCP
+   * page (channel harness:mcp-tools-set); overwriting the object would wipe selections made there
+   * when the agent page saves right after.
    */
   handle('main-agent-update', (config: { tools?: string[]; skills?: string[] }) => {
     const current = (settingsStore.get('mainAgent') as MainAgentConfig | undefined) ?? {}
-    // 写入前在主进程收敛：MCP 工具/分组项、插件模式工具都不属于这份清单
-    // （MCP 走 mcp-tools-set，模式工具按插件模式自动挂载）；旧资料工具名迁移到统一入口。
+    // Normalize in the main process before writing: MCP tools, grouped entries and plugin mode
+    // tools do not belong in this list (MCP goes through mcp-tools-set; mode tools are mounted
+    // automatically per plugin mode); legacy material tool names migrate to the unified entry.
     const tools = Array.from(
       new Set((config?.tools ?? []).map((name) => canonicalToolName(name)))
     ).filter(isSelectableMainAgentTool)

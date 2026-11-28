@@ -9,7 +9,7 @@ export interface BreadcrumbItem {
 
 interface BreadcrumbBarProps {
   items: BreadcrumbItem[]
-  /** 右侧操作区 */
+  /** Right-side action area */
   actions?: React.ReactNode
 }
 
@@ -22,7 +22,7 @@ const BreadcrumbBar: React.FC<BreadcrumbBarProps> = ({ items, actions }) => {
       style={{
         padding: '9px 12px',
         gap: 2,
-        /* 主区卡片顶部的分隔行，不再独立成卡（参考 Harness 头部行） */
+        /* Separator row at the top of the main-area card; no longer a standalone card */
         borderBottom: `1px solid ${token.colorBorderSecondary}`
       }}
     >

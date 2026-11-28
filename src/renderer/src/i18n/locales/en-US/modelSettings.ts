@@ -167,7 +167,7 @@ export const enUSModelSettings: typeof zhCNModelSettings = {
     providerTypePlaceholder: 'Select a provider type',
     customBaseUrlPlaceholder: 'Custom API URL (required)',
     ollamaBaseUrlPlaceholder: 'Ollama API URL',
-    customProviderIdPlaceholder: 'Provider ID (required, e.g. opencode)',
+    customProviderIdPlaceholder: 'Provider ID (required, e.g. my-provider)',
     customProviderIdHint:
       'The provider ID uses lowercase letters only, and may contain digits and hyphens. Listing models only supports OpenAI-compatible endpoints (GET /v1/models).',
     fetchList: 'Fetch model list',

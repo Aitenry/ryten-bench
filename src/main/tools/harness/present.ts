@@ -1,10 +1,11 @@
 /**
- * `present` 工具：把已存在的工作区文件声明为「本轮交付物」。
+ * `present` tool: declares existing workspace files as the "deliverables of this turn".
  *
- * 对照 DSH 的 `@deepseek-ai/dsh-tool-present`：模型用它告诉用户「这些就是最终产物」，
- * 界面据此在回复下方展示可点击的文件卡。这里不做文件复制、也不改文件，只做
- * 「存在性 + 工作区边界」校验后回一段确认文本；交付列表本身作为工具入参随对话落库，
- * 历史重载后卡片仍能还原。
+ * The model uses it to tell the user "these are the final artifacts", and the UI then shows
+ * clickable file cards under the reply. Nothing is copied or modified here — only an existence
+ * plus workspace-boundary check is performed, followed by a confirmation text; the deliverable
+ * list itself is persisted as tool input with the conversation, so cards can be restored after
+ * the history is reloaded.
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -12,15 +13,15 @@ import { mainFormat } from '../../i18n'
 import { getPresentToolTexts } from '../../i18n/tool-results-present'
 import { normalizePresentPath } from './present-core'
 
-/** 一次最多声明的交付文件数（与 DSH 一致：通常 1～2 个，上限 4 个） */
+/** Maximum number of files declared at once (usually 1-2, hard limit 4) */
 export const MAX_PRESENT_FILES = 4
 
-/** 工具运行配置里只关心工作区根（由 Runtime 注入 configurable.workspaceRoot） */
+/** Only the workspace root matters from the tool invoke config (injected by Runtime as configurable.workspaceRoot) */
 interface PresentInvokeConfig {
   configurable?: { workspaceRoot?: unknown }
 }
 
-/** 构造 present 工具 */
+/** Build the present tool */
 export function buildPresentTool(): StructuredToolInterface {
   return tool(
     async ({ files }, config) => {

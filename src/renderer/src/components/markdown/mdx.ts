@@ -2,28 +2,30 @@ import { Node, mergeAttributes } from '@tiptap/core'
 import type MarkdownIt from 'markdown-it'
 
 /* ════════════════════════════════════════════════════════════
-   MDX 内容适配：import/export 语句与 JSX（<Component>、<> 片段、
-   {...} 属性表达式）在编辑与保存中原样保留，不被 markdown 解析破坏
-   - protectMdx：解析前把 MDX 片段替换为 <pre data-mdx-src>…</pre>
-     （markdown-it 原样透传，PM 侧由 mdxBlock 节点承接，序列化还原原文）
-   - html_inline 中的 JSX 片段 → <span data-mdx-inline>（mdxInline 原子节点）
+   MDX content adaptation: import/export statements and JSX (<Component>, <> fragments,
+   {...} attribute expressions) are preserved verbatim when editing and saving, and are
+   not mangled by markdown parsing
+   - protectMdx: before parsing, replace MDX fragments with <pre data-mdx-src>…</pre>
+     (markdown-it passes them through verbatim; on the PM side mdxBlock nodes take them
+     over, and serialization restores the original text)
+   - JSX fragments in html_inline → <span data-mdx-inline> (mdxInline atomic node)
    ════════════════════════════════════════════════════════════ */
 
 const MAX_RUN_LINES = 500
 
-/** 单行是否像 MDX 构造：import/export 语句或 JSX 标签 */
+/** Whether a line looks like an MDX construct: an import/export statement or a JSX tag */
 export function isMdxLine(line: string): boolean {
   const t = line.trim()
   if (/^(?:import|export)(?:\s|[{*])/.test(t)) return true
   if (!t.startsWith('<')) return false
   return (
-    /^<\/?\s*[A-Z]/.test(t) || // 大写组件标签
-    /^<\/?>\s*$/.test(t) || // <> 片段
-    /<[a-zA-Z][\w.-]*[^>]*\{[^}]*\}/.test(t) // JSX 属性表达式
+    /^<\/?\s*[A-Z]/.test(t) || // Capitalized component tag
+    /^<\/?>\s*$/.test(t) || // <> fragment
+    /<[a-zA-Z][\w.-]*[^>]*\{[^}]*\}/.test(t) // JSX attribute expression
   )
 }
 
-/** 一行中 JSX 标签的嵌套增减（自闭合与无标签行返回 0） */
+/** Net change in JSX tag nesting for one line (0 for self-closing or tag-less lines) */
 function jsxBalance(line: string): number {
   let balance = 0
   const re = /<\/?[A-Za-z][A-Za-z0-9.-]*(?:\s[^<>]*?)?\/?>|<>|<\/>/g
@@ -43,9 +45,9 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * 把源文本中的 MDX 片段替换为 <pre data-mdx-src>…</pre> 原始 HTML，
- * markdown-it（html:true）会原样透传，PM 解析为 mdxBlock 节点。
- * 代码围栏（```…```）内部跳过——那里的 JSX 属于代码内容。
+ * Replace MDX fragments in the source text with raw HTML <pre data-mdx-src>…</pre>;
+ * markdown-it (html: true) passes it through verbatim, and PM parses it into mdxBlock nodes.
+ * Code fences (```…```) are skipped — JSX inside them is code content.
  */
 export function protectMdx(source: string): string {
   const lines = source.split('\n')
@@ -73,7 +75,7 @@ export function protectMdx(source: string): string {
       let balance = jsxBalance(line)
       let j = i + 1
       if (balance > 0) {
-        // 未闭合：按标签平衡继续收集（空白行在未闭合时保留在块内）
+        // Unclosed: keep collecting by tag balance (blank lines stay inside while unclosed)
         let guard = 0
         while (j < lines.length && guard < MAX_RUN_LINES) {
           const l = lines[j]
@@ -97,7 +99,7 @@ export function protectMdx(source: string): string {
   return out.join('\n')
 }
 
-/** 判断渲染层 html 片段是否像 MDX（用于 html_block / html_inline 兜底保护） */
+/** Whether rendered HTML looks like MDX (fallback guard for html_block / html_inline) */
 export function looksLikeMdxHtml(raw: string): boolean {
   return (
     /^\s*<\/?[A-Z]/.test(raw) ||
@@ -106,9 +108,9 @@ export function looksLikeMdxHtml(raw: string): boolean {
   )
 }
 
-/** markdown-it 侧适配：包一层 protectMdx + 兜底拦截 html_block/html_inline */
+/** markdown-it adapter: wraps protectMdx and guards html_block/html_inline */
 export function setupMdxParse(md: MarkdownIt): void {
-  // setup 每次解析都会执行，避免重复包裹
+  // setup runs on every parse; guard against wrapping more than once
   const marker = md as unknown as { __rytenMdxProtected?: boolean }
   if (marker.__rytenMdxProtected) return
   marker.__rytenMdxProtected = true
@@ -139,9 +141,9 @@ export function setupMdxParse(md: MarkdownIt): void {
   }
 }
 
-/* ──────────── 节点定义 ──────────── */
+/* ──────────── Node definitions ──────────── */
 
-/** 块级 MDX 源码（可编辑，序列化原样还原） */
+/** Block-level MDX source (editable; serialization restores it verbatim) */
 export const MdxBlock = Node.create({
   name: 'mdxBlock',
   group: 'block',
@@ -170,7 +172,7 @@ export const MdxBlock = Node.create({
   }
 })
 
-/** 行内 JSX 片段（原子节点，双击可整体替换） */
+/** Inline JSX fragment (atomic node; double-click replaces it as a whole) */
 export const MdxInline = Node.create({
   name: 'mdxInline',
   group: 'inline',

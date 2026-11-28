@@ -60,29 +60,30 @@ import type {
 } from './types'
 
 /**
- * 插件中心（`/v1/hub`）主进程业务：目录 / 详情 / 发布上传 / 下载安装。
+ * Plugin hub (`/v1/hub`) main-process business logic: catalog / detail / publish upload / download install.
  *
- * 上传链路（契约 §4）：
- *   选目录 → `resolvePackageRoot()` → 读 plugin.json + README.md → JSZip 打包（plugin.json 在根）
- *   → sha256 → `POST /v1/hub/plugins` 元数据 → `PUT {upload.path}` 原始字节（`X-Content-SHA256`）
- * 每个阶段向渲染层发 `lattice:upload-progress`。
+ * Upload flow:
+ *   pick directory → `resolvePackageRoot()` → read plugin.json + README.md → JSZip package (plugin.json at root)
+ *   → sha256 → `POST /v1/hub/plugins` metadata → `PUT {upload.path}` raw bytes (`X-Content-SHA256`)
+ * Each stage emits `lattice:upload-progress` to the renderer.
  *
- * 下载安装链路：
- *   详情选版本 → `GET .../download`（302 → 预签名）→ sha256 校验 → 解压临时目录
- *   → `installPackageDir({expectId})` → 启用 + 装载主模块 + 广播 → `PUT /v1/hub/installs/{id}`。
- * 失败一律返回 `{ok:false,error}`，不把异常抛到渲染层。
+ * Download/install flow:
+ *   pick a version in the detail → `GET .../download` (302 → presigned) → sha256 check → extract to a temp dir
+ *   → `installPackageDir({expectId})` → enable + load main module + broadcast → `PUT /v1/hub/installs/{id}`.
+ * Failures always return `{ok:false,error}`; exceptions never reach the renderer.
  *
- * 源码生命周期（契约 v2 §2，见 `./sources.ts`）：
- * - 安装时该版本带源码（`has_source`）→ 下载 `.../source`（302 → 预签名）→ 解压到
- *   `<pluginsPath>/<id>/`（未配置时回退 `userData/plugin-sources/<id>/<version>/`）→ source.json；
- *   源码失败**不判安装失败**，只在结果里带 `sourceError`；
- * - `republish`：源码目录 → 校验 plugin.json → 整包 zip（安装包）→ 同一份字节当源码包
- *   → POST（带 source 元数据）→ PUT 安装包 → PUT source；
- * - `downloadAsset`：安装包/源码包弹保存框下载到本机（sha256 校验）；
- * - `importLocalPlugins`：弹目录选择框，把本地源码目录下带 plugin.json 的插件逐个发布到平台。
+ * Source lifecycle (see `./sources.ts`):
+ * - if the version ships source (`has_source`) → download `.../source` (302 → presigned) → extract to
+ *   `<pluginsPath>/<id>/` (falls back to `userData/plugin-sources/<id>/<version>/` when unconfigured) → source.json;
+ *   a source failure **does not fail the install**, it is only reported as `sourceError`;
+ * - `republish`: source directory → validate plugin.json → whole-directory zip (install package) → the same bytes
+ *   serve as the source package → POST (with source metadata) → PUT install package → PUT source;
+ * - `downloadAsset`: install package / source package save-dialog download to this machine (sha256 checked);
+ * - `importLocalPlugins`: open a directory picker and publish every plugin that has a plugin.json under the local
+ *   source directory to the platform, one by one.
  */
 
-/** 平台取值（设计 §17.16）：包 ≤20MiB、源码包 ≤50MiB、readme ≤16KiB、manifest ≤16KiB */
+/** Platform limits: package ≤20MiB, source package ≤50MiB, readme ≤16KiB, manifest ≤16KiB */
 const PACKAGE_MAX_BYTES = 20 * 1024 * 1024
 const SOURCE_MAX_BYTES = 50 * 1024 * 1024
 const README_MAX_BYTES = 16 * 1024
@@ -94,25 +95,26 @@ const ICON_MAX_CHARS = 512
 const CATEGORY_VALUES = new Set(['productivity', 'ai', 'media', 'devtools', 'data', 'other'])
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/
 const VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]{1,32})?$/
-/** 压缩工具产出的噪音条目（与 package-install.ts 同口径，不上传） */
+/** Noise entries produced by archiving tools (same policy as package-install.ts; never uploaded) */
 const NOISE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '__MACOSX'])
 /**
- * 打包时整目录跳过的目录：版本库与依赖目录不属于插件包内容，
- * 打进去只会撑爆 20MiB 上限（v2 的「源码目录整包 zip」尤其容易撞上用户自己的工程目录）。
+ * Directories skipped wholesale when packaging: VCS and dependency directories are not part of the plugin
+ * package and only blow the 20MiB limit (the "zip the whole source directory" flow especially tends to
+ * run into the user's own project directories).
  */
 const PACKAGE_EXCLUDED_DIRS = new Set(['.git', 'node_modules'])
-/** 插件包根目录里不属于包内容的宿主元数据文件（workshop 草稿 / 源码下载标记） */
+/** Host metadata files in the package root that are not package content (workshop draft / source download marker) */
 const PACKAGE_ROOT_META_FILES = new Set(['source.json', 'workshop.json'])
 
 interface LatticeHubHooks {
   onUploadProgress?: (progress: LatticeUploadProgress) => void
-  /** 发布/安装后状态变化（index.ts 接成广播 `lattice:state-changed`） */
+  /** State change after publish/install (wired up by index.ts to the `lattice:state-changed` broadcast) */
   onStateChanged?: () => void
 }
 
 let hooks: LatticeHubHooks = {}
 
-/** 由 `lattice/index.ts` 在启动时接线（避免 hub → index 的循环依赖） */
+/** Wired up by `lattice/index.ts` at startup (avoids the hub → index circular dependency) */
 export function configureLatticeHub(next: LatticeHubHooks): void {
   hooks = next
 }
@@ -133,7 +135,7 @@ function notifyStateChanged(): void {
   }
 }
 
-// ---------- 通用小工具 ----------
+// ---------- General helpers ----------
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
@@ -170,13 +172,13 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.min(max, Math.max(min, num))
 }
 
-/** 按「字符」截断（平台上限按字符数校验；Array.from 不切坏代理对） */
+/** Truncate by characters (platform limits are checked in characters; Array.from never splits surrogate pairs) */
 function clampChars(value: string, maxChars: number): string {
   const chars = Array.from(value)
   return chars.length <= maxChars ? value : chars.slice(0, maxChars).join('')
 }
 
-/** 按 UTF-8 字节截断（readme 上限按字节；丢掉可能在边界被截断的半个字符） */
+/** Truncate by UTF-8 bytes (the readme limit is in bytes; drops a half character that may be cut at the boundary) */
 function clampUtf8Bytes(value: string, maxBytes: number): string {
   const buffer = Buffer.from(value, 'utf8')
   if (buffer.length <= maxBytes) return value
@@ -186,7 +188,7 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
     .replace(/\uFFFD+$/u, '')
 }
 
-// ---------- 目录 / 详情 ----------
+// ---------- Catalog / detail ----------
 
 function mapOwner(raw: unknown): HubEntry['owner'] {
   const record = asRecord(raw) ?? {}
@@ -197,7 +199,7 @@ function mapOwner(raw: unknown): HubEntry['owner'] {
   }
 }
 
-/** 平台目录条目 → 共享 HubEntry（字段缺失一律兜底，坏数据不该把面板搞崩） */
+/** Platform catalog entry → shared HubEntry (missing fields always fall back; bad data must not crash the panel) */
 function mapHubEntry(raw: unknown): HubEntry {
   const record = asRecord(raw) ?? {}
   return {
@@ -249,12 +251,12 @@ function mapHubVersion(raw: unknown): HubVersion {
   }
 }
 
-/** 该版本是否带源码包（v2 详情有 has_source；旧平台的 source_sha256 也视为有） */
+/** Whether this version ships a source package (the detail carries has_source; a legacy source_sha256 counts too) */
 function versionHasSource(version: HubVersion): boolean {
   return version.has_source === true || Boolean(version.source_sha256)
 }
 
-/** 目录：`GET /v1/hub/plugins`（渲染层驼峰参数 → 平台下划线） */
+/** Catalog: `GET /v1/hub/plugins` (renderer camelCase params → platform snake_case) */
 export async function listLatticeHub(query: LatticeListQuery = {}): Promise<HubListResult> {
   const page = clampInt(query.page, 1, 1, 100_000)
   const pageSize = clampInt(query.pageSize, 20, 1, 100)
@@ -281,7 +283,7 @@ export async function listLatticeHub(query: LatticeListQuery = {}): Promise<HubL
   }
 }
 
-/** 详情：`GET /v1/hub/plugins/{plugin_id}` */
+/** Detail: `GET /v1/hub/plugins/{plugin_id}` */
 export async function getLatticeHubDetail(pluginId: string): Promise<HubDetail> {
   const id = pluginId.trim()
   if (!id) throw new Error('缺少插件 id')
@@ -304,7 +306,7 @@ export async function getLatticeHubDetail(pluginId: string): Promise<HubDetail> 
   }
 }
 
-// ---------- 上传 ----------
+// ---------- Upload ----------
 
 interface LocalPackageManifest {
   id: string
@@ -326,11 +328,12 @@ interface CollectedPackageFile {
 }
 
 /**
- * 清单里的品牌图标：优先 `icon`（外部插件可以是 plugin:// 或 data:），
- * 没写 `icon` 时退回 `menu.icon`（内置插件与旧版插件只有这一处写图标）。
+ * Brand icon from the manifest: prefer `icon` (external plugins may use plugin:// or data:),
+ * falling back to `menu.icon` when `icon` is absent (built-in and older plugins declare an icon only there).
  *
- * 平台 `hub_plugins.icon` 只有一个字段，卡片/详情都读它；只取 `manifest.icon`
- * 会让所有"只有 menu.icon"的插件在插件仓库里变成默认拼图（用户 2026-11-21 反馈）。
+ * The platform's `hub_plugins.icon` is a single field read by both cards and the detail page; taking only
+ * `manifest.icon` would turn every plugin that only has `menu.icon` into the default puzzle piece in the hub
+ * (user feedback 2026-11-21).
  */
 function manifestIcon(manifest: LocalPackageManifest): string {
   const direct = typeof manifest.icon === 'string' ? manifest.icon.trim() : ''
@@ -363,7 +366,7 @@ function collectPackageFiles(root: string): CollectedPackageFile[] {
   return files
 }
 
-/** 读并校验包内 plugin.json（必须字段 + 入口文件真实存在 + 不是内置插件） */
+/** Read and validate the in-package plugin.json (required fields + entry files really exist + not a built-in plugin) */
 function readLocalPackageManifest(
   root: string,
   files: CollectedPackageFile[]
@@ -380,7 +383,7 @@ function readLocalPackageManifest(
   const rawText = fs.readFileSync(manifestPath, 'utf-8')
   let parsed: unknown
   try {
-    // 少数构建脚本会带 UTF-8 BOM：JSON.parse 不认 BOM，先剥掉再解析
+    // Some build scripts emit a UTF-8 BOM: JSON.parse rejects a BOM, so strip it before parsing
     parsed = JSON.parse(rawText.replace(/^\uFEFF/u, '')) as unknown
   } catch (err) {
     throw new Error(
@@ -414,7 +417,7 @@ function readLocalPackageManifest(
   return { manifest, rawText }
 }
 
-/** 读 README.md（≤16KiB，超出按字节截断） */
+/** Read README.md (≤16KiB; truncated by bytes when longer) */
 function readReadme(root: string): string {
   for (const name of ['README.md', 'readme.md', 'Readme.md']) {
     const file = path.join(root, name)
@@ -422,13 +425,13 @@ function readReadme(root: string): string {
       if (!fs.statSync(file).isFile()) continue
       return clampUtf8Bytes(fs.readFileSync(file, 'utf-8'), README_MAX_BYTES)
     } catch {
-      // 没有这个文件名就试下一个
+      // Try the next file name when this one does not exist
     }
   }
   return ''
 }
 
-/** 发布用的 manifest 快照（≤16KiB；超了就只发最小字段） */
+/** Manifest snapshot used for publishing (≤16KiB; send only the minimal fields when larger) */
 function manifestForPublish(
   manifest: LocalPackageManifest,
   rawText: string
@@ -446,14 +449,14 @@ function manifestForPublish(
   }
 }
 
-/** zip 打包选项（重新发布时把包内 plugin.json 的 version 换成用户填的新版本号） */
+/** Zip packaging options (on republish, replaces the version in the in-package plugin.json with the new version the user entered) */
 interface ZipDirOptions {
   overrides?: Map<string, Buffer>
-  /** 不向渲染层发进度（批量导入多条流水线时进度没有意义） */
+  /** Do not emit progress to the renderer (progress is meaningless across a batch import of several pipelines) */
   silent?: boolean
 }
 
-/** 目录 → zip 原始字节（相对路径平铺，plugin.json 在根；按百分比发 zip 阶段进度） */
+/** Directory → raw zip bytes (relative paths flattened, plugin.json at the root; emits zip-stage progress as a percentage) */
 async function zipPackageDir(
   files: CollectedPackageFile[],
   options: ZipDirOptions = {}
@@ -502,7 +505,7 @@ interface ApiPublishResponse {
   plugin?: unknown
   version?: unknown
   upload?: { path?: unknown; headers?: unknown } | null
-  /** v2：源码包上传地址（POST 里带 `source` 元数据时平台才给） */
+  /** Source package upload URL (the platform only returns it when the POST carries `source` metadata) */
   source_upload?: { path?: unknown; headers?: unknown; max_bytes?: unknown } | null
   idempotent_reused?: unknown
 }
@@ -512,46 +515,47 @@ interface ApiUploadResponse {
   download_path?: unknown
 }
 
-/** 发布目录的选项（v2：源码包默认与安装包同字节；也可以显式指定独立的源码目录） */
+/** Options for publishing a directory (source package defaults to the same bytes as the install package; an independent source directory may also be given explicitly) */
 interface PublishPackageOptions {
   /**
-   * 兼容路径：把**同一个 zip** 作为源码包上传（插件工坊里“插件 = 源码目录”，
-   * 安装包就是源码目录整包 zip，所以两份字节相同）。
+   * Compatibility path: upload the **same zip** as the source package (in the plugin workshop "plugin = source
+   * directory", so the install package is the whole-directory zip and both byte sets are identical).
    *
-   * 指定 `sourcePath` 时不生效——真实源码目录必须与构建产物分开上传。
+   * Has no effect when `sourcePath` is set — a real source directory must be uploaded separately from the build output.
    */
   includeSource?: boolean
   /**
-   * 独立源码目录 / 源码 .zip：作为该版本的源码包上传（≤50MiB）。
+   * Independent source directory / source .zip: uploaded as this version's source package (≤50MiB).
    *
-   * 适用场景是“仓库里的插件”：安装包取自 `dist/<id>/`（构建产物），源码取自
-   * `plugins/<id>/`（TypeScript 等源码）。平台按声明里的 sha256 校验，两份字节不同。
+   * The use case is "a plugin inside a repository": the install package comes from `dist/<id>/` (build output),
+   * the source from `plugins/<id>/` (TypeScript and so on). The platform validates against the declared sha256;
+   * the two byte sets differ.
    */
   sourcePath?: string
-  /** 覆盖 plugin.json 里的版本号（重新发布时用户填的新版本号；包内清单同步改写） */
+  /** Override the version in plugin.json (the new version the user entered on republish; the in-package manifest is rewritten to match) */
   versionOverride?: string
-  /** 覆盖更新说明（未给时沿用 plugin.json.changelog / `发布 v<version>`） */
+  /** Override the changelog (defaults to plugin.json.changelog or a generated "published v<version>" note when absent) */
   changelogOverride?: string
-  /** 不向渲染层发进度（批量导入多条流水线时进度没有意义） */
+  /** Do not emit progress to the renderer (progress is meaningless across a batch import of several pipelines) */
   silent?: boolean
 }
 
 interface PublishPackageResult {
   plugin_id: string
   version: string
-  /** 本次包体的 sha256 */
+  /** sha256 of this package body */
   sha256: string
-  /** 本次源码包的 sha256（没有源码包时缺省） */
+  /** sha256 of this source package (absent when there is no source package) */
   sourceSha256?: string
-  /** 平台最终状态：已发布 / 等待管理员审核（平台自 2026-11-23 起默认送审） */
+  /** Final platform status: published / awaiting admin review (the platform submits for review by default since 2026-11-23) */
   status: 'published' | 'review'
-  /** 平台是否接受了源码包（返回 source_upload 且 PUT 成功） */
+  /** Whether the platform accepted the source package (source_upload returned and the PUT succeeded) */
   sourceUploaded: boolean
-  /** 幂等复用：同版本同 sha 已发布过，没有上传任何字节 */
+  /** Idempotent reuse: the same version and sha were already published, so no bytes were uploaded */
   reused: boolean
 }
 
-/** 把发布阶段的平台错误转成给用户看的话（尤其是 409：版本必须递增 / 源码不可替换） */
+/** Turn platform errors from the publish stage into user-facing text (especially 409: version must increase / source cannot be replaced) */
 function publishPhaseError(
   err: unknown,
   phase: 'meta' | 'package' | 'source',
@@ -582,10 +586,11 @@ function publishPhaseError(
 }
 
 /**
- * 源码包来源解析：目录（重新打包，跳过 `.git` / `node_modules` 等无关目录）或 `.zip`（原样上传）。
+ * Resolve the source package origin: a directory (repackaged, skipping irrelevant directories like `.git` /
+ * `node_modules`) or a `.zip` (uploaded as is).
  *
- * 与安装包的区别：源码目录**不需要** plugin.json（平台允许源码包是纯工程目录）；
- * 体积上限是 50MiB，比安装包宽松。
+ * Difference from the install package: the source directory does **not** need plugin.json (the platform allows
+ * the source package to be a plain project directory); the size limit is 50MiB, looser than the install package.
  */
 async function resolveSourceArchive(
   sourcePath: string,
@@ -619,7 +624,7 @@ async function resolveSourceArchive(
   return { buffer, sha256: createHash('sha256').update(buffer).digest('hex'), size: buffer.length }
 }
 
-/** 把包目录发布到插件中心：元数据 → 安装包体 →（可选）源码包体 */
+/** Publish a package directory to the plugin hub: metadata → install package body → (optional) source package body */
 async function publishPackageDir(
   root: string,
   options: PublishPackageOptions = {}
@@ -635,7 +640,7 @@ async function publishPackageDir(
     )
   }
 
-  // 版本覆盖（重新发布）：包内 plugin.json 的 version 必须与发布版本一致，否则平台清单对不上
+  // Version override (republish): the in-package plugin.json version must match the published version, otherwise the platform manifest does not line up
   const overrides = new Map<string, Buffer>()
   let effectiveManifest: LocalPackageManifest = manifest
   let effectiveRawText = rawText
@@ -656,7 +661,7 @@ async function publishPackageDir(
     )
   }
   const sha256 = createHash('sha256').update(buffer).digest('hex')
-  // 源码包：显式源码目录优先（源码与构建产物分离）；否则沿用「安装包 = 源码目录整包」的旧口径
+  // Source package: an explicit source directory wins (source separate from build output); otherwise keep the legacy "install package = whole source directory" convention
   const sourceArchive = options.sourcePath
     ? await resolveSourceArchive(options.sourcePath, options.silent ? { silent: true } : {})
     : options.includeSource
@@ -730,10 +735,10 @@ async function publishPackageDir(
   const uploadPath = typeof publish.upload?.path === 'string' ? publish.upload.path : ''
   const reused = uploadPath === ''
   let sourceUploaded = false
-  // 平台自 2026-11-23 起默认送审：上传成功 ≠ 已发布，两者都是成功，只是提示文案不同
+  // The platform submits for review by default since 2026-11-23: a successful upload ≠ published; both are success, only the message text differs
   let status: 'published' | 'review' = 'published'
   if (!uploadPath) {
-    // 幂等重试命中：同版本同 sha 已经在平台发布过，不需要再传包体
+    // Idempotent retry hit: the same version and sha were already published, no need to upload the package body again
     const reusedStatus = asRecord(publish.version)?.status
     if (reusedStatus === 'review') status = 'review'
     logger.info(
@@ -753,11 +758,11 @@ async function publishPackageDir(
         const parsed = JSON.parse(uploaded.text) as unknown
         uploadResult = asRecord(parsed) as ApiUploadResponse | null
       } catch {
-        // 上传响应不是 JSON 也不影响 2xx 已成功的事实
+        // A non-JSON upload response does not change the fact that the 2xx already succeeded
       }
       const uploadStatus = typeof uploadResult?.status === 'string' ? uploadResult.status : ''
       if (uploadStatus === 'review') {
-        // 已提交、等待管理员审核：这是正常结果，不是失败
+        // Submitted and awaiting admin review: this is a normal outcome, not a failure
         status = 'review'
       } else if (uploadStatus !== '' && uploadStatus !== 'published') {
         throw new Error(`插件包上传后状态异常：${uploadStatus}（期望 published 或 review）`)
@@ -790,7 +795,7 @@ async function publishPackageDir(
         throw publishPhaseError(err, 'source', pluginId, version)
       }
     } else {
-      // 平台没给源码上传地址（旧平台 / 幂等复用）：源码状态未知，如实记录，但安装包已发布成功
+      // The platform returned no source upload URL (legacy platform / idempotent reuse): the source status is unknown, so record it as-is, but the install package has published successfully
       logger.warn(
         `[Lattice] Platform returned no source upload URL (source_upload): ${pluginId}@${version} may have no source package`
       )
@@ -813,14 +818,15 @@ async function publishPackageDir(
   }
 }
 
-/** 上传插件包并归一成 IPC 结果形状（`sourcePath` 给出时源码与安装包分开上传） */
+/** Upload a plugin package and normalize the result into the IPC shape (`sourcePath`, when given, uploads the source separately from the install package) */
 async function uploadPackageDirAsLatticeResult(
   root: string,
   sourcePath?: string
 ): Promise<LatticeUploadResult> {
-  // v2：用户口径「需要版本管理、源代码管理、安装包」——从本机上传的插件同样必须带源码，
-  // 否则别的机器装上以后无法查看/修改源码（安装包只是 bundle）。
-  // 仓库里的插件：安装包取构建产物目录，源码取源码目录（两份字节不同）。
+  // The requirement is "version management, source management, install package" — plugins uploaded from this
+  // machine must ship source too, otherwise another machine cannot view/modify the source after installing
+  // (the install package is only a bundle). For a plugin inside a repository: install package from the build
+  // output directory, source from the source directory (two different byte sets).
   const result = sourcePath
     ? await publishPackageDir(root, { sourcePath })
     : await publishPackageDir(root, { includeSource: true })
@@ -833,7 +839,7 @@ async function uploadPackageDirAsLatticeResult(
   }
 }
 
-/** 上传来源解析：目录 / .zip（压缩包先解到临时目录） */
+/** Resolve the upload source: directory / .zip (archives are extracted to a temp directory first) */
 async function resolveUploadRoot(source: string): Promise<{ root: string; cleanup?: () => void }> {
   let stat: fs.Stats
   try {
@@ -858,7 +864,7 @@ async function resolveUploadRoot(source: string): Promise<{ root: string; cleanu
   throw new Error('请选择插件包目录（含 plugin.json）或 .zip 压缩包')
 }
 
-/** 按显式路径上传（目录或 zip）；`sourcePath` 给出时源码与安装包分开上传 */
+/** Upload by explicit path (directory or zip); when `sourcePath` is given, source and install package are uploaded separately */
 export async function uploadLatticePackage(
   source: string,
   sourcePath?: string
@@ -880,10 +886,11 @@ export async function uploadLatticePackage(
 }
 
 /**
- * 「本机已安装插件」直接发布时一起上传的源码目录。
+ * Source directory uploaded together with a direct publish of an "installed plugin".
  *
- * 只有目录里确实是**同一个插件**的 `plugin.json` 才算源码；否则不传源码
- * （退回「安装包字节同时作为源码包」的旧口径），避免把别的目录误传上去。
+ * The directory counts as source only when its `plugin.json` really is for the **same plugin**; otherwise no
+ * source is uploaded (falling back to the legacy "install package bytes also serve as the source package"
+ * convention), so that a wrong directory is never uploaded by mistake.
  */
 function sourceDirForInstalledPublish(pluginId: string): string | undefined {
   const resolved = resolvePluginSource(pluginId)
@@ -898,12 +905,13 @@ function sourceDirForInstalledPublish(pluginId: string): string | undefined {
 }
 
 /**
- * `lattice:hub-publish-installed`：把**本机已安装**的这个插件直接发布到插件中心。
+ * `lattice:hub-publish-installed`: publish this **locally installed** plugin straight to the plugin hub.
  *
- * 为什么需要它（用户 2026-11-23：「为什么发布本地插件还要用户自己去选择」）：
- * 详情页的「发布到插件中心」只出现在「已安装、未发布」的插件上，安装包目录
- * （`userData/plugins/<id>`）与源码目录都是现成的——没必要再弹系统目录选择框，
- * 让用户从磁盘上把自己的插件再找一遍。找不到已安装包时才由调用方回退到「选目录发布」。
+ * Why it is needed (user 2026-11-23: "why must the user pick the directory themselves to publish a local plugin?"):
+ * the detail page only offers "publish to hub" for installed plugins that are not published yet, and both the
+ * install package directory (`userData/plugins/<id>`) and the source directory already exist — no need to pop a
+ * system directory picker and make the user hunt down their own plugin on disk again. When the installed package
+ * cannot be found, the caller falls back to "pick a directory and publish".
  */
 export async function publishInstalledLatticePlugin(
   pluginId: string
@@ -923,7 +931,7 @@ export async function publishInstalledLatticePlugin(
   }
 }
 
-/** 弹目录选择框并上传（用户取消返回 `{ok:true,canceled:true}`，不是失败） */
+/** Open a directory picker and upload (user cancel returns `{ok:true,canceled:true}`, which is not a failure) */
 export async function pickAndUploadLatticePackage(): Promise<LatticeUploadResult> {
   const result = await dialog.showOpenDialog({
     title: '选择要发布到插件中心的插件包目录（含 plugin.json 的构建产物目录）',
@@ -936,10 +944,11 @@ export async function pickAndUploadLatticePackage(): Promise<LatticeUploadResult
 }
 
 /**
- * 弹两个目录选择框：先选构建产物（安装包），再选源码目录（源码包）。
+ * Open two directory pickers: first the build output (install package), then the source directory (source package).
  *
- * 这是给“仓库里的插件”用的：`dist/<id>/` 是打包产物、`plugins/<id>/` 是 TypeScript 源码，
- * 两者字节不同，平台上的「源代码」下载才拿得到真正的源码。任一对话框取消都按“取消发布”处理。
+ * This targets "a plugin inside a repository": `dist/<id>/` is the packaged output and `plugins/<id>/` the
+ * TypeScript source; the two byte sets differ, so only this way does the platform's "source code" download yield
+ * the real source. Canceling either dialog is treated as "publish canceled".
  */
 export async function pickAndUploadLatticePackageWithSource(): Promise<LatticeUploadResult> {
   const pkg = await dialog.showOpenDialog({
@@ -959,7 +968,7 @@ export async function pickAndUploadLatticePackageWithSource(): Promise<LatticeUp
   return await uploadLatticePackage(pkg.filePaths[0], src.filePaths[0])
 }
 
-/** 弹 .zip 安装包选择框并上传（走同一套解压/清单/发布流水线） */
+/** Open a .zip install package picker and upload (goes through the same extract/manifest/publish pipeline) */
 export async function pickAndUploadZipLatticePackage(): Promise<LatticeUploadResult> {
   const result = await dialog.showOpenDialog({
     title: '选择要发布到插件中心的 .zip 安装包（根目录含 plugin.json）',
@@ -972,9 +981,9 @@ export async function pickAndUploadZipLatticePackage(): Promise<LatticeUploadRes
   return await uploadLatticePackage(result.filePaths[0])
 }
 
-// ---------- 下载安装 ----------
+// ---------- Download install ----------
 
-/** 选版本：显式 version 优先，否则 latest_version，再退回版本清单第一条（平台已按时间倒序） */
+/** Pick a version: an explicit version wins, then latest_version, then the first entry in the version list (the platform sorts newest first) */
 function pickVersion(detail: HubDetail, requested?: string): HubVersion {
   const versions = detail.versions
   if (versions.length === 0) {
@@ -997,7 +1006,7 @@ function pickVersion(detail: HubDetail, requested?: string): HubVersion {
   return versions[0]
 }
 
-/** 从插件中心下载并安装（或升级）一个插件；失败返回 `{ok:false,error}` */
+/** Download and install (or upgrade) a plugin from the plugin hub; failures return `{ok:false,error}` */
 export async function installLatticePlugin(
   pluginId: string,
   version?: string
@@ -1013,7 +1022,7 @@ export async function installLatticePlugin(
       installLatticePluginInner(id, version)
     )
   } catch (err) {
-    // 锁冲突（另一个入口正在安装/卸载同一插件）：可读地拒绝，别让两个动作互相覆盖
+    // Lock conflict (another entry is installing/uninstalling the same plugin): reject readably instead of letting the two operations overwrite each other
     return { ok: false, error: latticeErrorMessage(err) }
   }
 }
@@ -1039,7 +1048,7 @@ async function installLatticePluginInner(
       { expectedSha256: target.sha256 }
     )
 
-    // 落地：临时 zip → 解压 → 安装内核（校验 id/入口/是否撞内置 id 都由它兜底）
+    // Materialize: temp zip → extract → install core (it validates the id/entries and checks for built-in id collisions)
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ryten-lattice-'))
     const zipPath = path.join(
       workDir,
@@ -1066,9 +1075,11 @@ async function installLatticePluginInner(
       }
     }
 
-    // 用户是主动点「安装」的：装完即启用并装载主模块（与既有安装流程同口径）。
-    // 升级（同 id 已在跑）时必须**重载**：`installPackageDir` 刚覆盖了磁盘包，
-    // 直接 load 会因「已装载」提前返回，主进程继续跑旧模块，新版本里的新通道要重启才生效。
+    // The user actively clicked "install": enable and load the main module right after installing (same
+    // convention as the existing install flow). On upgrade (the same id is already running) a **reload** is
+    // required: `installPackageDir` just overwrote the package on disk, and a plain load returns early because
+    // the module is already loaded, leaving the main process running the old module — new channels in the new
+    // version only take effect after a restart.
     setEnabledOverride(info.id, true)
     let loadError: string | null = null
     try {
@@ -1086,7 +1097,7 @@ async function installLatticePluginInner(
       }
     }
 
-    // 安装记录（带版本/启用态/设备）：失败只告警——本地已经装好，不该因此把这次安装判失败
+    // Install record (version/enabled state/device): failures only warn — the plugin is already installed locally, so this should not fail the install
     try {
       await latticeRequest(`/v1/hub/installs/${encodeURIComponent(info.id)}`, {
         method: 'PUT',
@@ -1102,7 +1113,7 @@ async function installLatticePluginInner(
       )
     }
 
-    // v2：该版本带源码就自动下载并解压到本机源码目录（失败不判安装失败，见契约 §2）
+    // If the version ships source, download and extract it into the local source directory automatically (a failure does not fail the install)
     let sourcePath: string | undefined
     let sourceVersion: string | undefined
     let sourceManaged: LatticeSourceManaged | undefined
@@ -1112,7 +1123,7 @@ async function installLatticePluginInner(
       const installedId = detail.plugin_id
       const expectedSourceSha = target.source_sha256?.toLowerCase() || undefined
       try {
-        // 已经下过同一版本且内容一致 → 复用，不重复下载
+        // The same version with identical content was already downloaded → reuse it instead of downloading again
         const existing = resolvePluginSource(installedId)
         if (
           existing &&
@@ -1151,7 +1162,7 @@ async function installLatticePluginInner(
             sha256: actualSha,
             managed: stored.managed
           })
-          // 源码进了用户插件存放路径 = 插件模式侧栏多了一份草稿，让渲染层立刻刷新
+          // Source landed in the user plugin path = one more draft in the plugin-mode sidebar; make the renderer refresh right away
           if (stored.managed === 'pluginsPath') broadcastWorkshopChanged()
           logger.info(`[Lattice] Source ready: ${installedId}@${target.version} -> ${stored.path}`)
         }
@@ -1165,14 +1176,15 @@ async function installLatticePluginInner(
 
     notifyStateChanged()
     /**
-     * 安装/更新后拉一次云端安装记录（不自动补齐其它插件）：
-     * 全新安装的本机可能只有默认数据，而云端还留着这份插件的数据快照——
-     * 尤其是「卸载勾选清除本机数据」后重装时，`data_rev` 缓存已被清掉，这里 pull
-     * 会把云端数据写回 `plugin-state/<id>.json`（用户 2026-11-23：「不然以后的数据同步怎么办」）。
-     * 不 await：安装结果不依赖网络同步，后台完成即可。
+     * Pull the cloud install record once after install/update (other plugins are not auto-completed):
+     * a freshly installed machine may only have default data while the cloud still holds a data snapshot for
+     * this plugin — especially when reinstalling after "clear local data on uninstall" cleared the `data_rev`
+     * cache; this pull writes the cloud data back to `plugin-state/<id>.json` (user 2026-11-23: "otherwise
+     * what about future data sync?"). Not awaited: the install result does not depend on network sync, so let
+     * it finish in the background.
      */
-    // 安装过程中用户可能已经退出登录：没有会话就别再发一次后台 pull
-    // （否则一条「未登录」同步结果会写进新账号空间的状态条）
+    // The user may have logged out during the install: skip another background pull without a session
+    // (otherwise an "unauthenticated" sync result would be written into the new account space's status bar)
     if (hasLatticeSession()) void syncLattice({ direction: 'pull', installMissing: false })
     logger.info(
       `[Lattice] Install complete: ${info.id}@${info.version}${info.upgraded ? ' (upgrade)' : ''}`
@@ -1190,7 +1202,7 @@ async function installLatticePluginInner(
     }
   } catch (err) {
     let message = latticeErrorMessage(err)
-    // 平台已删除该插件时把 404 转成用户能懂的原因（自动补齐失败要展示可读文本）
+    // Convert a 404 into a user-understandable reason when the platform deleted the plugin (auto-complete failures need readable text)
     if (err instanceof LatticeApiError && err.status === 404) {
       message = `插件 '${id}' 在插件中心不存在（可能已被作者删除）：${message}`
     }
@@ -1199,7 +1211,7 @@ async function installLatticePluginInner(
   }
 }
 
-/** 「打开源码」前按需补源码的结果 */
+/** Result of fetching the source on demand before "open source" */
 export interface EnsureLatticeSourceResult {
   ok: boolean
   path?: string
@@ -1208,18 +1220,21 @@ export interface EnsureLatticeSourceResult {
 }
 
 /**
- * 打开源码之前的**按需补源码**：本机没有源码时，按「本机已安装的那个版本」从插件中心
- * 下载一次源码并解压到插件存放路径。
+ * **On-demand source fetch** before opening source: when this machine has no source, download it once from the
+ * plugin hub for "the version installed here" and extract it into the plugin storage path.
  *
- * 为什么需要：安装时源码下载失败只会记进 `sourceError`，不影响插件安装成功（契约 §2）；
- * 于是会出现「插件中心显示已安装、也标着有源码，但点『在对话中修改』只能回退到
- * 资源管理器」的状态（用户 2026-11-25 的现场，卸载重装后才好）。这里把「重装一次」
- * 变成一次可恢复的按需下载，用户不用卸载插件/重启应用。
+ * Why it is needed: a failed source download at install time is only recorded in `sourceError` and does not fail
+ * the install, so a state can arise where the hub shows the plugin as installed and flagged as having source, but
+ * clicking "modify in chat" can only fall back to the file explorer (user 2026-11-25; a reinstall fixed it). This
+ * turns "reinstall once" into a recoverable on-demand download, so the user need not uninstall the plugin or
+ * restart the app.
  *
- * 约束：
- * - 只补**本机安装的版本**，不要拿 latest 的源码去配旧安装包（版本错配比没有源码更糟）；
- * - 未登录 / 平台上该版本没有源码包时返回可读原因，由界面提示（不静默打开文件夹）；
- * - 已经存在源码（哪怕在 userData 回退目录）时什么都不做，交给调用方做迁移。
+ * Constraints:
+ * - only fetch the source for **the version installed here**; never pair the latest source with an older install
+ *   package (a version mismatch is worse than having no source);
+ * - when logged out / when the platform has no source package for that version, return a readable reason for the
+ *   UI to show (do not silently open a folder);
+ * - when source already exists (even in the userData fallback directory), do nothing and leave migration to the caller.
  */
 export async function ensureLatticePluginSource(
   pluginIdRaw: unknown
@@ -1311,9 +1326,9 @@ export async function ensureLatticePluginSource(
   }
 }
 
-// ---------- 源码路径 / 资产下载 / 重新发布 / 本地目录导入（契约 v2 §2） ----------
+// ---------- Source path / asset download / republish / local directory import ----------
 
-/** `lattice:source-path`：某插件当前可编辑的源码目录（null = 本机没有源码） */
+/** `lattice:source-path`: the currently editable source directory of a plugin (null = no source on this machine) */
 export function getLatticePluginSource(pluginId: string): LatticeSourcePathResult {
   const resolved = resolvePluginSource(pluginId)
   if (!resolved) return { path: null }
@@ -1324,14 +1339,14 @@ export function getLatticePluginSource(pluginId: string): LatticeSourcePathResul
   }
 }
 
-/** `lattice:local-source-path`：本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+/** `lattice:local-source-path`: the locally installed plugin package directory (`userData/plugins/<id>`, used to publish after a local install) */
 export function getLatticeLocalSourcePath(pluginId: string): LatticeLocalSourcePathResult {
   const scanned = findExternalPlugin(String(pluginId ?? '').trim())
   if (!scanned) return { path: null }
   return { path: scanned.dir, version: scanned.manifest.version }
 }
 
-/** 重新发布时解析源码目录：显式参数 → sourcePath → localSourcePath（已安装包目录） */
+/** Resolve the source directory on republish: explicit argument → sourcePath → localSourcePath (installed package directory) */
 function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
   const explicit = typeof sourceDir === 'string' ? sourceDir.trim() : ''
   if (explicit) {
@@ -1348,8 +1363,9 @@ function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
   const resolved: ResolvedPluginSource | null = resolvePluginSource(pluginId)
   if (resolved) {
     /**
-     * userData 回退目录里的源码先迁到插件存放路径：只有草稿目录才能构建/发布。
-     * 迁移失败时不要拿它去 `draftDir` 构建（路径不同，最终会报一个难懂的错）。
+     * Source in the userData fallback directory must first be promoted to the plugin storage path: only a draft
+     * directory can be built/published. When promotion fails, do not use it for a `draftDir` build (different
+     * paths would end in an obscure error).
      */
     const promoted = resolved.inWorkshop
       ? resolved
@@ -1358,10 +1374,11 @@ function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
     return promoted.path
   }
   /**
-   * 不再回退到「本机已安装的插件包目录」（`userData/plugins/<id>`）：
-   * 那是构建产物，不是源码。把它当源码发布会把**旧代码**重新上传成新版本，还会把
-   * 新版本号写进安装包的 plugin.json——页面显示 vNew，实际跑的仍是旧产物
-   * （用户 2026-11-25 的「发布后版本号对不上」现场）。没有源码就如实拒绝。
+   * No longer falls back to "the locally installed plugin package directory" (`userData/plugins/<id>`):
+   * that is build output, not source. Publishing it as source would re-upload **old code** as a new version
+   * and write the new version number into the install package's plugin.json — the page then shows vNew while
+   * the old artifacts are still running (user 2026-11-25: "version number does not match after publishing").
+   * Refuse honestly when there is no source.
    */
   throw new Error(
     `本机没有 '${pluginId}' 的源码目录，无法发布新版本。请先在插件中心安装带源码的版本，` +
@@ -1369,7 +1386,7 @@ function resolveRepublishRoot(pluginId: string, sourceDir?: string): string {
   )
 }
 
-/** 显式传入的目录如果是「已安装包目录」，拒绝：那是产物，发布它等于把旧代码当新版本 */
+/** Reject an explicitly passed directory that is an "installed package directory": it is output, publishing it would ship old code as a new version */
 function assertNotInstalledPackageRoot(pluginId: string, dir: string): void {
   const installed = installedPackageDirOf(pluginId)
   if (installed && isSamePath(dir, installed)) {
@@ -1381,11 +1398,12 @@ function assertNotInstalledPackageRoot(pluginId: string, dir: string): void {
 }
 
 /**
- * 目录本身是不是**已构建的插件包**：`plugin.json` 声明了 `entry.main` / `entry.renderer`，
- * 且这两个入口文件真的在目录里。
+ * Whether the directory itself is an **already built plugin package**: `plugin.json` declares `entry.main` /
+ * `entry.renderer` and both entry files really exist in the directory.
  *
- * 注意与「源码目录」的区别：工坊/插件仓库的源码 `plugin.json` 通常**不写 entry**
- * （entry 由构建写进产物），所以源码目录不是安装包，不能拿去发布。
+ * Note the difference from a "source directory": a workshop/repository source `plugin.json` usually does **not**
+ * declare entry (the build writes entry into the output), so a source directory is not an install package and
+ * must not be published.
  */
 function isBuiltPackageDir(dir: string): boolean {
   try {
@@ -1406,7 +1424,7 @@ function isBuiltPackageDir(dir: string): boolean {
   }
 }
 
-/** 读源码目录的 plugin.json（源码清单可能没有 entry；读不到 / 非法返回 null） */
+/** Read a source directory's plugin.json (a source manifest may have no entry; returns null when unreadable/invalid) */
 function readSourceManifest(dir: string): LocalPackageManifest | null {
   try {
     const raw = fs.readFileSync(path.join(dir, 'plugin.json'), 'utf-8')
@@ -1418,31 +1436,31 @@ function readSourceManifest(dir: string): LocalPackageManifest | null {
 }
 
 /**
- * 该源码目录是不是「工坊草稿」（= 配置的插件存放路径下的 `<id>/`）。
+ * Whether the source directory is a "workshop draft" (= `<id>/` under the configured plugin storage path).
  *
- * 不要求目录里先有 `workshop.json`：从插件中心下载的源码包只有 `plugin.json`，
- * 它同样应该能直接构建/发布（构建会在结束时补写 workshop.json）。旧判据要求
- * workshop.json，导致「刚装好、还没在对话里改过」的插件点「发布新版本」永远
- * 报「不是可发布的构建产物」——用户必须先随便改一个文件才行。
+ * The directory is not required to already contain `workshop.json`: source packages downloaded from the plugin
+ * hub only have `plugin.json` and should still be buildable/publishable directly (the build writes workshop.json
+ * at the end). The old check required workshop.json, so a plugin that was just installed and never edited in chat
+ * always reported "not a publishable build output" on "publish new version" — the user had to change a file first.
  */
 function isWorkshopSourceRoot(pluginId: string, dir: string): boolean {
   try {
     return isSamePath(dir, draftDir(pluginId))
   } catch {
-    // 没有配置插件存放路径时 draftDir 会抛错：按「不是草稿」处理，让下面的报错说明去处
+    // Without a configured plugin storage path draftDir throws: treat it as "not a draft" and let the error below explain where to go
     return false
   }
 }
 
-/** 本机已安装的插件包目录（`userData/plugins/<id>`）——它是产物，不是源码，不能拿来发布 */
+/** Locally installed plugin package directory (`userData/plugins/<id>`) — it is output, not source, and must not be published */
 function installedPackageDirOf(pluginId: string): string | null {
   const installed = findExternalPlugin(pluginId)
   return installed ? path.resolve(installed.dir) : null
 }
 
-/** 发布用的**安装包根目录**解析（源码目录 ≠ 安装包，这是这一层最容易混淆的地方） */
+/** Resolve the **install package root** for publishing (a source directory ≠ an install package; this is the most confusing part of this layer) */
 async function resolveRepublishPackageRoot(pluginId: string, sourceRoot: string): Promise<string> {
-  // 兼容旧口径：源码目录本身就是构建产物（外部插件仓库把 dist 当源码目录上传过）
+  // Legacy convention: the source directory is itself build output (external plugin repositories used to upload dist as the source directory)
   if (isBuiltPackageDir(sourceRoot)) return sourceRoot
 
   if (!isWorkshopSourceRoot(pluginId, sourceRoot)) {
@@ -1453,9 +1471,10 @@ async function resolveRepublishPackageRoot(pluginId: string, sourceRoot: string)
   }
 
   /**
-   * 工坊草稿：安装包 = 构建产物 `dist/<id>`（构建时把 entry 写进产物清单），源码包 = 草稿目录。
-   * 产物缺失或落后于源码时**当场构建**——「发布新版本」的语义就是「把当前源码发出去」，
-   * 拿旧产物发布会让用户装到旧代码（而且版本号还对得上，排查时极难发现）。
+   * Workshop draft: install package = build output `dist/<id>` (the build writes entry into the output manifest),
+   * source package = draft directory. When the output is missing or behind the source, **build on the spot** —
+   * "publish new version" means "ship the current source"; publishing with stale output would install old code for
+   * users (and the version numbers would still match, making it very hard to spot when debugging).
    */
   if (!hasBuild(pluginId) || isBuildStale(pluginId)) {
     logger.info(`[Lattice] Republish needs a fresh build for ${pluginId}, building the draft first`)
@@ -1477,10 +1496,12 @@ async function resolveRepublishPackageRoot(pluginId: string, sourceRoot: string)
 }
 
 /**
- * `lattice:republish`：源码目录 → 安装包根目录（工坊草稿先构建/复用 `dist/<id>`；本身是
- * 构建产物则原样用）→ **安装包 zip + 源码包 zip 分开上传** → POST → PUT。
+ * `lattice:republish`: source directory → install package root (a workshop draft is built first / reuses
+ * `dist/<id>`; if it is already build output, use it as is) → **upload the install package zip and the source
+ * package zip separately** → POST → PUT.
  *
- * 版本号必填且必须大于平台当前最新版本；服务端 409 会转成可读错误（源码不可替换同样是 409）。
+ * The version is required and must be greater than the platform's current latest version; server 409s are turned
+ * into readable errors (a source that cannot be replaced is also a 409).
  */
 export async function republishLatticePlugin(
   input: LatticeRepublishInput
@@ -1494,10 +1515,11 @@ export async function republishLatticePlugin(
     }
     const sourceRoot = resolveRepublishRoot(pluginId, input?.sourceDir)
     /**
-     * 源码目录**不是**安装包：工坊/插件仓库的源码 `plugin.json` 不写 entry（构建时才写进
-     * `dist/<id>`）。旧实现直接把源码目录当安装包校验，于是每次从源码发布都会报
-     * 「plugin.json 的 entry 缺少 main / renderer」（2026-11-23 用户反馈）。
-     * 现在安装包取构建产物，源码目录只作为源码包上传。
+     * The source directory is **not** the install package: a workshop/repository source `plugin.json` has no entry
+     * (entry is written into `dist/<id>` only at build time). The old implementation validated the source directory
+     * as an install package, so every publish from source failed with "plugin.json's entry is missing main /
+     * renderer" (user feedback 2026-11-23). Now the install package comes from the build output and the source
+     * directory is only uploaded as the source package.
      */
     const packageRoot = await resolveRepublishPackageRoot(pluginId, sourceRoot)
     const files = collectPackageFiles(packageRoot)
@@ -1509,8 +1531,9 @@ export async function republishLatticePlugin(
       )
     }
     /**
-     * 源码清单单独读、单独写回：源码目录的清单可能没有 entry（不能过安装包的校验），
-     * 发布成功后只把版本号写回它，保持「本机源码版本 = 刚发布的版本」。
+     * Read the source manifest separately and write it back separately: the source directory's manifest may have
+     * no entry (it cannot pass the install package validation); after a successful publish only the version number
+     * is written back, keeping "local source version = just published version".
      */
     const sourceManifest = readSourceManifest(sourceRoot)
     if (sourceManifest && typeof sourceManifest.id === 'string' && sourceManifest.id !== pluginId) {
@@ -1523,14 +1546,14 @@ export async function republishLatticePlugin(
         ? input.changelog.trim()
         : undefined
     const published = await publishPackageDir(packageRoot, {
-      // 源码与安装包分开：同一个目录时（旧口径）沿用「同一份 zip 当源码包」
+      // Source separate from the install package: when they are the same directory (legacy convention), keep "the same zip serves as the source package"
       ...(isSamePath(packageRoot, sourceRoot)
         ? { includeSource: true }
         : { sourcePath: sourceRoot }),
       versionOverride: version,
       ...(changelog ? { changelogOverride: changelog } : {})
     })
-    // 版本号与磁盘 plugin.json 不一致时落盘：本地源码状态与刚发布的版本保持一致
+    // Write to disk when the version differs from plugin.json on disk: keep the local source state consistent with the version just published
     const sourceVersion =
       sourceManifest && typeof sourceManifest.version === 'string' ? sourceManifest.version : ''
     if (sourceManifest && sourceVersion !== published.version) {
@@ -1575,10 +1598,10 @@ export async function republishLatticePlugin(
   }
 }
 
-/** 下载文件名安全化（防路径穿越/非法字符；默认名只取 basename） */
+/** Sanitize the download file name (prevents path traversal / invalid characters; the default name uses only the basename) */
 function sanitizeDownloadName(name: string): string {
   const base = path.basename(String(name ?? '').replace(/\\/g, '/'))
-  // 逐字符过滤 Windows 非法字符与控制字符（不用正则里的 \x00-\x1f：eslint no-control-regex）
+  // Filter Windows-invalid and control characters one by one (avoid the \x00-\x1f regex: eslint no-control-regex)
   const cleaned = Array.from(base)
     .filter((char) => {
       const code = char.codePointAt(0) ?? 0
@@ -1591,7 +1614,7 @@ function sanitizeDownloadName(name: string): string {
   return cleaned.toLowerCase().endsWith('.zip') ? cleaned : `${cleaned}.zip`
 }
 
-/** `lattice:download-asset`：安装包 / 源码包 → 弹保存框 → 下载（sha256 校验）→ 落盘 */
+/** `lattice:download-asset`: install package / source package → save dialog → download (sha256 check) → write to disk */
 export async function downloadLatticeAsset(
   pluginIdRaw: unknown,
   versionRaw: unknown,
@@ -1641,14 +1664,15 @@ export async function downloadLatticeAsset(
 }
 
 /**
- * 本地目录导入：找出「带 plugin.json 的插件目录」。
+ * Local directory import: find "plugin directories that contain a plugin.json".
  *
- * 支持三种选法：
- * 1. 所选目录本身就是插件目录（根有 plugin.json）；
- * 2. 所选目录的直接子目录是插件目录（`<root>/<id>/plugin.json`，最常见的插件仓库布局）；
- * 3. 直接子目录都不是插件、但它下面**一层**是（`<root>/dist/<id>/plugin.json`）——
- *    「仓库根 / 构建产物在 dist」这类布局，用户按仓库根选也能导入；
- *    `node_modules` / `.git` / 隐藏目录一律不扫。
+ * Three layouts are supported:
+ * 1. the selected directory is itself a plugin directory (plugin.json at the root);
+ * 2. a direct child of the selected directory is a plugin directory (`<root>/<id>/plugin.json`, the most common
+ *    plugin-repository layout);
+ * 3. no direct child is a plugin but one level below is (`<root>/dist/<id>/plugin.json`) — for
+ *    "repository root / build output in dist" layouts, so selecting the repository root also works;
+ *    `node_modules` / `.git` / hidden directories are never scanned.
  */
 function scanLocalPluginDirs(root: string): string[] {
   const looksLikePlugin = (dir: string): boolean => fs.existsSync(path.join(dir, 'plugin.json'))
@@ -1664,13 +1688,13 @@ function scanLocalPluginDirs(root: string): string[] {
     (entry) =>
       entry.isDirectory() && !entry.name.startsWith('.') && !PACKAGE_EXCLUDED_DIRS.has(entry.name)
   )
-  // ② 直接子目录
+  // ② Direct children
   const direct = candidates
     .map((entry) => path.join(root, entry.name))
     .filter((dir) => looksLikePlugin(dir))
   if (direct.length > 0) return direct.sort((a, b) => a.localeCompare(b, 'en'))
 
-  // ③ 再下钻一层（仓库根 → dist/<id> / plugins/<id>）
+  // ③ Drill down one more level (repository root → dist/<id> / plugins/<id>)
   const nested: string[] = []
   for (const entry of candidates) {
     const container = path.join(root, entry.name)
@@ -1689,13 +1713,13 @@ function scanLocalPluginDirs(root: string): string[] {
   return nested.sort((a, b) => a.localeCompare(b, 'en'))
 }
 
-/** `lattice:import-local-dir`：弹目录选择框 → 批量发布本地源码目录下的插件（安装包 + 源码） */
+/** `lattice:import-local-dir`: open a directory picker → batch publish the plugins under a local source directory (install package + source) */
 export async function importLocalPlugins(
   explicitDir?: string
 ): Promise<LatticeImportLocalDirResult> {
   const preset = typeof explicitDir === 'string' ? explicitDir.trim() : ''
   if (preset) {
-    // 显式路径：给「设为插件存放路径」与自动化/工装用（正常 UI 不传，走系统选择框）
+    // Explicit path: for "set as plugin storage path" and automation/tooling (the normal UI passes nothing and uses the system picker)
     return await importLocalPluginsFromDir(preset)
   }
   const picked = await dialog.showOpenDialog({
@@ -1709,9 +1733,10 @@ export async function importLocalPlugins(
 }
 
 /**
- * 按显式路径批量导入（为工装/自动化保留）：发布每个带 plugin.json 的插件目录，
- * 版本取 plugin.json.version，安装包与源码包用同一份 zip。
- * 单个失败只记 skipped（reason 可读），不影响其余插件。
+ * Batch import by explicit path (kept for tooling/automation): publish every plugin directory that has a
+ * plugin.json, taking the version from plugin.json.version and using the same zip for both the install package
+ * and the source package.
+ * A single failure is only recorded in skipped (with a readable reason) and does not affect the other plugins.
  */
 export async function importLocalPluginsFromDir(
   dirPath: string
@@ -1744,7 +1769,7 @@ export async function importLocalPluginsFromDir(
         if (!VERSION_RE.test(version)) {
           throw new Error(`plugin.json.version 不合法（需要 semver）：${version || '（空）'}`)
         }
-        // 安装包与源码包都是这个目录的整包 zip；批量导入不发进度事件（多条流水线进度没有意义）
+        // Install package and source package are both the whole-directory zip; batch imports emit no progress events (progress is meaningless across several pipelines)
         await publishPackageDir(dir, {
           includeSource: true,
           silent: true,

@@ -13,16 +13,21 @@ import {
 } from '../../utils/harness/question'
 
 /**
- * ask_user_question 的**输入区内联面板**（替代原弹窗，2026-11-27 用户口径）。
+ * Inline panel inside the input area for ask_user_question (replaces the old dialog, user
+ * requirement 2026-11-27).
  *
- * 口径：
- * - 不再弹独立窗口：面板占据输入框位置，问题区高亮/选项居中（radio 与右侧内容垂直居中）；
- * - 提交 = 回答后本轮继续（不新开消息）；
- * - 取消 = **不终止本轮**：通知主进程按 cancelled 结算挂起问题，面板立即消失、输入恢复，
- *   模型收到「用户取消回答」后继续执行；不显示任何取消提示条；
- * - 多题时一次一题（上一题/下一题/提交），单题直接提交。
+ * Semantics:
+ * - No separate window anymore: the panel takes the place of the input box; the question area is
+ *   highlighted and options are centered (radio vertically centered with the content on its right);
+ * - Submit = answer, then the current turn continues (no new message);
+ * - Cancel = does **not** terminate the turn: the main process is told to settle the pending
+ *   question as cancelled, the panel disappears immediately and the input is restored, and the
+ *   model continues after receiving "user cancelled the answer"; no cancel notice bar is shown;
+ * - Multiple questions are asked one at a time (prev / next / submit); a single question submits
+ *   directly.
  *
- * 纯逻辑（「其他」处理、答案折叠、可提交判定）在 utils/harness/question.ts，并单独有单测。
+ * Pure logic (handling of "other", answer folding, submit checks) lives in
+ * utils/harness/question.ts and has its own unit tests.
  */
 
 interface AskQuestionPanelProps {
@@ -44,7 +49,7 @@ const AskQuestionPanel: React.FC<AskQuestionPanelProps> = ({
   const [step, setStep] = useState(0)
   const [drafts, setDrafts] = useState<Record<string, QuestionDraft>>({})
 
-  // 换了一批问题（新 requestId）→ 回到第一题、清空草稿
+  // A new batch of questions (new requestId) → back to the first question, clear drafts
   useEffect(() => {
     setStep(0)
     setDrafts({})

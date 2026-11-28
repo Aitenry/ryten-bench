@@ -21,7 +21,7 @@ import { preloadHarness } from '../system/harness'
 import { migrateLegacyHarnessSettingsKey } from '../storage/layout'
 import { getMainWindow, markInitComplete } from './window-manager'
 
-/** 初始化进度快照：后挂载的启动页（主窗口渲染层）通过 `init-state` 先取一次当前状态 */
+/** Initialization progress snapshot: the later-mounted splash page (main window renderer) fetches the current state once via `init-state` */
 export interface InitSnapshot {
   complete: boolean
   error: string | null
@@ -46,7 +46,7 @@ function sendToMainWindow(channel: string, payload?: unknown): void {
   safeSend(win.webContents, channel, payload)
 }
 
-/** 初始化进度：更新快照并推给主窗口渲染层（启动页） */
+/** Initialization progress: update the snapshot and push it to the main window renderer (splash page) */
 function sendInitProgress(
   currentTask: string,
   progress: number,
@@ -69,16 +69,18 @@ export function getInitSnapshot(): InitSnapshot {
   return { ...initSnapshot }
 }
 
-/** 启动页拉取当前进度（处理「初始化在渲染层订阅前就已推进」的情况） */
+/** Splash page pulls the current progress (covers initialization advancing before the renderer subscribes) */
 export function registerStartupIpc(): void {
   ipcMain.handle('init-state', () => getInitSnapshot())
 }
 
 /**
- * 旧版本把 AI 助手这段配置存在 `chat` 键下，模块改名后统一用 `harness`。
+ * Older versions stored the AI assistant settings under the `chat` key; after the module
+ * rename everything uses `harness`.
  *
- * 迁移实现在 `storage/layout.ts`（启动更早的 `bootstrapStorageLayout()` 已经调用过一次；
- * 这里再调用是幂等的安全网，保证「初始化流程被单独调用」时也能读到老配置）。
+ * The migration lives in `storage/layout.ts` (the earlier-starting `bootstrapStorageLayout()`
+ * already calls it once; calling it again here is an idempotent safety net so the old config
+ * is readable even when the initialization flow runs on its own).
  */
 async function loadConfig(): Promise<void> {
   migrateLegacyHarnessSettingsKey()
@@ -89,13 +91,15 @@ async function loadConfig(): Promise<void> {
   const configPromises: Promise<void>[] = []
 
   if (!ipConfig) {
-    // IP 数据非关键依赖，后台静默获取，不阻塞初始化
+    // IP data is a non-critical dependency: fetch it silently in the background without
+    // blocking initialization
     getIp()
       .then((ip) => {
         if (ip) {
           settingsStore.set('ip', ip)
-          // IP 就绪后补建天气自动刷新定时器（修复：主窗口创建时 ip 未到位，
-          // startWeatherAutoRefresh 提前 return，定时器本会话永不启动）
+          // Re-create the weather auto-refresh timer once the IP is ready (the main window was
+          // created before the IP was available, so startWeatherAutoRefresh returned early and
+          // the timer would never start in this session)
           startWeatherAutoRefresh()
         }
       })
@@ -104,9 +108,10 @@ async function loadConfig(): Promise<void> {
   if (!lockPermission) {
     configPromises.push(
       Promise.resolve().then(async () => {
-        // 首次落盘就写成加盐 scrypt 摘要（旧版本这里写的是 MD5('123456')，见
-        // lock/credentials.ts 的说明）；默认码 123456 只用于开箱即可试用，
-        // 设置页会提示用户尽快修改。
+        // Write a salted scrypt digest on the first persist (older versions wrote
+        // MD5('123456') here; see the notes in lock/credentials.ts). The default code 123456
+        // only exists for out-of-the-box trial use; the settings page prompts the user to
+        // change it soon.
         settingsStore.set('lock', {
           code: await hashLockCode(DEFAULT_LOCK_CODE),
           view: false,
@@ -150,10 +155,11 @@ async function loadConfig(): Promise<void> {
 }
 
 /**
- * 数据库启动失败的识别：PGlite 起不来时 drizzle 只会抛「Failed query: CREATE SCHEMA …」，
- * 真正的原因藏在 cause 链里（如 RuntimeError: Aborted()，Postgres 侧的
- * "could not locate a valid checkpoint record" 只写进 stdout）。这里把整条 cause 链打出来，
- * 否则日志里只剩一句无从下手的 SQL。
+ * Detecting a database startup failure: when PGlite cannot start, drizzle only throws
+ * "Failed query: CREATE SCHEMA …" while the real cause hides in the cause chain (e.g.
+ * RuntimeError: Aborted(); the Postgres-side "could not locate a valid checkpoint record"
+ * is only written to stdout). Print the whole cause chain here, otherwise the log is left
+ * with a single SQL line that gives no clue where to start.
  */
 function describeErrorChain(err: unknown): string {
   const parts: string[] = []
@@ -165,7 +171,7 @@ function describeErrorChain(err: unknown): string {
   return parts.length > 0 ? parts.join(' ← ') : String(err)
 }
 
-/** 数据库无法启动的典型特征（本地集群损坏 / 需要崩溃恢复但恢复不了） */
+/** Typical signs that the database cannot start (local cluster corruption / crash recovery needed but impossible) */
 function looksLikeDatabaseStartupFailure(err: unknown): boolean {
   const text = describeErrorChain(err)
   return (
@@ -178,15 +184,18 @@ function looksLikeDatabaseStartupFailure(err: unknown): boolean {
 }
 
 /**
- * 数据库损坏时的兜底：把损坏目录改名留档（不删），让应用用空库继续可用。
+ * Fallback for a corrupt database: rename the corrupt directory to keep it on record (do not
+ * delete it) so the app can stay usable with an empty database.
  *
- * 为什么需要它：PGlite 是嵌入式 Postgres，**没有 pg_resetwal 这类修复工具**，一旦
- * pg_control/WAL 里的检查点记录被写坏（非正常退出、或两个进程同时打开同一目录），
- * 集群就再也起不来，而在此之前应用只是一直卡在「初始化失败」的启动页上（主窗口不展示），
- * 用户既看不到原因也无法自救。
+ * Why this is needed: PGlite is an embedded Postgres with **no repair tools such as
+ * pg_resetwal**. Once the checkpoint record in pg_control/WAL is corrupted (abnormal exit, or
+ * two processes opening the same directory at once), the cluster can never start again, and
+ * until then the app simply stayed stuck on the "initialization failed" splash page (the main
+ * window never shows), leaving the user with neither the reason nor a way to recover.
  *
- * 留档而不是删除：坏目录里的数据页通常完好，可用 `node scripts/recover-pglite.mjs`
- * 抢救出会话/文档等数据（该脚本正是 2026-09-18 那次事故里实际用过的恢复流程）。
+ * Archive rather than delete: the data pages in the corrupt directory are usually intact, so
+ * `node scripts/recover-pglite.mjs` can rescue sessions/documents and other data (that script
+ * is the recovery flow actually used in the 2026-09-18 incident).
  */
 async function offerDatabaseReset(
   err: unknown
@@ -224,10 +233,11 @@ async function offerDatabaseReset(
 }
 
 /**
- * 执行「加载页预取」：系统功能（AI 助手）的预取 + 第三方插件贡献的钩子（`app.preload`）。
+ * Run the "splash preload": preload of system features (AI assistant) plus hooks contributed
+ * by third-party plugins (`app.preload`).
  *
- * 逐个 try/catch：预取失败只记日志——预取是加速用的旁路，
- * 不该把一个还能用的启动流程拦在加载页上。
+ * Each one is wrapped in try/catch: a preload failure is only logged — preload is an optional
+ * accelerator and must not hold an otherwise working startup flow on the splash page.
  */
 async function runPreloadHooks(): Promise<void> {
   try {
@@ -245,9 +255,10 @@ async function runPreloadHooks(): Promise<void> {
 }
 
 async function performInitializationTasks(): Promise<void> {
-  // 扁平化初始化步骤：配置 / 密钥库 / 连接数据库 / 执行数据库迁移 / 工作区迁移。
-  // 进度条按步骤均匀推进，逐步增长，避免整任务一步跳到 25%。
-  // 步骤名是启动页上可见的文案，随界面语言（这里取一次即可，启动期间语言不会变）。
+  // Flattened initialization steps: config / keystore / connect database / run migrations /
+  // workspace migration. The progress bar advances evenly per step and grows gradually instead
+  // of jumping to 25% in one go. Step names are the copy visible on the splash page and follow
+  // the UI language (fetching them once is enough; the language does not change during startup).
   const m = mainMessages()
   let database: Database | null = null
   const steps: { name: string; execute: () => Promise<void> | void }[] = [
@@ -255,10 +266,12 @@ async function performInitializationTasks(): Promise<void> {
       name: m.splash.stepLoadConfig,
       execute: async () => {
         await loadConfig()
-        // 锁屏配置可能刚刚才首次落盘：刷新快照（默认码提示 / 开关状态）。
-        // 「启动即锁屏」由 startLockScreenWatcher() 统一完成（早于窗口创建）；设置文件
-        // 从备份恢复的场景也在它之前发生（恢复在 context 模块求值时），因此这里不再
-        // 单独补一次 lockNow —— 两处都做会让「锁屏到底由谁触发」变得难查。
+        // The lock-screen config may have been persisted for the first time just now: refresh
+        // the snapshot (default-code hint / toggle state). "Lock on startup" is handled in one
+        // place by startLockScreenWatcher() (before the window is created), and restoring the
+        // settings file from a backup happens even earlier (restore runs during context module
+        // evaluation), so do not call lockNow separately here — doing both would make it hard
+        // to tell who triggers the lock screen.
         refreshLockScreenState()
       }
     },
@@ -290,7 +303,8 @@ async function performInitializationTasks(): Promise<void> {
 
   const runSteps = async (): Promise<void> => {
     for (let i = 0; i < steps.length; i++) {
-      // 步骤起始进度：已完成 i 步 / 总步数，每步只推进一小格
+      // Progress at the start of the step: i steps done / total steps, so each step advances
+      // a small notch
       sendInitProgress(steps[i].name, (i / steps.length) * 100, i + 1, steps.length)
       await steps[i].execute()
     }
@@ -299,11 +313,13 @@ async function performInitializationTasks(): Promise<void> {
   try {
     await runSteps()
   } catch (err) {
-    // 数据库起不来：先关掉失败的实例（Windows 上句柄未释放会导致目录改名失败），
-    // 再给用户一条可执行的出路；其余错误照原样抛出（加载页会显示失败提示）
+    // Database failed to start: close the failed instance first (on Windows an unreleased
+    // handle makes renaming the directory fail), then offer the user an actionable way out;
+    // other errors are rethrown as-is (the splash page shows a failure notice)
     logger.error(`[Init] Initialization failed (cause chain): ${describeErrorChain(err)}`)
     try {
-      // 显式断言一次：database 只在 steps 回调里赋值，TS 的控制流分析会把它窄化成 null
+      // Explicit assertion: database is only assigned inside the step callbacks, so TS
+      // control-flow analysis narrows it to null
       const failedDb = database as Database | null
       await Promise.race([
         failedDb ? failedDb.close() : Promise.resolve(),
@@ -314,7 +330,7 @@ async function performInitializationTasks(): Promise<void> {
     }
     const outcome = await offerDatabaseReset(err)
     if (outcome !== 'recovered') {
-      // 用户选择退出：通知启动页显示错误，然后直接退出
+      // User chose to quit: tell the splash page to show the error, then quit immediately
       if (outcome === 'declined') {
         initSnapshot.error = describeErrorChain(err)
         sendToMainWindow('init-error', initSnapshot.error)
@@ -325,27 +341,32 @@ async function performInitializationTasks(): Promise<void> {
     database = null
     await runSteps()
   }
-  // 建表与工作区迁移全部完成后再开放数据库访问：
-  // 主窗口预热期间渲染进程可能已发起查询，提前暴露会导致「relation ... does not exist」。
+  // Expose database access only after table creation and workspace migration have finished:
+  // during warm-up the renderer may already issue queries, and exposing it early causes
+  // "relation ... does not exist".
   setDatabaseInstance(database)
 
-  // 全部步骤完成
+  // All steps completed
   sendInitProgress(m.splash.stepCompleted, 100, steps.length, steps.length)
 }
 
 /**
- * 运行启动初始化（数据库 / 配置 / 密钥库 / 工作区迁移 / 插件预取）。
+ * Run startup initialization (database / config / keystore / workspace migration / plugin
+ * preload).
  *
- * 用户 2026-11-20 口径：**不再创建独立的加载窗口**——主窗口先创建并立即显示，
- * 启动页放在主窗口渲染层里（StartupSplash），所有数据加载完成后再进入主界面。
- * 因此这里只跑初始化任务，进度通过 `init-progress` 事件 + `init-state` 快照暴露给渲染层。
+ * Per the user's 2026-11-20 decision: **no separate loading window is created anymore** — the
+ * main window is created first and shown immediately, the splash page lives in the main window
+ * renderer (StartupSplash), and the main UI appears once all data has loaded. So this only runs
+ * the initialization tasks; progress is exposed to the renderer through the `init-progress`
+ * event plus the `init-state` snapshot.
  */
 export function runStartupInitialization(): Promise<void> {
   const initPromise = performInitializationTasks()
     .then(async () => {
       logger.info('All initialization tasks completed.')
-      // 预取数据（启动页阶段完成）：AI 助手的预取直接调用，第三方插件的预取由它们
-      // 贡献的 `app.preload` 钩子提供——停用插件即不再预取。
+      // Preload data (done during the splash phase): the AI assistant preload is called
+      // directly, while third-party plugin preload is provided by the `app.preload` hooks they
+      // contribute — disabling a plugin stops its preload.
       await runPreloadHooks()
       initSnapshot.complete = true
       initSnapshot.progress = 100

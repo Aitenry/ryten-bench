@@ -23,8 +23,9 @@ import type { MarkdownViewProps } from '@renderer/types/components'
 // Stable references — prevent ReactMarkdown from re-rendering the entire DOM tree
 const remarkPlugins = [remarkGfm, remarkMath, remarkMathBridge, remarkMdxSource]
 
-// sanitize 先于 highlight/katex：KaTeX 输出与 hljs 类名不再被剥掉；
-// 白名单需放行 remarkMathBridge 生成的 .math 类名（rehype-katex 依赖它匹配）
+// sanitize runs before highlight/katex so KaTeX output and hljs class names are no longer
+// stripped; the allowlist must let through the .math class names produced by remarkMathBridge
+// (rehype-katex relies on them for matching)
 const sanitizeSchema = {
   ...defaultSchema,
   attributes: {
@@ -35,10 +36,10 @@ const sanitizeSchema = {
   }
 }
 
-/** 超长代码块的语法高亮上限（字符）：超过则跳过 highlighter，只做纯文本渲染 */
+/** Syntax highlighting limit for very long code blocks (characters): beyond it the highlighter is skipped and only plain text is rendered */
 const MAX_HIGHLIGHT_CHARS = 20_000
 
-/** 递归拼接 hast 节点的纯文本（只用于量代码块长度，不参与输出） */
+/** Recursively concatenate the plain text of hast nodes (only used to measure code block length, never emitted) */
 function hastText(node: unknown): string {
   const n = node as { type?: string; value?: string; children?: unknown[] } | null | undefined
   if (!n) return ''
@@ -50,25 +51,30 @@ function hastText(node: unknown): string {
 }
 
 /**
- * 超长代码块降级为纯文本（渲染进程内存/CPU 保护）。
+ * Degrade very long code blocks to plain text (renderer memory/CPU protection).
  *
- * 背景：模型经常在回复里整段贴出工具输出或文件内容，一次流式回复里几十上百个代码块
- * 并不罕见。rehype-highlight 对每个带语言的代码块跑一次 highlight.js，长文本下分词
- * 结果是一棵巨大的 hast 树，随后又被 React 展开成大段 DOM；叠加流式期间的高频全量
- * 重渲染（每批 chunk 重新解析整段 markdown），足以把渲染进程推到内存超限被杀
- * （reason=oom / 0xE0000008）。
+ * Background: the model often pastes whole tool outputs or file contents into a reply, and
+ * dozens to hundreds of code blocks in one streaming reply are not rare. rehype-highlight runs
+ * highlight.js for every code block that has a language; on long text the tokenized result is a
+ * huge hast tree that React then expands into a large DOM. Combined with the frequent full
+ * re-renders during streaming (the entire markdown is re-parsed for every batch of chunks), that
+ * is enough to push the renderer process past its memory limit and get it killed
+ * (reason=oom / 0xE0000008).
  *
- * 处理：给超过 MAX_HIGHLIGHT_CHARS 的 code 节点加 `no-highlight` 类，rehype-highlight
- * 见到该类直接跳过（不抛错、不改内容），文本仍完整渲染，只是没有配色。
+ * Handling: add a `no-highlight` class to code nodes longer than MAX_HIGHLIGHT_CHARS, and
+ * rehype-highlight skips them on sight (no error, no content change); the text still renders in
+ * full, just without colors.
  */
 function rehypeSkipHugeHighlight(): (tree: unknown) => void {
   const tooLong = (node: unknown): boolean => hastText(node).length > MAX_HIGHLIGHT_CHARS
   return (tree: unknown): void => {
-    // 兜底：本函数是 transformer，只能由 unified 在管线里带着 tree 调用。
-    // 若被误当 attacher 使用（即写成 rehypeSkipHugeHighlight() 传进 rehypePlugins），
-    // unified 会在 freeze 阶段无参调用它，tree 为 undefined，visit() 内部随即抛
-    // "Cannot use 'in' operator to search for 'children' in undefined"，整棵 markdown
-    // 渲染树会被 ErrorBoundary 兜住，界面直接白掉。这里直接退出，退化成「不做降级」。
+    // Guard: this function is a transformer, so unified can only call it with the tree while
+    // running the pipeline. If it is mistakenly used as an attacher (i.e. written as
+    // rehypeSkipHugeHighlight() and passed into rehypePlugins), unified calls it without
+    // arguments during freeze, tree is undefined, and visit() immediately throws
+    // "Cannot use 'in' operator to search for 'children' in undefined"; the whole markdown
+    // render tree is then caught by ErrorBoundary and the UI goes blank. Exit early here,
+    // degrading to "no downgrade".
     if (!tree || typeof tree !== 'object') {
       console.warn('[MarkdownLoad] rehypeSkipHugeHighlight must be passed as an attacher (no parentheses)')
       return
@@ -79,7 +85,7 @@ function rehypeSkipHugeHighlight(): (tree: unknown) => void {
         properties?: Record<string, unknown>
       }
       const up = parent as { tagName?: string } | undefined
-      // 与 rehype-highlight 的处理范围一致：只处理 <pre><code> 代码块
+      // Same scope as rehype-highlight: only handle <pre><code> code blocks
       if (el.tagName !== 'code' || up?.tagName !== 'pre') return
       if (el.properties?.className && String(el.properties.className).includes('no-highlight')) {
         return
@@ -96,20 +102,22 @@ function rehypeSkipHugeHighlight(): (tree: unknown) => void {
 const rehypePlugins: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, sanitizeSchema] as unknown as Pluggable,
-  // 传 attacher 本身：**不要写成 rehypeSkipHugeHighlight()**。
-  // 加括号拿到的是 transformer，在 unified 眼里它会被当成 attacher，freeze 阶段被无参
-  // 调用（tree === undefined）并抛错，整个 markdown 渲染随之崩掉。
+  // Pass the attacher itself: **do not write rehypeSkipHugeHighlight()**.
+  // With parentheses you get a transformer, which unified sees as an attacher, calls without
+  // arguments during the freeze phase (tree === undefined) and throws, taking down the whole
+  // markdown render.
   rehypeSkipHugeHighlight,
   rehypeHighlight,
-  // strict:'ignore'：模型常把中文写进 $...$ 数学模式，KaTeX 默认 strict='warn' 会为每个
-  // 字符刷一条 console.warning（一次渲染数百条，灌爆日志）；ignore 静默降级渲染。
+  // strict:'ignore': the model often writes Chinese inside $...$ math mode, and KaTeX's default
+  // strict='warn' logs a console warning per character (hundreds per render, flooding the logs);
+  // ignore degrades silently.
   [rehypeKatex, { strict: 'ignore' }]
 ]
 
 // Context to tell code component whether it's inside a <pre> (code block) or standalone (inline)
 const IsPreContext = React.createContext(false)
 
-// 复制按钮组件
+// Copy button component
 const CopyButton = ({
   text,
   isDarkMode
@@ -174,8 +182,9 @@ const MarkdownLoad = React.memo(
     .markdown-body blockquote { border-left: 4px solid; padding-left: 1em; margin: 1em 0; font-style: italic; }
     .markdown-body table { width: 100%; border-collapse: collapse; margin: 1em 0; }
     .markdown-body th, .markdown-body td { padding: 0.75em; border: 1px solid; text-align: left; }
-    /* 防横向溢出：根容器兜底断词；内联代码（如 Nav/Footer/... 含斜杠长串）在超宽时断行，
-       代码块（pre code）保持原样不换行（pre 自带 overflow-x） */
+    /* Horizontal overflow guard: the root container breaks words as a fallback; inline code
+       (e.g. long slash-separated strings such as Nav/Footer/...) wraps when too wide, while
+       code blocks (pre code) keep the original no-wrap (pre has its own overflow-x) */
     .markdown-body { overflow-wrap: break-word; }
     .markdown-body a { overflow-wrap: anywhere; }
     .markdown-body code { overflow-wrap: anywhere; }
@@ -232,7 +241,7 @@ const MarkdownLoad = React.memo(
         ...props
       }: React.ComponentPropsWithoutRef<'pre'>): React.ReactNode {
         const codeText = extractTextFromChildren(children)
-        // Mermaid 代码块 → 渲染为图表
+        // Mermaid code block → render as a diagram
         const codeChild = React.Children.toArray(children).find((c): c is React.ReactElement =>
           React.isValidElement(c)
         )

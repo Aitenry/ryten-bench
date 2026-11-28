@@ -1,10 +1,11 @@
 import { getMainLanguage } from './index'
 
 /**
- * `propose_action` 工具文案。
+ * Texts for the `propose_action` tool.
  *
- * 中文是源语言，英文树用 `typeof` 约束键一致。动作 label/description 来自模型（已按用户语言
- * 生成），这里只负责「已展示 / 等点选」的框架文案。
+ * Chinese is the source language and the English tree is checked with `typeof` for key parity.
+ * Action labels and descriptions come from the model (already generated in the user's language);
+ * this module only provides the framing text for "shown / awaiting a pick".
  */
 export const zhCNProposeActionTexts = {
   shown: '已在回答下方展示 {{count}} 个可选动作：',
@@ -18,7 +19,7 @@ export const enUSProposeActionTexts: typeof zhCNProposeActionTexts = {
   hint: 'Waiting for the user to pick one. The picked action arrives as the next user message; do not repeat the question or execute the actions yourself.'
 }
 
-/** 按当前界面语言取 propose_action 文案 */
+/** Return the propose_action texts for the current UI language */
 export function getProposeActionTexts(): typeof zhCNProposeActionTexts {
   return getMainLanguage() === 'en-US' ? enUSProposeActionTexts : zhCNProposeActionTexts
 }

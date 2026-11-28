@@ -37,16 +37,19 @@ import type {
 } from '../main/lattice/types'
 
 /**
- * 系统级功能通道的允许前缀。
+ * Allowed prefixes for system-level feature channels.
  *
- * 这些通道属于随应用编译进来的功能，不是可装卸代码，因此不需要“已启用通道白名单”；
- * 但仍然在 preload 侧卡前缀，保证第三方插件（只有 `window.api.plugin`）够不到它们。
+ * These channels belong to features compiled into the app, not loadable code, so they do not
+ * need the "enabled channel allowlist"; the prefix is still checked on the preload side so that
+ * third-party plugins (which only have `window.api.plugin`) cannot reach them.
  */
 const SYSTEM_CHANNEL_RE = /^(harness|notes):[a-z0-9-]+$/
 
 /**
- * 已启用插件通道白名单缓存（主进程权威注册表 + plugin-channels-updated 推送刷新）。
- * 仅作 preload 侧快速门控：真正权威校验在主进程（通道归属插件且插件已启用）。
+ * Cache of the enabled-plugin channel allowlist (authoritative registry in the main process,
+ * refreshed by the plugin-channels-updated push).
+ * Only a fast gate on the preload side: the real authoritative check is in the main process
+ * (the channel belongs to the plugin and the plugin is enabled).
  */
 const enabledPluginChannels = new Set<string>()
 const applyPluginChannels = (list: unknown): void => {
@@ -62,13 +65,14 @@ ipcRenderer.on('plugin-channels-updated', (_event, list: unknown) => {
   applyPluginChannels(list)
 })
 
-// 启动竞态修复：推送（含 did-finish-load 补推）晚于渲染层首帧，插件 Provider 在
-// useEffect 里订阅事件通道时会撞上「白名单还没到」。preload 先于页面脚本执行，
-// 这里同步取一次权威清单，保证首个 window.api.plugin.on(...) 就能拿到正确结果。
+// Startup race fix: the push (including the did-finish-load re-push) arrives later than the
+// renderer's first frame, so the plugin Provider hits "allowlist not here yet" when subscribing
+// to event channels in useEffect. preload runs before page scripts, so fetch the authoritative
+// list synchronously here and make the very first window.api.plugin.on(...) see the right result.
 try {
   applyPluginChannels(ipcRenderer.sendSync('plugin-channels-sync'))
 } catch {
-  // 主进程入口尚未注册（异常启动路径）：退回纯推送模式
+  // Main process entry not registered yet (abnormal startup path): fall back to push-only mode
 }
 
 interface WeatherData {
@@ -91,9 +95,9 @@ interface WeatherData {
 }
 
 // Custom APIs for renderer
-// 系统功能（AI 助手 / 资料库）走 `api.system`（普通 harness:* / notes:* 通道）；
-// 第三方插件走通用桥 `api.plugin.invoke/on`（通道 plugin:<命名空间>:*，
-// 白名单由主进程推送）。这里只放 core 的外壳能力。
+// System features (AI assistant / notes) go through `api.system` (plain harness:* / notes:*
+// channels); third-party plugins go through the generic bridge `api.plugin.invoke/on` (channels
+// plugin:<namespace>:*, allowlist pushed by the main process). Only core shell capabilities live here.
 const api = {
   file: {
     selectImageFile: (allowImages?: boolean) =>
@@ -103,7 +107,7 @@ const api = {
         fileName: string
         filePath: string
       } | null>,
-    // 取剪贴板/拖拽 File 的真实磁盘路径；无对应磁盘文件（如从网页复制的图片）返回空串
+    // Get the real disk path of a clipboard/drag File; returns an empty string when there is no on-disk file (e.g. an image copied from a web page)
     getPathForFile: (file: File) => {
       try {
         return webUtils.getPathForFile(file)
@@ -113,19 +117,19 @@ const api = {
     }
   },
   lock: {
-    /** 主进程持有的锁屏快照（摘要永不下发） */
+    /** Lock-screen snapshot held by the main process (the digest is never sent down) */
     getState: () => ipcRenderer.invoke('lock-screen-state'),
-    /** 手动锁屏（Esc）；未启用 / 没有解锁码时主进程不会锁 */
+    /** Lock manually (Esc); the main process does not lock when disabled / no unlock code is set */
     lock: () => ipcRenderer.invoke('lock-screen-lock'),
-    /** 解锁：校验在主进程完成（加盐 scrypt + 退避） */
+    /** Unlock: verification is done in the main process (salted scrypt + backoff) */
     unlock: (code: string) => ipcRenderer.invoke('lock-screen-unlock', code),
-    /** 开关 / 自动锁屏时长（落盘也在主进程） */
+    /** Toggle / auto-lock duration (persistence also happens in the main process) */
     configure: (patch: { enabled?: boolean; autoLockMinutes?: number }) =>
       ipcRenderer.invoke('lock-screen-configure', patch),
-    /** 改码：原密码在主进程校验，成功后才写新摘要 */
+    /** Change code: the old password is verified in the main process and the new digest is written only after success */
     changeCode: (oldCode: string, newCode: string) =>
       ipcRenderer.invoke('lock-screen-change-code', oldCode, newCode),
-    /** 锁屏状态推送（自动锁屏 / 手动锁 / 解锁；返回取消订阅函数） */
+    /** Lock-state push (auto lock / manual lock / unlock; returns an unsubscribe function) */
     onChanged: (callback: (state: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => {
         callback(state)
@@ -195,28 +199,29 @@ const api = {
       }
     },
     /**
-     * 自绘标题栏与系统窗口按钮覆盖层（Window Controls Overlay）的主题同步。
-     * 只影响系统绘制按钮的配色与标题栏底色，不改变按钮行为。
+     * Theme sync for the custom title bar and the system window controls overlay
+     * (Window Controls Overlay). Only affects the colors of the system-drawn buttons and the
+     * title bar background, not button behavior.
      */
     setTitleBarOverlay: (options: { color?: string; symbolColor?: string; height?: number }) => {
       ipcRenderer.send('window-titlebar-overlay', options)
     },
-    /** 让系统窗口边框/标题栏明暗跟随应用主题（亮色应用顶部不再残留深色 DWM 边框） */
+    /** Make the system window border/title bar follow the app theme (no dark DWM border left on top of a light-themed app) */
     setNativeTheme: (mode: 'light' | 'dark' | 'system') => {
       ipcRenderer.send('window-native-theme', mode)
     },
-    /** 设置窗口标题（原生标题栏：内容 - RytenBench） */
+    /** Set the window title (native title bar: content - RytenBench) */
     setTitle: (title: string) => ipcRenderer.send('window-set-title', title),
-    /** 重新加载当前窗口（标题栏「应用 → 重新加载」） */
+    /** Reload the current window (title bar "App → Reload") */
     reload: () => ipcRenderer.send('window-reload'),
-    /** 退出应用（标题栏「应用 → 退出」；走正常退出清理，不是隐藏到托盘） */
+    /** Quit the app (title bar "App → Quit"; normal quit cleanup, not hide-to-tray) */
     quit: () => ipcRenderer.send('app-quit'),
-    /** 编辑命令（标题栏「编辑」菜单）：交给主进程调用 webContents 的原生编辑动作 */
+    /** Edit commands (title bar "Edit" menu): delegated to the main process to invoke native webContents edit actions */
     edit: (command: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => {
       ipcRenderer.send('window-edit-command', command)
     }
   },
-  /** 当前平台（渲染层据此决定是否绘制自绘标题栏、是否给 macOS 交通灯留位） */
+  /** Current platform (the renderer uses it to decide whether to draw the custom title bar and whether to leave room for the macOS traffic lights) */
   platform: process.platform as NodeJS.Platform,
   mermaid: {
     preview: (svg: string) => ipcRenderer.invoke('mermaid-preview', svg) as Promise<void>
@@ -232,16 +237,16 @@ const api = {
       }
     }
   },
-  /** 系统级功能（AI 助手 / 资料库）的通道桥：普通 `harness:*` / `notes:*`，不经插件宿主 */
+  /** Channel bridge for system-level features (AI assistant / notes): plain `harness:*` / `notes:*`, not through the plugin host */
   system: {
-    /** 调用系统功能通道；前缀不符直接拒绝（第三方插件拿不到这条桥） */
+    /** Invoke a system feature channel; a mismatched prefix is rejected outright (third-party plugins cannot get this bridge) */
     invoke: (channel: string, ...args: unknown[]) => {
       if (typeof channel !== 'string' || !SYSTEM_CHANNEL_RE.test(channel)) {
         throw new Error(`非法系统通道名: ${String(channel)}`)
       }
       return ipcRenderer.invoke(channel, ...args) as Promise<unknown>
     },
-    /** 订阅系统功能事件通道（返回取消订阅函数） */
+    /** Subscribe to a system feature event channel (returns an unsubscribe function) */
     on: (channel: string, callback: (data: unknown) => void) => {
       if (typeof channel !== 'string' || !SYSTEM_CHANNEL_RE.test(channel)) {
         throw new Error(`非法系统通道名: ${String(channel)}`)
@@ -256,11 +261,13 @@ const api = {
   plugin: {
     list: () => ipcRenderer.invoke('plugins-list') as Promise<PluginListEntry[]>,
     /**
-     * **同步**取一次插件清单（含启用态）。
+     * Fetch the plugin list once **synchronously** (including enable state).
      *
-     * 渲染层宿主在构造期要同步决定装载哪些内置插件（首帧既要有路由/菜单，又不能把用户
-     * 停用的插件先装一遍再卸——那会让被停用插件的 Provider 订阅到不存在的通道）。
-     * 只有同步 IPC 能在这个时机拿到主进程的权威启用态；失败时退回空数组，让上层按默认值走。
+     * The renderer host must decide synchronously during construction which built-in plugins to
+     * load (the first frame needs routes/menus, and it must not load a user-disabled plugin first
+     * and unload it afterwards — that would make the disabled plugin's Provider subscribe to
+     * channels that do not exist). Only sync IPC can get the main process's authoritative enable
+     * state at that moment; on failure fall back to an empty array so callers use defaults.
      */
     listSync: (): PluginListEntry[] => {
       try {
@@ -271,8 +278,9 @@ const api = {
       }
     },
     /**
-     * 只读诊断：当前主进程里各插件贡献的宿主生命周期钩子（数量 + 标签）
-     * 与工作区事件订阅数。用于验证「停用插件后钩子不再执行」（见 main/ipc/misc.ts）。
+     * Read-only diagnostics: host lifecycle hooks contributed by each plugin in the main process
+     * (count + labels) and the number of workspace event subscriptions. Used to verify that
+     * "after disabling a plugin the hooks no longer run" (see main/ipc/misc.ts).
      */
     lifecycleHooks: () =>
       ipcRenderer.invoke('app-lifecycle-hooks') as Promise<{
@@ -282,29 +290,34 @@ const api = {
         workspaceListeners: number
       }>,
     /**
-     * 只读诊断：各插件主模块**从哪来**。
+     * Read-only diagnostics: **where** each plugin's main module comes from.
      *
-     * P1 的过渡共存期里同一个插件可能来自磁盘包（`userData/plugins/<id>/main.cjs`）或静态
-     * 注册表（dev 未跑打包脚本时的回退），`plugins-list` 分不出来源。工装用它断言
-     * 「music 的 handler 确实由磁盘包应答」。
+     * During the transitional coexistence period the same plugin may come from an on-disk package
+     * (`userData/plugins/<id>/main.cjs`) or from the static registry (fallback when the packaging
+     * script has not run in dev), and `plugins-list` cannot tell the source apart. Tooling uses
+     * this to assert "the music handler is really served by the on-disk package".
      */
     loadedFrom: () =>
       ipcRenderer.invoke('plugins-loaded-from') as Promise<
         Record<string, { installed: boolean; source: 'package' | 'absent'; file?: string }>
       >,
     /**
-     * 只读诊断：若干张表的行数（工装用，验证「卸载并清数据后插件表行数为 0」）。
-     * 表名由调用方传入并按标识符白名单校验；core 不含任何插件表名常量。
+     * Read-only diagnostics: row counts of several tables (used by tooling to verify "after
+     * uninstalling and purging data, the plugin tables have 0 rows").
+     * Table names are passed by the caller and validated against an identifier allowlist; core
+     * contains no plugin table-name constants.
      */
     tableCounts: (tables: string[]) =>
       ipcRenderer.invoke('app-table-counts', tables) as Promise<Record<string, number>>,
     setEnabled: (id: string, enabled: boolean) =>
       ipcRenderer.invoke('plugins-set-enabled', id, enabled) as Promise<PluginListEntry[]>,
     /**
-     * 从**本地路径**安装插件：`.zip` 压缩包、插件包目录，或该目录里的 `plugin.json`。
+     * Install a plugin from a **local path**: a `.zip` archive, a plugin package directory, or
+     * the `plugin.json` inside that directory.
      *
-     * 与插件中心的安装同一套校验与落地语义：装完自动启用并装载。失败不抛错，
-     * 返回 `{ ok: false, error }`（路径不存在、包里没有 plugin.json……）。
+     * Same validation and installation semantics as installing from the plugin hub: it is
+     * enabled and loaded automatically after install. On failure it does not throw, returning
+     * `{ ok: false, error }` (path does not exist, no plugin.json in the package, ...).
      */
     installLocal: (source: string) =>
       ipcRenderer.invoke('plugins-install-local', source) as Promise<{
@@ -317,8 +330,9 @@ const api = {
         error?: string
       }>,
     /**
-     * 弹系统选择框挑一个本地来源并安装（面板上**唯一**的本地安装入口）。
-     * 用户取消时返回 `{ ok: true, canceled: true }`（取消不是错误）。
+     * Show a system chooser to pick a local source and install it (the panel's **only** local
+     * install entry). Returns `{ ok: true, canceled: true }` when the user cancels (cancel is
+     * not an error).
      */
     installLocalFromDialog: () =>
       ipcRenderer.invoke('plugins-pick-local') as Promise<{
@@ -331,16 +345,18 @@ const api = {
         error?: string
       }>,
     /**
-     * 卸载插件（= 移除插件代码）。
+     * Uninstall a plugin (= remove the plugin code).
      *
-     * `purgeData` 只决定**要不要连数据一起清**：true = 调插件的 `plugin.purge` 删表内记录与
-     * 应用托管的文件；false = 只删插件目录，数据留在库里（重装后仍然可用）。
+     * `purgeData` only decides **whether data is purged too**: true = call the plugin's
+     * `plugin.purge` to delete its table records and app-managed files; false = delete only the
+     * plugin directory and leave the data in the database (still usable after reinstalling).
      */
     uninstall: (id: string, purgeData: boolean) =>
       ipcRenderer.invoke('plugins-uninstall', id, purgeData) as Promise<PluginListEntry[]>,
     /**
-     * 上报宿主 UI 表的「键 → 导出名」（渲染层启动最早期一次）。
-     * 主进程的 `plugin://host/ui.js?m=<key>` 桥按这份清单生成 ESM 具名导出。
+     * Report the host UI table's "key → export name" (once, very early during renderer startup).
+     * The main process's `plugin://host/ui.js?m=<key>` bridge generates ESM named exports from
+     * this list.
      */
     reportHostUi: (names: Record<string, string[]>) => {
       ipcRenderer.send('plugin-host-ui-exports', names)
@@ -352,7 +368,7 @@ const api = {
         ipcRenderer.off('plugin-state-changed', handler)
       }
     },
-    /** 外部插件通道调用：前缀格式强校验；未注册通道由主进程抛错 */
+    /** External plugin channel call: strict prefix format validation; unregistered channels throw in the main process */
     invoke: (channel: string, ...args: unknown[]) => {
       if (typeof channel !== 'string' || !PLUGIN_CHANNEL_RE.test(channel)) {
         throw new Error(`非法插件通道名: ${String(channel)}`)
@@ -360,14 +376,17 @@ const api = {
       return ipcRenderer.invoke(channel, ...args) as Promise<unknown>
     },
     /**
-     * 订阅插件事件通道。
+     * Subscribe to a plugin event channel.
      *
-     * 只强校验通道名格式；**白名单只用于提示，不再抛错**。原因（2026-09-26 实测事故）：
-     * 白名单是主进程已装载通道的缓存，天然可能滞后于渲染层（插件停用后的空窗期、主进程
-     * 插件模块装载失败、dev 下 HMR 重载顺序……）。此前这里直接抛错，异常从插件 Provider 的
-     * useEffect 逃逸 → ErrorBoundary 接管 → 整个界面变成「RUNTIME ERROR」。
-     * 现在的语义：订阅照常建立（真正权威在主进程——插件没装载就没人往该通道发消息），
-     * 通道当时不在白名单里只提示一条告警。
+     * Only the channel name format is strictly validated; **the allowlist is advisory and no
+     * longer throws**. Reason (an incident observed on 2026-09-26): the allowlist is a cache of
+     * channels loaded in the main process and can naturally lag behind the renderer (the window
+     * after a plugin is disabled, a failed plugin module load in the main process, HMR reload
+     * ordering in dev, ...). This used to throw directly, the exception escaped the plugin
+     * Provider's useEffect → the ErrorBoundary took over → the whole UI turned into "RUNTIME
+     * ERROR". The current semantics: subscribe as usual (the main process remains authoritative —
+     * no one posts to that channel if the plugin is not loaded) and merely log a warning when the
+     * channel is not in the allowlist at that moment.
      */
     on: (channel: string, callback: (data: unknown) => void) => {
       if (typeof channel !== 'string' || !PLUGIN_CHANNEL_RE.test(channel)) {
@@ -386,10 +405,11 @@ const api = {
     }
   },
   /**
-   * Lattice 插件中心（core 通道：登录 / 目录 / 上传 / 下载安装 / 数据同步）。
+   * Lattice plugin hub (core channels: login / catalog / upload / download install / data sync).
    *
-   * 与插件桥不同，这些通道**不经过**插件白名单：它们属于应用外壳能力，
-   * 由 `src/main/ipc/lattice.ts` 常驻注册。事件订阅统一返回 unsubscribe。
+   * Unlike the plugin bridge, these channels **bypass** the plugin allowlist: they are app shell
+   * capabilities registered permanently by `src/main/ipc/lattice.ts`. Event subscriptions all
+   * return an unsubscribe function.
    */
   lattice: {
     status: () => ipcRenderer.invoke(LATTICE_IPC.status) as Promise<LatticeStatus>,
@@ -399,66 +419,71 @@ const api = {
     me: () => ipcRenderer.invoke(LATTICE_IPC.me) as Promise<LatticeMeResult>,
     setBaseUrl: (url: string) =>
       ipcRenderer.invoke(LATTICE_IPC.setBaseUrl, url) as Promise<LatticeSetBaseUrlResult>,
-    /** 插件目录（分页/搜索/分类） */
+    /** Plugin catalog (pagination/search/category) */
     list: (query?: LatticeListQuery) =>
       ipcRenderer.invoke(LATTICE_IPC.hubList, query ?? {}) as Promise<HubListResult>,
-    /** 插件详情（含 readme / 版本清单 / 我的安装记录） */
+    /** Plugin details (including readme / version list / my install record) */
     detail: (pluginId: string) =>
       ipcRenderer.invoke(LATTICE_IPC.hubDetail, pluginId) as Promise<HubDetail | null>,
-    /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+    /** Publish a locally installed plugin directly (install package + source, no chooser dialog) */
     publishInstalled: (pluginId: string) =>
       ipcRenderer.invoke(LATTICE_IPC.hubPublishInstalled, pluginId) as Promise<LatticeUploadResult>,
-    /** 弹系统目录选择框并发布（取消返回 `{ok:true,canceled:true}`） */
+    /** Show a system directory chooser and publish (cancel returns `{ok:true,canceled:true}`) */
     pickAndUpload: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubPickUpload) as Promise<LatticeUploadResult>,
-    /** 选 .zip 安装包发布（目录上传的补充入口） */
+    /** Pick a .zip install package to publish (supplementary to directory upload) */
     pickAndUploadZip: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubPickUploadZip) as Promise<LatticeUploadResult>,
-    /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+    /** Pick "install package directory + source directory" to publish: the package and the source are two different zips */
     pickAndUploadWithSource: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubPickUploadWithSource) as Promise<LatticeUploadResult>,
-    /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 可选，给出时源码单独上传 */
+    /** Publish by explicit path: `source` is the install package directory/zip; `sourcePath` is optional and uploads the source separately when given */
     uploadSource: (source: string, sourcePath?: string) =>
       ipcRenderer.invoke(LATTICE_IPC.hubUpload, {
         source,
         ...(sourcePath ? { sourcePath } : {})
       }) as Promise<LatticeUploadResult>,
-    /** 下载并安装（或升级）插件；失败返回 `{ok:false,error}`，不抛错 */
+    /** Download and install (or upgrade) a plugin; on failure returns `{ok:false,error}` without throwing */
     install: (pluginId: string, version?: string) =>
       ipcRenderer.invoke(
         LATTICE_IPC.hubInstall,
         pluginId,
         version
       ) as Promise<LatticeInstallResult>,
-    /** 本机已安装插件视图（本地口径，不联网） */
+    /** View of locally installed plugins (local only, no network) */
     listInstalls: () =>
       ipcRenderer.invoke(LATTICE_IPC.hubInstalls) as Promise<{
         items: LatticeInstallSummary[]
       }>,
     /**
-     * 当前源码目录（v2）：安装时自动下载的源码解压位置。
-     * `managed='pluginsPath'` = 用户配置的插件存放路径（= workshop 草稿目录，插件模式可开对话）；
-     * `managed='userData'` = 应用数据目录回退；`path=null` = 本机没有该插件源码。
+     * Current source directory (v2): where source downloaded automatically during install is
+     * extracted.
+     * `managed='pluginsPath'` = the user-configured plugin storage path (= workshop draft
+     * directory, where plugin mode can start a conversation);
+     * `managed='userData'` = fallback to the app data directory; `path=null` = this machine has
+     * no source for that plugin.
      */
     sourcePath: (pluginId: string) =>
       ipcRenderer.invoke(LATTICE_IPC.sourcePath, pluginId) as Promise<LatticeSourcePathResult>,
-    /** 本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+    /** Local installed plugin package directory (`userData/plugins/<id>`, used for publishing after local install) */
     localSource: (pluginId: string) =>
       ipcRenderer.invoke(
         LATTICE_IPC.localSourcePath,
         pluginId
       ) as Promise<LatticeLocalSourcePathResult>,
     /**
-     * 「在对话中修改」：为源码目录建/复用插件工作区并开一条插件会话。
-     * 成功开对话返回 `{ok:true,workspaceId,topicId}`；做不到时回退文件管理器并返回
-     * `{ok:true,opened:'folder'}`（不会假装开了对话）。
+     * "Modify in conversation": create/reuse a plugin workspace for the source directory and
+     * start a plugin session.
+     * On success returns `{ok:true,workspaceId,topicId}`; when that is not possible it falls back
+     * to the file manager and returns `{ok:true,opened:'folder'}` (it will not pretend a
+     * conversation was opened).
      */
     openSource: (pluginId: string) =>
       ipcRenderer.invoke(LATTICE_IPC.openSource, pluginId) as Promise<LatticeOpenSourceResult>,
-    /** 「发布新版本」：源码目录整包 zip 同时作为安装包与源码包上传；失败返回 `{ok:false,error}` */
+    /** "Publish a new version": upload the whole source directory zip as both package and source; on failure returns `{ok:false,error}` */
     republish: (input: LatticeRepublishInput) =>
       ipcRenderer.invoke(LATTICE_IPC.republish, input) as Promise<LatticeRepublishResult>,
-    /** 下载安装包 / 源码包到本机（主进程弹保存框 + sha256 校验；用户取消不是失败） */
+    /** Download the install package / source package locally (the main process shows a save dialog + sha256 check; user cancel is not a failure) */
     downloadAsset: (pluginId: string, version: string, kind: LatticeDownloadAssetKind) =>
       ipcRenderer.invoke(
         LATTICE_IPC.downloadAsset,
@@ -467,44 +492,45 @@ const api = {
         kind
       ) as Promise<LatticeDownloadAssetResult>,
     /**
-     * 「从本地导入」：弹目录选择框，把所选目录下带 plugin.json 的插件逐个发布到平台
-     * （安装包 + 源码包都是这个目录的整包 zip）。
+     * "Import from local": show a directory chooser and publish every plugin under the chosen
+     * directory that has a plugin.json (both package and source are whole-directory zips).
      */
     importLocalDir: (dir?: string) =>
       ipcRenderer.invoke(LATTICE_IPC.importLocalDir, dir) as Promise<LatticeImportLocalDirResult>,
     /**
-     * 显式设置「插件存放路径」并立即生效（导入本地插件目录后，让这些源码出现在「插件」模式）。
-     * 只接受非空路径；清除路径请走设置页。
+     * Explicitly set the "plugin storage path" and apply it immediately (so that imported local
+     * plugin sources show up in "Plugin" mode). Only accepts a non-empty path; use the settings
+     * page to clear the path.
      */
     setPluginRoot: (dir: string) =>
       ipcRenderer.invoke(LATTICE_IPC.setPluginRoot, dir) as Promise<LatticeSetPluginRootResult>,
-    /** 手动同步：`{direction, installMissing?}` 或裸字符串（installMissing 缺省跟随设置项，默认开启） */
+    /** Manual sync: `{direction, installMissing?}` or a bare string (installMissing follows the setting when omitted, on by default) */
     sync: (input?: LatticeSyncInput) =>
       ipcRenderer.invoke(
         LATTICE_IPC.sync,
         input ?? { direction: 'both' }
       ) as Promise<LatticeSyncResult>,
-    /** 同步详情：最近一次同步的自动补齐成功/失败明细与孤儿记录（失败原因可查看） */
+    /** Sync details: auto-install success/failure details of the latest sync and orphaned records (failure reasons can be inspected) */
     syncDetails: () => ipcRenderer.invoke(LATTICE_IPC.syncDetails) as Promise<LatticeSyncDetails>,
-    /** 「缺失插件自动补齐」开关（持久化；默认开启） */
+    /** "Auto-install missing plugins" toggle (persisted; on by default) */
     setAutoInstallMissing: (enabled: boolean) =>
       ipcRenderer.invoke(
         LATTICE_IPC.setAutoInstallMissing,
         enabled
       ) as Promise<LatticeAutoInstallSettingResult>,
-    /** 未解决的插件数据冲突（含补拉的云端数据快照） */
+    /** Unresolved plugin data conflicts (including the cloud data snapshot pulled for them) */
     syncConflicts: () =>
       ipcRenderer.invoke(LATTICE_IPC.syncConflicts) as Promise<LatticeSyncConflict[]>,
-    /** 显式解决冲突：local=用本机覆盖云端；cloud=用云端覆盖本机；merge=两边合并（插件支持时） */
+    /** Resolve a conflict explicitly: local=overwrite cloud with this machine; cloud=overwrite this machine with cloud; merge=merge both sides (when the plugin supports it) */
     resolveConflict: (pluginId: string, strategy: 'local' | 'cloud' | 'merge') =>
       ipcRenderer.invoke(
         LATTICE_IPC.resolveConflict,
         pluginId,
         strategy
       ) as Promise<LatticeResolveConflictResult>,
-    /** 合并云端数据：把各已安装插件（支持合并的）的云端快照并进本机并推回云端 */
+    /** Merge cloud data: merge the cloud snapshots of installed plugins (those supporting merge) into this machine and push back to the cloud */
     mergeData: () => ipcRenderer.invoke(LATTICE_IPC.mergeData) as Promise<LatticeMergeDataResult>,
-    /** 登录态/基址/同步摘要变化推送 */
+    /** Push when login state / base URL / sync summary changes */
     onStateChanged: (callback: (status: LatticeStatus) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, status: LatticeStatus): void =>
         callback(status)
@@ -513,7 +539,7 @@ const api = {
         ipcRenderer.off(LATTICE_IPC.stateChanged, handler)
       }
     },
-    /** 发布阶段进度（zip / meta / upload） */
+    /** Upload stage progress (zip / meta / upload) */
     onUploadProgress: (callback: (progress: LatticeUploadProgress) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, progress: LatticeUploadProgress): void =>
         callback(progress)
@@ -522,7 +548,7 @@ const api = {
         ipcRenderer.off(LATTICE_IPC.uploadProgress, handler)
       }
     },
-    /** 同步结果推送（手动同步与后台防抖同步都会发） */
+    /** Sync result push (sent for both manual sync and background debounced sync) */
     onSyncState: (callback: (result: LatticeSyncResult) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, result: LatticeSyncResult): void =>
         callback(result)
@@ -534,12 +560,12 @@ const api = {
   }
 }
 
-// 将特定的 API 暴露给渲染进程
+// Expose the specific APIs to the renderer process
 const loadingAPI = {
-  /** 应用版本（启动页可展示） */
+  /** App version (can be shown on the startup page) */
   getAppVersion: () => ipcRenderer.invoke('app-version') as Promise<string>,
 
-  /** 初始化进度快照：启动页挂载时先取一次（初始化可能已经推进/完成） */
+  /** Initialization progress snapshot: fetched once when the startup page mounts (initialization may already be in progress or done) */
   getInitState: () =>
     ipcRenderer.invoke('init-state') as Promise<{
       complete: boolean
@@ -550,7 +576,7 @@ const loadingAPI = {
       totalTasks: number
     }>,
 
-  /** 初始化进度（返回取消订阅函数） */
+  /** Initialization progress (returns an unsubscribe function) */
   onInitProgress: (
     callback: (data: {
       currentTask: string
@@ -569,14 +595,14 @@ const loadingAPI = {
     return () => ipcRenderer.off('init-progress', handler)
   },
 
-  /** 初始化完成（返回取消订阅函数） */
+  /** Initialization complete (returns an unsubscribe function) */
   onInitComplete: (callback: () => void) => {
     const handler = (): void => callback()
     ipcRenderer.on('init-complete', handler)
     return () => ipcRenderer.off('init-complete', handler)
   },
 
-  /** 初始化失败（返回取消订阅函数） */
+  /** Initialization failed (returns an unsubscribe function) */
   onInitError: (callback: (errorMessage: string) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, message: string): void => callback(message)
     ipcRenderer.on('init-error', handler)

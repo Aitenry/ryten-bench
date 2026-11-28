@@ -2,20 +2,20 @@ import type MarkdownIt from 'markdown-it'
 import type Token from 'markdown-it/lib/token.mjs'
 
 /**
- * 自研任务列表解析插件（替代 markdown-it-task-lists）。
+ * Custom task list parsing plugin.
  *
- * 原插件只给 li/ul 打标记，遇到「普通列表与任务列表相邻」时
- * markdown-it 会把它们合并成一个 <ul>（含混排项），ProseMirror
- * 的 taskList 节点只接受 taskItem 子节点，混排会被包裹重组，
- * 产生空任务项、内容漂移等问题。
+ * Marking only the li/ul is not enough: when a plain list and a task list are
+ * adjacent, markdown-it merges them into a single <ul> with mixed items.
+ * ProseMirror's taskList node only accepts taskItem children, so mixed items get
+ * wrapped and regrouped, producing empty task items and content drift.
  *
- * 本插件在 token 层面将混排列表按类型拆分成独立的 <ul>：
- * - 任务项：首部 "[ ] "/"[x] " 转为复选框，li 打 task-list-item 类
- * - 任务列表 ul 打 contains-task-list 类（供 tiptap-markdown 的
- *   updateDOM 映射为 taskList 节点）
+ * This plugin splits mixed lists into separate <ul> elements at the token level:
+ * - Task items: a leading "[ ] "/"[x] " becomes a checkbox; the li gets the task-list-item class
+ * - Task list ul elements get the contains-task-list class (so tiptap-markdown's
+ *   updateDOM maps them to taskList nodes)
  */
 export function taskCheckboxPlugin(md: MarkdownIt): void {
-  /* 复选框渲染 */
+  /* Checkbox rendering */
   md.renderer.rules.task_checkbox = (tokens, idx) => {
     const checked = tokens[idx].attrGet('checked') === 'true'
     return `<input class="task-list-item-checkbox" type="checkbox" disabled${checked ? ' checked=""' : ''}>`
@@ -54,7 +54,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
       content === '[x]' ||
       content === '[X]'
 
-    /* 将一个任务项的首个 inline 内容转为复选框 */
+    /* Convert the first inline content of a task item into a checkbox */
     const transformTaskItem = (itemTokens: Token[], level: number): Token[] => {
       for (const tok of itemTokens) {
         if (tok.type === 'list_item_open' && tok.level === level + 1) {
@@ -82,15 +82,15 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
       return itemTokens
     }
 
-    /* 判断一个列表项是否为任务项（首个 inline 以 [ ] /[x] 开头） */
+    /* Determine whether a list item is a task item (first inline starts with [ ] /[x]) */
     const classifyItem = (itemTokens: Token[]): 'task' | 'plain' => {
       const inline = itemTokens.find((t) => t.type === 'inline')
       if (inline && isTaskStart(inline.content)) return 'task'
       return 'plain'
     }
 
-    /* 拆分混排列表时，去除「仅包裹单个 inline」的段落包装，
-       避免原紧凑列表被 markdown-it 判定为 loose 后往返漂移 */
+    /* When splitting mixed lists, drop paragraph wrappers that contain only a single inline,
+       so that a compact list is not parsed as loose by markdown-it and drifts on round-trip */
     const stripParagraphs = (tokens: Token[], level: number): Token[] => {
       const out: Token[] = []
       for (let i = 0; i < tokens.length; i++) {
@@ -106,7 +106,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
           const inlineCount = inner.filter((x) => x.type === 'inline').length
           if (inlineCount === 1 && inner.length === 1) {
             out.push(...inner)
-            i = j /* 跳过 paragraph_close */
+            i = j /* skip paragraph_close */
           } else {
             out.push(t)
           }
@@ -117,7 +117,8 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
       return out
     }
 
-    /* 递归处理 token 数组中的全部 bullet_list（含嵌套），返回重建后的数组 */
+    /* Recursively process every bullet_list in the token array (including nested ones) and
+       return the rebuilt array */
     const processTokens = (arr: Token[]): Token[] => {
       const out: Token[] = []
       let i = 0
@@ -135,7 +136,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
       return out
     }
 
-    /* 重建单个 bullet_list：按任务/普通类型拆分成多个独立 ul */
+    /* Rebuild a single bullet_list: split it into separate ul elements by task/plain type */
     const rebuildList = (arr: Token[], openIdx: number): { tokens: Token[]; end: number } => {
       const openTok = arr[openIdx]
       const level = openTok.level
@@ -162,7 +163,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
           break
         }
         if (t.type === 'list_item_open' && t.level === level + 1) {
-          /* 消费完整列表项（到同层级的 list_item_close） */
+          /* Consume the complete list item (up to the same-level list_item_close) */
           const itemTokens: Token[] = []
           let depth = 0
           while (i < arr.length) {
@@ -178,7 +179,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
             }
             i++
           }
-          /* 递归处理项内嵌套列表 */
+          /* Recursively process nested lists inside the item */
           const processed = processTokens(itemTokens)
           const kind = classifyItem(processed)
           if (kind !== currentKind) {
@@ -208,7 +209,7 @@ export function taskCheckboxPlugin(md: MarkdownIt): void {
       return { tokens: out, end: i }
     }
 
-    /* 把一个 run 的 token 按 list_item 边界切分（每项一组） */
+    /* Split a run's tokens at list_item boundaries (one group per item) */
     const splitItems = (tokens: Token[], level: number): Token[][] => {
       const groups: Token[][] = []
       let current: Token[] = []

@@ -9,7 +9,7 @@ import { buildMermaidPreviewHtml } from './mermaid-preview-html'
 let mermaidPreviewWin: BrowserWindow | null = null
 let cachedHtml: string | null = null
 
-/** 从 HTML 资源文件构建预览页（注入 SVG / nonce / 当前语言文案，逻辑见 mermaid-preview-html.ts） */
+/** Build the preview page from the HTML asset (injects SVG / nonce / current locale text; see mermaid-preview-html.ts) */
 function buildPreviewPage(svg: string): string {
   if (cachedHtml === null) {
     cachedHtml = fs.readFileSync(mermaidPreviewHtmlPath, 'utf-8')
@@ -22,15 +22,16 @@ export function registerMermaidPreviewIpc(): void {
     const dataUrl =
       'data:text/html;charset=utf-8,' + encodeURIComponent(buildPreviewPage(svg))
     if (mermaidPreviewWin && !mermaidPreviewWin.isDestroyed()) {
-      // 快速连续预览时上一次导航会被下一次取代并以 ERR_ABORTED 拒绝——吞掉
-      // 避免主进程 unhandled rejection（修复）
+      // On rapid consecutive previews the previous navigation is superseded by the next one and
+      // rejects with ERR_ABORTED — swallow it to avoid an unhandled rejection in the main process
       mermaidPreviewWin.loadURL(dataUrl).catch((err) => {
         logger.warn('[Mermaid] Failed to load preview:', (err as Error)?.message)
       })
       mermaidPreviewWin.focus()
       return
     }
-    // 独立预览窗口：与应用同款自定义无边框标题栏，可拉伸、可最大化，不占满全屏
+    // Standalone preview window: custom frameless title bar matching the app, resizable and
+    // maximizable, without covering the full screen
     const { workAreaSize } = screen.getPrimaryDisplay()
     mermaidPreviewWin = new BrowserWindow({
       width: Math.round(Math.min(1200, workAreaSize.width * 0.7)),

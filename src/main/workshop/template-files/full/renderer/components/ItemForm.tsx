@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react'
 import { Input, Modal } from 'antd'
-import type { ${vars.pascal}Item, ${vars.pascal}ItemInput } from '../../shared/harness/types'
+import type { ${vars.pascal}Item, ${vars.pascal}ItemInput } from '../../shared/types'
 import { formModalProps } from './ui'
 
 /**
- * 新建 / 编辑记录的弹窗。
+ * Modal for creating / editing a record.
  *
- * 为什么拆出来：表单是**状态最多的那一块**（草稿值、校验、提交中），
- * 塞在页面组件里会让列表渲染跟着一起重渲染。组件只认 props 与本插件自己的 DTO。
+ * Why it is a separate component: the form is **the state-heaviest part** (draft values,
+ * validation, submitting); keeping it inside the page component would re-render the list along with
+ * it. The component only knows props and the plugin's own DTOs.
  *
- * **每个 Modal 都要展开 formModalProps（或 createModalProps）**：
- * 不限制高度的弹窗在矮窗口下会撑出「整页」滚动条（滚动容器是铺满视口的 .ant-modal-wrap），
- * 标题与「保存」按钮一起被滚出视口。字段多、需要内部滚动的表单用 formModalProps。
+ * **Every Modal must spread formModalProps (or createModalProps)**: a modal without a height limit
+ * produces a "whole page" scrollbar in short windows (the scroll container is the viewport-sized
+ * .ant-modal-wrap), and the title and the Save button scroll out of the viewport together. Forms
+ * with many fields that need internal scrolling use formModalProps.
  */
 export default function ItemForm(props: {
   open: boolean
-  /** 传了就是编辑，没传就是新建 */
+  /** Passed = edit, omitted = create */
   item?: ${vars.pascal}Item | null
   saving: boolean
   labels: {
@@ -34,7 +36,7 @@ export default function ItemForm(props: {
   const [title, setTitle] = useState('')
   const [note, setNote] = useState('')
 
-  // 每次打开都用当前这条记录重置草稿（关掉再打开不能留着上一次的输入）
+  // Reset the draft from the current record on every open (closing and reopening must not keep the previous input)
   useEffect(() => {
     if (!props.open) return
     setTitle(props.item?.title ?? '')

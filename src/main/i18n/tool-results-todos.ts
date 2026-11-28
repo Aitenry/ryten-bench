@@ -1,13 +1,14 @@
 import { getMainLanguage } from './index'
 
 /**
- * **待办工具**的返回文案（由 manage_materials 的 todo.* 命令使用，会显示在工具卡片上、
- * 跟随界面语言）。
+ * Result texts for the **todo tools** (used by the manage_materials todo.* commands; they are
+ * rendered on tool cards and follow the UI language).
  *
- * 优先级口径与界面一致：0=P0（最高）… 7=P7（最低），不再使用「1=紧急」的旧映射。
+ * Priority numbering matches the UI: 0=P0 (highest) ... 7=P7 (lowest); the old "1=urgent"
+ * mapping is gone.
  */
 export const zhCNTodoToolTexts = {
-  /** 未知命令的兜底提示 */
+  /** Fallback hint for an unknown command */
   common: {
     unknownCommand: '未知命令：{{command}}。支持：{{supported}}'
   },
@@ -18,7 +19,7 @@ export const zhCNTodoToolTexts = {
     listPage: '（第 {{page}}/{{pages}} 页，共 {{total}} 项）',
     pageEmpty: '第 {{page}} 页没有待办（共 {{total}} 项；用 page 参数翻页）。',
     empty: '没有找到待办事项。',
-    /** 状态标签，下标即库里的数值 */
+    /** Status labels; the index is the numeric value stored in the database */
     statusLabels: {
       todo: '待办',
       inProgress: '进行中',

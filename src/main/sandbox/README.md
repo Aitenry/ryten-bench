@@ -98,7 +98,7 @@ workspace-write 时再 `(allow file-write* (subpath <工作区>))`；命令经
   DLL 初始化阶段以 `STATUS_DLL_INIT_FAILED`（`0xC0000142`，stderr 全空）死亡，因此子进程与 runner
   **共享控制台**，只用 `STARTF_USESHOWWINDOW + SW_HIDE` 把窗口藏起来；stdio 走 runner 自己建的管道，
   不受影响（2026-09-27 GitHub Actions 实测：打包产物自检里两条「工作区内写入」都是 exit=0xC0000142，
-  而 cleanup（不起子进程）正常；参考实现 `dsh-sandbox-windows-acl` 的已知边界有同一条记录）；
+  而 cleanup（不起子进程）正常；同类实现的已知边界里也有同一条记录）；
 - Windows 需要 **NTFS**（exFAT / 网络盘没有 ACL）：探针会在这种工作区里失败 → 判定不可用；
 - 沙箱会给工作区目录加一条 ACE（不可见、可复用、可用 `cleanup` 撤销）；
 - macOS 的 `sandbox-exec` 被 Apple 标记为 deprecated（但仍随每个 macOS 分发）；
@@ -109,7 +109,7 @@ workspace-write 时再 `(allow file-write* (subpath <工作区>))`；命令经
   bubblewrap 腿没有这个问题（`--dev /dev` 换掉整个 /dev，只留 null/zero/full/random/urandom/tty），自评 **full**；
 - Linux 需要内核 ≥ 5.13；ABI < 3 时启动器会往 stderr 报 `[ryten-sandbox] partial enforcement (Landlock ABI N < 3)`
   （**信息性提示，不是致命签名**：致命失败才是 `ryten-landlock-launcher: ...` + 退出码 125）；
-- 本沙箱只约束**文件系统写入**（与 DSH 一致），不约束网络、进程或凭据。
+- 本沙箱只约束**文件系统写入**，不约束网络、进程或凭据。
 
 ## 打包
 
@@ -188,8 +188,8 @@ pnpm verify:sandbox-docker          # linux/amd64 + linux/arm64 都跑
 node docker/verify-sandbox.mjs --arch amd64
 ```
 
-> 按仓库 `.gitignore` 约定，`docker/` 与 `test/` 同为**不入库的本地工装**（和 `scripts/`、`docs/`
-> 一样）。也就是说 clone 下来没有这两个目录；要复现跨平台验证，需按本节描述自建——脚本本身
+> 按仓库 `.gitignore` 约定，`docker/` 与 `test/` 同为**不入库的本地工装**。也就是说 clone
+> 下来没有这两个目录；要复现跨平台验证，需按本节描述自建——脚本本身
 > 很短（驱动 ~200 行 + 容器内验证器 ~200 行 + 一个 Dockerfile），逻辑已在本节说明清楚。
 
 流程与结论（2026-09-27 实测：Docker 29 + WSL2 内核 5.15）：

@@ -12,11 +12,12 @@ import type {
 } from './types'
 
 /**
- * RecordQueue — 运行时事件队列（按流分流）
+ * RecordQueue — runtime event queue (split by stream)
  *
- * 图执行（后台任务）把 RuntimeRecord 推入队列；push 时按 kind 路由到
- * messages / toolCalls / subagents 三个独立缓冲，每条记录恰好属于一个流，
- * 三个消费迭代器互不干扰（对应现有 producer 的三路并发模型）。
+ * Graph execution (a background task) pushes RuntimeRecords into the queue; on push each record is
+ * routed by kind into one of three independent buffers — messages / toolCalls / subagents. Every
+ * record belongs to exactly one stream, and the three consumer iterators never interfere with each
+ * other (mirroring the producer's existing three-way concurrency model).
  */
 export class RecordQueue {
   private readonly messages: MessageRecord[] = []
@@ -60,7 +61,7 @@ export class RecordQueue {
     this.waiters.messages.shift()?.()
   }
 
-  /** 关闭全部子队列；可携带错误（图执行失败时由迭代器抛出） */
+  /** Close all sub-queues; an optional error is thrown by the iterators when graph execution fails */
   close(err?: Error): void {
     if (err) this.error = err
     for (const key of ['messages', 'toolCalls', 'subagents'] as const) {
@@ -72,7 +73,7 @@ export class RecordQueue {
     }
   }
 
-  /** 消息流迭代器 */
+  /** Message stream iterator */
   async *iterateMessages(): AsyncGenerator<MessageRecord> {
     while (true) {
       if (this.messages.length > 0) {
@@ -87,7 +88,7 @@ export class RecordQueue {
     }
   }
 
-  /** 工具调用流迭代器 */
+  /** Tool call stream iterator */
   async *iterateToolCalls(): AsyncGenerator<ToolCallRecord> {
     while (true) {
       if (this.toolCalls.length > 0) {
@@ -102,7 +103,7 @@ export class RecordQueue {
     }
   }
 
-  /** 子代理流迭代器 */
+  /** Subagent stream iterator */
   async *iterateSubAgents(): AsyncGenerator<SubAgentRecord> {
     while (true) {
       if (this.subagents.length > 0) {
@@ -118,44 +119,48 @@ export class RecordQueue {
   }
 }
 
-/** 图执行配置 */
+/** Graph execution options */
 export interface GraphRunOptions {
-  /** 递归上限（工程常量，远宽于工具护栏；触顶时优雅收尾） */
+  /** Recursion limit (an engineering constant, far wider than the tool guards; wrap up gracefully when hit) */
   recursionLimit: number
   signal?: AbortSignal
-  /** 透传给工具节点的 configurable（如 turnSource / goalRound，供执行期权限校验） */
+  /** configurable passed through to tool nodes (e.g. turnSource / goalRound, for execution-time permission checks) */
   configurable?: Record<string, unknown>
 }
 
-/** 工具调用轮次耗尽时的收尾提示（推送为文本记录，而非让整条流报错） */
+/** Wrap-up note when tool call rounds are exhausted (pushed as a text record instead of failing the whole stream) */
 export const RECURSION_STOP_NOTE = '\n(Tool call round limit reached; stopped automatically)'
 
-/** 判断是否为 LangGraph 递归上限错误（instanceof 兜底 name 检查） */
+/** Whether the error is a recursion-limit error (instanceof check, with a name fallback) */
 function isRecursionError(err: unknown): boolean {
   return err instanceof GraphRecursionError || (err as Error)?.name === 'GraphRecursionError'
 }
 
 /**
- * 判断 chunk 是否来自子代理子图（嵌套在主图 tools 节点内执行）。
+ * Whether a chunk comes from a subagent subgraph (running nested inside the main graph's tools node).
  *
- * LangGraph 的 streamMode ['messages'] 通过 CallbackManager 收集模型事件，
- * 子代理子图在主图 tools 节点内运行时，其模型调用事件会经 AsyncLocalStorage
- * 传播的 callbacks 冒泡到主图 stream（metadata 的 langgraph_checkpoint_ns
- * 形如 "tools:xxx"）。若不过滤，子智能体的 token 流会被当作主智能体文本
- * 推入主消息流，导致前端「主智能体内容 = 子智能体内容」的重复显示。
+ * The messages stream mode collects model events through the CallbackManager; when a subagent
+ * subgraph runs inside the main graph's tools node, its model-call events bubble up to the main
+ * graph stream through AsyncLocalStorage-propagated callbacks (the metadata's
+ * langgraph_checkpoint_ns looks like "tools:xxx"). Without filtering, the subagent's token stream
+ * would be pushed into the main message stream as main-agent text, so the frontend would show the
+ * subagent content duplicated as the main agent content.
  */
 function isSubgraphChunk(meta: unknown): boolean {
   if (typeof meta !== 'object' || meta === null) return false
   const ns = (meta as Record<string, unknown>).langgraph_checkpoint_ns
   if (typeof ns !== 'string' || !ns) return false
-  // 主图 model 节点的 ns 形如 "model:xxx"；tools 节点内嵌套子图的 ns 形如 "tools:xxx"
+  // The main graph's model node has an ns like "model:xxx"; a subgraph nested in the tools node has
+  // an ns like "tools:xxx"
   return !ns.startsWith('model:')
 }
 
 /**
- * 启动图流式执行并返回三路流适配器。
- * 图执行在后台进行（错误会关闭队列并由迭代器抛出）；AbortSignal 可随时取消。
- * queue 由调用方创建并注入（Runtime 需在建图前把队列注入 QueueRef，工具节点才能推送记录）。
+ * Start streaming graph execution and return the three-stream adapter.
+ * Graph execution runs in the background (errors close the queue and are thrown by the iterators);
+ * the AbortSignal can cancel it at any time. The queue is created and injected by the caller
+ * (Runtime must inject the queue into QueueRef before building the graph so tool nodes can push
+ * records).
  */
 export function startGraphStream(
   graph: CompiledAgentGraph,
@@ -170,8 +175,9 @@ export function startGraphStream(
     subagents: queue.iterateSubAgents()
   }
 
-  // 后台消费 LangGraph 的 messages 模式流，转换为统一记录。
-  // 注意：messages 模式迭代元素为 [mode, [message, metadata]] 元组（payload 是二层结构）。
+  // Consume the messages-mode stream in the background and convert it into unified records.
+  // Note: each element of the messages-mode stream is a [mode, [message, metadata]] tuple (the
+  // payload is a two-level structure).
   void (async () => {
     try {
       const stream = await graph.stream(input, {
@@ -184,7 +190,8 @@ export function startGraphStream(
         const [mode, payload] = item as readonly [string, [StreamMessageLike, unknown]]
         if (mode !== 'messages') continue
         if (options.signal?.aborted) break
-        // 过滤子代理子图冒泡的 chunk（其内容已由子代理子图独立流式转发为 sub_* 记录）
+        // Drop chunks bubbling up from subagent subgraphs (their content is already streamed
+        // separately as sub_* records)
         if (isSubgraphChunk(payload[1])) continue
         pushMessageRecords(payload[0], queue, seenIndexes)
       }
@@ -196,7 +203,8 @@ export function startGraphStream(
         return
       }
       const error = err instanceof Error ? err : new Error(String(err))
-      // 工具调用轮次耗尽：优雅收尾而非报错（保留已生成的部分内容，前端正常结束）
+      // Tool call rounds exhausted: wrap up gracefully instead of throwing (keep the partial content
+      // already generated; the frontend ends normally)
       if (isRecursionError(error)) {
         logger.warn('[Graph] Tool call limit reached, stopping automatically:', error.message)
         queue.push({ kind: 'text', text: RECURSION_STOP_NOTE })
@@ -213,8 +221,8 @@ export function startGraphStream(
 }
 
 /**
- * 非流式执行：直接返回最终消息列表（sendMessage 路径）。
- * 递归上限触顶时返回收尾提示消息，而非向上抛错。
+ * Non-streaming execution: return the final message list directly (the sendMessage path).
+ * When the recursion limit is hit, return a wrap-up note message instead of throwing.
  */
 export async function invokeGraph(
   graph: CompiledAgentGraph,

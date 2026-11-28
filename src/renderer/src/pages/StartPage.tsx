@@ -10,12 +10,12 @@ import { useTranslation } from '@renderer/i18n'
 import { usePtyTerminalStats } from '../hooks/usePtyTerminalStats'
 
 /**
- * 「开始」面板：右侧工具选择入口（用户 2026-11-27 口径）。
+ * "Start" panel: tool picker on the right side (user wording 2026-11-27).
  *
- * - 入口在**对话窗口侧栏**（HarnessSidebar 的「开始」按钮），点击后在**右侧面板**打开本页，
- *   不占对话主内容区、也不默认弹资源管理器；
- * - 三个工具：工作区文件 / 新建终端 / 浏览器；「更多工具」按用户要求移除；
- * - 选择后面板切换为对应工具（同一列、同一宽度）；终端卡片与侧栏入口共用运行数角标。
+ * - The entry lives in the **chat sidebar** (the "Start" button in HarnessSidebar); clicking it opens this page in the **right panel**,
+ *   without taking over the chat content area and without opening the file explorer by default;
+ * - Three tools: workspace files / new terminal / browser; "More tools" was removed as the user requested;
+ * - After a selection the panel switches to that tool (same column, same width); the terminal card and the sidebar entry share the running-count badge.
  */
 
 export type StartToolKind = 'workspace' | 'terminal' | 'browser'
@@ -29,7 +29,7 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
   const { t } = useTranslation()
   const terminalAlive = usePtyTerminalStats()
 
-  // 快捷键与卡片上的提示一致（Ctrl/Cmd + P / ` / T）
+  // Shortcuts match the hints on the cards (Ctrl/Cmd + P / ` / T)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const mod = event.ctrlKey || event.metaKey
@@ -97,7 +97,7 @@ const StartPage: React.FC<StartPageProps> = ({ onSelect }) => {
       style={{ background: token.colorBgContainer, borderRadius: token.borderRadiusLG }}
       data-start-page="1"
     >
-      {/* 标题栏：与其他右侧面板同款 */}
+      {/* Title bar: same as the other right-side panels */}
       <div
         className="flex items-center"
         style={{

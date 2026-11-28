@@ -1,15 +1,15 @@
 /**
- * 联网搜索的纯工具函数（无 DB / electron / SDK 依赖，可离线测试）。
+ * Pure utility functions for web search (no DB / electron / SDK dependencies, offline-testable).
  */
-/** 可选搜索服务 id 列表（顺序即 UI 顺序） */
+/** Available search service ids (order matches UI order) */
 export const SEARCH_PROVIDER_IDS = ['builtin', 'deepseek', 'tavily'] as const
 
 export type SearchProviderIdPure = (typeof SEARCH_PROVIDER_IDS)[number]
 
 /**
- * Key 掩码：长度 > 12 时显示前 6 + 后 6，否则只露末 4。
+ * Key mask: when longer than 12 characters show the first 6 + last 6, otherwise only the last 4.
  *
- * 用户口径（2026-11-27）：搜索设置里密钥要显示前后 6 位。
+ * User requirement (2026-11-27): keys in search settings must show the first and last 6 characters.
  */
 export function maskApiKey(key: string): string {
   const trimmed = key.trim()
@@ -19,7 +19,7 @@ export function maskApiKey(key: string): string {
   return `${trimmed.slice(0, 6)}••••••${trimmed.slice(-6)}`
 }
 
-/** 规范化 provider 参数（非法值返回 null） */
+/** Normalize a provider argument (returns null for invalid values) */
 export function asSearchProviderId(value: unknown): SearchProviderIdPure | null {
   return typeof value === 'string' && (SEARCH_PROVIDER_IDS as readonly string[]).includes(value)
     ? (value as SearchProviderIdPure)

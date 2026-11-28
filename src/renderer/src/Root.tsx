@@ -5,10 +5,11 @@ import { AppErrorBoundary } from './components/system/AppErrorBoundary'
 import { useWindowTitle } from './window-title'
 
 /**
- * 把当前窗口标题同步给主进程（原生标题栏显示 `内容 - RytenBench`）。
+ * Sync the current window title to the main process (the native title bar shows
+ * `content - RytenBench`).
  *
- * 标题内容由各处通过 `setWindowTitleSource` 声明（插件名 / 页面名 / 对话模式等），
- * 这里只做订阅 + IPC。
+ * The title content is declared in various places via `setWindowTitleSource` (plugin name /
+ * page name / conversation mode, etc.); this component only subscribes and forwards it over IPC.
  */
 const WindowTitleSync: React.FC = () => {
   const title = useWindowTitle()
@@ -16,23 +17,25 @@ const WindowTitleSync: React.FC = () => {
     try {
       ;window.api.window.setTitle(title)
     } catch {
-      // 平台不支持时忽略
+      // Ignore when the platform does not support it
     }
   }, [title])
   return null
 }
 
 /**
- * 根组件：主界面 + 启动页。
+ * Root component: main UI + startup splash.
  *
- * 主界面从第一帧就挂载（初始化数据在后台加载），启动页盖在最上面；
- * 初始化任务全部完成且主界面首帧就绪后，启动页淡出并卸载（见 StartupSplash）。
+ * The main UI mounts on the first frame (initialization data loads in the background) and the
+ * splash sits on top; once all initialization tasks finish and the main UI's first frame is
+ * ready, the splash fades out and unmounts (see StartupSplash).
  */
 const Root: React.FC = () => {
   const [startupDone, setStartupDone] = useState(false)
   return (
-    // 错误边界也覆盖启动页与标题同步：此前 `AppErrorBoundary` 只在 App 内部，
-    // 启动阶段（StartupSplash 的定时器/订阅）抛错会直接卸载整棵树变成白屏。
+    // The error boundary also covers the splash and title sync: previously `AppErrorBoundary`
+    // only wrapped the inside of App, so an error during startup (StartupSplash timers or
+    // subscriptions) would unmount the whole tree and blank the screen.
     <AppErrorBoundary>
       <WindowTitleSync />
       <App />

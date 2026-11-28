@@ -3,7 +3,7 @@ import { dialog, ipcMain } from 'electron'
 import * as fs from 'fs'
 import { mainMessages } from '../i18n'
 
-/** 通用文件选择 IPC（聊天附件：图片/文档、文本文件） */
+/** Shared file-picker IPC (chat attachments: images/documents and text files) */
 export function registerDialogIpc(): void {
   ipcMain.handle('select-image-file', async (_event, allowImages?: boolean) => {
     try {
@@ -30,7 +30,7 @@ export function registerDialogIpc(): void {
       const ext = filePath.split('.').pop()?.toLowerCase() || 'bin'
       const isImage = imageExts.includes(ext)
 
-      // 非视觉模型时禁止选择图片
+      // Disallow picking images for non-vision models
       if (allowImages === false && isImage) {
         await dialog.showErrorBox(m.unsupportedFileTypeTitle, m.unsupportedFileTypeMessage)
         return null

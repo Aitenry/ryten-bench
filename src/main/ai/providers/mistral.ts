@@ -1,21 +1,23 @@
 /**
- * Mistral（OpenAI 兼容，但工具调用 id 必须是 9 位字母数字）。
+ * Mistral (OpenAI-compatible, but tool call ids must be 9 alphanumeric characters).
  *
- * baseURL 走 `serverURL` 字段（旧实现同名），缺省 https://api.mistral.ai/v1。
+ * baseURL comes from the `serverURL` field (legacy field name), defaulting to
+ * https://api.mistral.ai/v1.
  */
 import { ChatOpenAI, OpenAICompatibleFields } from './openai'
 import { toMistralMessages } from './converters'
 import type { BaseMessage } from '../messages'
 
 export interface MistralFields extends OpenAICompatibleFields {
-  /** 旧实现字段名：自定义服务地址 */
+  /** Custom service address (legacy field name) */
   serverURL?: string
 }
 
 export class ChatMistralAI extends ChatOpenAI {
   constructor(fields: MistralFields) {
-    // 旧实现的 serverURL 是「服务根」，SDK 自己拼 /v1/chat/completions；
-    // 这里两种写法都接：已经带 /v1 的直接用，否则补上 /v1 再交给基类拼 /chat/completions。
+    // `serverURL` is a service root; the SDK itself appends /v1/chat/completions. Both forms are
+    // accepted here: use it as-is when it already contains /v1, otherwise append /v1 and let the
+    // base class append /chat/completions.
     const serverURL = fields.serverURL ?? fields.baseURL ?? fields.baseUrl
     const normalizedBase = serverURL
       ? /(^|\/)v1($|\/)/.test(serverURL)
@@ -23,7 +25,7 @@ export class ChatMistralAI extends ChatOpenAI {
         : `${serverURL.replace(/\/+$/, '')}/v1`
       : undefined
     super({
-      // Mistral 不支持 stream_options（部分版本会 400），用量在最后一个 chunk 里按需读取
+      // Mistral does not support stream_options (some versions return 400); usage is read from the last chunk as needed
       streamUsage: false,
       ...fields,
       ...(normalizedBase ? { baseURL: normalizedBase } : {})

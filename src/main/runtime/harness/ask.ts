@@ -7,52 +7,51 @@ import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { buildCancelledAnswer } from './question-cancel'
 
 /**
- * 向用户提问（ask_user_question）— 对应 deepseek-harness 的
- * dsh-user-questions / dsh-tool-ask-user 体系
+ * Ask the user a question (ask_user_question).
  *
- * 机制（参考 DSH，适配 RytenBench）：
- * - 工具执行期间向人类提问：工具节点挂起等待（图保持在 tools 节点），
- *   答案经 IPC 由前端弹窗收集后回写，模型拿到答案继续原循环（不消耗额外轮次）；
- * - 显式无超时（DSH 语义）：仅随本轮取消信号中止（ASK_ABORTED），
- *   流取消时挂起提问全部拒绝；
- * - 只有主代理持有该工具（子代理被禁问，对应 DELEGATED_CALLER 边界；
- *   v1 简化：子代理不持有 ask 工具）。
+ * Mechanism:
+ * - Ask a human while a tool runs: the tool node suspends and waits (the graph stays at the tools
+ *   node); the answer is collected by the frontend dialog over IPC and written back, and the model
+ *   continues the same loop with the answer (no extra turn consumed);
+ * - Explicitly no timeout: aborted only by the turn's cancel signal (ASK_ABORTED); when the stream
+ *   is cancelled all pending questions are rejected;
+ * - Only the main agent holds this tool (subagents cannot ask; v1 keeps them without it).
  */
 
-/** 选项 */
+/** An option */
 export interface AskOption {
   label: string
   description?: string
-  /** 分组键（如供应商类型 'openai'），前端用于树形目录分组展示 */
+  /** Group key (e.g. provider type 'openai'), used by the frontend for tree grouping */
   group?: string
 }
 
-/** 单个问题 */
+/** A single question */
 export interface AskQuestion {
   id: string
   question: string
   header?: string
   options?: AskOption[]
   multi_select?: boolean
-  /** 题目种类（如 'model-recovery'=模型请求失败的「换模型继续」选择；普通提问无此字段） */
+  /** Question kind (e.g. 'model-recovery' = "switch model and continue" after a failed model request; absent for normal questions) */
   kind?: string
-  /** kind='model-recovery' 时的失败原因（展示用） */
+  /** Failure reason when kind='model-recovery' (display only) */
   error?: string
-  /** kind='model-recovery' 时「放弃继续」选项的文案（前端排到列表末尾并按放弃处理） */
+  /** Label of the "give up" option when kind='model-recovery' (listed last and treated as abandon) */
   abandonLabel?: string
 }
 
-/** 答案（单选取第一个；多选为数组；selected 为空而带 custom = 用户自行输入，即「其他」） */
+/** Answer (single choice takes the first item; multi-select is an array; empty selected with custom = user-typed "other") */
 export interface AskAnswer {
   answers: Array<{ id: string; selected: string[]; custom?: string }>
   /**
-   * 用户点了「取消」：本轮**不中止**，工具正常返回这条带 cancelled 的答案，
-   * 模型据此继续执行（见 ask 工具描述与 question-cancel.ts）。
+   * The user clicked Cancel: this turn is **not aborted**; the tool returns this answer with
+   * cancelled set and the model continues from it (see question-cancel.ts).
    */
   cancelled?: boolean
 }
 
-/** 挂起提问的视图（广播到前端） */
+/** View of a pending question (broadcast to the frontend) */
 export interface PendingQuestionView {
   topicId: number
   requestId: string
@@ -63,39 +62,41 @@ interface PendingRecord extends PendingQuestionView {
   resolve: (answer: AskAnswer) => void
   reject: (err: Error) => void
   signal?: AbortSignal
-  /** signal 的中止处理器（解决/中止后用于移除监听，防闭包滞留） */
+  /** Abort handler for signal (removes the listener after settle/abort to avoid leaked closures) */
   onAbort?: () => void
 }
 
 export type AskListener = (pending: PendingQuestionView) => void
 
-/** 提问服务（进程级单例：挂起队列 + IPC 答案回写） */
+/** Question service (process-wide singleton: pending queue + IPC answer write-back) */
 export class QuestionService {
   private readonly pending = new Map<string, PendingRecord>()
 
-  /** 新提问广播回调（主进程注入，通知前端弹窗） */
+  /** New-question broadcast callback (injected by the main process to open the frontend dialog) */
   onAsk?: AskListener
 
   /**
-   * 挂起项已结算（用户回答 / 本轮中止）→ 通知界面「这条会话不再等人」。
+   * A pending item settled (user answered / turn aborted) -> notify the UI that this session is
+   * no longer waiting.
    *
-   * 与 onAsk 成对：一条提问的生命周期 = 提问广播（onAsk）→ 结算广播（这里）。
-   * 侧栏的「等待确认」黄点靠这两端翻转，缺了结算那一端就会一直亮着。
+   * Pairs with onAsk: a question's lifecycle = ask broadcast (onAsk) -> settle broadcast (here).
+   * The sidebar's "waiting for confirmation" dot flips on both ends; missing the settle end
+   * leaves it on forever.
    */
   onResolved?: (topicId: number) => void
 
-  /** 结算广播：失败只意味着界面少一次状态翻转，不能影响挂起项本身的结算 */
+  /** Settle broadcast: failure only means one missed UI flip and must not affect the settlement itself */
   private notifyResolved(topicId: number): void {
     try {
       this.onResolved?.(topicId)
     } catch {
-      // 广播出口失效（窗口已销毁等）：忽略，结算已经完成
+      // Broadcast outlet is gone (window destroyed, etc.): ignore, settlement already completed
     }
   }
 
   /**
-   * 挂起等待用户回答。
-   * signal 中止 → 抛 ASK_ABORTED（工具层捕获后返回取消文案）。
+   * Suspend and wait for the user's answer.
+   * When signal aborts -> throws ASK_ABORTED (the tool layer catches it and returns a cancel message).
    */
   ask(topicId: number, questions: AskQuestion[], signal?: AbortSignal): Promise<AskAnswer> {
     const tr = getFsToolTexts()
@@ -119,15 +120,16 @@ export class QuestionService {
         signal.addEventListener('abort', onAbort, { once: true })
       }
       try {
-        // 只广播可序列化视图：PendingRecord 含 resolve/reject/signal，
-        // 直接过 webContents.send 会抛 "Failed to serialize arguments"（Electron 结构化克隆）
+        // Broadcast only a serializable view: PendingRecord contains resolve/reject/signal and
+        // passing it to webContents.send would throw "Failed to serialize arguments" (Electron structured clone)
         this.onAsk?.({
           topicId: record.topicId,
           requestId: record.requestId,
           questions: record.questions
         })
       } catch (err) {
-        // 广播失败（序列化异常/无窗口）：清理挂起记录与信号监听，避免泄漏与永久挂起
+        // Broadcast failed (serialization error / no window): clean up the pending record and
+        // signal listener to avoid leaks and permanent hangs
         this.pending.delete(requestId)
         if (signal) signal.removeEventListener('abort', onAbort)
         reject(err instanceof Error ? err : new Error(String(err)))
@@ -137,14 +139,14 @@ export class QuestionService {
     })
   }
 
-  /** 清理挂起记录的信号监听（修复：解决后监听器仍挂在 signal 上直至其触发/GC） */
+  /** Remove the signal listener of a pending record (after settle it would otherwise stay attached until fired/GC) */
   private detach(record: PendingRecord): void {
     if (record.signal && record.onAbort) {
       record.signal.removeEventListener('abort', record.onAbort)
     }
   }
 
-  /** 用户回答：命中挂起提问则回写答案；不存在返回 false */
+  /** User answered: write the answer back if the pending question exists, else return false */
   answer(requestId: string, answers: AskAnswer['answers']): boolean {
     const record = this.pending.get(requestId)
     if (!record) return false
@@ -157,10 +159,12 @@ export class QuestionService {
   }
 
   /**
-   * 用户取消回答：**不中止本轮**，把挂起项按 `cancelled: true` 结算，模型继续执行。
+   * User cancelled: **do not abort the turn**; settle the pending item as `cancelled: true` and
+   * let the model continue.
    *
-   * 与 `abortTopic` 的区别：abort 让工具抛 AskAbortedError（本轮结束）；这里工具正常
-   * 返回，模型拿到取消标记后自行决定下一步，不再等待用户。
+   * Difference from `abortTopic`: abort makes the tool throw AskAbortedError (turn ends); here the
+   * tool returns normally and the model decides the next step from the cancel flag instead of
+   * waiting for the user.
    */
   cancel(requestId: string): boolean {
     const record = this.pending.get(requestId)
@@ -173,7 +177,7 @@ export class QuestionService {
     return true
   }
 
-  /** 读取话题的挂起提问（前端重载/恢复用） */
+  /** Read a topic's pending question (for frontend reload/restore) */
   getPending(topicId: number): PendingQuestionView | null {
     for (const record of this.pending.values()) {
       if (record.topicId === topicId) {
@@ -183,7 +187,7 @@ export class QuestionService {
     return null
   }
 
-  /** 话题全部挂起提问中止（流取消时调用） */
+  /** Abort all pending questions of a topic (called when a stream is cancelled) */
   abortTopic(topicId: number): void {
     const tr = getFsToolTexts()
     let settled = false
@@ -199,7 +203,7 @@ export class QuestionService {
     if (settled) this.notifyResolved(topicId)
   }
 
-  /** 全部挂起提问中止（应用级取消兜底） */
+  /** Abort all pending questions (app-level cancel fallback) */
   abortAll(): void {
     const tr = getFsToolTexts()
     const topics = new Set<number>()
@@ -215,7 +219,7 @@ export class QuestionService {
   }
 }
 
-/** 进程级单例 */
+/** Process-wide singleton */
 export const questionService = new QuestionService()
 
 const askOptionSchema = z.object({
@@ -237,7 +241,7 @@ const askQuestionSchema = z.object({
     .describe('Whether multiple options may be selected (default false)')
 })
 
-/** 构建提问工具（仅注入主代理） */
+/** Build the ask tool (injected into the main agent only) */
 export function buildAskUserTool(fallbackTopicId = 0): StructuredToolInterface {
   return tool(
     async ({ questions }, config) => {

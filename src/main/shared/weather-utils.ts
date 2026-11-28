@@ -2,12 +2,16 @@ import { getMainLanguage, mainFormat } from '../i18n'
 import { getWeatherToolTexts } from '../i18n/tool-results-weather'
 
 // ============================================================================
-// 天气工具公共模块 — 风向、地理编码、日期格式化
-// 用于 harness tool (weather.ts) 和底栏组件（主进程 weather.ts）共享
-// 天气码/风向/周几的**文案**都在 src/main/i18n/tool-results-weather.ts，按语言取
+// Shared weather tool module — wind direction, geocoding, date formatting
+// Used by both the harness tool (weather.ts) and the status bar component (main-process weather.ts)
+// The **text** for weather codes / wind directions / weekdays lives in
+// src/main/i18n/tool-results-weather.ts and is looked up per language
 // ============================================================================
 
-/** 16 方位缩写（度数与风向词表共用下标：`Math.round(degrees / 22.5) % 16`） */
+/**
+ * 16-point compass abbreviations (shared index with the wind-direction word list:
+ * `Math.round(degrees / 22.5) % 16`)
+ */
 const WIND_DIRECTION_CODES = [
   'N',
   'NNE',
@@ -27,21 +31,23 @@ const WIND_DIRECTION_CODES = [
   'NNW'
 ] as const
 
-/** 度数 → 风向描述（按当前界面语言取词表） */
+/** Degrees → wind direction description (word list taken in the current UI language) */
 export function windDirectionLabelFor(degrees: number, texts = getWeatherTexts()): string {
   const key = WIND_DIRECTION_CODES[Math.round(degrees / 22.5) % 16]
   const map = texts.windDirections as Record<string, string>
   return map[key] ?? `${degrees.toFixed(0)}°`
 }
 
-/** 地理编码：地点名 → 经纬度候选列表（返回的地名按界面语言本地化） */
+/** Geocoding: place name → candidate lat/lon list (returned names are localized to the UI language) */
 export async function geocodeLocation(
   location: string
 ): Promise<Array<{ lat: number; lon: number; name: string; admin1?: string; country: string }>> {
-  // 结果会作为地名渲染在工具卡片上，所以 language 跟随界面语言而不是写死 zh
+  // Results are rendered as place names on the tool card, so language follows the UI language
+  // instead of being hard-coded to zh
   const lang = getMainLanguage() === 'en-US' ? 'en' : 'zh'
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=5&language=${lang}&format=json`
-  // 网络/HTTP 错误交给调用方转成可读文案；只有「确实没匹配」才返回空数组
+  // Network / HTTP errors are left to the caller to turn into readable text; only "really no match"
+  // returns an empty array
   const res = await fetch(url, { signal: AbortSignal.timeout(12_000) })
   if (!res.ok) throw new Error(`geocoding HTTP ${res.status}`)
   const json = await res.json()
@@ -69,24 +75,24 @@ export function formatDate(date: Date): string {
 }
 
 // ============================================================================
-// 语言感知文案 — 工具卡片跟随界面语言（词条见 i18n/tool-results-weather.ts）
+// Language-aware text — tool cards follow the UI language (entries in i18n/tool-results-weather.ts)
 // ============================================================================
 
-/** Date.getDay() → 词条键（0 = 周日） */
+/** Date.getDay() → entry key (0 = Sunday) */
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
-/** 当前语言的天气工具文案（含天气码、风向、周几词表） */
+/** Weather tool text for the current language (incl. weather code, wind direction, weekday tables) */
 export function getWeatherTexts(): ReturnType<typeof getWeatherToolTexts> {
   return getWeatherToolTexts()
 }
 
-/** 天气码 → 当前语言描述；未收录时回落到词条里的「天气码 N」兜底 */
+/** Weather code → description in the current language; falls back to the "weather code N" entry when unknown */
 export function weatherCodeLabel(code: number, texts = getWeatherTexts()): string {
   const codes = texts.codes as Record<number, string>
   return codes[code] ?? mainFormat(texts.unknownCode, { code })
 }
 
-/** Date → 当前语言周几 */
+/** Date → weekday name in the current language */
 export function weekdayLabelFor(date: Date, texts = getWeatherTexts()): string {
   return texts.weekdays[WEEKDAY_KEYS[date.getDay()]]
 }

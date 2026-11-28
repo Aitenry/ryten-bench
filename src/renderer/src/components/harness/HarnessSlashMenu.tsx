@@ -4,28 +4,31 @@ import { useTranslation } from '@renderer/i18n'
 import { filterSlashCommands, type HarnessSlashCommandId } from './slashCommands'
 
 /**
- * 输入框命令面（slash menu）——在输入框**开头**输入 `/` 唤起。
+ * Slash command panel for the input box — opened by typing `/` at the **start** of the input.
  *
- * 形态参考 DSH 的输入框命令菜单：一个贴着输入卡片上沿的深色浮层，分组标题「添加」，
- * 每行从左到右是「图标 + 中文名 + 英文名 + 右侧说明」，第一行默认高亮，
- * 方向键移动、回车选中（键盘在输入框的 handleKeyDown 里统一处理）。
+ * Shaped like a dark floating panel attached to the top edge of the input card, with a group
+ * header "Add" and one row per command: icon + localized name + English alias + description on
+ * the right. The first row is highlighted by default; arrow keys move and Enter picks (keyboard
+ * handling lives in the input's handleKeyDown).
  *
- * 当前只保留两个与「目标 / 计划」相关的命令（截图里其余行被划掉）：
- * - 目标 goal：打开目标弹窗，设置或查看长期任务目标；
- * - 计划 plan：进入 / 退出计划模式。
+ * Only the two goal/plan commands are kept for now (the remaining rows in the mock were struck
+ * out):
+ * - goal: open the goal dialog to set or review the long-running task objective;
+ * - plan: enter / leave plan mode.
  *
- * 过滤只按「`/` 后面的查询词」做子串匹配（中文名 / 英文名 / 说明），不区分大小写；
- * 查询词由父组件从编辑器文本里解析（遇到空白或过长就关闭菜单，避免压住正常输入）。
+ * Filtering is a case-insensitive substring match against the query after `/` (localized name /
+ * English alias / description). The parent parses the query from the editor text and closes the
+ * menu on whitespace or an over-long query so it does not cover normal input.
  */
 
 interface HarnessSlashMenuProps {
-  /** `/` 后面的查询文本 */
+  /** Query text after `/` */
   query: string
-  /** 键盘高亮下标（父组件维护，滚动/鼠标同步） */
+  /** Keyboard highlight index (maintained by the parent, kept in sync with scroll/mouse) */
   activeIndex: number
   onActiveIndexChange: (index: number) => void
   onPick: (id: HarnessSlashCommandId) => void
-  /** 浮层容器 ref（父组件用它判断「点击在菜单内」） */
+  /** Floating panel container ref (the parent uses it to tell whether a click is inside) */
   menuRef?: React.RefObject<HTMLDivElement | null>
   style?: React.CSSProperties
 }
@@ -59,7 +62,7 @@ const HarnessSlashMenu: React.FC<HarnessSlashMenuProps> = ({
         ...style
       }}
     >
-      {/* 分组标题：与 DSH 的「添加」小节一致（当前两条命令都属于「添加」） */}
+      {/* Group header: both commands currently belong to "Add" */}
       <div
         style={{
           padding: '5px 14px 4px',
@@ -85,7 +88,7 @@ const HarnessSlashMenu: React.FC<HarnessSlashMenuProps> = ({
       ) : (
         rows.map((command, index) => {
           const label = t(command.labelKey)
-          // 本地化标题与英文名只差大小写时不重复显示（与 DSH 菜单同一规则）
+          // Skip the alias when the localized label differs from it only by case
           const showAlias = label.toLowerCase() !== command.alias.toLowerCase()
           const Icon = command.icon
           const selected = index === active
@@ -96,7 +99,7 @@ const HarnessSlashMenu: React.FC<HarnessSlashMenuProps> = ({
               role="option"
               aria-selected={selected}
               data-harness-slash-command={command.id}
-              // mousedown 而不是 click：不让焦点离开编辑器（输入框保持光标/草稿状态）
+              // mousedown instead of click: do not move focus out of the editor
               onMouseDown={(event) => {
                 event.preventDefault()
                 onPick(command.id)

@@ -8,15 +8,19 @@ import {
 } from './harnessHelpers'
 
 /**
- * 把一条流式 chunk 应用到指定 id 的助手消息上，返回更新后的 messages 浅拷贝。
+ * Apply one streaming chunk to the assistant message with the given id and return a shallow copy
+ * of the updated messages.
  *
- * 这是主对话与「后台子代理会话视图」**共用的唯一合并语义**（2026-11-26 从
- * useHarnessHandlers 抽成独立纯函数）：正文/推理增量、工具 preparing → executing →
- * completed、子代理嵌套块、重试/压缩过渡块都在这里合并。子代理会话视图直接复用
- * 同一主进程下发的 StructuredMessage chunk，渲染结果与主对话逐像素同源。
+ * This is the **single merge semantic shared** by the main conversation and the background
+ * subagent conversation view (extracted from useHarnessHandlers into a standalone pure function on
+ * 2026-11-26): text/reasoning deltas, tools going preparing → executing → completed, nested
+ * subagent blocks, and retry/compaction transition blocks are all merged here. The subagent
+ * conversation view reuses the same StructuredMessage chunks sent by the main process, so its
+ * rendering is pixel-identical to the main conversation.
  *
- * @param activeCauseIds 当前话题「正在运行的子代理 causeId」集合（task 工具的子代理块
- *   据此把 running 事件归并到同一个嵌套块；没有子代理的会话传空 Set 即可）
+ * @param activeCauseIds Set of "currently running subagent causeIds" for the current topic (the
+ *   task tool's subagent blocks use it to fold running events into the same nested block; sessions
+ *   without subagents can pass an empty Set)
  */
 export function applyChunkToMessages(
   msgs: Message[],
@@ -58,8 +62,9 @@ export function applyChunkToMessages(
     }
     let updatedBlocks = [...msg.blocks]
 
-    // 「正在重试」过渡块仅在请求未恢复时展示：一旦真实内容/工具/智能体/压缩结果到达，
-    // 说明重试已成功、模型开始正常输出，立即移除该过渡块
+    // The "retrying" transition block only shows while the request has not recovered: once real
+    // content/tools/agents/compaction results arrive, the retry has succeeded and the model is
+    // emitting normally, so remove the transition block immediately
     const retryFinished =
       Boolean(chunk.content) ||
       Boolean(chunk.reasoning_content) ||
@@ -69,14 +74,16 @@ export function applyChunkToMessages(
     if (retryFinished) {
       updatedBlocks = updatedBlocks.filter((b) => b.type !== 'retrying')
     }
-    // 摘要压缩失败/放弃（全程没有 historyCompacted 结果）时，正文一旦开始就收起
-    // 残留的「正在压缩早期对话…」过渡卡（避免压缩卡与正文并行误导）
+    // When summary compaction fails/is abandoned (no historyCompacted result at all), collapse the
+    // leftover "compacting early conversation…" transition card once text starts (so the card does
+    // not sit alongside the body and mislead)
     if (retryFinished && !updatedBlocks.some((b) => b.type === 'historyCompacted')) {
       updatedBlocks = updatedBlocks.filter((b) => b.type !== 'historyCompacting')
     }
 
-    // 模型单次请求失败后在原调用处自动重试（不整轮重跑）：插入「正在重试」过渡行，
-    // 只保留最新一次进度；已输出的历史内容与工具块原样保留（重试不会作废它们）
+    // After a single failed model request, retry at the original call site (no full-turn rerun):
+    // insert a "retrying" transition row and keep only the latest attempt's progress; already
+    // emitted content and tool blocks are preserved (a retry does not invalidate them)
     if (chunk.retrying) {
       updatedBlocks = updatedBlocks.filter((b) => b.type !== 'retrying')
       updatedBlocks.push({
@@ -85,7 +92,8 @@ export function applyChunkToMessages(
       })
     }
 
-    // 本轮热记忆注入：置于消息块最顶部（首个 chunk 到达，仅插入一次）
+    // Hot memory injection for this turn: placed at the very top of the message blocks (inserted
+    // once when the first chunk arrives)
     if (chunk.memoryInjected) {
       const exists = updatedBlocks.some((b) => b.type === 'memoryInjected')
       if (!exists) {
@@ -100,8 +108,9 @@ export function applyChunkToMessages(
       }
     }
 
-    // 摘要压缩开始：插入「压缩中」过渡块（仅当前轮展示，不落库；
-    // 结果块到达后在原位置替换，压缩失败时随消息结束隐藏）
+    // Summary compaction starts: insert a "compacting" transition block (shown only for the
+    // current turn, not persisted; replaced in place when the result block arrives, hidden when
+    // the message ends if compaction fails)
     if (chunk.historyCompacting) {
       const exists = updatedBlocks.some(
         (b) => b.type === 'historyCompacting' || b.type === 'historyCompacted'
@@ -111,7 +120,8 @@ export function applyChunkToMessages(
       }
     }
 
-    // 本轮早期对话摘要压缩：紧随记忆注入块（正文流开始前到达，仅插入一次）
+    // Early conversation summary compaction for this turn: follows the memory injection block
+    // (arrives before the text stream starts, inserted once)
     if (chunk.historyCompacted) {
       const compacted = {
         type: 'historyCompacted' as const,
@@ -121,7 +131,7 @@ export function applyChunkToMessages(
           boundaryId: chunk.historyCompacted.boundaryId
         }
       }
-      // 原地替换「压缩中」过渡块（保持卡片位置稳定）
+      // Replace the "compacting" transition block in place (keeps the card position stable)
       const compactingIdx = updatedBlocks.findIndex((b) => b.type === 'historyCompacting')
       if (compactingIdx >= 0) {
         updatedBlocks[compactingIdx] = compacted
@@ -223,9 +233,10 @@ export function applyChunkToMessages(
               break
             }
           }
-          // 防御：部分 provider 首个工具块不携带工具名（以占位名 'tool' 登记）——
-          // 未按名称匹配到 preparing 块时，并入最近的占位块并改名为真实工具名，
-          // 避免「tool · 参数构建中…」幽灵块与真实工具块并存
+          // Defensive: some providers' first tool block carries no tool name (registered under the
+          // placeholder name 'tool') — when no preparing block matches by name, merge into the
+          // nearest placeholder block and rename it to the real tool name, so the ghost
+          // "tool · building args…" block does not coexist with the real tool block
           if (!merged) {
             const placeholderIdx = findPlaceholderPreparingTool(updatedBlocks)
             if (placeholderIdx >= 0) {
@@ -290,8 +301,9 @@ export function applyChunkToMessages(
             children: []
           })
         } else {
-          // 复制后更新：不改写与旧状态共享的 subAgent 对象（渲染/更新期就地改共享对象
-          // 是文本自复制的隐患，统一走不可变替换）
+          // Copy then update: never rewrite the subAgent object shared with the previous state
+          // (in-place mutation of shared objects during render/update risks text duplication;
+          // always use immutable replacement)
           const existing = updatedBlocks[idx]
           const prevSa = existing.subAgent!
           updatedBlocks[idx] = {
@@ -307,7 +319,8 @@ export function applyChunkToMessages(
           activeCauseIds.add(sa.causeId)
         }
       } else if (sa.status === 'dispatched') {
-        // 后台派发轻量卡：定格「已派发」，仅名称+简述+会话 id（结果在顶部栏查看）
+        // Lightweight background-dispatch card: fixed at "dispatched", with name + summary +
+        // conversation id only (results are viewed in the top bar)
         const idx = findSaBlock()
         if (idx < 0) {
           pushBlock(updatedBlocks, {
@@ -357,8 +370,9 @@ export function applyChunkToMessages(
         const idx = findSaBlock()
         let block: MessageBlock
         if (idx >= 0) {
-          // 复制成新块后再就地更新：新块独占 subAgent 对象与 children 数组，
-          // 后续对 block.subAgent/block.children 的写入不会污染与旧状态共享的对象
+          // Copy into a new block, then update in place: the new block owns its subAgent object and
+          // children array, so later writes to block.subAgent/block.children do not pollute objects
+          // shared with the previous state
           const existing = updatedBlocks[idx]
           block = {
             ...existing,
@@ -485,8 +499,9 @@ export function applyChunkToMessages(
                   break
                 }
               }
-              // 防御：部分 provider 首个工具块不携带工具名（以占位名 'tool' 登记）——
-              // 未按名称匹配到 preparing 块时，并入最近的占位块并改名为真实工具名
+              // Defensive: some providers' first tool block carries no tool name (registered under
+              // the placeholder name 'tool') — when no preparing block matches by name, merge into
+              // the nearest placeholder block and rename it to the real tool name
               if (!merged) {
                 const placeholderIdx = findPlaceholderPreparingTool(block.children)
                 if (placeholderIdx >= 0) {
@@ -525,14 +540,17 @@ export function applyChunkToMessages(
     }
 
     /**
-     * **流式期间不动折叠布局**（用户 2026-09-24：「还是出现内容从折叠里面移到外面，
-     * 一会又被移进去」）：主进程随 chunk 下发的 `answer` 实时标记不再驱动布局——
-     * 那时边界还没有定论（模型随时可能接着调工具，刚写的那句话就不是答复），
-     * 一摘就会出现「先露到折叠外、再被收回折叠里」的来回搬。
+     * **Do not touch the fold layout while streaming** (user report, 2026-09-24: "content still
+     * moves out of the fold and then back in a moment later"): the live `answer` flags the main
+     * process sends with each chunk no longer drive layout — the boundary is not settled at that
+     * point (the model may keep calling tools, and the sentence just written is then not the
+     * answer), so pulling content out causes repeated back-and-forth between inside and outside
+     * the fold.
      *
-     * 布局只在 done 事件（下面的 done 分支）一次性按主进程的权威结论定格：
-     * 折叠外只留**最终结果正文 + 紧挨着它的思考**，其余内容全部留在任务段折叠里
-     * （第一个 write_todos 之前那段 2026-09-25 起不折叠、始终铺开）。
+     * Layout is frozen once, on the done event, using the main process's authoritative conclusion:
+     * outside the fold only the **final result text + the thinking immediately next to it**, with
+     * everything else staying inside the task-segment fold (the segment before the first
+     * write_todos has not been folded since 2026-09-25 and is always expanded).
      */
     return {
       ...msg,
@@ -540,7 +558,8 @@ export function applyChunkToMessages(
       blocks: updatedBlocks,
       toolCalls: updatedToolCalls.length > 0 ? updatedToolCalls : undefined,
       reasoning_content: updatedReasoning,
-      // 瞬时字段：记录最后 chunk 时间戳，供静默指示（正在生成…）判定
+      // Transient field: records the last chunk timestamp for the silence indicator
+      // ("generating…") check
       lastChunkAt: Date.now()
     }
   })

@@ -1,12 +1,13 @@
 /**
- * 设置 →「联网搜索」页。
+ * Settings -> "Web Search" page.
  *
- * 版式对齐设计稿：
- * - 三个搜索服务单选项（内置搜索 / DeepSeek / Tavily），各带品牌图标、状态 pill、
- *   密钥掩码（前 6 + 后 6）与「测试 / 配置」；
- * - 行为开关：失败回退、请求正文摘要；
- * - 配置弹窗只填密钥（不显示请求地址、无底部提示），保存前先测试；
- * - 密钥只保存在本机并加密；「模型」里已有同厂商 Key 时给复用提示。
+ * - Three search-service radio options (built-in search / DeepSeek / Tavily), each with a brand
+ *   icon, a status pill, a masked key (first 6 + last 6) and "Test / Configure";
+ * - Behavior toggles: failure fallback, request-body summary;
+ * - The configure dialog only asks for the key (no request URL, no footer hint), and saves only
+ *   after a successful test;
+ * - Keys are stored only on this machine and encrypted; when "Models" already has a key for the
+ *   same provider, show a reuse hint.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Input, Modal, Radio, Spin, Tag, theme } from 'antd'
@@ -21,7 +22,7 @@ import {
 } from '@renderer/components/system/settings/SettingsUI'
 import { harnessApi, type SearchProviderId, type SearchSettingsView } from '../../../api/harness'
 
-/** 可配置密钥的服务（内置搜索不需要） */
+/** Services whose key can be configured (built-in search needs none) */
 type KeyedProvider = Exclude<SearchProviderId, 'builtin'>
 
 const PROVIDER_ICONS: Record<SearchProviderId, React.ReactNode> = {
@@ -30,7 +31,7 @@ const PROVIDER_ICONS: Record<SearchProviderId, React.ReactNode> = {
   tavily: <img src={tavilyIcon} alt="Tavily" style={{ width: 18, height: 18 }} />
 }
 
-/** 各服务的帮助链接（「去获取」） */
+/** Help link for each service ("Get key") */
 const PROVIDER_KEY_URLS: Record<KeyedProvider, string> = {
   deepseek: 'https://platform.deepseek.com',
   tavily: 'https://app.tavily.com'
@@ -169,7 +170,8 @@ const SearchSettings: React.FC = () => {
         messageApi.error(errorLabel(saved.error))
         return
       }
-      // 保存后立即测试；失败则撤掉这份密钥，避免留下不可用的配置
+      // Test immediately after saving; on failure revoke the key so no unusable config is left
+      // behind
       const passed = await runTest(configProvider)
       if (!passed) {
         await harnessApi.harness.clearSearchProviderKey(configProvider).catch(() => null)

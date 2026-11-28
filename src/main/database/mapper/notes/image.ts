@@ -9,7 +9,8 @@ async function saveImage(dataUrl: string | null): Promise<string | null> {
   return withOrm('saveImage', async (db) => {
     const id = crypto.createHash('md5').update(dataUrl).digest('hex')
 
-    // 同图去重：主键冲突直接忽略（等价于原来的 ON CONFLICT DO NOTHING）
+    // Deduplicate identical images: ignore primary-key conflicts (equivalent to the original
+    // ON CONFLICT DO NOTHING)
     await db.insert(images).values({ id, data: dataUrl }).onConflictDoNothing()
 
     return id

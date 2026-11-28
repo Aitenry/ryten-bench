@@ -1,29 +1,32 @@
 #!/usr/bin/env node
 /**
- * 构建沙箱自带资产 —— 产出**整个** `resources/sandbox/` 目录；附带 `--selfcheck`：
- * 对**打包产物**里的沙箱做真机自检（CI 与本地都能跑）。
+ * Build the sandbox's bundled assets — produce the **entire** `resources/sandbox/` directory;
+ * also provides `--selfcheck` to run a real-machine self-check of the sandbox inside the
+ * **packaged artifact** (works both in CI and locally).
  *
- * 为什么这个目录整体是构建产物（约定，见 .gitignore）：
- * 它是「随应用分发的运行期二进制/脚本」，其**源码**都在会入库的位置：
- *   - Windows 后端：`native/win32-sandbox-runner/win32-sandbox-runner.cjs`（手写，纯 CJS，
- *     被当成独立进程 spawn：`process.execPath` + `ELECTRON_RUN_AS_NODE=1`）；
- *   - Linux 后端：`native/landlock-launcher/ryten-landlock-launcher.c`（自研 Landlock 启动器，
- *     需要按目标架构编译）；
- *   - macOS 后端：无自带文件（运行时拼 SBPL，走系统自带 `sandbox-exec`）。
- * 所以 `resources/sandbox/` 里出现的东西一律可重建；删掉它不会丢源码。
+ * Why the whole directory is a build artifact (by convention):
+ * It holds the runtime binaries/scripts distributed with the app; their **sources** live in
+ * tracked locations:
+ *   - Windows backend: `native/win32-sandbox-runner/win32-sandbox-runner.cjs` (hand-written,
+ *     plain CJS, spawned as a separate process: `process.execPath` + `ELECTRON_RUN_AS_NODE=1`);
+ *   - Linux backend: `native/landlock-launcher/ryten-landlock-launcher.c` (custom Landlock
+ *     launcher, which must be compiled for the target architecture);
+ *   - macOS backend: no bundled file (SBPL is assembled at runtime via the system `sandbox-exec`).
+ * So everything under `resources/sandbox/` is reproducible; deleting it loses no source.
  *
- * 产出：
- *   <out>/win32-sandbox-runner.cjs                      （所有平台都产，Windows 用）
- *   <out>/linux-<arch>/ryten-landlock-launcher          （在 Linux 上编译；静态链接优先）
- * 跑法：
- *   `node native/build-sandbox.mjs [--out <目录>] [--dynamic]`
- *   `node native/build-sandbox.mjs --selfcheck [<打包产物目录>]`（默认自动找 dist/*-unpacked）
- *   - `--out`   指定输出根（Docker/交叉构建用；默认仓库的 `resources/sandbox`）
- *   - `--dynamic` 强制动态链接（默认先试 `-static`：产物不依赖发行版 glibc 版本，
- *     任何发行版（含 Alpine/musl）都能跑，这正是「装完即用」的要求）
- * 接入：`pnpm build:sandbox`（dev / build:win / build:mac / build:linux 都会先跑它）。
- * 跨平台：在 Windows 上无法编译 Linux 目标 → 用 `docker/verify-sandbox.mjs`，
- *   它在容器里为 linux/amd64 与 linux/arm64 各构建一份并顺手把验证跑掉。
+ * Output:
+ *   <out>/win32-sandbox-runner.cjs                      (produced on all platforms, used by Windows)
+ *   <out>/linux-<arch>/ryten-landlock-launcher          (compiled on Linux; static linking preferred)
+ * Usage:
+ *   `node native/build-sandbox.mjs [--out <dir>] [--dynamic]`
+ *   `node native/build-sandbox.mjs --selfcheck [<packaged artifact dir>]` (defaults to dist/*-unpacked)
+ *   - `--out`   output root (for Docker/cross builds; defaults to the repo's `resources/sandbox`)
+ *   - `--dynamic` force dynamic linking (by default `-static` is tried first: the artifact then
+ *     does not depend on the distro's glibc version, so any distro (including Alpine/musl) can run
+ *     it, which is exactly the "works right after install" requirement)
+ * Integration: `pnpm build:sandbox` (dev / build:win / build:mac / build:linux all run it first).
+ * Cross-platform: Linux targets cannot be compiled on Windows → use `docker/verify-sandbox.mjs`,
+ *   which builds one for linux/amd64 and linux/arm64 inside a container and runs the verification.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
@@ -40,7 +43,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** 本文件在 native/ 下，仓库根是再上一层 */
+/** This file is under native/, so the repo root is one level up. */
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const runnerSource = join(repoRoot, 'native', 'win32-sandbox-runner', 'win32-sandbox-runner.cjs')
 const launcherSource = join(repoRoot, 'native', 'landlock-launcher', 'ryten-landlock-launcher.c')
@@ -53,14 +56,14 @@ const outRoot =
     : join(repoRoot, 'resources', 'sandbox')
 const forceDynamic = argv.includes('--dynamic')
 
-/** 目标架构目录名（与 sandbox/service.ts 的解析路径一致） */
+/** Target-architecture directory name (matches the resolution path in sandbox/service.ts). */
 function targetDirName() {
   if (process.arch === 'x64') return 'linux-x64'
   if (process.arch === 'arm64') return 'linux-arm64'
   return `linux-${process.arch}`
 }
 
-/** Windows runner：所有平台都产（Linux/macOS 打包时也在，便于跨平台组装资源） */
+/** Windows runner: produced on every platform (also present in Linux/macOS packaging for cross-platform assembly). */
 function buildWindowsRunner() {
   if (!existsSync(runnerSource)) {
     throw new Error(`缺少 Windows runner 源码：${runnerSource}`)
@@ -71,11 +74,12 @@ function buildWindowsRunner() {
   console.log(`[sandbox] Windows runner → ${target}`)
 }
 
-/** Linux Landlock 启动器：需要在 Linux 上编译（这里用 cc；静态优先） */
+/** Linux Landlock launcher: must be compiled on Linux (uses cc here; static linking preferred). */
 function compile(compiler, outFile, extraFlags) {
   const args = ['-O2', '-Wall', '-Wextra', ...extraFlags, '-o', outFile, launcherSource]
   console.log(`[sandbox] ${compiler} ${args.join(' ')}`)
-  // windowsHide：跨平台构建/自检时不要在用户桌面上闪出控制台窗口（对非 Windows 无副作用）
+  // windowsHide: don't flash a console window on the user's desktop during cross-platform
+  // builds/self-checks (no effect on non-Windows platforms)
   execFileSync(compiler, args, { stdio: 'inherit', windowsHide: true })
 }
 
@@ -103,12 +107,12 @@ function buildLandlockLauncher() {
   console.log(`[sandbox] Linux 启动器 → ${outFile}`)
 }
 
-/* ────────────────────────── 打包产物自检（--selfcheck） ────────────────────────── */
+/* ────────────────────────── Packaged-artifact self-check (--selfcheck) ────────────────────────── */
 
 let checked = 0
 let failed = 0
 
-/** 断言式打印 */
+/** Assertion-style logging */
 function expect(label, condition, detail = '') {
   if (condition) {
     checked += 1
@@ -120,11 +124,11 @@ function expect(label, condition, detail = '') {
 }
 
 /**
- * 退出码的可读形式。
+ * Human-readable form of an exit code.
  *
- * 为什么必须写十六进制：受限子进程「在 loader 初始化阶段就死掉」时退出码是
- * `0xC0000142`（`STATUS_DLL_INIT_FAILED`），十进制打印出来只是一串无意义的数字
- * （2026-09-27 CI 上就是 `exit=3221225794`，看不出任何东西）。
+ * Why hex is mandatory: when a restricted child process "dies during loader initialization"
+ * the exit code is `0xC0000142` (`STATUS_DLL_INIT_FAILED`); printed in decimal it is just a
+ * meaningless number (on the 2026-09-27 CI run it was `exit=3221225794`, revealing nothing).
  */
 function describeExit(status) {
   if (status === null || status === undefined) return 'exit=null（进程没起来）'
@@ -140,13 +144,13 @@ function describeExit(status) {
   return `exit=${code}${notable ? ` (${notable})` : ''}`
 }
 
-/** 一次受限执行的可诊断摘要：退出码 + 子进程输出尾部（CI 日志里没有它就查不出任何东西） */
+/** Diagnostic summary of one restricted run: exit code + tail of child output (CI logs are undiagnosable without it) */
 function describeRun(result) {
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
   return `${describeExit(result.status)}${output ? ` out=${JSON.stringify(output.slice(-300))}` : ' out=(空)'}`
 }
 
-/** 找打包产物根目录（含 resources/sandbox 的那一层），支持 --dir 产物与 macOS .app */
+/** Find packaged-artifact roots (the level containing resources/sandbox); supports --dir artifacts and macOS .app */
 function packagedRoots(explicit) {
   if (explicit) return [resolve(explicit)]
   const dist = join(repoRoot, 'dist')
@@ -168,11 +172,14 @@ function packagedRoots(explicit) {
 }
 
 /**
- * 受限子进程用的探针脚本（写进工作区，由受限子进程自己执行）。
+ * Probe script for restricted child processes (written into the workspace and executed by the
+ * restricted child itself).
  *
- * 为什么要有它：`cmd.exe` 的 `>` 重定向里塞绝对路径要处理空格与引号，语法一旦被 cmd 解析坏，
- * 「写入被拒」与「命令根本没解析对」就长得一模一样；探针把**运行**（先打印 start）与
- * **写入结果**（wrote / denied:<code>）分成两行结构化输出，两种失败模式在日志里可区分。
+ * Why it exists: putting an absolute path into a `cmd.exe` `>` redirection requires handling
+ * spaces and quotes; once cmd mis-parses the syntax, "the write was denied" and "the command
+ * was never parsed correctly" look identical. The probe splits **execution** (prints start
+ * first) and **write result** (wrote / denied:<code>) into two structured lines, so the two
+ * failure modes are distinguishable in the log.
  */
 const PROBE_SOURCE = `const fs = require('node:fs')
 const [target, label] = process.argv.slice(2)
@@ -185,7 +192,7 @@ try {
 }
 `
 
-/** Windows：用**打包出来的 Electron 二进制**跑 runner（生产调用路径） */
+/** Windows: run the runner with the **packaged Electron binary** (the production call path) */
 function selfcheckWindows(root, sandboxDir) {
   const runner = join(sandboxDir, 'win32-sandbox-runner.cjs')
   const exeCandidates = ['RytenBench.exe', 'electron.exe']
@@ -194,30 +201,31 @@ function selfcheckWindows(root, sandboxDir) {
     ? join(root, 'resources', 'app.asar')
     : join(root, 'resources', 'app.asar.unpacked')
   const ws = mkdtempSync(join(tmpdir(), 'ryten-selfcheck-'))
-  // 越界目标分两个：homedir 下的绝对路径（探针用）与工作区的 `..` 相对路径
-  //（cmd 的 `>` 重定向用：不含空格，不会被引号解析坏）
+  // Two out-of-bounds targets: an absolute path under homedir (for the probe) and a `..`
+  // relative path from the workspace (for cmd's `>` redirection: no spaces, so quotes can't break it)
   const outside = join(homedir(), 'ryten-sandbox-selfcheck.txt')
   const escape = join(tmpdir(), 'ryten-selfcheck-escape.txt')
   const probeScript = join(ws, 'sandbox-probe.cjs')
   writeFileSync(probeScript, PROBE_SOURCE)
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', RYTEN_APP_ROOT: appRoot }
-  /** 受限调用：runner 自己把子进程 cwd 设成工作区（与产品 exec.ts 的 cwd=workspaceRoot 一致） */
+  /** Restricted invocation: the runner itself sets the child cwd to the workspace (matching the product's cwd=workspaceRoot in exec.ts) */
   const run = (mode, argv) =>
     spawnSync(
       runtime ?? process.execPath,
       [runner, '--workspace', ws, '--temp', tmpdir(), '--mode', mode, '--', ...argv],
       { encoding: 'utf8', env, windowsHide: true }
     )
-  /** 子进程是 cmd.exe —— 产品在 Windows 上就是这么包命令的（`cmd /d /s /c <命令>`） */
+  /** Child process is cmd.exe — the product wraps commands exactly this way on Windows (`cmd /d /s /c <command>`) */
   const shell = (mode, command) => run(mode, ['cmd.exe', '/d', '/s', '/c', command])
-  /** 子进程是打包后的 Electron 自己（node 模式；GUI 子系统，不需要控制台） */
+  /** Child process is the packaged Electron itself (node mode; GUI subsystem, no console needed) */
   const probe = (mode, target, label) =>
     run(mode, [runtime ?? process.execPath, probeScript, target, label])
 
   console.log(`  运行时：${runtime ?? process.execPath}`)
   for (const path of [outside, escape]) rmSync(path, { force: true })
 
-  // 对照组 1：产物外的目标路径在沙箱外本来可写——否则下面的「拒绝」断言毫无判别力
+  // Control group 1: the out-of-artifact target path is writable outside the sandbox — otherwise
+  // the "denied" assertions below have no discriminating power
   try {
     execFileSync(
       process.execPath,
@@ -225,7 +233,7 @@ function selfcheckWindows(root, sandboxDir) {
       { windowsHide: true }
     )
     expect('对照组：工作区外的目标路径在沙箱外可写（拒绝断言才有意义）', existsSync(outside))
-    rmSync(outside, { force: true }) // 后面「越界被拒」要求这个路径不存在
+    rmSync(outside, { force: true }) // a later "out-of-bounds denied" check requires this path to be absent
   } catch (error) {
     expect(
       '对照组：工作区外目标可写',
@@ -234,7 +242,8 @@ function selfcheckWindows(root, sandboxDir) {
     )
   }
 
-  // 对照组 2：同一条 cmd 命令在沙箱外能跑——否则下面的断言只是在说「这台机器跑不了 cmd.exe」
+  // Control group 2: the same cmd command runs outside the sandbox — otherwise the assertions
+  // below only show that "this machine can't run cmd.exe"
   rmSync(join(ws, 'control.txt'), { force: true })
   const controlShell = spawnSync(
     'cmd.exe',
@@ -253,7 +262,7 @@ function selfcheckWindows(root, sandboxDir) {
     describeRun(controlShell)
   )
 
-  // 对照组 3：cmd 用来越界的 `..` 相对路径在沙箱外可写
+  // Control group 3: the `..` relative path used to escape is writable outside the sandbox
   const controlEscape = spawnSync(
     'cmd.exe',
     ['/d', '/s', '/c', 'echo ctrl> ..\\ryten-selfcheck-escape.txt'],
@@ -266,7 +275,8 @@ function selfcheckWindows(root, sandboxDir) {
   expect('对照组：越界相对路径（..\\）在沙箱外可写', existsSync(escape), describeRun(controlEscape))
   rmSync(escape, { force: true })
 
-  // 工作区内写入：除文件存在外还要求子进程打印了运行探针（证明「写成功」是子进程干的）
+  // Write inside the workspace: besides the file existing, the child must have printed the run
+  // probe (proving the child actually performed the write)
   const inside = shell('workspace-write', 'echo ran-inside& echo x > inside.txt')
   expect(
     'workspace-write：工作区内写入成功（子进程确有运行）',
@@ -285,7 +295,8 @@ function selfcheckWindows(root, sandboxDir) {
     describeRun(again)
   )
 
-  // 越界写入：必须看到运行探针，否则「进程根本没起来」也会被算成「被拒绝」= 假绿
+  // Out-of-bounds write: the run probe must be seen, otherwise "the process never started" also
+  // counts as "denied" = falsely green
   const escapeShell = shell(
     'workspace-write',
     'echo ran-escape& echo x > ..\\ryten-selfcheck-escape.txt'
@@ -308,8 +319,9 @@ function selfcheckWindows(root, sandboxDir) {
     describeRun(readOnly)
   )
 
-  // 非控制台子进程（打包后的 Electron 自己）：把「只有控制台子进程起不来」与
-  // 「整个受限令牌都不行」分开——CI（windows-latest）上这两种结论的处置完全不同
+  // Non-console child process (the packaged Electron itself): separate "only console child
+  // processes fail to start" from "the whole restricted token is unusable" — on CI
+  // (windows-latest) these two conclusions require completely different responses
   rmSync(join(ws, 'probe-inside.txt'), { force: true })
   const probeInside = probe('workspace-write', 'probe-inside.txt', 'inside')
   expect(
@@ -334,7 +346,7 @@ function selfcheckWindows(root, sandboxDir) {
   rmSync(outside, { force: true })
 }
 
-/** Linux：直接跑打包进来的自研启动器（内核 Landlock / bwrap 由 service 在运行期选） */
+/** Linux: run the bundled custom launcher directly (the service picks kernel Landlock / bwrap at runtime) */
 function selfcheckLinux(sandboxDir) {
   const dir = readdirSync(sandboxDir).find((name) => name.startsWith('linux-'))
   const launcher = dir ? join(sandboxDir, dir, 'ryten-landlock-launcher') : null
@@ -346,13 +358,14 @@ function selfcheckLinux(sandboxDir) {
   const ws = mkdtempSync(join(tmpdir(), 'ryten-selfcheck-'))
   const outside = join(homedir(), 'ryten-sandbox-selfcheck.txt')
   /**
-   * 与产品下发的形态一致（`profiles.ts` 的 `linuxLandlockArgs`）：`--ro /` + `--rw /dev`，
-   * workspace-write 再加 `/tmp` 与工作区。
+   * Matches the shape the product passes down (`linuxLandlockArgs` in `profiles.ts`): `--ro /` +
+   * `--rw /dev`, plus `/tmp` and the workspace for workspace-write.
    *
-   * **cwd 必须是工作区**：产品就是 `spawn(cwd=workspaceRoot)` + `/bin/sh -c <命令>`，
-   * 相对路径落在哪里由它决定。2026-09-27 CI 实测的假失败根因：自检没传 cwd，
-   * `echo x > inside.txt` 写到了仓库根目录 → 被 `--ro /` **正确拒绝**，
-   * 于是「工作区内写入成功」永远是 ✗（而「越界被拒」还因为「只要非零就算拒绝」而假绿）。
+   * **cwd must be the workspace**: the product does `spawn(cwd=workspaceRoot)` + `/bin/sh -c <command>`,
+   * and where relative paths land depends on it. Root cause of the false failure measured on the
+   * 2026-09-27 CI: the self-check did not pass cwd, so `echo x > inside.txt` wrote to the repo root
+   * → correctly denied by `--ro /`, making "write inside workspace succeeds" permanently ✗ (while
+   * "out-of-bounds denied" was also falsely green because "any non-zero exit counts as denied").
    */
   const run = (rwPaths, command) =>
     spawnSync(
@@ -421,8 +434,9 @@ function selfcheck(explicitRoot) {
       existsSync(join(sandboxDir, 'win32-sandbox-runner.cjs')),
       sandboxDir
     )
-    // 打包态只应有一份（extraResources 的 <resourcesPath>/sandbox）：asar 里不该再有，
-    // 否则 service.ts 的 resolveSandboxAsset 在打包态会先命中 asar 里那份（路径不确定）
+    // In a packaged build there should be exactly one copy (extraResources' <resourcesPath>/sandbox):
+    // it must not also exist inside asar, otherwise resolveSandboxAsset in service.ts hits the asar
+    // copy first when packaged (indeterminate path)
     const duplicates = [
       join(root, 'resources', 'app.asar.unpacked', 'resources', 'sandbox'),
       join(root, 'Resources', 'app.asar.unpacked', 'resources', 'sandbox')

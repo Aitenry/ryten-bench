@@ -16,13 +16,16 @@ import {
 } from './types'
 
 /**
- * DocumentController — Project Documents 控制面
+ * DocumentController — Project Documents control plane
  *
- * 移植自 dsh-mnemon 的 DocumentController：
- * - `index.json` 是元数据事实源；Markdown 托管副本带生成 frontmatter；
- * - active（参与默认搜索）/ archived（冷层，不计 active 容量）分层；
- * - active 总量 10 MiB / 单份 2 MiB；容量不足时按 LRU（lastAccessedAt）选择归档候选；
- * - 搜索只覆盖 active（除非显式 includeArchived），命中更新 lastAccessedAt（LRU 排序）。
+ * - `index.json` is the metadata source of truth; managed Markdown copies carry generated
+ *   frontmatter;
+ * - Layers: active (included in default search) / archived (cold layer, not counted toward active
+ *   capacity);
+ * - Active total 10 MiB / 2 MiB per document; when capacity is insufficient, archived candidates are
+ *   chosen by LRU (lastAccessedAt);
+ * - Search only covers active (unless includeArchived is set explicitly); a hit updates
+ *   lastAccessedAt (LRU ordering).
  */
 
 interface DocumentIndexFile {
@@ -32,7 +35,7 @@ interface DocumentIndexFile {
 
 interface ArchiveOptions {
   summary: string
-  /** 归档时写入长期层的冷引用（memoryBodyIds 由调用方提供） */
+  /** Cold references written into the long-term layer when archiving (memoryBodyIds provided by the caller) */
   memoryBodyIds?: string[]
 }
 
@@ -64,7 +67,7 @@ export class DocumentController {
     this.reconcileFiles(index)
   }
 
-  /** 目录快照 */
+  /** Directory snapshot */
   snapshot(): DocumentSnapshot {
     const index = this.readIndex()
     const active = index.documents.filter((d) => d.status === 'active')
@@ -86,7 +89,7 @@ export class DocumentController {
     }
   }
 
-  /** 读取一份文档 */
+  /** Read one document */
   get(id: string): DocumentView | undefined {
     const index = this.readIndex()
     const record = index.documents.find((d) => d.id === id)
@@ -94,7 +97,7 @@ export class DocumentController {
     return this.view(record)
   }
 
-  /** 搜索（只覆盖 active；命中更新 lastAccessedAt 用于 LRU） */
+  /** Search (covers active only; hits update lastAccessedAt for LRU) */
   async search(
     query: string,
     options: { includeArchived?: boolean; limit?: number } = {}
@@ -128,7 +131,7 @@ export class DocumentController {
         .sort((a, b) => b.score - a.score)
         .slice(0, limit)
 
-      // 命中更新 lastAccessedAt（LRU 排序），并写回索引
+      // Hits update lastAccessedAt (LRU ordering) and are written back to the index
       let touched = false
       const now = new Date().toISOString()
       for (const hit of scored) {
@@ -156,7 +159,7 @@ export class DocumentController {
     return (await this.enqueue(run)) as DocumentSearchResult
   }
 
-  /** 创建 / 更新文档 */
+  /** Create / update a document */
   async mutate(request: DocumentMutation): Promise<DocumentMutationResult> {
     const run = async (): Promise<DocumentMutationResult> => {
       const tm = mainToolMessages().mnemon
@@ -169,7 +172,7 @@ export class DocumentController {
         if (sizeBytes > DOCUMENT_MAX_BYTES) {
           throw new Error(mainFormat(tm.errors.documentTooLarge, { limit: DOCUMENT_MAX_BYTES }))
         }
-        // 容量规划：active 总量 10 MiB
+        // Capacity planning: 10 MiB total active
         const activeBytes = index.documents
           .filter((d) => d.status === 'active')
           .reduce((sum, d) => sum + d.sizeBytes, 0)
@@ -237,7 +240,7 @@ export class DocumentController {
     return (await this.enqueue(run)) as DocumentMutationResult
   }
 
-  /** 归档：把 active 文档移入 archived（先写长期层冷引用，再迁移原文） */
+  /** Archive: move an active document into archived (write the long-term cold reference first, then migrate the text) */
   async archive(id: string, details: ArchiveOptions): Promise<DocumentMutationResult> {
     const run = async (): Promise<DocumentMutationResult> => {
       const tm = mainToolMessages().mnemon
@@ -256,7 +259,7 @@ export class DocumentController {
       record.revision += 1
       record.updatedAt = now
 
-      // 迁移原文文件
+      // Migrate the source file
       const srcPath = path.join(this.activeDirectory, record.filename)
       const dstPath = path.join(this.archivedDirectory, record.filename)
       if (fs.existsSync(srcPath)) {
@@ -272,7 +275,7 @@ export class DocumentController {
   }
 
   // --------------------------------------------------------------------------
-  // 内部实现
+  // Internal implementation
   // --------------------------------------------------------------------------
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -281,7 +284,7 @@ export class DocumentController {
     return next
   }
 
-  /** 检查磁盘文件与索引一致（启动时修复缺失的托管副本） */
+  /** Check that files on disk match the index (repair missing managed copies at startup) */
   private reconcileFiles(index: DocumentIndexFile): void {
     for (const record of index.documents) {
       const filePath = this.pathFor(record)
@@ -321,7 +324,7 @@ export class DocumentController {
     return path.join(this.directory, record.relativePath)
   }
 
-  /** 写托管 Markdown（带生成 frontmatter） */
+  /** Write the managed Markdown (with generated frontmatter) */
   private persistDocument(record: DocumentRecord, content: string): void {
     const filePath = this.pathFor(record)
     fs.mkdirSync(path.dirname(filePath), { recursive: true })

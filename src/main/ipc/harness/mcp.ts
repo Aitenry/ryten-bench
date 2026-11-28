@@ -20,29 +20,31 @@ import {
 } from '../../runtime/harness/mcp-store'
 
 /**
- * MCP 服务器管理的 IPC（设置 → MCP 页）。
+ * IPC for MCP server management (Settings → MCP page).
  *
- * 归属：MCP 是「AI 工具的外部来源」，配置页挂在助手分组下，因此与智能体配置同属 harness 插件；
- * 通道一律 `harness:mcp-*`，停用「AI 助手」后这组通道一并消失。
+ * Ownership: MCP is an "external source of tools for the AI", and its settings page sits under
+ * the assistant group, so it belongs to the harness plugin along with agent config; channels are
+ * always `harness:mcp-*`, and disabling the "AI assistant" removes this channel group as well.
  *
- * 目录变化（连上/断开/新增工具）通过 `harness:harness-mcp-updated` 广播：
- * 智能体设置页的工具下拉与 MCP 页都靠它刷新——**没有这个广播，刚保存的服务器工具要等
- * 下一次重新打开设置页才会出现**。
+ * Catalog changes (connect/disconnect/new tools) are broadcast via
+ * `harness:harness-mcp-updated`: both the tool dropdown on the agent settings page and the MCP
+ * page rely on it to refresh — **without this broadcast, a just-saved server's tools won't show
+ * up until the settings page is reopened next time**.
  */
 
-/** 目录更新事件通道（主进程 → 渲染层；由 main/index.ts 声明进 preload 白名单） */
+/** Catalog update event channel (main → renderer; declared into the preload whitelist by main/index.ts) */
 export const MCP_EVENT_CHANNELS = {
   catalogUpdated: 'harness:harness-mcp-updated'
 } as const
 
-/** 广播目录变化（只发不订阅；窗口销毁时 safeSend 静默跳过） */
+/** Broadcast catalog changes (send only, never subscribe; safeSend silently skips destroyed windows) */
 function broadcastCatalog(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) safeSend(win.webContents, MCP_EVENT_CHANNELS.catalogUpdated, {})
   }
 }
 
-/** 重连并广播（保存/删除/切启用态/手动重连之后都要走一遍） */
+/** Reconnect and broadcast (run after save/remove/toggle/manual reconnect) */
 async function reconnectAndBroadcast(): Promise<void> {
   await refreshCatalog()
   broadcastCatalog()
@@ -54,9 +56,10 @@ export function mcpIpcHandlers(): IpcHandlerMap {
     handlers[`harness:${channel}`] = handler
   }
 
-  // 当前服务器清单 + 运行期状态（连没连上、有哪些工具）。
-  // **只读快照、不重连**（2026-09-26 用户要求：加载列表不要测试连接，否则服务器一多就卡）。
-  // 状态要更新就点「重新连接」；保存/切换启用态/删除仍然会主动重连并广播。
+  // Current server list + runtime status (connected or not, which tools exist).
+  // **Read-only snapshot, no reconnect** (2026-09-26 user requirement: loading the list must not
+  // test connections, otherwise it stalls with many servers). To refresh the status, click
+  // "Reconnect"; save/toggle/remove still reconnect actively and broadcast.
   handle('mcp-servers-list', async () => {
     try {
       return mcpServerViews()
@@ -66,7 +69,7 @@ export function mcpIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // 新增/更新一台服务器 → 立刻重连，让界面马上看到真实状态
+  // Add/update a server → reconnect immediately so the UI sees the real status right away
   handle('mcp-server-save', async (input: McpServerInput) => {
     try {
       const saved = upsertMcpServer(input)
@@ -100,7 +103,7 @@ export function mcpIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // 手动重连全部服务器（外部进程被系统杀掉、网络恢复后用户点一下就恢复）
+  // Manually reconnect all servers (one click recovers after external processes are killed or the network comes back)
   handle('mcp-server-reconnect', async () => {
     try {
       await reconnectAndBroadcast()
@@ -112,8 +115,9 @@ export function mcpIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 试连一台**尚未保存**的服务器：连上返回工具清单，连不上返回原始错误。
-   * 刻意不抛错——表单要把失败原因显示在字段下方（抛错会被 IPC 折成一句通用失败）。
+   * Test a **not-yet-saved** server: returns the tool list on success, the raw error on failure.
+   * Deliberately does not throw — the form needs to show the failure reason under the field
+   * (a thrown error would be folded into one generic failure by the IPC layer).
    */
   handle('mcp-server-test', async (input: McpServerInput) => {
     try {
@@ -124,7 +128,7 @@ export function mcpIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // 导入 mcp.json 形态的配置（逐条回报结果，部分成功也可用）
+  // Import mcp.json-shaped config (reports each entry; partial success is usable)
   handle('mcp-servers-import', async (raw: unknown) => {
     try {
       const result = importMcpServers(raw)
@@ -137,11 +141,12 @@ export function mcpIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 导入：主进程弹文件框读 mcp.json。
+   * Import: the main process opens a file dialog to read mcp.json.
    *
-   * 放主进程的原因：渲染层没有 fs，且用户手上的配置多半就在磁盘上（Cursor 的
-   * `~/.cursor/mcp.json`、Claude Desktop 的 `claude_desktop_config.json`），
-   * 选文件比让用户复制粘贴一大段 JSON 现实得多。取消选择返回 null。
+   * It lives in the main process because the renderer has no fs, and users' configs are usually
+   * already on disk (Cursor's `~/.cursor/mcp.json`, Claude Desktop's
+   * `claude_desktop_config.json`), so picking a file is far more realistic than having the user
+   * copy-paste a big chunk of JSON. Returns null when the selection is canceled.
    */
   handle('mcp-servers-import-file', async () => {
     try {
@@ -171,11 +176,13 @@ export function mcpIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 勾选/取消一台服务器带来的全部工具（写入 mainAgent.mcpTools）。
+   * Check/uncheck all tools contributed by one server (writes mainAgent.mcpTools).
    *
-   * 只改这一个键：`mcpTools` 与主智能体页的 `tools` 分开存（见 shared/mcp.ts 的说明），
-   * 因此在这里停用一台服务器**不会**动用户在智能体页挑的其他工具——两边同时保存也不会
-   * 互相覆盖（各写各的键），这正是把两个入口的数据拆成两份的原因。
+   * Only this one key changes: `mcpTools` is stored separately from the main agent page's
+   * `tools` (see the notes in shared/mcp.ts), so disabling a server here does **not** touch
+   * other tools the user picked on the agent page — and saving on both sides at once won't
+   * overwrite each other (each writes its own key), which is exactly why the two entry points
+   * keep separate copies of the data.
    */
   handle('mcp-tools-set', (toolNames: string[]) => {
     try {
@@ -192,10 +199,11 @@ export function mcpIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // ── 资源浏览（只读）：MCP 页服务器行上的「资源」入口 ─────────────────────
-  // 模型侧早就有 list_mcp_resources / read_mcp_resource 三个工具，但用户侧一直没有
-  // 浏览入口。这里把同一套 runtime 读取能力包成三个只读通道；失败以 `{ok:false,error}`
-  // 返回，不抛异常（服务器断线/不支持资源都是可预期状态，页面就地显示原因）。
+  // ── Resource browsing (read-only): the "Resources" entry on the server row of the MCP page ──
+  // The model side has long had the list_mcp_resources / read_mcp_resource tools, but users had
+  // no browsing entry. Here the same runtime read capability is wrapped into three read-only
+  // channels; failures return `{ok:false,error}` instead of throwing (a disconnected server or
+  // unsupported resources are expected states, and the page shows the reason in place).
   handle(
     'mcp-resources-list',
     async (payload: { server?: unknown; cursor?: unknown }) => {

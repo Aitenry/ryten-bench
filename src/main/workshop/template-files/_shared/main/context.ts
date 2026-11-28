@@ -1,17 +1,17 @@
 /**
- * 宿主给插件主进程的上下文（最小契约；完整说明见 WORKSHOP.md）。
+ * Context the host provides to the plugin main process (minimal contract).
  */
 export interface MainPluginContext {
-  /** 插件 id（= 目录名 = plugin.json.id） */
+  /** Plugin id (= directory name = plugin.json.id) */
   readonly id: string
-  /** 通道命名空间：plugin:<namespace>:* 里的 namespace（= id 去掉开头的 plugin. 段） */
+  /** Channel namespace: the namespace in plugin:<namespace>:* (= id without the leading plugin. segment) */
   readonly namespace: string
-  /** 注册 IPC 处理器（通道必须以 plugin:<namespace>: 开头，否则装载期抛错） */
+  /** Register IPC handlers (channels must start with plugin:<namespace>:, otherwise loading throws) */
   registerIpc(handlers: Record<string, (...args: never[]) => unknown>): () => void
-  /** 声明只有发送方的事件通道（主进程 → 渲染层推送；不声明则渲染层订阅不到） */
+  /** Declare sender-only event channels (main process → renderer push; without declaring, the renderer cannot subscribe) */
   registerEvent(...channels: string[]): void
-  /** 注册可逆效果（定时器 / 监听器），插件停用时 LIFO 回滚 */
+  /** Register reversible effects (timers / listeners); rolled back LIFO when the plugin is deactivated */
   effect(register: () => void | (() => void)): void
-  /** 挂载多值贡献（例如给 AI 助手贡献工具：HARNESS_TOOL_CONTRIBUTION） */
+  /** Attach a multi-value contribution (e.g. contribute tools to the AI assistant: HARNESS_TOOL_CONTRIBUTION) */
   contribute<T>(key: string, value: T): void
 }

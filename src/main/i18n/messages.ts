@@ -1,8 +1,10 @@
 /**
- * 主进程里**会出现在系统界面上**的文案：系统托盘菜单、原生文件对话框、启动页步骤名、独立窗口标题。
+ * Main-process copy that **shows up in system UI**: the tray menu, native file dialogs, splash
+ * step names, and standalone window titles.
  *
- * 这里不放：日志、注释、抛给渲染进程的错误信息（那些属于各自的模块）、以及发给模型的提示词。
- * 中文是源语言，`enUS` 用 `typeof zhCN` 约束，缺键/多键都是编译期错误。
+ * Not kept here: logs, comments, errors thrown to the renderer (those belong to their own
+ * modules), and prompts sent to the model. Chinese is the source language; `enUS` is constrained
+ * by `typeof zhCN`, so missing or extra keys are compile-time errors.
  */
 import { enUSGraphProgress, zhCNGraphProgress } from './graph-progress'
 
@@ -59,14 +61,14 @@ export const zhCN = {
     }
   },
   graphProgress: zhCNGraphProgress,
-  /** 「在应用中打开」子弹（会话 ⋯ 菜单）：系统文件管理器在各平台的名字，以及探测不到时的原因 */
+  /** "Open in app" bullet (conversation ⋯ menu): the system file manager's name on each platform, and the reason when none is detected */
   openInApp: {
     explorer: '文件资源管理器',
     finder: '访达',
     fileManager: '文件管理器',
     notAvailable: '没有检测到该应用：可能已被卸载，换一个应用试试'
   },
-  /** 经 IPC 抛给渲染进程、最终以提示条形式出现在界面上的错误文案 */
+  /** Error copy thrown to the renderer over IPC and eventually shown as a toast */
   error: {
     musicDirNotSet: '未设置音乐目录',
     playlistNotFound: '歌单不存在',
@@ -81,7 +83,7 @@ export const zhCN = {
     pathOutsideWorkspace: '路径不在 AI 工作区内，已拒绝访问',
     workspacePathNotSelected:
       '该目录不是通过系统选择框选定的，已拒绝将其设为工作区（请重新选择目录）',
-    /** 侧栏工作区行「⋯ → 在文件夹中显示」：行已不存在 / 目录已不在 */
+    /** Sidebar workspace row "⋯ → Show in folder": the row no longer exists / the directory is gone */
     workspaceNotFound: '工作区不存在：可能已被删除，请刷新后重试',
     workspaceDirMissing: '工作区目录不存在：{{path}}',
     graphModelNotConfigured:
@@ -96,11 +98,11 @@ export const zhCN = {
     providerNotFound: '目标模型不存在：未找到 ID 为 {{id}} 的供应商配置，或该供应商已被禁用。',
     modelNameMissing: '目标模型不存在：供应商 "{{name}}" 未指定模型名称，请在设置中配置模型。',
     noProviderConfigured: '未配置任何大模型供应商',
-    /* 流式生成失败时直接写进助手消息的文案 */
+    /* Copy written straight into the assistant message when streaming generation fails */
     responseFailed: '获取响应失败：{{reason}}',
     emptyModelResponse: '模型未返回任何内容，请查看日志或重试。'
   },
-  /** 底栏天气组件：主进程缓存里存的是天气码与日期，下发前按当前语言渲染成文案 */
+  /** Footer weather widget: the main-process cache stores weather codes and dates, rendered into copy in the current language before being sent down */
   weather: {
     today: '今天',
     unknown: '未知',
@@ -144,7 +146,7 @@ export const zhCN = {
       code99: '大冰雹雷暴'
     }
   },
-  /** 工具下拉（AgentSettings「默认工具」）的展示名与说明；键就是工具 name，与工具给模型看的 description 无关 */
+  /** Display names and descriptions for the tool dropdown (AgentSettings "default tools"); keys are tool names and unrelated to the description shown to the model */
   tools: {
     get_weather: { label: '天气查询', description: '查询当前实况、逐小时与未来天气预报' },
     get_time: { label: '时间查询', description: '获取当前日期和时间' },
@@ -177,16 +179,16 @@ export const zhCN = {
       label: '资料整理',
       description: '统一整理文档、待办、知识库与图谱；文档支持按行/按区间精修'
     },
-    // 工坊这 4 个 + 插件中心「发布版本」是**模式工具**：不进下拉（插件模式自动挂载，见 harness 的
-    // shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`；`plugin_release` 还要求登录插件中心）。
-    // 文案留作兜底：别处按名字列工具时仍能出中文名。
+    // These 4 workshop tools plus the plugin hub's "release version" are **mode tools**: they never
+    // enter the dropdown (auto-mounted in plugin mode; `plugin_release` also requires signing in to
+    // the plugin hub). The copy is kept as a fallback so tools listed by name elsewhere still get a label.
     plugin_draft: { label: '插件草稿', description: '新建插件草稿、读写草稿里的文件' },
     plugin_build: { label: '构建插件', description: '把草稿构建成可安装的插件包并做静态体检' },
     plugin_verify: { label: '验收插件', description: '跑自动化验收电池，确认插件真的能用' },
     plugin_publish: { label: '发布插件', description: '把验收过的插件装进应用并启用' },
     plugin_release: { label: '发布版本', description: '把插件发布一个新版本到插件中心（需登录）' }
   },
-  /** 模型重试失败后的「换模型继续」弹窗 */
+  /** The "switch model and continue" dialog after model retries fail */
   modelRecovery: {
     header: '模型请求失败',
     question: '当前模型自动重试 {{count}} 次仍失败。请选择要切换的模型，继续完成当前任务：',
@@ -195,8 +197,9 @@ export const zhCN = {
     abandonDescription: '结束本轮生成（已生成内容保留在界面，不落库）'
   },
   /**
-   * 模型请求失败的收尾说明：按 HTTP 状态码讲清「为什么停止重试 / 该怎么修」，
-   * 再拼上供应商原文（withReason），避免分类把真实报文吃掉了
+   * Closing explanation for a failed model request: the HTTP status spells out "why retrying
+   * stopped / how to fix it", followed by the provider's raw message (withReason) so that
+   * classification does not swallow the actual response
    */
   modelFailure: {
     withReason: '{{summary}}（供应商原文：{{reason}}）',
@@ -382,8 +385,8 @@ export const enUS: typeof zhCN = {
         'Organize documents, to-dos, knowledge bases and graph entities; documents support line/range edits'
     },
     // Mode tools (plugin workshop + plugin hub release): never listed in the tool picker - auto-mounted
-    // in plugin mode (see the harness plugin's shared/mcp.ts `PLUGIN_MODE_TOOL_NAMES`; `plugin_release`
-    // only when signed in to the plugin hub). Kept as fallback labels.
+    // in plugin mode (`plugin_release` only when signed in to the plugin hub). Kept as fallback
+    // labels.
     plugin_draft: {
       label: 'Plugin drafts',
       description: 'Create a plugin draft and edit its files'

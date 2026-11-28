@@ -7,13 +7,13 @@ import type { PluginHost } from './host'
 export type Dispose = () => void | Promise<void>
 
 /**
- * 插件上下文（Cordis PluginContext 的轻量实现）。
+ * Plugin context (lightweight plugin-context implementation).
  *
- * - use/get：按键取宿主服务；未 use 声明而 get → UNDECLARED_ACCESS（capability 模型）；
- * - set：登记插件提供的自定义键（供其他插件 inject + 卸载顺序推导）；
- * - effect：注册可逆效果，dispose 时 LIFO 逆序回滚（论文 revertible effect + 累积逆）；
- * - require：外部插件向宿主取 vendored 实例（react/antd...），杜绝双重 React；
- * - dispose：install 返回的 dispose + 全部 effect 逆序执行，失败不阻断其他回滚。
+ * - use/get: fetch host services by key; get without a use declaration → UNDECLARED_ACCESS (capability model);
+ * - set: register custom keys provided by the plugin (used by other plugins' inject + unload-order derivation);
+ * - effect: register a revertible effect, rolled back LIFO on dispose (revertible effect + cumulative inverse);
+ * - require: external plugins receive vendored instances from the host (react/antd...), preventing a duplicate React;
+ * - dispose: the dispose returned by install plus all effects run in reverse order; a failure does not block the other rollbacks.
  */
 export class PluginContext {
   private declared = new Set<string>()
@@ -28,13 +28,13 @@ export class PluginContext {
     readonly config?: unknown
   ) {}
 
-  /** 声明依赖并取宿主服务 */
+  /** Declare a dependency and fetch the host service */
   use<K extends HostServiceKey>(key: K): HostServices[K] {
     this.declared.add(key)
     return this.host.serviceFor<K>(key, this.id)
   }
 
-  /** 读取依赖：未声明访问直接拒绝 */
+  /** Read a dependency: undeclared access is rejected */
   get<K extends HostServiceKey>(key: K): HostServices[K] {
     if (!this.declared.has(key)) {
       throw new PluginError(
@@ -45,7 +45,7 @@ export class PluginContext {
     return this.host.serviceFor<K>(key, this.id)
   }
 
-  /** 提供自定义键（宿主根键不允许被提供） */
+  /** Provide a custom key (host root keys cannot be provided) */
   set(key: string, value: unknown): void {
     if ((HOST_KEYS as readonly string[]).includes(key)) {
       console.warn(`[plugin:${this.id}] Host root key '${key}' is not allowed to be provided by a plugin, ignored`)
@@ -55,7 +55,7 @@ export class PluginContext {
     this.host.registerProvide(this.id, key, value)
   }
 
-  /** 注册可逆效果：register 执行副作用，返回的逆在 dispose 时逆序执行 */
+  /** Register a revertible effect: register performs the side effect; the returned inverse runs in reverse order on dispose */
   effect(register: () => void | Dispose): void {
     let undo: void | Dispose
     try {
@@ -67,7 +67,7 @@ export class PluginContext {
     if (typeof undo === 'function') this.effects.push(undo)
   }
 
-  /** install 返回的 dispose（最后注册、最先执行） */
+  /** Dispose returned by install (registered last, executed first) */
   attachInstallDispose(dispose: void | Dispose | undefined): void {
     if (typeof dispose === 'function') this.installDispose = dispose
   }
@@ -80,7 +80,7 @@ export class PluginContext {
     return [...this.providedKeys]
   }
 
-  /** 逆序回滚本插件全部效果（满足 registers 后注册先撤销） */
+  /** Roll back all effects of this plugin in reverse order (later registrations are undone first) */
   async dispose(): Promise<void> {
     if (this.installDispose) {
       const undo = this.installDispose
@@ -101,7 +101,7 @@ export class PluginContext {
     }
   }
 
-  /** 外部插件取宿主 vendored 实例 */
+  /** External plugins fetch vendored instances from the host */
   require(name: string): unknown {
     return this.host.requireVendor(name)
   }

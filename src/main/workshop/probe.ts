@@ -4,33 +4,39 @@ import { isSenderAlive, safeSend } from '../safe-send'
 import type { WorkshopRendererProbe } from '../../shared/harness/workshop'
 
 /**
- * 渲染层**实时探针**的主进程侧（通道与语义见 shared/workshop.ts 的 `WorkshopRendererProbe`）。
+ * Main-process side of the renderer **live probe** (channel and semantics: `WorkshopRendererProbe`
+ * in shared/workshop.ts).
  *
- * 为什么值得单独一条链路：主进程冒烟只能证明「主模块能装载」，
- * 而外部插件最真实的失败模式是**渲染模块在宿主环境里 import 就炸**——
- * 引了宿主 UI 表里没有的键、顶层读了 `window` 上不存在的东西、桥的具名导出对不上。
- * 这些只有让**真实的渲染进程**（真 React、真 antd、真 `__RB_HOST_UI__` 表）跑一遍才会暴露。
+ * Why it deserves its own channel: a main-process smoke test only proves "the main module can be
+ * loaded", while the most real failure mode of an external plugin is that the **renderer module
+ * blows up on import inside the host environment** — importing a key the host UI table does not
+ * have, reading something at top level that does not exist on `window`, named exports of the
+ * bridge not matching up. Only running these in the **real renderer process** (real React, real
+ * antd, real `__RB_HOST_UI__` table) exposes them.
  *
- * 协议：
- * 1. 主进程发事件 `harness:workshop-probe` = `{ probeId, id, entry }`；
- * 2. 助手界面（harness 的 Provider，常驻挂载）里收到后：fetch 产物的 `renderer.mjs`
- *    → blob import → 用一个**记录版上下文**调 `install(ctx)` → 可能再挂载一次注册的路由组件；
- * 3. 结果经 `harness:workshop-probe-result` 通道回来，这里按 `probeId` 兑付。
+ * Protocol:
+ * 1. The main process emits the event `harness:workshop-probe` = `{ probeId, id, entry }`;
+ * 2. The assistant UI (the harness Provider, mounted permanently) receives it: fetch the build
+ *    output's `renderer.mjs` -> blob import -> call `install(ctx)` with a **recording context**
+ *    -> possibly mount the registered route component once more;
+ * 3. The result comes back over the `harness:workshop-probe-result` channel and is redeemed here
+ *    by `probeId`.
  *
- * 超时/没有窗口都算 **skip（不是失败）**：用户没打开界面时不该把插件判成不可用。
+ * Timeouts and no-window both count as **skip (not failure)**: a plugin must not be judged
+ * unusable just because the user has not opened the UI.
  */
 
-/** 默认超时：blob import + install + 一次挂载，正常在几百毫秒内；给足冷启动余量 */
+/** Default timeout: blob import + install + one mount normally complete within a few hundred ms; leave room for cold start */
 const DEFAULT_TIMEOUT_MS = 15_000
 
 const pending = new Map<string, (result: WorkshopRendererProbe) => void>()
 
-/** 是否有待兑付的探针（诊断用） */
+/** Whether a probe is pending (for diagnostics) */
 export function pendingProbeCount(): number {
   return pending.size
 }
 
-/** 向所有窗口广播探针请求并等待结果（无窗口 / 超时 → skip） */
+/** Broadcast a probe request to all windows and wait for the result (no window / timeout -> skip) */
 export function probeRendererPlugin(
   id: string,
   entry = 'renderer.mjs',
@@ -59,7 +65,8 @@ export function probeRendererPlugin(
       resolve(result)
     })
 
-    // 一律走 safeSend：向已失效的渲染帧发送不会抛错，只有它认得出来（见 safe-send.ts）
+    // Always go through safeSend: sending to an already-invalid renderer frame does not throw,
+    // so only it can tell (see safe-send.ts)
     let delivered = 0
     for (const win of windows) {
       if (!isSenderAlive(win.webContents)) continue
@@ -76,10 +83,11 @@ export function probeRendererPlugin(
 }
 
 /**
- * 兑付一次探针结果（由 IPC 通道调用）。
+ * Redeem a probe result (called by the IPC channel).
  *
- * 返回 false 表示**没有对应的待兑付请求**（超时后界面才回话）——如实记日志，
- * 而不是当成成功（否则「探针超时」会被悄悄覆盖成通过）。
+ * Returning false means **there is no matching pending request** (the UI replied only after the
+ * timeout) — log that truthfully rather than treating it as success (otherwise a "probe timeout"
+ * would be silently overwritten as a pass).
  */
 export function resolveProbeResult(payload: unknown): boolean {
   const data = payload as {

@@ -33,41 +33,49 @@ import * as sharedPluginCssSafety from '../../shared/plugin/css-safety'
 import * as sharedPluginMenuIcons from '../../shared/plugin/menu-icons'
 
 /**
- * 主进程**宿主运行时**（插件打包方案见 src/main/workshop/README.md）。
+ * Main-process **host runtime**.
  *
- * 背景：插件包（`userData/plugins/<id>/main.cjs`）不能各自再打一份 core —— 那会得到
- * 第二个 PGlite 连接、第二份 electron-store 实例、各不相同的 i18n 状态。因此打包时
- * 把插件源码里指向 core 的导入改写成 `@host/main/<相对路径>`，运行期在这里换成
- * **宿主自己已经加载的那一份模块实例**（单例由此保住）。
+ * Background: plugin packages (`userData/plugins/<id>/main.cjs`) cannot each bundle their own copy
+ * of core - that would give a second PGlite connection, a second electron-store instance, and
+ * diverging i18n state. So at packaging time the plugin source's imports pointing at core are
+ * rewritten to `@host/main/<relative path>`, and at runtime they are swapped here for **the module
+ * instances the host itself already loaded** (which keeps the singletons).
  *
- * 交接方式：`globalThis.__RB_HOST_RESOLVE__(spec)`。必须在**任何插件 main.cjs 被 require
- * 之前**挂上（`initPluginHost()` 的第一件事），否则插件包会在装载期直接拿到 undefined。
+ * Handoff: `globalThis.__RB_HOST_RESOLVE__(spec)`. It must be mounted **before any plugin main.cjs
+ * is required** (the first thing `initPluginHost()` does), otherwise plugin packages get undefined
+ * at load time.
  *
- * 解析语义（优先级从高到低）：
- *  1. `node:*` 内置模块 → 直接 require；
- *  2. 命中下表（`@host/main/**`、`@host/shared/**`）→ 返回宿主自己的模块实例（单例）；
- *  3. 其它裸模块（electron / electron-log / zod/v4 / drizzle-orm/pg-core / music-metadata…）
- *     → 用**宿主自身的解析基准** require，返回宿主已加载的同一实例；
- *  4. 找不到 → 抛可读错误（含 spec 与「宿主运行时没有提供」提示）。
+ * Resolution semantics (highest priority first):
+ *  1. `node:*` built-in modules -> require directly;
+ *  2. hit the table below (`@host/main/**`, `@host/shared/**`) -> return the host's own module
+ *     instance (singleton);
+ *  3. other bare modules (electron / electron-log / zod/v4 / drizzle-orm/pg-core / music-metadata…)
+ *     -> require with **the host's own resolution base**, returning the same instance the host
+ *     already loaded;
+ *  4. not found -> throw a readable error (with the spec and "the host runtime does not provide
+ *     it").
  *
- * 关键细节：第 3 步的解析基准必须是**应用根**而不是插件目录。插件装在
- * `userData/plugins/<id>/`，那里没有 node_modules，用插件目录做基准会解析失败；
- * 而用应用根做基准既能找到随应用分发的 node_modules，又能命中 Node 的模块缓存，
- * 于是「宿主已加载的同一实例」这条语义自动成立。
+ * Key detail: the resolution base in step 3 must be the **app root**, not the plugin directory.
+ * Plugins are installed under `userData/plugins/<id>/`, where there is no node_modules, so using
+ * the plugin directory as the base would fail to resolve; using the app root both finds the
+ * node_modules distributed with the app and hits Node's module cache, so the semantics "the same
+ * instance the host already loaded" hold automatically.
  *
- * 表是**按需补齐**的：P1 保证 music 端到端跑通，同时把 planner/notes/harness 的静态依赖
- * 一次性补齐。P2（planner）用到其中 5 个 `@host/main/**` 键，P3（notes）9 个，
- * P4（harness）18 个 + `@host/shared/model-params`——也就是本表基本被吃满；其余外部依赖
- * （`zod/v3|v4`、`drizzle-orm`、`electron`、`electron-log`、`jsdom`、`mammoth`、
- * `turndown`、`@electric-sql/pglite`、`openmeteo`…）走下面的裸模块解析；
- * 旧插件里的 `@langchain/**` 由 HOST_LEGACY 兼容层兜住（见下）。
- * PACKAGING.md 的契约面（主进程 20 个）已全部在表内。
+ * The table is **filled in on demand**: P1 got the music path working end to end while filling in
+ * the static dependencies of planner/notes/harness at once. P2 (planner) uses 5 of the
+ * `@host/main/**` keys, P3 (notes) 9, P4 (harness) 18 + `@host/shared/model-params` - in other
+ * words the table is essentially saturated; the remaining external dependencies (`zod/v3|v4`,
+ * `drizzle-orm`, `electron`, `electron-log`, `jsdom`, `mammoth`, `turndown`,
+ * `@electric-sql/pglite`, `openmeteo`…) go through the bare-module resolution below; legacy
+ * `@langchain/**` in old plugins is covered by the HOST_LEGACY compatibility layer (see below).
+ * All 20 main-process contract modules are now in the table.
  */
 
-/** 表键 = 打包产物里的 spec（`@host/main/<相对 src/main 的路径，无扩展名>`） */
+/** Table key = the spec in the bundle (`@host/main/<path relative to src/main, no extension>`) */
 const HOST_MAIN: Record<string, unknown> = {
   '@host/main/context': context,
-  // 自研 AI 层（替代 @langchain/*）：插件做工具 / 消息 / 图编排时用宿主这一份实现
+  // Self-developed AI layer: plugins building tools / messages / graph orchestration use the
+  // host's implementation
   '@host/main/ai/chat-model': aiChatModel,
   '@host/main/ai/graph': aiGraph,
   '@host/main/ai/messages': aiMessages,
@@ -89,10 +97,12 @@ const HOST_MAIN: Record<string, unknown> = {
   '@host/main/plugins/app-hooks': appHooks,
   '@host/main/plugins/contributions': contributions,
   '@host/main/plugins/tool-contract': toolContract,
-  // 插件工坊（harness 的「对话式做插件」）需要读写插件目录与装载/卸载插件：
-  // 它借的是**宿主自己那套**安装/启用/卸载函数，而不是另造一条（见 workshop/wiring.ts）。
-  // 这几个键一律懒加载：它们 import 回 plugins/host.ts，而 host.ts 又 import 本文件（见 lazyHostModule）。
-  /* eslint-disable @typescript-eslint/no-require-imports -- 懒加载：原因见 lazyHostModule 的注释 */
+  // Plugin workshop (the harness's "build plugins conversationally") needs to read/write the
+  // plugin directory and load/unload plugins: it borrows **the host's own** install/enable/
+  // uninstall functions rather than creating another set (see workshop/wiring.ts). These keys are
+  // always lazily loaded: they import back to plugins/host.ts, and host.ts imports this file again
+  // (see lazyHostModule).
+  /* eslint-disable @typescript-eslint/no-require-imports -- lazy loading: see the comment on lazyHostModule */
   '@host/main/plugins/host': lazyHostModule(() => require('../plugins/host')),
   '@host/main/plugins/host-ui-bridge': lazyHostModule(() => require('../plugins/host-ui-bridge')),
   '@host/main/plugins/lifecycle': lazyHostModule(() => require('../plugins/lifecycle')),
@@ -108,21 +118,25 @@ const HOST_MAIN: Record<string, unknown> = {
   '@host/main/shared/weather-utils': weatherUtils
 }
 
-/** `@host/shared/**` → `src/shared/**`（三端共用的纯模块；插件直接 import @shared/*） */
+/** `@host/shared/**` -> `src/shared/**` (pure modules shared by all three sides; plugins import @shared/* directly) */
 const HOST_SHARED: Record<string, unknown> = {
   '@host/shared/model-params': sharedModelParams,
-  // 插件工坊与插件宿主共用：plugin.css 的宿主保护、声明式菜单图标名单
-  // （工坊构建会把 `src/shared/**` 的导入统一外部化成 `@host/shared/**`）
+  // Shared by the plugin workshop and the plugin host: plugin.css host protection, declarative
+  // menu icon allowlist
+  // (the workshop build externalizes every `src/shared/**` import as `@host/shared/**`)
   '@host/shared/plugin/css-safety': sharedPluginCssSafety,
   '@host/shared/plugin/menu-icons': sharedPluginMenuIcons
 }
 
 /**
- * 旧插件**兼容层**：历史插件包把 `@langchain/*` 当宿主依赖直接 import。
+ * Legacy plugin **compatibility layer**: historical plugin packages import `@langchain/*` directly
+ * as host dependencies.
  *
- * 这些 npm 包已从项目移除（改为自研 `src/main/ai/**`），但已发布的插件不应该因此打不开：
- * 运行时表把旧说明符映射到自研实现（消息 / 工具 / 图 / 解析器四类契约保持同形）。
- * 新插件请直接 import `@host/main/ai/tools` 等。
+ * Those npm packages have been removed from the project (replaced by the self-developed
+ * `src/main/ai/**`), but published plugins should not break because of it: the runtime table maps
+ * the old specifiers to the self-developed implementations (the four contracts - messages / tools
+ * / graph / parsers - keep the same shape). New plugins should import `@host/main/ai/tools` etc.
+ * directly.
  */
 const HOST_LEGACY: Record<string, unknown> = {
   '@langchain/core/tools': aiTools,
@@ -132,21 +146,22 @@ const HOST_LEGACY: Record<string, unknown> = {
   '@langchain/langgraph': aiGraph
 }
 
-/** 宿主解析基准：应用根（dev = 仓库根，打包后 = app.asar 根），再兜底进程工作目录 */
+/** Host resolution base: app root (dev = repository root, packaged = app.asar root), with the process working directory as fallback */
 function hostRequire(): NodeRequire {
   const base = app.isReady() ? app.getAppPath() : process.cwd()
   return createRequire(base.endsWith('package.json') ? base : base + '/package.json')
 }
 
 /**
- * **懒加载**的宿主模块（插件工坊那几个键必须用它，原因见下方注释）。
+ * **Lazily loaded** host module (required for the plugin workshop keys; reasons below).
  *
- * `plugins/host.ts` 自己 import 本文件（要 `installHostRuntime`），而工坊要的
- * `@host/main/plugins/host`、`lifecycle`、`package-install` 等（直接或间接）都 import 回
- * `host.ts` —— 静态 import 会形成**环**：CJS 打包下先被求值的那一侧拿到的是「函数还没挂上」
- * 的半成品命名空间，插件运行期表现为 `xxx is not a function`
- * （2026-09-27 真机实测：工坊建草稿直接失败）。改成首次访问时才 require，环就只存在于
- * 定义期、不存在于求值期。
+ * `plugins/host.ts` imports this file itself (for `installHostRuntime`), and the workshop's
+ * `@host/main/plugins/host`, `lifecycle`, `package-install` etc. (directly or indirectly) all
+ * import back to `host.ts` - a static import would form a **cycle**: under the CJS bundle the side
+ * evaluated first receives a half-built namespace where "functions are not mounted yet", and at
+ * plugin runtime it shows up as `xxx is not a function` (measured on a real machine on 2026-09-27:
+ * creating a draft in the workshop failed outright). Requiring lazily on first access keeps the
+ * cycle only in the definition phase, not in the evaluation phase.
  */
 function lazyHostModule<T extends object>(load: () => T): T {
   let cached: T | null = null
@@ -156,11 +171,13 @@ function lazyHostModule<T extends object>(load: () => T): T {
     has: (_target, key) => Reflect.has(resolve(), key),
     ownKeys: () => Reflect.ownKeys(resolve()),
     /**
-     * 描述符**必须报 configurable: true**：代理的 target 是个空对象，
-     * 而 ESM 命名空间的 `__esModule` 等属性在真模块上是不可配置的——照抄描述符会违反
-     * Proxy 不变量，esbuild 的 `__toESM`（插件包里 `import * as` 的互操作层）会直接抛
+     * The descriptor **must report configurable: true**: the proxy target is an empty object, and
+     * properties such as `__esModule` on a real ESM namespace are non-configurable - copying the
+     * descriptor would violate the Proxy invariant, and esbuild's `__toESM` (the interop layer for
+     * `import * as` in plugin packages) would throw
      * `'getOwnPropertyDescriptor' on proxy: trap reported non-configurability for property …`
-     * （2026-09-27 真机实测：整个 harness 主模块因此装载失败，界面里一个通道都没有）。
+     * (measured on a real machine on 2026-09-27: the whole harness main module failed to load
+     * because of it, and the UI showed no channels at all).
      */
     getOwnPropertyDescriptor: (_target, key) => {
       const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), key)
@@ -169,7 +186,7 @@ function lazyHostModule<T extends object>(load: () => T): T {
   })
 }
 
-/** 缓存的 host require（app ready 前后基准可能不同，首次调用时定下来） */
+/** Cached host require (the base may differ before and after app ready; fixed on first use) */
 let cachedRequire: NodeRequire | null = null
 
 function resolveBare(spec: string): unknown {
@@ -178,9 +195,10 @@ function resolveBare(spec: string): unknown {
 }
 
 /**
- * 按 spec 取宿主模块。插件包里的 `require(...)` 会被打包器改写成对本函数的调用，
- * 因此这里**绝不返回 undefined**：拿不到就抛错，让「宿主没提供」在装载期立刻暴露，
- * 而不是变成下游某个 `Cannot read properties of undefined`。
+ * Get a host module by spec. `require(...)` in plugin packages is rewritten by the bundler into
+ * calls to this function, so it **never returns undefined**: if it cannot be resolved, it throws,
+ * exposing "the host does not provide it" at load time instead of turning into a downstream
+ * `Cannot read properties of undefined`.
  */
 export function resolveHostModule(spec: string): unknown {
   if (typeof spec !== 'string' || spec === '') {
@@ -200,7 +218,7 @@ export function resolveHostModule(spec: string): unknown {
       Object.keys(HOST_MAIN).length +
       Object.keys(HOST_SHARED).length +
       Object.keys(HOST_LEGACY).length
-    // 可读错误：说清是谁、为什么、下一步该往哪查（表是按需补齐的）
+    // Readable error: state who, why, and where to look next (the table is filled in on demand)
     throw new Error(
       `宿主运行时没有提供模块 '${spec}'：它既不在宿主运行时表（${count} 个 @host/** 契约模块）里，` +
         `也无法从应用根 '${app.isReady() ? app.getAppPath() : process.cwd()}' 解析到。` +
@@ -210,10 +228,11 @@ export function resolveHostModule(spec: string): unknown {
 }
 
 /**
- * 挂上宿主运行时（幂等）。
+ * Mount the host runtime (idempotent).
  *
- * 必须在 `initPluginHost()` 里、**扫描/装载任何外部插件之前**调用：插件 main.cjs 一被
- * require 就会执行源码里的 `require('@host/main/...')`，那些调用最终落到这个全局函数上。
+ * It must be called in `initPluginHost()`, **before scanning/loading any external plugin**: as soon
+ * as a plugin main.cjs is required it executes `require('@host/main/...')` from its source, and
+ * those calls ultimately land on this global function.
  */
 export function installHostRuntime(): void {
   const target = globalThis as typeof globalThis & {
@@ -225,7 +244,7 @@ export function installHostRuntime(): void {
   )
 }
 
-/** 运行时表里的键（诊断用：面板/工装可以核对插件包引用了哪些宿主模块） */
+/** Keys in the runtime table (for diagnostics: the panel/tooling can verify which host modules a plugin package references) */
 export function hostRuntimeKeys(): string[] {
   return [...Object.keys(HOST_MAIN), ...Object.keys(HOST_SHARED), ...Object.keys(HOST_LEGACY)]
 }

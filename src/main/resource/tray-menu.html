@@ -3,27 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    /* 自绘托盘菜单（面板式）：仿参考稿的深色面板视觉（#242423 底 + 暖灰棕文字 + 行式布局），
-   暗色为默认主视觉；亮色主题沿用品牌暖纸/墨。随应用主题明暗切换。 */
+    /* Custom tray menu (panel style): #242423 dark panel, warm gray-brown text, rows;
+    dark by default, light theme uses warm paper/ink; switches with the app theme. */
     :root {
-      --bg: #242423; /* 面板底（参考稿主色） */
+      --bg: #242423; /* Panel background */
       --hover: #2e2d2b;
-      --ink: #c9c1b2; /* 主文字：暖灰棕（参考稿 #827665 提亮，保证可读） */
-      --sub: #8a8375; /* 次级文字（参考稿 #827665） */
+      --ink: #c9c1b2; /* Primary text: warm gray-brown, lightened from #827665 for readability */
+      --sub: #8a8375; /* Secondary text: warm gray based on #827665 */
       --hair: rgba(200, 190, 170, 0.14);
-      --accent: #e0553a; /* 朱砂（提亮，用于开关 ON / 退出项） */
+      --accent: #e0553a; /* Vermilion, lightened; used for switch ON and the quit item */
       --accent-soft: rgba(224, 85, 58, 0.1);
-      --switch-frame: #6e6a63; /* 开关外框（参考稿浅色框） */
-      --switch-track: #3a3937; /* 开关轨道（参考稿深色轨道） */
-      --switch-thumb: #e8e4da; /* 开关滑块（亮） */
+      --switch-frame: #6e6a63; /* Switch outer border, light */
+      --switch-track: #3a3937; /* Switch track, dark */
+      --switch-thumb: #e8e4da; /* Switch thumb, light */
       --shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
       --radius: 12px;
     }
 
     html[data-theme='light'] {
-      --bg: #f6f0e3; /* 暖纸 */
+      --bg: #f6f0e3; /* Warm paper */
       --hover: #efe5cf;
-      --ink: #1c1812; /* 墨 */
+      --ink: #1c1812; /* Ink */
       --sub: #6f6759;
       --hair: rgba(28, 24, 18, 0.12);
       --accent: #c13e26;
@@ -43,15 +43,15 @@
     html,
     body {
       background: transparent;
-      /* 固定尺寸窗口：内容与窗口恰好等高时 DPI 取整可能溢出触发滚动条，
-     滚动条会盖住阴影留白区，这里直接裁剪 */
+      /* Fixed-size window: when content exactly matches the window height, DPI rounding may
+      overflow and show a scrollbar that covers the shadow padding, so clip it here */
       overflow: hidden;
       font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
       -webkit-font-smoothing: antialiased;
       user-select: none;
     }
 
-    /* 窗口四周留出阴影区（主进程窗口尺寸 = 菜单体 + 2×16） */
+    /* Leave room for the shadow on all sides (window size = menu body + 2×16 padding) */
     body {
       padding: 16px;
     }
@@ -95,7 +95,7 @@
       }
     }
 
-    /* 头部：品牌徽标 + 名称/副标题 + 版本号（参考稿 HEAD 区） */
+    /* Header: brand mark, name/subtitle, and version */
     .head {
       display: flex;
       align-items: center;
@@ -141,7 +141,7 @@
       flex-shrink: 0;
     }
 
-    /* 菜单项行：左文字右图标（参考稿行式布局） */
+    /* Menu item row: label on the left, icon on the right */
     .item {
       display: flex;
       align-items: center;
@@ -177,7 +177,7 @@
       transform: translateX(1.5px);
     }
 
-    /* 危险项（退出）：朱砂文字 + 朱砂图标，悬停朱砂底 */
+    /* Danger item (quit): vermilion text and icon, vermilion tint on hover */
     .item.danger {
       color: var(--accent);
     }
@@ -196,7 +196,7 @@
       margin: 5px 8px;
     }
 
-    /* iOS 风格开关（参考稿：亮外框 + 深轨道 + 亮滑块；ON 用朱砂轨道） */
+    /* iOS-style switch: light frame, dark track, light thumb; vermilion track when on */
     .switch {
       position: relative;
       width: 34px;
@@ -251,7 +251,7 @@
   <div id="list"></div>
 </div>
 <script>
-  // 主进程下发菜单数据（items / theme / flip / version），点击项回传 id
+  // The main process sends menu data (items / theme / flip / version); clicks send the id back
   const { ipcRenderer } = window.electron
 
   const ICONS = {
@@ -292,7 +292,7 @@
     document.documentElement.dataset.theme = data.theme
     document.documentElement.dataset.flip = data.flip || 'up'
     document.getElementById('ver').textContent = 'v' + (data.version || '')
-    // 副标题随界面语言（主进程下发，HTML 里的中文只是首帧兜底）
+    // Subtitle follows the UI language; the main process overrides the Chinese placeholder in HTML
     if (data.subtitle) {
       const desc = document.querySelector('.desc')
       if (desc) desc.textContent = data.subtitle
@@ -306,8 +306,8 @@
     if (row && row.dataset.id) ipcRenderer.send('tray-menu-click', row.dataset.id)
   })
 
-  // 打开动画：先移除再挂类（窗口 show 后下一帧触发，动画干净重放；
-  // 主进程在「刚关闭又立刻弹出」时会抑制本信号，此时保留终态不闪屏）
+  // Open animation: remove then re-add the class on the next frame after show so it replays
+  // cleanly; a rapid close-then-reopen suppresses this signal, keeping the end state (no flicker)
   ipcRenderer.on('tray-menu-open', () => {
     const html = document.documentElement
     html.classList.remove('open')

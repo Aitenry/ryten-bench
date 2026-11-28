@@ -1,17 +1,19 @@
 /**
- * 自研消息模型（替代 `@langchain/core/messages`）。
+ * In-house message model.
  *
- * 只实现本项目需要的部分：
- * - 四种消息：human / ai / system / tool（外加流式增量块 AIMessageChunk）；
- * - 模型调用、工具调用、用量、推理内容（reasoning_content）都挂在消息对象上，
- *   字段名与旧 LangChain 实现保持一致，避免上层（history / stream-records / usage）
- *   改写消费方式；
- * - 内容既可以是字符串，也可以是内容块数组（多模态图片、工具结果等）。
+ * Only the parts this project needs are implemented:
+ * - Four message types: human / ai / system / tool (plus the streaming chunk AIMessageChunk);
+ * - Model calls, tool calls, usage, and reasoning content (reasoning_content) all live on the
+ *   message object, and their field names match the legacy implementation so upper layers
+ *   (history / stream-records / usage) do not need to change how they consume them;
+ * - Content can be either a string or an array of content blocks (multimodal images, tool
+ *   results, etc.).
  *
- * 以后新增供应商时，只要能把自己的协议报文映射到这里的消息形态，就不必改上层。
+ * When a new provider is added, it only needs to map its protocol payloads to the message shapes
+ * here, without changing upper layers.
  */
 
-/** 多模态内容块（文本 / 图片等），字段随供应商协议保留原始形状 */
+/** Multimodal content block (text / images, etc.); fields keep the original provider protocol shape */
 export interface MessageContentComplex {
   type?: string
   text?: string
@@ -19,10 +21,10 @@ export interface MessageContentComplex {
   [key: string]: unknown
 }
 
-/** 消息内容：纯文本或内容块数组 */
+/** Message content: plain text or an array of content blocks */
 export type MessageContent = string | MessageContentComplex[]
 
-/** 工具调用（模型产出的完整形态） */
+/** Tool call (the complete form produced by the model) */
 export interface ToolCall {
   name: string
   args: Record<string, unknown>
@@ -30,17 +32,17 @@ export interface ToolCall {
   type?: 'tool_call'
 }
 
-/** 工具调用增量块（流式解析中的半成品） */
+/** Tool call chunk (partial form during streamed parsing) */
 export interface ToolCallChunk {
-  /** 同一条模型回复内的工具序号（从 0 开始） */
+  /** Tool index within the same model reply (starts at 0) */
   index?: number
   name?: string
   id?: string
-  /** 参数 JSON 的增量片段（未解析的原始字符串） */
+  /** Incremental fragment of the arguments JSON (unparsed raw string) */
   args?: string
 }
 
-/** 非法工具调用（参数无法解析成 JSON 时保留原文，供上层排查） */
+/** Invalid tool call (keeps the raw text when the args cannot be parsed as JSON, for diagnostics) */
 export interface InvalidToolCall {
   name?: string
   args?: string
@@ -48,7 +50,7 @@ export interface InvalidToolCall {
   error?: string
 }
 
-/** 模型回传的真实用量（字段名与旧实现一致） */
+/** Real usage reported by the model (field names match the legacy implementation) */
 export type UsageMetadata = Record<string, unknown>
 
 export interface BaseMessageFields {
@@ -59,7 +61,7 @@ export interface BaseMessageFields {
   id?: string
 }
 
-/** 消息基类：所有消息共享的字段与文本提取逻辑 */
+/** Message base class: fields and text extraction shared by all messages */
 export abstract class BaseMessage {
   content: MessageContent
   name?: string
@@ -76,28 +78,28 @@ export abstract class BaseMessage {
     this.id = normalized.id
   }
 
-  /** 消息类型（human / ai / system / tool） */
+  /** Message type (human / ai / system / tool) */
   abstract get type(): string
 
-  /** 兼容旧 LangChain 的取类型方法（上层多处按 `_getType()` 判断） */
+  /** Type getter kept for compatibility (upper layers check `_getType()` in several places) */
   _getType(): string {
     return this.type
   }
 
-  /** 内容里的纯文本部分（内容块数组时拼接 text 块） */
+  /** Plain-text portion of the content (concatenates text blocks for block arrays) */
   get text(): string {
     return contentToText(this.content)
   }
 }
 
-/** 用户消息 */
+/** User message */
 export class HumanMessage extends BaseMessage {
   get type(): string {
     return 'human'
   }
 }
 
-/** 系统消息 */
+/** System message */
 export class SystemMessage extends BaseMessage {
   get type(): string {
     return 'system'
@@ -110,7 +112,7 @@ export interface AIMessageFields extends BaseMessageFields {
   usage_metadata?: UsageMetadata
 }
 
-/** 模型回复消息 */
+/** Model reply message */
 export class AIMessage extends BaseMessage {
   tool_calls: ToolCall[]
   invalid_tool_calls: InvalidToolCall[]
@@ -127,7 +129,7 @@ export class AIMessage extends BaseMessage {
     this.tool_calls = (fields.tool_calls ?? []).map((call) => ({
       name: call.name,
       args: call.args ?? {},
-      // 旧实现的工具调用 id 可能缺失：这里补一个稳定 id，工具结果才能对得上
+      // Legacy tool call ids may be missing: supply a stable id so tool results can be matched
       id: call.id ?? `call_${randomId()}`,
       type: 'tool_call'
     }))
@@ -145,10 +147,11 @@ export interface AIMessageChunkFields extends AIMessageFields {
 }
 
 /**
- * 流式增量块。
+ * Streaming chunk.
  *
- * 文本 / 推理内容按增量下发；工具调用按 `tool_call_chunks` 增量下发（与旧实现同形，
- * 上层 stream-records.ts 直接消费该字段）。
+ * Text / reasoning content are delivered incrementally; tool calls are delivered incrementally via
+ * `tool_call_chunks` (same shape as the legacy implementation, and the upper-layer
+ * stream-records.ts consumes that field directly).
  */
 export class AIMessageChunk extends AIMessage {
   tool_call_chunks: ToolCallChunk[]
@@ -165,12 +168,12 @@ export class AIMessageChunk extends AIMessage {
 
 export interface ToolMessageFields extends BaseMessageFields {
   tool_call_id: string
-  /** 工具结果对应的工具名（Gemini 等协议需要） */
+  /** Tool name corresponding to the tool result (required by protocols such as Gemini) */
   tool_name?: string
   status?: 'success' | 'error'
 }
 
-/** 工具结果消息 */
+/** Tool result message */
 export class ToolMessage extends BaseMessage {
   tool_call_id: string
   tool_name?: string
@@ -193,12 +196,12 @@ export class ToolMessage extends BaseMessage {
   }
 }
 
-/** 取字符串 id（避免引入额外依赖） */
+/** Get a string id (avoids extra dependencies) */
 function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10)
 }
 
-/** 内容 → 纯文本（内容块数组时只拼 text 块） */
+/** Content → plain text (only text blocks are joined for block arrays) */
 export function contentToText(content: MessageContent | undefined | null): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -208,7 +211,7 @@ export function contentToText(content: MessageContent | undefined | null): strin
     .join('')
 }
 
-/** 内容 → 内容块数组（字符串内容包装成单个 text 块） */
+/** Content → content block array (string content is wrapped into a single text block) */
 export function contentToBlocks(
   content: MessageContent | undefined | null
 ): MessageContentComplex[] {
@@ -216,7 +219,7 @@ export function contentToBlocks(
   return Array.isArray(content) ? content : []
 }
 
-/** 是否为 AI 消息（流式记录过滤用） */
+/** Whether this is an AI message (used for streamed record filtering) */
 export function isAIMessage(message: unknown): message is AIMessage {
   return (
     message instanceof AIMessage ||
@@ -224,7 +227,7 @@ export function isAIMessage(message: unknown): message is AIMessage {
   )
 }
 
-/** 是否为工具消息 */
+/** Whether this is a tool message */
 export function isToolMessage(message: unknown): message is ToolMessage {
   return (
     message instanceof ToolMessage ||
@@ -233,8 +236,8 @@ export function isToolMessage(message: unknown): message is ToolMessage {
 }
 
 /**
- * 从 data URL 中解析 MIME 与 base64 数据（图片直传协议时需要）。
- * 非 data URL（http/https 链接）返回 null，由调用方决定如何处理。
+ * Parse the MIME type and base64 data from a data URL (required by protocols that send images inline).
+ * Returns null for non-data URLs (http/https links); the caller decides how to handle them.
  */
 export function parseDataUrl(url: string): { mimeType: string; data: string } | null {
   const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(url)

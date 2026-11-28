@@ -2,25 +2,30 @@ import { tool, type StructuredToolInterface } from '../../ai/tools'
 import { z } from 'zod'
 
 /**
- * Agent Teams / 超级智能体 —— 共享任务板（按 topicId 隔离，快照 + 事件日志持久化）。
+ * Agent Teams / super agent — shared task board (isolated by topicId, persisted as a snapshot
+ * plus an event log).
  *
- * 机制参考 deepseek-harness（packages/team/agent-team）：
- * - Team = 根会话（RytenBench 的 topic）+ 它的前后台子代理树，**不新增 agent 类型**；
- * - 协作靠一张共享任务板：任务有 subject/description/status/owner/blockedBy/writeScopes，
- *   主智能体（lead）与子代理（member）用 team_task_* 工具读写同一张板；
- * - 任务按 revision 做 CAS：认领/更新时带上看到的 revision，冲突即失败并让模型重读，
- *   避免两个子代理同时改同一行；
- * - writeScopes 只是**建议性**的写入范围提示（给模型排冲突用），不是锁。
+ * - Team = the root session (a topic) + its foreground/background subagent tree, with **no new
+ *   agent type**;
+ * - Collaboration runs on one shared task board: tasks have
+ *   subject/description/status/owner/blockedBy/writeScopes, and the main agent (lead) and
+ *   subagents (members) read and write the same board through the team_task_* tools;
+ * - Tasks use revision-based CAS: claim/update carries the revision that was seen, a conflict
+ *   fails and makes the model re-read, so two subagents cannot change the same row at once;
+ * - writeScopes is only an **advisory** write-range hint (to help the model avoid conflicts), not
+ *   a lock.
  *
- * 持久化：任务板整板快照写 `team_board` 表（每话题一行 JSON，含 deleted tombstone）；
- * 每次 create/claim/complete/update/delete 同时追加 `team_task_event` 事件（协作面板最近活动）。
- * 存储适配器由系统启动时注入（`setPersistence`），运行时不直接依赖数据库；重启后
- * 第一次访问任务板（IPC 拉取 / team_task_* 工具）时懒加载，恢复 revision/counter/任务。
+ * Persistence: the whole board snapshot is written to the `team_board` table (one JSON row per
+ * topic, including deleted tombstones); every create/claim/complete/update/delete also appends a
+ * `team_task_event` event (recent activity for the collaboration panel). The storage adapter is
+ * injected at system startup (`setPersistence`), so the runtime does not depend on the database
+ * directly; after a restart, the first access to the board (IPC pull / team_task_* tools) lazily
+ * loads it and restores revision/counter/tasks.
  */
 
 export type TeamTaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
 
-/** 调用者身份：主智能体为 lead，子代理为 member（由各自图的 configurable 传入） */
+/** Caller identity: the main agent is lead, subagents are members (passed via each graph's configurable) */
 export interface TeamActor {
   id: string
   name: string
@@ -42,18 +47,18 @@ export interface TeamTask {
   updatedAt: number
 }
 
-/** 任务板行（附带依赖就绪判定，渲染层/工具输出共用） */
+/** Board task view (with dependency readiness, shared by the renderer and tool output) */
 export interface TeamTaskView extends TeamTask {
-  /** 依赖是否全部完成（blockedBy 里有未完成/不存在/已删除的 id 即 false） */
+  /** Whether every dependency is complete (false if blockedBy has an unfinished/missing/deleted id) */
   ready: boolean
-  /** 未完成的依赖 id（ready=false 时非空） */
+  /** Unfinished dependency ids (non-empty when ready=false) */
   blockers: string[]
 }
 
-/** 任务板快照（IPC 推送与团队工具输出同构） */
+/** Board snapshot (same shape for IPC pushes and team tool output) */
 export interface TeamBoardSnapshot {
   topicId: number
-  /** 每次变更 +1：渲染层据此丢弃乱序的旧快照 */
+  /** Incremented on every change: the renderer uses it to discard out-of-order stale snapshots */
   revision: number
   tasks: TeamTaskView[]
 }
@@ -75,7 +80,7 @@ export interface TeamTaskUpdateInput {
   writeScopes?: string[]
 }
 
-/** 状态排序：进行中 → 待办 → 已完成（组内按最近更新倒序，与 DSH 目录同一口径） */
+/** Status ordering: in progress → pending → completed (within a group, most recently updated first) */
 const STATUS_RANK: Record<TeamTaskStatus, number> = {
   in_progress: 0,
   pending: 1,
@@ -83,7 +88,7 @@ const STATUS_RANK: Record<TeamTaskStatus, number> = {
   deleted: 3
 }
 
-/** 允许的状态迁移（认领走 claim；其余走 update） */
+/** Allowed status transitions (claiming goes through claim; everything else through update) */
 const ALLOWED_TRANSITIONS: Record<TeamTaskStatus, TeamTaskStatus[]> = {
   pending: ['in_progress', 'deleted'],
   in_progress: ['completed', 'pending', 'deleted'],
@@ -91,7 +96,7 @@ const ALLOWED_TRANSITIONS: Record<TeamTaskStatus, TeamTaskStatus[]> = {
   deleted: []
 }
 
-/** 单板任务数上限：防止模型无限建任务把内存/UI 撑爆 */
+/** Per-board task cap: prevents the model from creating tasks without bound and blowing up memory/UI */
 const MAX_TASKS_PER_TOPIC = 200
 
 interface Board {
@@ -100,7 +105,7 @@ interface Board {
   tasks: Map<string, TeamTask>
 }
 
-/** 持久化快照（与 Board 同构，tasks 用可 JSON 序列化的数组） */
+/** Persisted snapshot (same shape as Board, with tasks as a JSON-serializable array) */
 export interface TeamBoardPersistedSnapshot {
   revision: number
   counter: number
@@ -108,20 +113,22 @@ export interface TeamBoardPersistedSnapshot {
 }
 
 /**
- * 任务板存储适配器：由系统启动装配（DB 实现见 `system/harness.ts`）。
- * 运行时只依赖这个接口——离线回归（不启数据库）不注入即可跑。
+ * Task board storage adapter, wired at system startup (the DB implementation lives in
+ * `system/harness.ts`).
+ * The runtime only depends on this interface — offline regression (without a database) runs
+ * without injecting it.
  */
 export interface TeamBoardPersistence {
   load: (topicId: number) => Promise<TeamBoardPersistedSnapshot | null>
   save: (topicId: number, snapshot: TeamBoardPersistedSnapshot) => Promise<void>
   remove: (topicId: number) => Promise<void>
-  /** 追加一条任务事件（可选：离线回归/未装配事件表时静默跳过） */
+  /** Append one task event (optional: silently skipped in offline regression or when no event table is wired) */
   appendEvent?: (event: TeamTaskEventInput) => Promise<void>
-  /** 删除话题下的事件（可选；话题删除外键级联是主路径） */
+  /** Delete the events under a topic (optional; the foreign-key cascade on topic deletion is the main path) */
   removeEvents?: (topicId: number) => Promise<void>
 }
 
-/** 任务事件（协作面板最近活动/后续审计用） */
+/** Task event (recent activity for the collaboration panel / later auditing) */
 export type TeamTaskEventAction = 'created' | 'claimed' | 'completed' | 'updated' | 'deleted'
 
 export interface TeamTaskEventInput {
@@ -140,19 +147,20 @@ function notFound(taskId: string): Error {
 
 export class TeamTaskStore {
   private readonly boards = new Map<number, Board>()
-  /** 已尝试从持久化层加载过的话题（无持久化时也会标记：内存模式没有远端数据） */
+  /** Topics already attempted to load from persistence (also marked without persistence: in-memory mode has no remote data) */
   private readonly loaded = new Set<number>()
-  /** 同一话题的并发加载去重（工具/IPC 同时到达时只读一次库） */
+  /** Deduplicates concurrent loads of the same topic (the DB is read once when tool/IPC calls arrive together) */
   private readonly loading = new Map<number, Promise<void>>()
   private persistence?: TeamBoardPersistence
 
   /**
-   * 变更回调（IPC 层节流/广播用）。
-   * 每次变更推送**完整快照**：任务板规模很小（上限 200），整板替换比增量协议简单可靠。
+   * Change callback (used by the IPC layer for throttling/broadcasting).
+   * Every change pushes the **full snapshot**: the board is small (capped at 200), so replacing
+   * the whole board is simpler and more reliable than an incremental protocol.
    */
   onChange?: (snapshot: TeamBoardSnapshot) => void
 
-  /** 注入/撤销任务板存储适配器（系统启动装配；切换账号时由外部清理内存） */
+  /** Install/remove the board storage adapter (wired at system startup; memory is cleared externally when switching accounts) */
   setPersistence(persistence?: TeamBoardPersistence): void {
     this.persistence = persistence
     this.loaded.clear()
@@ -160,8 +168,9 @@ export class TeamTaskStore {
   }
 
   /**
-   * 懒加载话题任务板（IPC 拉取、团队工具在操作前调用）。
-   * 无持久化适配器（离线回归）/加载失败时保持内存空板，不阻塞任务板操作。
+   * Lazily load a topic's board (called by IPC pulls and by team tools before they operate).
+   * Without a persistence adapter (offline regression) or when loading fails, the in-memory board
+   * stays empty and board operations are not blocked.
    */
   async ensureLoaded(topicId: number): Promise<void> {
     if (this.loaded.has(topicId)) return
@@ -186,7 +195,8 @@ export class TeamTaskStore {
         }
         this.loaded.add(topicId)
       } catch {
-        // 读取失败不标记 loaded：下一次访问再重试（任务板不会是"永久空"）
+        // Do not mark loaded on read failure: retry on the next access (the board never stays
+        // "permanently empty")
       } finally {
         this.loading.delete(topicId)
       }
@@ -195,7 +205,7 @@ export class TeamTaskStore {
     return load
   }
 
-  /** 追加任务事件（fire-and-forget；未装配事件表时静默跳过） */
+  /** Append a task event (fire-and-forget; silently skipped when no event table is wired) */
   private recordEvent(
     topicId: number,
     action: TeamTaskEventAction,
@@ -215,11 +225,11 @@ export class TeamTaskStore {
         taskRevision: task.revision
       })
       .catch(() => {
-        // 事件只服务活动展示/审计：写失败不能影响任务板本身
+        // Events only serve activity display/auditing: a failed write must not affect the board
       })
   }
 
-  /** 整板快照持久化（fire-and-forget：存储失败不能阻塞工具调用） */
+  /** Persist the whole-board snapshot (fire-and-forget: a storage failure must not block tool calls) */
   private persist(topicId: number): void {
     const persistence = this.persistence
     const board = this.boards.get(topicId)
@@ -231,7 +241,8 @@ export class TeamTaskStore {
         tasks: [...board.tasks.values()]
       })
       .catch(() => {
-        // 持久化失败静默：内存仍是本次进程的权威，下一次变更会再次尝试
+        // Fail silently: memory remains authoritative for this process, and the next change
+        // retries
       })
   }
 
@@ -244,7 +255,7 @@ export class TeamTaskStore {
     return board
   }
 
-  /** 依赖就绪判定：blockedBy 里每个 id 都必须是已完成的现存任务 */
+  /** Dependency readiness check: every id in blockedBy must be an existing, completed task */
   private checkReady(task: TeamTask, board: Board): { ready: boolean; blockers: string[] } {
     const blockers: string[] = []
     for (const dependencyId of task.blockedBy) {
@@ -275,13 +286,13 @@ export class TeamTaskStore {
       .map((task) => this.view(task, board))
   }
 
-  /** 当前任务板快照（含 revision） */
+  /** Current board snapshot (including revision) */
   snapshot(topicId: number): TeamBoardSnapshot {
     const board = this.board(topicId)
     return { topicId, revision: board.revision, tasks: this.sortedViews(board) }
   }
 
-  /** 任务列表（不含已删除） */
+  /** Task list (excluding deleted) */
 
   private touch(board: Board): void {
     board.revision += 1
@@ -292,7 +303,7 @@ export class TeamTaskStore {
     this.onChange?.(this.snapshot(topicId))
   }
 
-  /** 新建任务（任何人可建）：默认 pending、未认领 */
+  /** Create a task (anyone may create): pending and unowned by default */
   create(topicId: number, input: TeamTaskCreateInput, actor: TeamActor): TeamTaskView {
     const board = this.board(topicId)
     const activeTaskCount = [...board.tasks.values()].filter(
@@ -332,8 +343,9 @@ export class TeamTaskStore {
   }
 
   /**
-   * 认领任务：pending + 未认领 + 依赖就绪 才能认领；成功即 in_progress、owner = 调用者。
-   * expectedRevision 提供时做 CAS（模型从 list 拿到的 revision）。
+   * Claim a task: it must be pending, unowned and dependency-ready; on success it becomes
+   * in_progress with owner = the caller.
+   * When expectedRevision is provided, do a CAS (the revision the model got from list).
    */
   claim(
     topicId: number,
@@ -371,11 +383,12 @@ export class TeamTaskStore {
   }
 
   /**
-   * 更新任务：
-   * - 权限：lead 可改任意任务/改派负责人；member 只能改自己认领的任务，且不能改派；
-   * - ownerId/ownerName 只有 lead 能设置（改派），传空字符串表示放回未认领；
-   * - 状态迁移必须合法（见 ALLOWED_TRANSITIONS），删除 = status 'deleted'；
-   * - expectedRevision 提供时做 CAS。
+   * Update a task:
+   * - Permissions: the lead can change any task and reassign the owner; a member can only change
+   *   tasks it owns and cannot reassign;
+   * - only the lead can set ownerId/ownerName (reassignment); an empty string releases the task;
+   * - status transitions must be legal (see ALLOWED_TRANSITIONS), deleting = status 'deleted';
+   * - when expectedRevision is provided, do a CAS.
    */
   update(
     topicId: number,
@@ -443,7 +456,8 @@ export class TeamTaskStore {
 
     if (nextStatus !== undefined) {
       task.status = nextStatus
-      // 完成时保留 owner（历史可追溯）；删除时清空 owner（不再归属任何人）
+      // Keep the owner on completion (traceable history); clear the owner on deletion (no longer
+      // owned by anyone)
       if (nextStatus === 'deleted') {
         task.ownerId = undefined
         task.ownerName = undefined
@@ -462,20 +476,20 @@ export class TeamTaskStore {
     return this.view(task, board)
   }
 
-  /** 话题删除时清理（任务板按 topicId 归属；同时删持久化行，外键级联是主路径） */
+  /** Clean up when a topic is deleted (boards belong to a topicId; also removes the persisted row, with the foreign-key cascade as the main path) */
   clearTopic(topicId: number): void {
     this.boards.delete(topicId)
     this.loaded.delete(topicId)
     this.loading.delete(topicId)
     void this.persistence?.remove(topicId).catch(() => {
-      // 删除失败静默：话题删除的外键级联仍会清掉该行
+      // Fail silently: the foreign-key cascade on topic deletion still removes that row
     })
     void this.persistence?.removeEvents?.(topicId).catch(() => {
-      // 同上：事件表也有外键级联兜底
+      // Same as above: the event table also has a foreign-key cascade as a fallback
     })
   }
 
-  /** 切换账号 / 退出时清空全部任务板（不删数据库：数据属于各自账号库） */
+  /** Clear all boards when switching accounts / logging out (do not delete the database: data belongs to each account's own DB) */
   clearAll(): void {
     this.boards.clear()
     this.loaded.clear()
@@ -483,12 +497,12 @@ export class TeamTaskStore {
   }
 }
 
-/** 进程级单例（与 todo/goal/jobs 等运行时注册表同一口径） */
+/** Process-level singleton (same pattern as the todo/goal/jobs runtime registries) */
 export const teamStore = new TeamTaskStore()
 
 type ToolConfig = { configurable?: Record<string, unknown> } | undefined
 
-/** 从工具调用 config 里解析调用者身份（主图不传 teamAgent → 视为 lead） */
+/** Resolve the caller identity from the tool call config (the main graph passes no teamAgent → treated as lead) */
 function actorFromConfig(config: ToolConfig): TeamActor {
   const raw = config?.configurable?.teamAgent as Partial<TeamActor> | undefined
   if (raw && typeof raw.id === 'string' && raw.id) {
@@ -501,7 +515,7 @@ function actorFromConfig(config: ToolConfig): TeamActor {
   return { id: 'lead', name: 'lead', isLead: true }
 }
 
-/** 从工具调用 config 里解析话题（主图/子代理图都会把 topicId 放进 configurable） */
+/** Resolve the topic from the tool call config (both the main and subagent graphs put topicId in configurable) */
 function topicFromConfig(config: ToolConfig, fallback: number): number {
   const value = config?.configurable?.topicId
   return typeof value === 'number' && value > 0 ? value : fallback
@@ -512,10 +526,10 @@ function formatTask(task: TeamTaskView): string {
 }
 
 /**
- * 构建共享任务板工具（注入主智能体与子代理）。
+ * Build the shared task board tools (injected into the main agent and subagents).
  *
- * @param store 任务板注册表
- * @param fallbackTopicId 构建期兜底话题 id（调用期优先取 config.configurable.topicId）
+ * @param store task board registry
+ * @param fallbackTopicId fallback topic id at build time (call time prefers config.configurable.topicId)
  */
 export function buildTeamTools(
   store: TeamTaskStore,
@@ -559,7 +573,7 @@ export function buildTeamTools(
         schema: z.object({
           subject: z
             .string()
-            .describe('Short imperative task title, e.g. "Inspect the DSH subagent package"'),
+            .describe('Short imperative task title, e.g. "Inspect the subagent package"'),
           description: z.string().optional().describe('Full instructions / acceptance details'),
           blockedBy: z
             .array(z.string())

@@ -13,14 +13,14 @@ export interface SlashMenuListHandle {
 }
 
 /**
- * Slash 菜单弹层（经 ReactRenderer 挂载到 body，Floating UI 托管定位）。
+ * Slash menu popup (mounted to body via ReactRenderer, positioned by Floating UI).
  */
 const SlashMenuList = forwardRef<SlashMenuListHandle, SlashMenuListProps>(
   ({ items, theme, command }, ref) => {
     const { t } = useTranslation()
     const [index, setIndex] = useState(0)
 
-    /* items 变化（查询过滤）时重置选中项 */
+    /* Reset the selected item when items change (query filtering) */
     useEffect(() => {
       setIndex(0)
     }, [items])

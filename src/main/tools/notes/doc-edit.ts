@@ -1,31 +1,37 @@
 /**
- * 文档正文的**纯文本编辑引擎**（零 electron / 数据库依赖，可离线单测）。
+ * **Plain-text editing engine** for document bodies (no electron / database dependencies, unit
+ * testable offline).
  *
- * 为什么单独抽出：模型过去只能整篇 `update content`，一次改一行也要重写全文，
- * 既容易把别处内容改坏，也浪费上下文/写放大。这里提供"行 / 行内列区间 / 文本片段"
- * 三种粒度的确定性编辑，并统一处理：
- * - **行号 1 起、列号 1 起、列按 Unicode 码点计**（中文、emoji 不会被 UTF-16 代理对切坏）；
- * - **EOL 保持**（原文是 CRLF 就继续写 CRLF，模型给的新文本统一归一后再按原文 EOL 落盘）；
- * - **expectedOld / expectedRevision 双重校验**（读到什么就改什么，别人先改过就拒绝写入）；
- * - **原子批量编辑**（patch 全部算完才落盘，任何一处失败都不产生半截修改）。
+ * Why it was split out: the model used to be able to only update the whole `content`, so changing
+ * a single line rewrote the entire text, which easily damaged other parts and wasted context and
+ * writes. This provides deterministic edits at three granularities — "lines / in-line column
+ * ranges / text fragments" — and handles the following uniformly:
+ * - **Lines and columns are 1-based and columns count Unicode code points** (Chinese text and
+ *   emoji are never split by UTF-16 surrogate pairs);
+ * - **EOL is preserved** (a CRLF original keeps CRLF; new text from the model is normalized first
+ *   and then written back with the original EOL);
+ * - **expectedOld / expectedRevision double check** (edit exactly what was read; refuse to write
+ *   if someone else changed it first);
+ * - **Atomic batch edits** (every patch is computed before anything is written, and any failure
+ *   leaves no half-applied change).
  *
- * 行号语义：`content.split('\n')`，所以以 `\n` 结尾的文档最后一行为空行。
- * 例如 "a\nb\n" 共 3 行（第 3 行为空），"a\nb" 共 2 行。
+ * Line numbering semantics: `content.split('\n')`, so a document ending in `\n` has an empty last
+ * line. For example, "a\nb\n" has 3 lines (the 3rd is empty) and "a\nb" has 2 lines.
  */
 
 import { createHash } from 'node:crypto'
 
-/** 原文档使用的换行符（编辑后保持） */
+/** Line ending used by the original document (kept after edits) */
 export type LineEnding = '\n' | '\r\n'
 
-/** 解析后的文档：body 一律用 \n，输出时再还原 eol */
+/** Parsed document: body always uses \n and is restored to eol on output */
 export interface ParsedDocument {
   body: string
   eol: LineEnding
   lines: string[]
 }
 
-/** 编辑引擎抛出的**结构化**错误：文案由调用方按界面语言渲染 */
+/** **Structured** errors thrown by the editing engine: the caller renders the text per UI language */
 export type DocEditErrorCode =
   | 'line-out-of-range'
   | 'range-out-of-range'
@@ -45,7 +51,7 @@ export type DocEditErrorCode =
 export class DocEditError extends Error {
   readonly code: DocEditErrorCode
   readonly details: Record<string, string | number>
-  /** patch 中第几处（1 起）；非 patch 错误为空 */
+  /** Which patch entry (1-based); empty for non-patch errors */
   editIndex?: number
 
   constructor(code: DocEditErrorCode, details: Record<string, string | number> = {}) {
@@ -56,29 +62,29 @@ export class DocEditError extends Error {
   }
 }
 
-/** 短修订号：内容哈希前 12 位，用于「读到的是不是同一版」校验 */
+/** Short revision: first 12 chars of the content hash, used to check "is this the same version I read" */
 export function revisionOf(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 12)
 }
 
-/** 解析正文（保留原文 EOL 选择，body 统一为 \n） */
+/** Parse the body (keeps the original EOL choice; body is normalized to \n) */
 export function parseDocument(content: string): ParsedDocument {
   const eol: LineEnding = content.includes('\r\n') ? '\r\n' : '\n'
   const body = eol === '\r\n' ? content.split('\r\n').join('\n') : content
   return { body, eol, lines: body.split('\n') }
 }
 
-/** 把内部 body 还原成落盘文本 */
+/** Turn the internal body back into on-disk text */
 export function serializeDocument(doc: ParsedDocument): string {
   return doc.eol === '\n' ? doc.body : doc.body.split('\n').join(doc.eol)
 }
 
-/** 文档行数（空文档也至少有 1 行） */
+/** Number of document lines (an empty document still has at least 1 line) */
 export function lineCountOf(content: string): number {
   return content.split('\n').length
 }
 
-/** 模型给的新文本：先统一成 \n，最终由 serializeDocument 换成原文 EOL */
+/** New text from the model: normalized to \n first, then converted to the original EOL by serializeDocument */
 function normalizeText(text: string): string {
   return text.split('\r\n').join('\n')
 }
@@ -110,31 +116,31 @@ function assertLineRange(doc: ParsedDocument, startLine: number, endLine: number
   }
 }
 
-/** expectedOld 比较时容忍模型多带的一个结尾换行（其余必须逐字一致） */
+/** expectedOld comparison tolerates one extra trailing newline from the model (everything else must match exactly) */
 function normalizeExpected(text: string): string {
   const normalized = normalizeText(text)
   return normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized
 }
 
-/** 错误详情里展示的当前内容（避免把整篇文档塞进错误信息） */
+/** Current content shown in error details (keeps the whole document out of the error message) */
 function clip(text: string, max = 500): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 // ============================================================================
-// 单步编辑
+// Single-step edits
 // ============================================================================
 
 export interface ReplaceLinesOptions {
   startLine: number
   endLine: number
-  /** 新内容（可多行）；空串表示删除这些行 */
+  /** New content (may be multiple lines); an empty string means delete these lines */
   newText: string
-  /** 可选：这段行当前必须是什么（逐字校验），防止行号漂移改错位置 */
+  /** Optional: what these lines must currently be (exact check), preventing an edit at a drifted line number */
   expectedOld?: string
 }
 
-/** 替换/删除整行区间（1 起、闭区间） */
+/** Replace/delete a whole line range (1-based, inclusive) */
 export function replaceLines(content: string, options: ReplaceLinesOptions): string {
   const doc = parseDocument(content)
   const { startLine, endLine, newText, expectedOld } = options
@@ -161,16 +167,16 @@ export function replaceLines(content: string, options: ReplaceLinesOptions): str
 
 export interface ReplaceRangeOptions {
   line: number
-  /** 1 起；省略表示 1 */
+  /** 1-based; defaults to 1 */
   startColumn?: number
-  /** 1 起、闭区间；省略表示行尾 */
+  /** 1-based, inclusive; defaults to end of line */
   endColumn?: number
   newText: string
-  /** 可选：被替换的那段字符当前必须是什么 */
+  /** Optional: what the replaced characters must currently be */
   expectedOld?: string
 }
 
-/** 替换一行内部的字符区间（列号按 Unicode 码点，闭区间） */
+/** Replace a character range within one line (columns count Unicode code points, inclusive) */
 export function replaceRange(content: string, options: ReplaceRangeOptions): string {
   const doc = parseDocument(content)
   const { line, newText, expectedOld } = options
@@ -220,14 +226,14 @@ export type InsertPosition = 'at' | 'before' | 'after' | 'start' | 'end'
 
 export interface InsertOptions {
   position?: InsertPosition
-  /** position=at/before/after 时必填（1 起） */
+  /** Required when position=at/before/after (1-based) */
   line?: number
-  /** position=at 时的插入列（1 起，插在该字符之前；省略=行首，行尾=length+1） */
+  /** Insert column for position=at (1-based, inserted before that character; defaults to line start, end of line = length+1) */
   column?: number
   newText: string
 }
 
-/** 在行内、某行前后或文档首尾插入文本 */
+/** Insert text inside a line, before/after a line, or at the start/end of the document */
 export function insertText(content: string, options: InsertOptions): string {
   const doc = parseDocument(content)
   const normalized = normalizeText(options.newText)
@@ -243,7 +249,8 @@ export function insertText(content: string, options: InsertOptions): string {
     }
     assertLine(doc, options.line)
     const column = options.column ?? 1
-    // 空区间 [column, column-1] 即插入点；复用区间替换统一列校验与 EOL 处理
+    // An empty range [column, column-1] is the insertion point; reuse range replacement so column
+    // validation and EOL handling are shared
     return replaceRange(content, {
       line: options.line,
       startColumn: column,
@@ -286,7 +293,7 @@ export function insertText(content: string, options: InsertOptions): string {
   return serializeDocument(doc)
 }
 
-/** 删除整行区间 */
+/** Delete a whole line range */
 export function deleteLines(
   content: string,
   options: Omit<ReplaceLinesOptions, 'newText'>
@@ -294,7 +301,7 @@ export function deleteLines(
   return replaceLines(content, { ...options, newText: '' })
 }
 
-/** 删除行内字符区间 */
+/** Delete a character range inside a line */
 export function deleteRange(
   content: string,
   options: Omit<ReplaceRangeOptions, 'newText'>
@@ -303,14 +310,14 @@ export function deleteRange(
 }
 
 export interface ReplaceTextOptions {
-  /** 要替换的原文（字面量；regex=true 时按正则） */
+  /** Source text to replace (literal; regex when regex=true) */
   oldText: string
   newText: string
-  /** 替换全部；与 occurrence 二选一 */
+  /** Replace all occurrences; mutually exclusive with occurrence */
   all?: boolean
-  /** 只替换第几处（1 起） */
+  /** Replace only the Nth occurrence (1-based) */
   occurrence?: number
-  /** 限定在第 startLine–endLine 行内查找（可选） */
+  /** Limit the search to lines startLine–endLine (optional) */
   startLine?: number
   endLine?: number
   regex?: boolean
@@ -322,7 +329,7 @@ interface TextMatch {
   end: number
 }
 
-/** 收集 scope 内的匹配（字面量或正则，忽略大小写时统一走 RegExp） */
+/** Collect matches within the scope (literal or regex; case-insensitive runs through RegExp) */
 function collectMatches(scope: string, options: ReplaceTextOptions): TextMatch[] {
   const matches: TextMatch[] = []
   const regex =
@@ -352,7 +359,7 @@ function collectMatches(scope: string, options: ReplaceTextOptions): TextMatch[]
   }
   let match: RegExpExecArray | null
   while ((match = re.exec(scope)) !== null) {
-    // 零宽匹配不产生可替换内容，跳过并推进，避免死循环
+    // Zero-width matches produce nothing replaceable: skip and advance to avoid an infinite loop
     if (match[0].length === 0) {
       re.lastIndex += 1
       continue
@@ -364,10 +371,11 @@ function collectMatches(scope: string, options: ReplaceTextOptions): TextMatch[]
 }
 
 /**
- * 替换文本片段。
+ * Replace a text fragment.
  *
- * 未指定 all / occurrence 时**必须唯一命中**：多处命中会报 ambiguous-match，
- * 让模型明确指定位置，而不是悄悄改掉第一处。
+ * When neither all nor occurrence is given it **must match exactly once**: multiple matches raise
+ * ambiguous-match, forcing the model to state the location explicitly instead of silently changing
+ * the first one.
  */
 export function replaceText(content: string, options: ReplaceTextOptions): string {
   if (options.oldText === '') throw new DocEditError('empty-query')
@@ -421,7 +429,7 @@ export function replaceText(content: string, options: ReplaceTextOptions): strin
 }
 
 // ============================================================================
-// 批量编辑
+// Batch edits
 // ============================================================================
 
 export type DocEdit =
@@ -433,7 +441,8 @@ export type DocEdit =
   | ({ type: 'delete_range' } & Omit<ReplaceRangeOptions, 'newText'>)
 
 function applySingleEdit(content: string, edit: DocEdit): string {
-  // patch 的 JSON 里 newText 可能被模型漏掉：删除必须显式传空串，不能靠「没传」静默删
+  // newText in a patch's JSON may be omitted by the model: a deletion must pass an explicit empty
+  // string rather than relying on "not passed" silently deleting
   if (
     edit.type === 'replace_lines' ||
     edit.type === 'replace_text' ||
@@ -465,9 +474,10 @@ function applySingleEdit(content: string, edit: DocEdit): string {
 }
 
 /**
- * 按顺序应用一批编辑（行号指**上一处编辑之后**的文档状态）。
- * 任意一处失败立即抛出，调用方据 editIndex 指出位置；由于全程只在内存中演算，
- * 调用方不落盘就不会产生半截修改。
+ * Apply a batch of edits in order (line numbers refer to the document state **after the previous
+ * edit**). Any failure throws immediately and the caller points at the location via editIndex;
+ * since everything is computed in memory, as long as the caller writes nothing there is no
+ * half-applied change.
  */
 export function applyEdits(content: string, edits: DocEdit[]): string {
   if (edits.length === 0) throw new DocEditError('patch-empty')
@@ -484,7 +494,7 @@ export function applyEdits(content: string, edits: DocEdit[]): string {
 }
 
 // ============================================================================
-// 查找 / 差异摘要
+// Search / diff summary
 // ============================================================================
 
 export interface FindOptions {
@@ -522,7 +532,7 @@ function lineStartsOf(body: string): number[] {
   return starts
 }
 
-/** 字符偏移 → 1 起的行/列（列按码点） */
+/** Character offset -> 1-based line/column (column by code point) */
 function positionAt(
   body: string,
   starts: number[],
@@ -562,7 +572,7 @@ function buildSnippet(
   return out.join('\n')
 }
 
-/** 在正文中按字面量/正则查找，返回精确到行、列（码点）的命中位置与上下文 */
+/** Search the body by literal/regex, returning hit positions precise to line and column (code point) plus context */
 export function findInContent(content: string, options: FindOptions): FindResult {
   if (options.query === '') throw new DocEditError('empty-query')
   const parsed = parseDocument(content)
@@ -601,26 +611,28 @@ export function findInContent(content: string, options: FindOptions): FindResult
 }
 
 export interface ChangeSummary {
-  /** 旧内容中第一处差异的行（1 起） */
+  /** Line of the first difference in the old content (1-based) */
   startLine: number
-  /** 旧内容中最后一处差异的行；纯插入时为 startLine - 1 */
+  /** Line of the last difference in the old content; for a pure insertion it is startLine - 1 */
   endLine: number
   removed: number
   added: number
-  /** 新内容中差异起始行（1 起） */
+  /** Line where the difference starts in the new content (1-based) */
   newStartLine: number
-  /** 新内容中差异结束行；纯删除时为 newStartLine - 1 */
+  /** Line where the difference ends in the new content; for a pure deletion it is newStartLine - 1 */
   newEndLine: number
 }
 
 /**
- * 轻量差异摘要：只按「公共前缀 / 公共后缀」取中间变化段。
- * 一次编辑通常只有一个连续改动段，足够生成「第几行起 -n/+m」和变更预览；
- * 多段 patch 由调用方按每步摘要分别展示。
+ * Lightweight diff summary: only takes the changed middle segment using the "common prefix /
+ * common suffix" approach. A single edit usually has one contiguous changed segment, which is
+ * enough to produce "from line N, -n/+m" and a change preview; multi-step patches are shown by the
+ * caller one summary per step.
  */
 export function summarizeChange(before: string, after: string): ChangeSummary | null {
   if (before === after) return null
-  // 空文档按 0 行参与差异计算：否则「从无到有」会被算成 -1/+1
+  // Treat an empty document as 0 lines in the diff: otherwise "from nothing to something" would be
+  // counted as -1/+1
   const beforeLines = before === '' ? [] : parseDocument(before).lines
   const afterLines = after === '' ? [] : parseDocument(after).lines
 
@@ -649,7 +661,7 @@ export function summarizeChange(before: string, after: string): ChangeSummary | 
   }
 }
 
-/** 变更预览（旧/新各最多 maxLines 行、maxChars 字符） */
+/** Change preview (old/new each at most maxLines lines and maxChars characters) */
 export function previewChange(
   before: string,
   after: string,

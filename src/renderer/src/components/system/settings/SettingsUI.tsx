@@ -1,15 +1,15 @@
 import React from 'react'
 import { theme } from 'antd'
 
-/* 设置页统一视觉：页头 + 分区卡片（标题栏 + 行式条目，发丝线分隔），
-   参考 Obsidian / Linear 的设置布局。 */
+/* Unified settings page visuals: page header + section cards (title bar + row items
+   separated by hairlines). */
 
 const ROW_DIVIDER_STYLE = `
 .sui-rows > .sui-row + .sui-row { border-top: 1px solid var(--sui-hairline); }
 .sui-rows > .sui-row:last-child { border-bottom: none; }
 `
 
-/** 页头：标题 + 描述（右侧可放操作按钮） */
+/** Page header: title + description (action buttons can go on the right) */
 export const SettingsPageHeader: React.FC<{
   title: string
   description?: string
@@ -58,17 +58,17 @@ export const SettingsPageHeader: React.FC<{
   )
 }
 
-/** 分区卡片：可选标题栏（图标 + 标题 + 描述 + 右侧操作） */
+/** Section card: optional title bar (icon + title + description + right-side actions) */
 export const SettingsSection: React.FC<{
   title?: string
   description?: string
   icon?: React.ReactNode
   extra?: React.ReactNode
-  /** 无标题栏且直接放内容的场景，body 是否需要内边距 */
+  /** When there is no title bar and content is placed directly, whether the body needs padding */
   bodyPadding?: number
-  /** 外层卡片样式（技能页用它把列表撑满剩余高度） */
+  /** Outer card style (the skills page uses it to make the list fill the remaining height) */
   style?: React.CSSProperties
-  /** 内容区样式（同上：`flex:1 + overflow` 让列表自己滚动） */
+  /** Content area style (same as above: `flex:1 + overflow` lets the list scroll on its own) */
   bodyStyle?: React.CSSProperties
   bodyClassName?: string
   children: React.ReactNode
@@ -144,12 +144,12 @@ export const SettingsSection: React.FC<{
   )
 }
 
-/** 行式条目：左侧标题 + 说明，右侧控件 */
+/** Row item: title + description on the left, control on the right */
 export const SettingRow: React.FC<{
   title: string
   description?: string
   control: React.ReactNode
-  /** 非行式内容（如输入区/图表）直接放入 */
+  /** Non-row content (such as an input area / chart) is placed directly */
   children?: React.ReactNode
 }> = ({ title, description, control, children }) => {
   const { token } = theme.useToken()
@@ -186,7 +186,7 @@ export const SettingRow: React.FC<{
   )
 }
 
-/** 分区内的一块说明文字（独立段落，带内边距） */
+/** A block of explanatory text inside a section (standalone paragraph with padding) */
 export const SettingBlock: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token } = theme.useToken()
   return (

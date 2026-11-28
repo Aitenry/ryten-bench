@@ -1,45 +1,35 @@
+# Dependencies and build output
 node_modules
 dist
 dist-*/
 out
-.DS_Store
-.eslintcache
-*.log*
-/.vscode/
-/.idea/
 /build/*
 !/build/entitlements.mac.plist
-/.trae/
-/tsconfig.node.tsbuildinfo
-
-# 本地设计文档与论文材料（不入库）
-/docs/*
-!/docs/audit-2026-11/
-/paper-extracted.txt
-/paper.pdf
-
-# 临时 Chrome 调试 profile（不入库）
-/.tmp-cdp-profile/
-# 本地工装（真机验证/探针脚本）一律不入库
-/test/
-/docker/
-/.dsh-vision-toolkit/*
-
-# 布局工装每次运行生成的测量结果（跑 test/measure-file-editor-statusbar.mjs 时会重建）
-test/status-bar-harness/last-result.json
-/tsconfig.web.tsbuildinfo
+/resources/sandbox/
 /resources/plugins/
 
-# 安装目录下的默认存储根（记忆 / 插件 / 技能；开发态会落在仓库根）
-/data/
+# Caches and logs
+*.log*
+.eslintcache
+*.tsbuildinfo
+/.pnpm-store/
 
-# 沙箱自带资产 `/resources/sandbox/`：**整目录都是构建产物**（由 native/build-sandbox.mjs 产出，
-# `pnpm build:sandbox` 会在 dev 与各打包流程前自动跑）。源码都在会入库的位置：
-# native/win32-sandbox-runner/win32-sandbox-runner.cjs（手写 Windows runner）、
-# native/landlock-launcher/ryten-landlock-launcher.c（自研 Linux 启动器）。删掉这个目录不会丢源码。
-/resources/sandbox/
-/.tooling/*
-/.dsh-design/*
-/.pnpm-store/*
-/.tmp/*
+# Editor and OS files
+.DS_Store
+/.vscode/
+/.idea/
+/.trae/
+
+# Local-only content (docs, tooling, storage)
+/docs/
+/paper-extracted.txt
+/paper.pdf
+/.tmp/
+/.tmp-cdp-profile/
+/.tooling/
+/.dsh-design/
+/.dsh-vision-toolkit/
 /mockup/
+/data/
+/test/
+/docker/

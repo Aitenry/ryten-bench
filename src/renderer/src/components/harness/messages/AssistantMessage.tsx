@@ -48,7 +48,8 @@ import type {
 } from '../../../../../shared/harness/types'
 import type { Message } from '../../../types/harness/types'
 
-/** 定制化卡片工具集：进行中/完成态共用同款卡片外形（光泽只在进行中扫过，完成后静止） */
+/** Custom card tool set: in-progress and completed states share the same card shape
+ * (the gloss only sweeps while running, then rests) */
 const CARD_TOOLS = new Set([
   'read_file',
   'read_image',
@@ -62,24 +63,29 @@ const CARD_TOOLS = new Set([
 ])
 
 /**
- * 折叠头统一垂直居中。
+ * Center every collapse header vertically.
  *
- * antd 默认是 `.ant-collapse-header { align-items: flex-start }`：头部只有一行小字号标签时，
- * 文字会贴上沿、与左侧箭头不在同一条中线上（用户反馈「思考过程这几个字并没有居中」）。
- * 任务段此前靠 `.task-segment-collapse` 的 CSS 单独修过（见 Index.tsx 的 style），其余
- * 折叠头（思考过程 / 子代理 / 注入记忆 / 通用工具）没有，于是同一屏里两种对齐并存。
+ * antd defaults to `.ant-collapse-header { align-items: flex-start }`: when the header holds a
+ * single line of small text, the text hugs the top edge and no longer shares a centerline with
+ * the arrow on the left (users reported that the thinking-process label was not centered). Task
+ * segments were previously patched separately through the `.task-segment-collapse` CSS (see the
+ * style in Index.tsx), while the other headers (thinking process / subagent / injected memory /
+ * generic tool) were not, so two kinds of alignment coexisted on the same screen.
  *
- * 这里用 antd 的语义 styles 传内联样式统一改：内联优先，不受 CSS 注入顺序与选择器权重影响，
- * 也不必再为每种折叠头补一条全局规则。
+ * Passing an inline style through antd's semantic styles fixes this uniformly: inline wins over
+ * CSS injection order and selector specificity, and no global rule has to be added per header
+ * type.
  */
 const COLLAPSE_HEADER_CENTERED = { header: { alignItems: 'center' } } as const
 
 /**
- * 任务段内容展开后的固定高度上限。
+ * Fixed height cap for a task segment's expanded body.
  *
- * 比思考框的 256 高一些：段里装的是工具卡 + 思考 + 正文，单块更高（工具卡本身 30+px），
- * 320 大约能一屏看到 6~8 步，够判断「这一步在干什么」而不至于把整段铺满屏幕。
- * 前期探索段不走这个框（用户 2026-09-25：只有任务段折叠），所以这里只服务任务段。
+ * A little taller than the thinking box's 256: a segment holds tool cards + thinking + text, and
+ * individual blocks are taller (a tool card alone is 30+px), so 320 shows roughly 6~8 steps at
+ * once — enough to tell what a step is doing without covering the whole screen. The early
+ * exploration segment does not use this box (user, 2026-09-25: only task segments collapse), so
+ * this serves task segments only.
  */
 const SEGMENT_BODY_MAX_HEIGHT = 320
 
@@ -93,39 +99,44 @@ interface AssistantMessageProps {
   colorTextTertiary: string
   colorFillAlter: string
   colorBorderSecondary: string
-  /** 当前话题 id（操作栏的评价索引用） */
+  /** Current topic id (used by the action bar's rating index) */
   topicId: number | null
-  /** 只读（归档会话）：操作栏只留复制 / 元信息，隐藏分支、存入记忆、删除 */
+  /** Read-only (archived conversation): the action bar keeps only copy / metadata and hides branch,
+   * save-to-memory and delete */
   readOnly?: boolean
-  /** 该轮提问的时间戳（操作栏算「用时」用） */
+  /** Timestamp of this turn's question (used by the action bar to compute elapsed time) */
   turnStartedAt?: number
-  /** 该条回复的真实用量（harness_dialogue_usage 行；无回传时为 undefined） */
+  /** Real usage of this reply (a harness_dialogue_usage row; undefined when not reported) */
   usage?: HarnessDialogueUsageRow
-  /** 分支：把到这条为止的消息复制到新话题并切过去 */
+  /** Branch: copy the messages up to this one into a new topic and switch to it */
   onBranch: (upToIndex: number) => Promise<void>
   onCopy: (text: string, id: string) => void
   onDelete: (index: number) => void
   /**
-   * 待审查改动（文件路径 → 待审查条数），用来在**任务段头**上报「这一段改了哪几个文件」。
+   * Pending review changes (file path → pending count), used on the **task segment header** to
+   * report which files this segment changed.
    *
-   * 背景（用户 2026-09-23）：「明明编辑了文件，聊天里找不到编辑卡片」——段一折起，
-   * 段内的 write/edit 卡片连挂载都被卸载了（destroyOnHidden），段头只剩任务名 + 步数，
-   * 于是「改了什么」在聊天里彻底失联。段头这个徽标把改动重新提到折叠之外。
+   * Background (user, 2026-09-23): "the file was edited but the chat shows no edit card" — once a
+   * segment folds, the write/edit cards inside it are unmounted too (destroyOnHidden), and the
+   * header keeps only the task name + step count, so "what changed" is lost from the chat. This
+   * header badge lifts the changes back outside the fold.
    */
   pendingByPath?: Map<string, number>
-  /** 点段头的改动徽标：在右侧面板打开该文件的差异视图 */
+  /** Segment-header change badge click: open that file's diff view in the right panel */
   onOpenChangedFile?: (path: string) => void
 }
 
 /**
- * 流式静默指示行（「正在生成…」）。
+ * Streaming silence indicator row ("generating…").
  *
- * 为什么单独抽成 memo 子组件：这行的判定依赖「距最后一次 chunk 有多久」，需要一个
- * 500ms 时钟。时钟状态若放在 AssistantMessage 里，每秒两次 tick 会把整条消息（长任务下
- * 可达上百个块、几十万字符）整棵重渲染——2026-09-18 实测：一个 40 轮目标任务的会话里，
- * 渲染进程 workingSet 从 534MB 一路涨到 5991MB，且**流内静默期**（没有任何 chunk 到达）
- * 依然以约 40MB/10s 稳定增长，正是这个时钟在反复重建巨型子树。时钟挪进来之后，
- * tick 只影响这一行；父组件只在内容真的变化（合批刷入）时才重渲染。
+ * Why it is a separate memo component: the row's visibility depends on how long ago the last
+ * chunk arrived, which needs a 500ms clock. If the clock state lived in AssistantMessage, its two
+ * ticks per second would re-render the whole message (hundreds of blocks and hundreds of
+ * thousands of characters for long tasks) — measured on 2026-09-18: in a session with a 40-round
+ * goal task, the renderer workingSet climbed from 534MB to 5991MB, and even during **in-stream
+ * silence** (no chunk arriving at all) it kept growing at about 40MB/10s, precisely this clock
+ * rebuilding a huge subtree. With the clock moved in here, a tick only affects this row, and the
+ * parent re-renders only when content really changes (batched flush).
  */
 const SilenceGeneratingHint = React.memo(function SilenceGeneratingHint({
   loading,
@@ -137,14 +148,15 @@ const SilenceGeneratingHint = React.memo(function SilenceGeneratingHint({
   loading: boolean
   hasStartedContent: boolean
   /**
-   * 取「最后一次 chunk 时间」的稳定 getter。
+   * Stable getter for "time of the last chunk".
    *
-   * 刻意不传 `lastChunkAt` 数值：这个时间每批刷入都变，传值会让块级渲染缓存（见 renderBlocks）
-   * 每批都失效。传稳定的 getter 后，本组件在自己的 500ms tick 里去读最新值。
+   * Deliberately not passed as a `lastChunkAt` value: that time changes on every batch flush, and
+   * passing the value would invalidate the block render cache (see renderBlocks) on every batch.
+   * With a stable getter, this component reads the latest value in its own 500ms tick.
    */
   getLastChunkAt: () => number
   color: string
-  /** 图标尺寸与字号：主消息用 14，子代理嵌套块用 12（与旧实现一致） */
+  /** Icon size and font size: 14 for the main message, 12 for nested subagent blocks */
   size?: number
 }): React.ReactNode {
   const { t } = useTranslation()
@@ -200,33 +212,39 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
     const { t, i18n } = useTranslation()
     const { token } = theme.useToken()
     const isCopied = copiedId === message.id
-    /** 打开后台子代理会话视图的桥（点「已派发」卡片直达；不在 Harness 页内时为 null） */
+    /** Bridge to open the background subagent conversation view (the "dispatched" card jumps
+     * straight there; null outside the Harness page) */
     const subagentViewBridge = useSubagentViewBridge()
 
     /**
-     * 任务分段折叠状态（key = 段 key，值 = 是否折起）。
+     * Task segment fold state (key = segment key, value = whether folded).
      *
-     * 只记「用户手动改过」的段：默认态由状态推导——已完成且不是最后一段的任务默认折起，
-     * 进行中的与最后一段默认展开（最后一段通常承载最终答复，绝不能默认折掉）。
+     * Only segments the user changed manually are recorded: the default state is derived — a
+     * completed task that is not the last segment folds by default, while the running segment and
+     * the last one start expanded (the last segment usually carries the final answer and must
+     * never fold by default).
      */
     const [foldOverride, setFoldOverride] = useState<Record<string, boolean>>({})
-    /** 展开了「清单」的任务段（点标签右侧的列表图标切换；与折叠状态相互独立） */
+    /** Task segments whose "list" is expanded (toggled by the list icon right of the label;
+     * independent of the fold state) */
     const [listOpenKeys, setListOpenKeys] = useState<string[]>([])
 
-    // 块级渲染缓存：key 变化即整表重建（见 renderBlocks 里的说明）
+    // Block-level render cache: the table is rebuilt whenever the key changes (see renderBlocks)
     const blockCacheRef = useRef<{
       key: string
       map: WeakMap<MessageBlock, { sig: string; node: React.ReactNode }>
     }>({ key: '', map: new WeakMap() })
 
-    // 「最后一次 chunk 时间」的稳定读取器：值每批都变，但引用必须稳定，
-    // 否则块级缓存每批失效（静默提示改为自己定时读这个 getter）
+    // Stable reader for "time of the last chunk": the value changes every batch but the reference
+    // must stay stable, otherwise the block cache misses on every batch (the silence hint reads
+    // this getter on its own timer)
     const lastChunkAtRef = useRef(message.lastChunkAt ?? message.timestamp)
     lastChunkAtRef.current = message.lastChunkAt ?? message.timestamp
     const getLastChunkAt = useCallback((): number => lastChunkAtRef.current, [])
 
-    // 复制文本按需生成：此前是 useMemo([message])，流式期间每批刷入都要把全部块的正文拼一遍
-    // （实测 160k 字符 ≈ 数毫秒 + 等量垃圾），而它只在用户点「复制」时用得到。
+    // Copy text is built on demand: it used to be useMemo([message]), which concatenated the body
+    // of every block on each flush while streaming (measured: 160k characters ≈ a few ms plus as
+    // much garbage), yet it is only needed when the user clicks copy.
     const getCopyText = useCallback((): string => {
       const parts: string[] = []
       const collect = (blocks: MessageBlock[] | undefined): void => {
@@ -243,19 +261,24 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       return joined || message.content
     }, [message])
 
-    // 滚动容器与流式贴底：**全部交给 FoldBody 自管**（固定高度 + 可打断的贴底跟随）。
+    // Scroll containers and streaming bottom-follow: **handled entirely by FoldBody** (fixed
+    // height + interruptible bottom-follow).
     //
-    // 这里原先有一个无差别的 effect：流式中每来一个 chunk 就把所有折叠容器
-    // `scrollTop = scrollHeight`——不判断用户是否正在往上读，想回看前面几行会被立刻拽回底部。
-    // 用户明确要求「可以打断、回到底部再继续」，所以每个内容框自己按「是否在底部」决定跟不跟；
-    // 这个集中式的强拽 effect 连同 scrollRefs 一并删掉了。
-    /** 流式贴底跟随的触发信号（每个 chunk 变一次） */
+    // There used to be an indiscriminate effect here: every chunk while streaming set
+    // `scrollTop = scrollHeight` on all collapse containers — without checking whether the user
+    // was reading upwards, so scrolling back a few lines was yanked back to the bottom at once.
+    // Users explicitly asked for "interruptible, follow again once back at the bottom", so each
+    // content box decides on its own whether to follow; that centralized forced-scroll effect and
+    // its scrollRefs were removed together.
+    /** Trigger signal for streaming bottom-follow (changes once per chunk) */
     const followSignal = message.lastChunkAt
     const streamingFollow = Boolean(message.loading)
 
-    // 仅有「注入记忆」/「压缩中」块时仍渲染（卡片可见），其余空消息走 LoadingMessage；
-    // 「正在重试」块同理（展示重试进度行，避免被 LoadingMessage 整卡替换）。
-    // 这些标志此前是 4 次独立的全表扫描（每次刷入都要跑），并成一次遍历并记忆化。
+    // Still render when only "injected memory" / "compacting" blocks exist (the card stays
+    // visible); other empty messages fall through to LoadingMessage. Same for the "retrying" block
+    // (show the retry progress row rather than letting LoadingMessage replace the whole card).
+    // These flags used to be 4 separate full-table scans (run on every flush); they are now a
+    // single pass, memoized.
     const blockFlags = useMemo(() => {
       let memory = false
       let compacting = false
@@ -284,9 +307,12 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
     const hasVisibleToolBlock = blockFlags.visibleTool
 
     /**
-     * 合并相邻的 reasoning 块：模型会把思考过程拆成 token 级事件，不合并就是满屏「思考过程」。
-     * 必须「复制后合并」（不可原地改写共享状态对象，否则文本会随渲染轮次自复制增长）。
-     * 放在顶层记忆化：块列表身份不变时（例如只改了 loading / 折叠态）不重跑这趟合并。
+     * Merge adjacent reasoning blocks: the model may split its thinking into token-level events,
+     * and without merging the screen fills with "thinking process".
+     * Must "copy then merge" (never rewrite the shared state objects in place, otherwise the text
+     * duplicates itself on every render pass).
+     * Memoized at the top level: when the block list identity is unchanged (e.g. only loading /
+     * fold state changed) the merge does not run again.
      */
     const mergedBlocks = useMemo(() => {
       const out: MessageBlock[] = []
@@ -306,18 +332,21 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       return out
     }, [message.blocks])
 
-    // 流式静默指示：推理型模型生成大工具参数期间，流内可能长时间无任何事件（连工具名
-    // 都不发）——此时已输出的内容之后显示「正在生成…」光泽行，诚实反馈「仍在生成」，
-    // 工具调用一旦到达即切换为真实工具卡。
-    // 时钟在 SilenceGeneratingHint 内部（500ms tick 只重渲染那一行，不碰这棵子树）。
-    // 子代理折叠手动展开记录（key = 会话 causeId 等稳定标识）：进行中强制展开、
-    // 完成后默认收起，仍可手动点开查看输出。defaultActiveKey 只在首次挂载生效，
-    // 状态翻转（running→completed）后不会自动收起，故改为受控 activeKey。
+    // Streaming silence hint: while a reasoning model generates large tool arguments the stream may
+    // carry no events for a long time (not even a tool name) — the already-emitted content then
+    // gets a "generating…" gloss line after it, honestly reporting "still generating", and
+    // switches to a real tool card as soon as the tool call arrives.
+    // The clock lives inside SilenceGeneratingHint (the 500ms tick only re-renders that row).
+    // Manual expand record for subagent folds (key = stable identity such as the conversation
+    // causeId): forced expanded while running, collapsed by default once completed but still
+    // clickable to view the output. defaultActiveKey only applies on first mount, so a state flip
+    // (running→completed) would not collapse it automatically — hence a controlled activeKey.
     const [saOpenOverride, setSaOpenOverride] = useState<Record<string, boolean>>({})
     const hasStartedContent = Boolean(
       message.content || message.reasoning_content || message.blocks.length > 0
     )
-    // 静默行只在「流式进行中且无其它状态行可看」时挂载；是否真的静默交给子组件按时钟判定
+    // The silence row mounts only while streaming with no other status row to show; whether it is
+    // really silent is decided by the child on its clock
     const showSilenceGenerating =
       Boolean(message.loading) &&
       hasStartedContent &&
@@ -326,7 +355,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       !hasCompactingBlock &&
       !hasRetryingBlock
 
-    /** 最后一个子块是否为进行中工具卡（是则不再显示静默指示，工具卡本身已有状态） */
+    /** Whether the last child block is an in-progress tool card (then no silence hint is shown, the
+     * card already has a status) */
     const lastChildIsActiveTool = (children: MessageBlock[]): boolean => {
       const last = children[children.length - 1]
       if (!last || last.type !== 'tool' || !last.tool) return false
@@ -350,17 +380,21 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
     const collapseBg = isDarkMode ? 'rgba(255,255,255,0.04)' : '#f9fafb'
 
     /**
-     * 状态点 + 计数胶囊（任务段头 / 同名工具组头共用一处几何）。
+     * Status dot + count pill (one geometry shared by task segment headers and same-tool group
+     * headers).
      *
-     * 用户 2026-09-25：「前面那个点应该放在数字里面，并且里面和数字居中，水平和垂直」——
-     * 点是**胶囊内部的子元素**，不再是胶囊左边独立的圆点。
+     * User, 2026-09-25: "the dot in front should sit inside the number, and the inside and the
+     * number should be centered, horizontally and vertically" — the dot is now a **child element
+     * of the pill**, no longer a separate dot to the left of it.
      *
-     * 居中靠 flex：胶囊自己 `inline-flex` + `align-items/justify-content: center`，
-     * 于是「点 + 数字」这一组在胶囊里水平、垂直都居中；数字用等宽字形 + 胶囊给 minWidth，
-     * 位数变化时各行数字仍对齐（等宽只用于数字）。
+     * Centering relies on flex: the pill itself is `inline-flex` with
+     * `align-items/justify-content: center`, so the "dot + number" pair is centered both ways
+     * inside the pill; the number uses tabular figures and the pill sets a minWidth, so numbers
+     * stay aligned across rows when the digit count changes (tabular figures only for numbers).
      *
-     * 两处共用同一个函数：这个胶囊的几何（18px 高、9px 圆角、1px 描边、6px 点、4px 间距）
-     * 写两遍必然漂移——这个项目里「同一约束写两处」踩过不止一次。
+     * Both call sites share this single function: the pill's geometry (18px tall, 9px radius, 1px
+     * stroke, 6px dot, 4px gap) written twice would inevitably drift — putting the same constraint
+     * in two places has bitten this project more than once.
      */
     const countPill = (count: number, dotColor: string): React.ReactNode => (
       <span
@@ -392,15 +426,19 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             background: dotColor
           }}
         />
-        {/* lineHeight:1：不让行高把胶囊撑高，垂直居中交给 flex */}
+        {/* lineHeight:1 so the line height cannot stretch the pill; vertical centering is flex's
+            job */}
         <span style={{ lineHeight: 1 }}>{count}</span>
       </span>
     )
 
-    /** 内置工具卡片（非折叠）：进行中 / 完成态共用同款外形，具体渲染在 ToolResultCard.tsx。
+    /** Built-in tool cards (not collapsible): in-progress / completed share the same shape; the
+     *  actual rendering lives in ToolResultCard.tsx.
      *
-     *  2026-09-19 起这些工具的结果不再下发/落库——卡片上的路径/计数/退出码由主进程投影
-     *  （service/tool-presentation.ts）给出，点卡片才去右侧面板看真实文件或结果详情。 */
+     *  Since 2026-09-19 these tools' results are no longer streamed or persisted — the path /
+     *  count / exit code on the card is projected by the main process
+     *  (service/tool-presentation.ts), and clicking the card opens the real file or result details
+     *  in the right panel. */
     const renderToolCard = (
       tool: ToolCall,
       key: string | number,
@@ -426,7 +464,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           />
         )
       }
-      // 无卡片数据且无图像（异常形态）：返回 null，交由通用折叠兜底展示
+      // No card data and no images (abnormal shape): return null and let the generic collapse
+      // handle it
       const images = tool.images ?? []
       if (!tool.card && images.length === 0) return null
       return (
@@ -439,7 +478,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       )
     }
 
-    /** present：交付文件卡片（列表来自工具入参，随对话落库） */
+    /** present: delivered-files card (the list comes from the tool input and is persisted with the
+     * conversation) */
     const renderPresentCard = (
       tool: ToolCall,
       key: string | number,
@@ -456,10 +496,12 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       return <PresentedFilesCard key={key} tool={tool} isNested={isNested} style={style} />
     }
 
-    // ── Mnemon 记忆工具定制卡片 ──────────────────────────────────────────
-    // 读取类（召回/查看记忆）：mnemon_recall / mnemon_document_search / mnemon_related /
+    // ── Mnemon memory tool custom cards ──────────────────────────────────
+    // Read side (recall / inspect memory): mnemon_recall / mnemon_document_search / mnemon_related
+    // /
     //   mnemon_memory_bodies / mnemon_status
-    // 写入类（沉淀/维护记忆）：mnemon_runtime_memory / mnemon_remember / mnemon_document_manage /
+    // Write side (persist / maintain memory): mnemon_runtime_memory / mnemon_remember /
+    // mnemon_document_manage /
     //   mnemon_forget / mnemon_link / mnemon_memory_body_*
     const MEMORY_READ_TOOLS = [
       'mnemon_recall',
@@ -478,7 +520,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       'mnemon_memory_body_update',
       'mnemon_memory_body_merge'
     ]
-    /** 工具中文标签（卡片标题）：只存词条键，求值处用组件内的 t */
+    /** Localized tool labels (card titles): only the message keys are stored, resolved with the
+     * component's t */
     const MEMORY_TOOL_TITLES = {
       mnemon_status: 'harness.assistantMessage.memoryStatus',
       mnemon_memory_bodies: 'harness.assistantMessage.memorySpaces',
@@ -487,11 +530,12 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       mnemon_related: 'harness.assistantMessage.memoryRelated'
     } as const
 
-    /** 截断长文本（记忆条目/摘要展示用） */
+    /** Truncate long text (for memory entries / summaries) */
     const clampText = (text: string, max = 300): string =>
       text.length > max ? `${text.slice(0, max)}…` : text
 
-    /** 渲染 mnemon_* 记忆工具为定制卡片：每个工具一类独特内容，不展示存储路径 */
+    /** Render an mnemon_* memory tool as a custom card: each tool has its own kind of content and
+     * storage paths are never shown */
     const renderMemoryToolCard = (
       tool: ToolCall,
       key: string | number,
@@ -502,7 +546,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       const smallFont = isNested ? '11px' : '12px'
       const query = (tool.input as Record<string, unknown>)?.query as string | undefined
 
-      // 安全解析工具输出 JSON
+      // Parse the tool output JSON safely
       let parsed: Record<string, unknown> | null = null
       if (tool.output) {
         try {
@@ -514,7 +558,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       const asList = (v: unknown): Record<string, unknown>[] =>
         Array.isArray(v) ? (v as Record<string, unknown>[]) : []
 
-      /** 统一条目行：主文本 + 元信息行 + 可选徽标（发丝线分隔） */
+      /** Shared entry row: primary text + meta line + optional badge (separated by hairlines) */
       const renderEntry = (
         entryKey: number,
         primary: string,
@@ -553,7 +597,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         </div>
       )
 
-      /** 卡片外壳：图标 + 标题 + 头部统计 + 查询词 + 内容 */
+      /** Card shell: icon + title + header stats + query + content */
       const shell = (
         title: string,
         headExtra: React.ReactNode,
@@ -590,14 +634,14 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         </div>
       )
 
-      /** 空态行 */
+      /** Empty state row */
       const empty = (text: string): React.ReactNode => (
         <div style={{ color: colorTextTertiary, fontSize: smallFont }} className="py-0.5">
           {text}
         </div>
       )
 
-      // ── mnemon_status：记忆状态概览 ──
+      // ── mnemon_status: memory status overview ──
       if (tool.name === 'mnemon_status') {
         const activeSpaces = asList(parsed?.active_spaces)
         const rows: [string, string][] = [
@@ -673,7 +717,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      // ── mnemon_memory_bodies：记忆空间目录 ──
+      // ── mnemon_memory_bodies: memory space catalog ──
       if (tool.name === 'mnemon_memory_bodies') {
         const bodies = asList(parsed?.bodies)
         return shell(
@@ -754,7 +798,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      // ── mnemon_recall：召回的记忆条目 ──
+      // ── mnemon_recall: recalled memory entries ──
       if (tool.name === 'mnemon_recall') {
         const results = asList(parsed?.results)
         return shell(
@@ -806,7 +850,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      // ── mnemon_document_search：项目档案搜索 ──
+      // ── mnemon_document_search: project document search ──
       if (tool.name === 'mnemon_document_search') {
         const results = asList(parsed?.results)
         return shell(
@@ -880,7 +924,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      // ── mnemon_related：关联记忆遍历 ──
+      // ── mnemon_related: related memory traversal ──
       if (tool.name === 'mnemon_related') {
         const results = asList(parsed?.results)
         return shell(
@@ -915,9 +959,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      // ── 写入类：沉淀/维护结果 ──
+      // ── Write side: persist / maintain results ──
       const writeBody = (): React.ReactNode => {
-        // mnemon_remember：JSON 输出，展示沉淀目标
+        // mnemon_remember: JSON output, shows where the entry was persisted
         if (tool.name === 'mnemon_remember' && parsed) {
           const category =
             typeof parsed.category === 'string'
@@ -950,12 +994,13 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           </div>
         )
       }
-      // 注意：mnemon_remember 的返回值是**纯文本**（不是 JSON），所以不能因为没有
-      // 解析出 JSON 就显示「无法解析」——writeBody 内部已按「JSON 优先、否则原样展示」兜底
+      // Note: mnemon_remember returns **plain text** (not JSON), so a failed JSON parse must not
+      // show "cannot parse" — writeBody itself falls back to "JSON first, otherwise show as is"
       return shell(t('harness.assistantMessage.memoryWrite'), null, writeBody())
     }
 
-    /** mnemon 记忆工具进行中卡片：大脑图标 + 标题 + 状态后缀，光泽扫过（完成后仍是专属结果卡） */
+    /** In-progress card for an mnemon memory tool: brain icon + title + status suffix, with the
+     * gloss sweeping (a completed call still renders its dedicated result card) */
     const renderMemoryInProgressCard = (
       tool: ToolCall,
       key: string | number,
@@ -1003,7 +1048,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         if (message.content) {
           return (
             <div style={{ color: colorText }} className="mb-2">
-              {/* 无块消息（历史/异常路径）同样走窗口：整段正文可能是几十万字符 */}
+              {/* Block-less messages (history / abnormal path) also go through the window: the body
+                  may be hundreds of thousands of characters */}
               <StreamTextWindow
                 content={message.content}
                 renderMarkdown={(text) => <MarkdownLoad content={text} isDarkMode={isDarkMode} />}
@@ -1014,23 +1060,31 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         return null
       }
 
-      // 合并相邻的 reasoning 块：防止模型把思考过程拆成 token 级事件，导致满屏"思考过程"
-      // 必须「复制后合并」：此前直接改写原块对象（last.reasoning += ...），渲染期变异共享
-      // 状态对象，一旦出现相邻同型块，文本会随渲染轮次自复制增长且永不裁剪（渲染进程 OOM
-      // 隐患）；复制后合并对原状态零副作用。
-      // 合并结果在组件顶层记忆化（mergedBlocks，见 useMemo）：块列表身份不变时不必重跑。
+      // Merge adjacent reasoning blocks: prevent the model from splitting its thinking into
+      // token-level events, which would fill the screen with "thinking process".
+      // Must "copy then merge": this used to rewrite the original block object directly
+      // (last.reasoning += ...), mutating shared state during render; with adjacent blocks of the
+      // same kind the text duplicated itself on every render pass and was never trimmed (renderer
+      // OOM risk). Copy-then-merge has zero side effects on the original state.
+      // The merge result is memoized at the component top level (mergedBlocks, see useMemo): it
+      // does
+      // not rerun while the block list identity is unchanged.
 
-      // ── 块级渲染缓存（2026-09-18 仿真实测量出来的主成本）────────────────────
-      // 实测（.git/sim/render-sim.mjs，375 块 / 160k 字符的真实形态消息）：
-      //   内容增长的一次刷入 165ms，其中「内容不变、仅强制重渲染」也要 178ms——也就是说
-      //   成本几乎全在**每次刷入重建全部块的 vdom**，真正需要重算的增长块只占 ~10ms。
-      // React 在 element 引用完全相同时会整棵跳过该子树的重渲染；因此这里按「块对象身份」
-      // 缓存渲染结果：流式期间未变化的块对象身份不变（useHarnessHandlers 是不可变更新），
-      // 命中缓存的块不再参与重建。
+      // ── Block-level render cache (the main cost measured by the 2026-09-18 simulation) ─────
+      // Measured (.git/sim/render-sim.mjs, a realistic 375-block / 160k-character message):
+      //   one flush while content grows took 165ms, of which "content unchanged, forced
+      //   re-render only" still cost 178ms — the cost is almost entirely in **rebuilding the vdom
+      //   of every block on each flush**, while the grown blocks that truly need recomputation take
+      //   only ~10ms. React skips a subtree's re-render entirely when element references are all
+      //   identical, so render results are cached by **block object identity**: block objects that
+      //   do not change during streaming keep their identity (useHarnessHandlers updates
+      //   immutably), and cached blocks no longer take part in the rebuild.
       //
-      // 缓存键：块渲染体读到的可变父状态（主题、语言、loading、子代理折叠态）。这些一变就
-      // 整表失效重建。注意 lastChunkAt 刻意不进键——它每批都变，传值会让缓存永不命中，
-      // 静默提示改为传稳定的 getter（getLastChunkAt）。
+      // Cache key: mutable parent state that block bodies read (theme, language, loading,
+      // subagent fold state). Any change to these invalidates and rebuilds the whole table. Note
+      // lastChunkAt is deliberately NOT in the key — it changes every batch, and passing the value
+      // would make the cache never hit; the silence hint passes a stable getter instead
+      // (getLastChunkAt).
       const blockCacheKey = `${isDarkMode}|${i18n.language}|${message.loading ? 1 : 0}|${JSON.stringify(saOpenOverride)}|${topicId ?? 0}|${colorText}|${colorTextSecondary}|${colorTextTertiary}|${colorFillAlter}|${colorBorderSecondary}|${collapseBg}`
       const blockNodes = blockCacheRef.current
       if (blockNodes.key !== blockCacheKey) {
@@ -1038,10 +1092,13 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         blockNodes.map = new WeakMap()
       }
 
-      // 逐块的「跨块依赖」：思考块是否已完成 = 其**之后**是否出现过非推理块。
-      // 它随后续追加的新块而翻转，因此必须进缓存键（否则新块到达时旧的思考块会命中缓存、
-      // 停在「思考中」不切换成「思考完成」——仿真的「增量 vs 冷启动」比对就是靠这个抓出来的）。
-      // 一次反向遍历得出，替换原先逐块 slice+some 的 O(B²) 扫描。
+      // Per-block "cross-block dependency": whether a thinking block is done = whether a
+      // non-reasoning block appeared **after** it.
+      // It flips as later blocks are appended, so it must go into the cache key (otherwise an old
+      // thinking block hits the cache when new blocks arrive and stays at "thinking" instead of
+      // switching to "thinking done" — the simulation's "incremental vs cold start" diff is what
+      // caught this).
+      // Computed in one reverse pass, replacing the previous per-block slice+some O(B²) scan.
       const hasContentAfterFlags = new Array<boolean>(mergedBlocks.length)
       let seenNonReasoning = false
       for (let i = mergedBlocks.length - 1; i >= 0; i -= 1) {
@@ -1050,8 +1107,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       }
 
       const renderBlock = (block: MessageBlock, blockIndex: number): React.ReactNode => {
-        // 模型请求失败后自动重试中（过渡行：重试成功恢复输出或轮次结束时由 useHarnessHandlers 移除；
-        // 仅消息进行中展示，避免历史消息出现残留）
+        // Auto-retry after a failed model request (transition row: removed by useHarnessHandlers
+        // when the retry succeeds and output resumes, or when the turn ends;
+        // shown only while the message is in progress so historical messages have no leftovers)
         if (block.type === 'retrying' && block.retrying) {
           if (!message.loading) return null
           const { attempt, retries } = block.retrying
@@ -1078,7 +1136,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             </div>
           )
         }
-        // 摘要压缩进行中（过渡态：流式替换为 historyCompacted 结果块；失败则随消息结束隐藏）
+        // Summary compaction in progress (transitional: replaced by a historyCompacted result block
+        // while streaming, hidden when the message ends on failure)
         if (block.type === 'historyCompacting' && message.loading) {
           return (
             <div
@@ -1103,7 +1162,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             </div>
           )
         }
-        // 早期对话摘要压缩（置于消息顶部，紧随注入记忆；仅提示，不可展开）
+        // Earlier-conversation summary compaction (top of the message, right after injected memory;
+        // a notice only, not expandable)
         if (block.type === 'historyCompacted' && block.compaction) {
           const c = block.compaction
           return (
@@ -1138,7 +1198,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             </div>
           )
         }
-        // 本轮注入的热记忆（置于消息顶部，默认折叠）
+        // Hot memory injected this turn (top of the message, collapsed by default)
         if (block.type === 'memoryInjected' && block.memory) {
           const mem = block.memory
           const total = mem.user.length + mem.memory.length
@@ -1177,7 +1237,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                     </span>
                   ),
                   children: (
-                    // 固定展示高度 + 纵向滚动条（注入条目多/文本长时内容不撑爆整卡）
+                    // Fixed display height + vertical scrollbar (so many entries or long text
+                    // cannot blow the card up)
                     <div className="max-h-64 overflow-y-auto harness-scrollbar px-1.5 text-sm">
                       {mem.user.length > 0 ? (
                         <>
@@ -1227,7 +1288,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           )
         }
         if (block.type === 'reasoning' && block.reasoning) {
-          // 后续出现任意非推理块（正文/工具），或消息已结束（完成/中止/出错），都视为思考完成
+          // Any non-reasoning block appearing afterwards (text/tool), or the message ending
+          // (done/aborted/error), counts as thinking done
           const hasContentAfter = hasContentAfterFlags[blockIndex] ?? false
           const thinkingDone = hasContentAfter || !message.loading
           const thinkingLabel = thinkingDone
@@ -1259,10 +1321,11 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   key: blockIndex,
                   ...extra,
                   children: (
-                    /* 思考正文框：固定高度 + 可打断的贴底跟随（见 FoldBody）。
-                       不加展开控件（用户 2026-09-23：「思考内容不需要，下方的展开全部内容…
-                       就是不需要这个按钮了」）：长思考就在 256px 里内滚，读全文靠滚动，
-                       框下不再摆任何按钮。 */
+                    /* Thinking body box: fixed height + interruptible bottom-follow (see FoldBody).
+                       No expand control (user, 2026-09-23: "the thinking content does not need it,
+                       the expand-all below… that button is not needed"): long thinking scrolls
+                       inside 256px and reading the full text is done by scrolling, so no button
+                       sits under the box. */
                     <FoldBody
                       maxHeight={256}
                       expandable={false}
@@ -1297,8 +1360,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         if (block.type === 'text' && block.text) {
           return (
             <div key={blockIndex} style={{ color: colorText }} className="mb-2">
-              {/* 长正文窗口：模型整段贴文件/输出时，单个 text 块可能几十万字符，
-                  默认只渲染末尾一段，避免每批 chunk 全量重解析 markdown */}
+              {/* Long-text window: when the model pastes a whole file / output, a single text block
+                  can be hundreds of thousands of characters; by default only the trailing part is
+                  rendered to avoid re-parsing all markdown on every chunk batch */}
               <StreamTextWindow
                 content={block.text}
                 renderMarkdown={(text) => <MarkdownLoad content={text} isDarkMode={isDarkMode} />}
@@ -1308,23 +1372,30 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         }
         if (block.type === 'tool' && block.tool) {
           /**
-           * 待办清单（write_todos / read_todos）**不进消息正文**（用户 2026-09-25：
-           * 「页面上面不要再显示这张『0/9 已完成 · 1 进行中』清单卡」）。
+           * Todo lists (write_todos / read_todos) **do not go into the message body** (user,
+           * 2026-09-25: "don't show this '0/9 completed · 1 in progress' checklist card on the page
+           * any more").
            *
-           * 计划在别处已经可见，正文里再铺一张整表是重复：
-           *   - 段头按任务分好（点段头右侧的清单图标展开该段快照，见 renderTaskChecklist）；
-           *   - 输入框上方那张实时任务卡（TaskProgressCard）显示当前话题的整份清单，状态实时更新。
+           * The plan is already visible elsewhere, so laying out another full table in the body is
+           * duplication:
+           *   - segment headers group by task (click the list icon right of the header to expand that
+           *     segment's snapshot, see renderTaskChecklist);
+           *   - the live task card above the input box (TaskProgressCard) shows the current topic's
+           *     whole list with live status.
            *
-           * 为什么以前只有 write_todos 不显示：分段时 write_todos 块被登记进 `writeIndices`、
-           * 不进段正文；read_todos 没被登记，它的卡片照渲染不误——第一个 write_todos 之前那段
-           * 一铺开（同日「只有任务段折叠」），它就露在消息最上面。现在两者一律跳过，
-           * 既不渲染卡片，也不落成通用工具折叠行（那是纯粹的记账动作）。
+           * Why previously only write_todos was hidden: during segmentation write_todos blocks were
+           * registered in `writeIndices` and kept out of the segment body, while read_todos was not
+           * registered and its card rendered anyway — once the segment before the first write_todos
+           * was laid out flat (same-day "only task segments collapse"), it showed at the very top of
+           * the message. Both are now skipped uniformly: no card is rendered and no generic tool
+           * collapse row is emitted either (they are pure bookkeeping).
            */
           if (block.tool.name === 'write_todos' || block.tool.name === 'read_todos') return null
           const isPreparing = block.tool.status === 'preparing'
           const isExecuting =
             block.tool.status === 'executing' || (!block.tool.status && !block.tool.output)
-          // 仅在消息进行中才视为进行中状态，避免中止/完成后转圈不消失
+          // Treat as in-progress only while the message is in progress, so the spinner does not
+          // linger after abort/completion
           const inProgress = Boolean(message.loading) && (isPreparing || isExecuting)
           const phase: 'preparing' | 'executing' | undefined = inProgress
             ? isPreparing
@@ -1332,7 +1403,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               : 'executing'
             : undefined
           const toolName = block.tool.name || t('harness.assistantMessage.toolCallFallback')
-          // Mnemon 记忆工具：进行中 = 同款光泽状态卡；完成后 = 专属结果卡
+          // Mnemon memory tool: in progress = the same glossy status card; completed = its
+          // dedicated result card
           if (
             toolName.startsWith('mnemon_') &&
             (MEMORY_READ_TOOLS.includes(toolName) || MEMORY_WRITE_TOOLS.includes(toolName))
@@ -1342,24 +1414,29 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             }
             if (phase) return renderMemoryInProgressCard(block.tool, blockIndex, false, phase)
           }
-          // 交付文件（present）：模型声明的最终产物，点击直接在右侧打开
+          // Delivered files (present): the final artifacts declared by the model; clicking opens
+          // them on the right
           if (toolName === 'present' && block.tool.status === 'completed') {
             return renderPresentCard(block.tool, blockIndex, false)
           }
-          // propose_action 不在消息流留痕（2026-11-27 用户口径）：确认只出现在输入区预填条
+          // propose_action leaves no trace in the message stream (user decision, 2026-11-27):
+          // confirmation only appears in the input prefill bar
           if (toolName === 'propose_action') {
             return null
           }
-          // 系统工具：进行中与完成态共用同款卡片（光泽只在进行中扫过，完成后静止）
+          // System tools: in-progress and completed share the same card (the gloss sweeps only
+          // while running, then rests)
           if (CARD_TOOLS.has(toolName)) {
             if (phase) return renderToolCard(block.tool, blockIndex, false, phase)
             if (block.tool.card && block.tool.status === 'completed') {
               return renderToolCard(block.tool, blockIndex)
             }
           }
-          // 其余工具（含无卡片数据的异常完成态）：通用折叠，进行中光泽头 + 输入/输出详情
+          // Other tools (including abnormal completed states with no card data): generic collapse,
+          // glossy header while running + input/output details
           const toolLabel = getToolStatusLabel(t, toolName, phase)
-          // 进行中折叠头展示该工具完成后的定制卡片同款图标；MCP / mnemon 走前缀兜底；其余不显示
+          // The in-progress header shows the same icon as the tool's completed custom card;
+          // MCP / mnemon fall back to a prefix; others show none
           const inProgressIcon = inProgress && toolIconFor(toolName)
           return (
             <Collapse
@@ -1375,8 +1452,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   ),
                   collapsible: inProgress ? 'disabled' : undefined,
                   children: (
-                    /* 固定高度 + 可打断的贴底跟随：工具输出边长边跑，用户上滑即打断
-                       （展开入口由工具卡自己提供，所以这里不给展开控件） */
+                    /* Fixed height + interruptible bottom-follow: tool output grows while running and
+                       the user interrupts by scrolling up (the expand entry is provided by the tool
+                       card itself, so no expand control is given here) */
                     <FoldBody
                       maxHeight={256}
                       expandable={false}
@@ -1397,8 +1475,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                       <div style={{ color: colorTextSecondary }} className="font-medium mt-2 mb-1">
                         {t('harness.assistantMessage.toolOutput')}
                       </div>
-                      {/* 纯文本输出走 ToolTextPreview：超长（read_file 单次上限 2,000,000 字符）
-                          只渲染开头一段，避免渲染进程被文本节点撑到 OOM */}
+                      {/* Plain-text output goes through ToolTextPreview: when very long (read_file
+                          is capped at 2,000,000 characters) only the leading part is rendered, so
+                          the renderer is not OOM-ed by text nodes */}
                       <ToolTextPreview
                         text={
                           typeof block.tool.output === 'string'
@@ -1427,9 +1506,11 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         }
         if (block.type === 'subAgent' && block.subAgent) {
           const sa = block.subAgent
-          // 后台派发轻量卡：仅名称 + 简述 + 会话 id（不含智能体内容/结果——结果在顶部栏查看）
+          // Lightweight card for background dispatch: name + short description + session id only
+          // (no agent content/results — those are viewed in the top bar)
           if (sa.status === 'dispatched') {
-            // 卡片的会话 id 能直达该子代理的流式会话视图（顶部栏入口之外的第二个入口）
+            // The card's session id jumps straight to that subagent's streaming conversation view
+            // (a second entry besides the top bar)
             const canOpenConversation = Boolean(sa.subagentId && subagentViewBridge)
             return (
               <div
@@ -1491,15 +1572,18 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               ? t('harness.assistantMessage.subAgentError', { name: sa.name })
               : t('harness.assistantMessage.subAgentCompleted', { name: sa.name })
           const saIconColor = isError ? '#ef4444' : isActive ? '#1677ff' : '#52c41a'
-          // 折叠受控（key = causeId 唯一标识，缺省按位置回退）
+          // Controlled folding (key = causeId, a unique id; falls back to position when absent)
           const saPanelKey = sa.causeId ?? `sa-${blockIndex}`
           const saOpen = isActive ? true : (saOpenOverride[saPanelKey] ?? false)
 
-          // 递归渲染智能体的嵌套子块（text / tool / reasoning / subAgent）
+          // Recursively render the agent's nested child blocks (text / tool / reasoning / subAgent)
           const renderChildren = (children: MessageBlock[], depth = 0): React.ReactNode => {
-            // 合并相邻的 reasoning 块：防止模型把 reasoning 拆成 token 级事件，导致满屏"思考过程"
-            // 合并相邻的 text 块：避免流式输出把正文拆成 "Good" / "," / "found" 等碎片
-            // 必须「复制后合并」：渲染期不得改写原状态对象（否则文本随渲染轮次自复制增长）
+            // Merge adjacent reasoning blocks: prevent the model from splitting reasoning into
+            // token-level events, which would fill the screen with "thinking process"
+            // Merge adjacent text blocks: keep streaming from splitting the body into fragments
+            // such as "Good" / "," / "found"
+            // Must "copy then merge": never rewrite original state objects during render (otherwise
+            // the text duplicates itself on every render pass)
             const mergedChildren: MessageBlock[] = []
             for (const child of children) {
               if (child.type === 'reasoning') {
@@ -1539,8 +1623,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                           </span>
                         ),
                         children: (
-                          /* 子智能体的思考同样是「思考过程」：同款固定高度 + 可打断跟随；
-                             展开控件与顶层思考一致地不给 */
+                          /* A subagent's thinking is also "thinking process": same fixed height +
+                             interruptible follow; no expand control, consistent with top-level thinking */
                           <FoldBody
                             maxHeight={192}
                             expandable={false}
@@ -1550,7 +1634,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                             kind="thinking-nested"
                             borderColor={colorBorderSecondary}
                           >
-                            {/* 子智能体的推理同样走窗口：整段贴文件时也会是几十万字符 */}
+                            {/* A subagent's reasoning also goes through the window: pasting a whole
+                                file yields hundreds of thousands of characters */}
                             <StreamTextWindow
                               content={child.reasoning}
                               renderMarkdown={(text) => (
@@ -1580,8 +1665,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 )
               }
               if (child.type === 'tool' && child.tool) {
-                // 待办清单不进正文（含子代理层级，见上面 renderBlockAt 里的说明）：计划由
-                // 段头快照与输入框上方的实时任务卡承担，正文里只留干活的过程。
+                // Todo lists do not go into the body (including the subagent level, see the note in
+                // renderBlockAt above): the plan is carried by the segment-header snapshot and the
+                // live task card above the input box, leaving only the actual work in the body.
                 if (child.tool.name === 'write_todos' || child.tool.name === 'read_todos') {
                   return null
                 }
@@ -1595,7 +1681,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                     : 'executing'
                   : undefined
                 const toolName = child.tool.name || t('harness.assistantMessage.toolCallFallback')
-                // Mnemon 记忆工具（嵌套）：进行中 = 光泽状态卡；完成后 = 专属结果卡
+                // Mnemon memory tool (nested): in progress = glossy status card; completed =
+                // dedicated result card
                 if (
                   toolName.startsWith('mnemon_') &&
                   (MEMORY_READ_TOOLS.includes(toolName) || MEMORY_WRITE_TOOLS.includes(toolName))
@@ -1605,24 +1692,27 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   }
                   if (phase) return renderMemoryInProgressCard(child.tool, ci, true, phase)
                 }
-                // 交付文件（present，嵌套）：同上
+                // Delivered files (present, nested): as above
                 if (toolName === 'present' && child.tool.status === 'completed') {
                   return renderPresentCard(child.tool, ci, true)
                 }
-                // propose_action（嵌套）：同样不在消息流留痕
+                // propose_action (nested): likewise leaves no trace in the message stream
                 if (toolName === 'propose_action') {
                   return null
                 }
-                // 系统工具（嵌套）：进行中与完成态共用同款卡片（光泽只在进行中扫过）
+                // System tools (nested): in-progress and completed share the same card (the gloss
+                // sweeps only while running)
                 if (CARD_TOOLS.has(toolName)) {
                   if (phase) return renderToolCard(child.tool, ci, true, phase)
                   if (child.tool.card && child.tool.status === 'completed') {
                     return renderToolCard(child.tool, ci, true)
                   }
                 }
-                // 其余工具（含无卡片数据的异常完成态）：通用折叠，进行中光泽头 + 输入/输出详情
+                // Other tools (including abnormal completed states with no card data): generic
+                // collapse, glossy header while running + input/output details
                 const toolLabel = getToolStatusLabel(t, toolName, phase)
-                // 进行中折叠头展示该工具完成后的定制卡片同款图标；MCP / mnemon 走前缀兜底；其余不显示
+                // The in-progress header shows the same icon as the tool's completed custom card;
+                // MCP / mnemon fall back to a prefix; others show none
                 const inProgressIcon = inProgress && toolIconFor(toolName)
                 return (
                   <Collapse
@@ -1716,7 +1806,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   : childIsActive
                     ? '#1677ff'
                     : '#52c41a'
-                // 嵌套折叠受控（key = 子会话 causeId 或 父级标识 + 位置回退）
+                // Nested fold is controlled (key = child conversation causeId, or parent id +
+                // position fallback)
                 const childSaPanelKey = childSa.causeId ?? `nsa:${sa.causeId ?? blockIndex}:c${ci}`
                 const childSaOpen = childIsActive
                   ? true
@@ -1724,8 +1815,11 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 return (
                   <Collapse
                     styles={COLLAPSE_HEADER_CENTERED}
-                    // key 用数组序号（修复：此前 `name-${isActive?'a':'d'}` 在状态翻转时强制换 key
-                    // 重挂 Collapse 丢失展开态,同名子智能体两次委派还会产生重复 key 致 React 复用错位）
+                    // Use the array index as the key (fix: the previous `name-${isActive?'a':'d'}`
+                    // forced a new key whenever the state flipped, remounting the Collapse and
+                    // losing
+                    // its expanded state; two delegations to a same-named subagent also produced
+                    // duplicate keys, making React reuse the wrong element)
                     key={`nested-sa-${ci}`}
                     items={[
                       {
@@ -1813,8 +1907,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           return (
             <Collapse
               styles={COLLAPSE_HEADER_CENTERED}
-              // key 用数组序号（修复：状态翻转换 key 重挂 Collapse 丢失展开态；同名子智能体
-              // 两次委派产生重复 key 致 React 复用错位）
+              // Use the array index as the key (fix: a changing key on state flips remounted the
+              // Collapse and lost its expanded state; two delegations to a same-named subagent
+              // produced duplicate keys, making React reuse the wrong element)
               key={`sa-${blockIndex}`}
               items={[
                 {
@@ -1853,8 +1948,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                       {block.children && block.children.length > 0 ? (
                         <>
                           {renderChildren(block.children)}
-                          {/* 子代理流静默：已输出内容但超阈值无新事件（模型在生成工具参数）
-                              且最后一个子块不是进行中工具卡时，显示「正在生成…」 */}
+                          {/* Subagent stream silence: content already emitted but no new event past the
+                              threshold (the model is generating tool arguments) and the last child
+                              block is not an in-progress tool card → show "generating…" */}
                           {isActive && !lastChildIsActiveTool(block.children) ? (
                             <SilenceGeneratingHint
                               loading
@@ -1880,7 +1976,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               ]}
               activeKey={saOpen ? [blockIndex] : []}
               onChange={(keys) => {
-                // 进行中折叠禁用（collapsible disabled），此处只处理完成/出错后的手动展开收起
+                // Folding is disabled while running (collapsible: disabled), so this only handles
+                // manual expand/collapse after completion/error
                 if (!isActive) {
                   setSaOpenOverride((m) => ({
                     ...m,
@@ -1897,11 +1994,14 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         return null
       }
 
-      /** 单块的渲染（走块级缓存）：块身份 + 跨块推导值 组成缓存签名 */
+      /** Render one block (through the block cache): block identity + cross-block derived values
+       * make up the cache signature */
       const renderBlockAt = (blockIndex: number): React.ReactNode => {
         const block = mergedBlocks[blockIndex]
-        // 缓存签名：块身份之外，还要带上「跨块依赖」的推导值（当前只有思考完成态）。
-        // 漏掉它就会在追加新块时命中过期缓存——仿真比对（增量 vs 冷启动）能抓到这类问题。
+        // Cache signature: besides block identity it carries the derived "cross-block dependency"
+        // value (currently only the thinking-done state).
+        // Omitting it would hit a stale cache when new blocks are appended — the simulation diff
+        // (incremental vs cold start) catches this kind of bug.
         const sig = `${blockIndex}|${hasContentAfterFlags[blockIndex] ? 1 : 0}`
         const hit = blockNodes.map.get(block)
         if (hit && hit.sig === sig) return hit.node
@@ -1910,7 +2010,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         return node
       }
 
-      /** 任务清单（点折叠头上的列表图标才显示）：状态字形 + 条目，取自该段最后一次 write_todos 快照 */
+      /** Task checklist (shown only after clicking the list icon on the fold header): status glyphs +
+       *  entries, taken from the segment's last write_todos snapshot */
       const renderTaskChecklist = (segment: TaskSegment): React.ReactNode => (
         <div
           data-task-checklist
@@ -1931,7 +2032,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                 {itemDone ? (
                   <RiCheckboxCircleLine
                     size={13}
-                    // 已完成 = 绿（与段头上的状态点同一套语义）
+                    // Completed = green (same semantics as the status dot on the segment header)
                     style={{ color: token.colorSuccess, marginTop: 3, flexShrink: 0 }}
                   />
                 ) : (
@@ -1961,65 +2062,80 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       )
 
       /**
-       * 按任务分段渲染（2026-09-18：消息内容按任务折叠）。
+       * Render by task segment (2026-09-18: message content folds by task).
        *
-       * - 折叠外观与其他折叠内容完全同款：antd Collapse（collapseBg + rounded-lg border-0 +
-       *   size=small），标签是小的次级文本——不自造一套头样式；
-       * - 正文里**不再渲染 write_todos 工具卡**（有任务头就重复了）：清单改由标签右侧的
-       *   列表图标按需展开；
-       * - 折起时 `destroyOnHidden` 卸载子节点：渲染开销与挂载块数成正比（仿真台实测 375 块
-       *   253~305KB/次刷入、80 块 77KB/次），这是折叠的意义所在；
-       * - 分段依据是流里的 write_todos 快照（见 buildTaskSegments），无需存储层改动；
-       * - 默认折叠态：**流式进行中**只折已完成的、进行中/末段保持展开（要能看见正在干什么）；
-       *   **一轮结束或从库里加载的历史消息一律折起**（用户要求：历史消息默认折叠、块结束后折叠）。
-       *   注意末段里往往接着「最终答复正文」——那部分会从折叠里摘出来常显（见 answerIndices），
-       *   否则一折就把答案藏了。
-       * - **折的只有任务段**（用户 2026-09-25：「只有任务才折叠」）：第一个 write_todos 之前那段
-       *   不再包一层「前期探索」折叠壳，内容原样铺开（见下面 `if (!segment.task)` 处注释）。
+       * - The fold looks exactly like any other collapsible content: antd Collapse (collapseBg +
+       *   rounded-lg border-0 + size=small) with a small secondary label — no home-grown header;
+       * - the body **no longer renders write_todos tool cards** (the task header already repeats
+       *   them): the checklist is expanded on demand from the list icon right of the label;
+       * - `destroyOnHidden` unmounts children when folded: render cost is proportional to the number
+       *   of mounted blocks (measured on the simulation rig: 375 blocks 253~305KB per flush, 80
+       *   blocks 77KB), which is the point of folding;
+       * - segmentation is driven by write_todos snapshots in the stream (see buildTaskSegments) and
+       *   needs no storage-layer change;
+       * - default fold state: **while streaming** only completed segments fold while the running and
+       *   last segments stay expanded (you have to see what is being done); **once a turn ends, or
+       *   for historical messages loaded from the database, everything folds** (requirement:
+       *   historical messages fold by default and blocks fold once finished). Note the last segment
+       *   usually continues with the "final answer body" — that part is lifted out of the fold and
+       *   always shown (see answerIndices), otherwise folding would hide the answer.
+       * - **only task segments fold** (user, 2026-09-25: "only tasks fold"): the segment before the
+       *   first write_todos no longer gets an "early exploration" fold shell and its content is laid
+       *   out as is (see the comment at `if (!segment.task)` below).
        */
       const segments = buildTaskSegments(mergedBlocks, { streaming: Boolean(message.loading) })
       const lastSegIndex = segments.length - 1
       /**
-       * 收尾阶段：模型自己把清单收口（最后一次 `write_todos` 至少一项 completed、无 in_progress）
-       * 时所处的位置。≥0 表示「活干完了，接下来流出的就是交付给用户的回答」，末尾那段内容
-       * 因此可以在流式期间就渲染到折叠外（判据见 harnessHelpers.answerPhaseFrom）。
+       * Wrap-up phase: where the model wrapped up the checklist itself (the last `write_todos` has
+       * at least one completed item and no in_progress). ≥0 means "the work is done and what flows
+       * out next is the answer delivered to the user", so the trailing content can be rendered
+       * outside the fold while still streaming (criterion: harnessHelpers.answerPhaseFrom).
        */
       const answerPhaseAt = answerPhaseFrom(mergedBlocks)
       /**
-       * 折叠外要渲染的「最终回答」块：**整条消息一次算好**，段循环里只取与本段的交集。
+       * "Final answer" blocks to render outside the fold: **computed once for the whole message**;
+       * the segment loop only intersects with its own range.
        *
-       * 必须按整条消息算，不能按段内的下标列表算：write_todos 块不在段的内容下标里，
-       * 段内反扫会**跨过收口写入**继续往前吃，把上一项任务那句话也算成答复
-       * （工装 C⑤/C⑦ 抓到过这个错切）。
+       * It must be computed over the whole message, not over a per-segment index list: write_todos
+       * blocks are not part of a segment's content indices, so a reverse scan inside a segment would
+       * **step over the wrap-up write** and keep going backwards, counting the line about the
+       * previous task as part of the answer (caught by fixtures C⑤/C⑦).
        */
       const answerBlockSet = ((): Set<number> => {
         const allBlockIndices = mergedBlocks.map((_, i) => i)
         if (!message.loading) {
           if (message.answer instanceof Set) return message.answer
-          // 协议层明确没有答复（中止 / 只有工具与思考）
+          // The protocol layer says explicitly that there is no answer (aborted / tools and
+          // thinking only)
           if (message.answer === null) return new Set<number>()
-          // 主进程没给结论（老版本/异常路径）：退回反向扫描
+          // The main process gave no conclusion (older version / abnormal path): fall back to the
+          // reverse scan
           return new Set(tailContentIndices(mergedBlocks, allBlockIndices))
         }
-        // 流式中：只有进入收尾阶段才摘（末尾那段一定在收口写入之后）
+        // While streaming: lift only once the wrap-up phase is reached (the trailing part always
+        // follows the wrap-up write)
         if (answerPhaseAt < 0) return new Set<number>()
         return new Set(tailContentIndices(mergedBlocks, allBlockIndices))
       })()
 
       /**
-       * 段外壳：折叠外观与「思考过程」「子代理」完全同款（antd Collapse + collapseBg + size=small）。
+       * Segment shell: the fold looks exactly like "thinking process" and "subagent" (antd Collapse +
+       * collapseBg + size=small).
        *
-       * 段内容也走 FoldBody（用户 2026-09-19：「这个内容，也要折叠啊」）——展开的段不再是一堵
-       * 随任务跑越堆越高的墙，而是**固定高度 + 内部滚动**；流式时贴底跟随最新一步，用户上滑即
-       * 打断、滚回底部自动继续；内容超高时框外给「展开全部」。
-       * 思考框不摆这个控件（见思考正文框处注释）：只有段内容保留。
+       * The segment body also goes through FoldBody (user, 2026-09-19: "this content needs folding
+       * too") — an expanded segment is no longer a wall growing taller as the task runs, but
+       * **fixed height + internal scrolling**; while streaming it follows the latest step at the
+       * bottom, the user scrolling up interrupts it, and it resumes automatically when scrolled back
+       * to the bottom; when content overflows a "show all" control appears outside the box. The
+       * thinking box does not get this control (see the comment at the thinking body box): only
+       * segment content keeps it.
        */
       const renderSegmentShell = (args: {
         segKey: string
         label: React.ReactNode
         collapsed: boolean
         children: React.ReactNode
-        /** 折叠外常显的内容（末段的最终答复正文） */
+        /** Content always shown outside the fold (the last segment's final answer body) */
         tail?: React.ReactNode
       }): React.ReactNode => (
         <React.Fragment key={args.segKey}>
@@ -2055,22 +2171,30 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       )
 
       /**
-       * 同名工具组外壳（用户 2026-09-25：「连续相同的工具调用需要折叠到一起」）。
+       * Shell for same-name tool groups (user, 2026-09-25: "consecutive identical tool calls should
+       * fold together").
        *
-       * 归并规则是纯函数 `buildToolRuns`（相邻同名、≥2 才成组、待办记账工具透明）。
-       * 这里只管外观与默认折叠态，与段/思考框同款：antd Collapse + FoldBody（固定高度 + 内滚 +
-       * 「展开全部」），所以展开一组十连读也不会把正文顶成一堵墙。
+       * The grouping rule is the pure function `buildToolRuns` (adjacent same name, ≥2 forms a group,
+       * todo bookkeeping tools are transparent).
+       * This only handles appearance and the default fold state, the same as segments / the thinking
+       * box: antd Collapse + FoldBody (fixed height + internal scroll + "show all"), so expanding a
+       * group of ten reads does not push the body into a wall either.
        *
-       * 组头只放「哪个工具 + 几次 + 状态点」：内容一点就展开，不在这里重复卡片上的路径。
+       * The group header only carries "which tool + how many times + status dot": one click expands
+       * the content, and paths from the cards are not repeated here.
        *
-       * 默认折叠态：**组里还有调用在进行中就不折**（同「要能看见正在干什么」这条口径——
-       * 流式时最后一组通常正开着），其余（整组完成、历史消息）一律折起。
+       * Default fold state: **do not fold while a call in the group is still running** (the same
+       * "you have to see what is being done" rule — during streaming the last group is usually
+       * open), everything else (whole group completed, historical messages) folds.
        *
-       * **组头文字与组内名称同款**（用户 2026-11-27：「需要折叠的名称和一致都是大字体」）：
-       * 此前组头按小标题写死 12px + 次级色，而组里每个工具折叠头继承 antd 的
-       * `token.fontSize`（14px）与 `token.colorText`——同一个 `get_weather`，在组头小而灰、
-       * 在组内大而白，折起与展开像两种东西。现在组头直接取 token 的字号/行高与正文色，
-       * 与组内名称逐项对齐：折起时看到的就是这行大字，展开后组内每一行仍是同款大字。
+       * **The header text matches the names inside the group** (user, 2026-11-27: "the name that
+       * needs folding should be the same, both in the large font"): the header used to be hard-coded
+       * as a 12px + secondary-color small label, while every tool fold header inside the group
+       * inherits antd's `token.fontSize` (14px) and `token.colorText` — the same `get_weather` looked
+       * small and grey in the header but large and white inside, so folded and expanded looked like
+       * two different things. The header now takes the token's font size / line height and the body
+       * text color, aligning item by item with the names inside the group: what you see folded is
+       * this large text, and each row inside stays the same large text after expanding.
        */
       const renderToolRun = (entry: Extract<ToolRunEntry, { kind: 'run' }>): React.ReactNode => {
         const runKey = `toolrun-${entry.indices[0]}-${entry.name}`
@@ -2086,13 +2210,15 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         const allDone = members.every((block) => block?.tool?.status === 'completed')
         const collapsed = foldOverride[runKey] ?? !activeNow
         /**
-         * 组头图标：**认不出工具名时不能摆 `<RunIcon/>`**。
+         * Group header icon: **do not place `<RunIcon/>` when the tool name is unknown**.
          *
-         * `TOOL_IN_PROGRESS_ICONS` 只收录内置工具名，但 MCP（`mcp__…`）与 Mnemon（`mnemon_…`）
-         * 是运行期才知道的名字，所以走 `toolIconFor` 的**前缀兜底**；仍认不出时必须不摆图标——
-         * 直接渲染 undefined 组件会抛「Element type is invalid … Check the render method of
-         * `AssistantMessage`」，整条消息白屏（这条踩过：工装夹具里全是 read_file / grep，
-         * 恰好都在表里，漏了这条路径）。与逐卡渲染处的兜底保持一致。
+         * `TOOL_IN_PROGRESS_ICONS` only lists built-in tool names, while MCP (`mcp__…`) and Mnemon
+         * (`mnemon_…`) are names only known at runtime, so they go through `toolIconFor`'s **prefix
+         * fallback**; when still unrecognized no icon must be placed — rendering an undefined
+         * component throws "Element type is invalid … Check the render method of `AssistantMessage`"
+         * and blanks the whole message (this was hit once: the fixture contained only read_file /
+         * grep, which all happen to be in the table, so this path was missed). Consistent with the
+         * fallback at the per-card render site.
          */
         const RunIcon = toolIconFor(entry.name)
         const headLabel = (
@@ -2105,9 +2231,11 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             {RunIcon ? (
               <RunIcon size={14} style={{ color: colorTextSecondary, flex: '0 0 auto' }} />
             ) : null}
-            {/* 组名与组内折叠头的名称同字号同色（2026-11-27 用户口径）：字号/行高取 antd 的
-                token，颜色取正文色——组内每个折叠头都由 `resetComponent` 写成这一套，
-                组头再写死 12px/次级色就会「折起小、展开大」。 */}
+            {/* The group name uses the same font size and color as the fold header names inside the
+                group (user decision, 2026-11-27): size/line height come from antd's token and the
+                color from the body text color — every fold header inside the group is styled this
+                way by `resetComponent`, so a hard-coded 12px/secondary color here would look "small
+                when folded, large when expanded". */}
             <span
               style={{
                 flex: '1 1 auto',
@@ -2123,9 +2251,10 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             >
               {entry.name}
             </span>
-            {/* 状态点 + 计数：点与数字同在胶囊里居中（见 countPill）。
-                这一格是折叠头里的「同名工具调用了几次」；任务段头上的「本段还有几步」共用
-                同一个胶囊，只靠所在的折叠头区分，数字上不再加 `×` 前缀 */}
+            {/* Status dot + count: dot and number are centered together inside the pill (see countPill).
+                This cell is "how many times the same-name tool was called" in the fold header; the task
+                segment header's "how many steps remain in this segment" shares the same pill and is
+                told apart only by the header it sits in, so the number gets no `×` prefix */}
             {countPill(
               entry.indices.length,
               activeNow ? token.colorPrimary : allDone ? token.colorSuccess : colorBorderSecondary
@@ -2164,63 +2293,82 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         )
       }
 
-      /** 正文块序列：单块照旧走块级缓存，同名工具组换成组外壳 */
+      /** Body block sequence: single blocks still go through the block cache, same-name tool groups
+       * use the group shell */
       const renderBlockSequence = (indices: number[]): React.ReactNode =>
         buildToolRuns(mergedBlocks, indices).map((entry) =>
           entry.kind === 'run' ? renderToolRun(entry) : renderBlockAt(entry.index)
         )
 
       return segments.map((segment, segIndex) => {
-        // 正文块：跳过 write_todos（清单另开），其余照旧走块级缓存
+        // Body blocks: skip write_todos (the checklist is handled separately), the rest still go
+        // through the block cache
         const allIndices = segment.blockIndices.filter((i) => !segment.writeIndices.includes(i))
         /**
-         * 末段末尾「思考 + 正文」一起摘到折叠外面常显。
+         * Lift the trailing "thinking + text" of the last segment outside the fold so it is always
+         * shown.
          *
-         * - 正文（连续 text 块）= 最终答复，必须摘，否则一折答案就没了；
-         * - 紧跟其前的**思考块**（连续 reasoning 块）也要一起摘：它是产出这段答复的那一步，
-         *   留在折叠里答复就成了无源之水（用户：思考要跟着最后的内容）。
-         *   工具卡会打断回溯——被工具隔开的思考与末尾答复不连续，硬摘会打乱时序；
-         * - 必须至少摘到一段正文才成立：整段以思考结尾（本轮被中止等）时不摘，
-         *   交给折叠统一收着，避免把「没有答复的消息」整块搬到外面；
-         * - **不对「有没有任务」做区分**：探索段（第一个 write_todos 之前）现在一律铺开，
-         *   普通问答同样要摘（仿真台抓到过：摘出漏掉时普通问答的正文会整段消失）。
+         * - Text (consecutive text blocks) = the final answer, which must be lifted, otherwise
+         *   folding hides the answer;
+         * - the **thinking blocks** right before it (consecutive reasoning blocks) are lifted too:
+         *   they are the step that produced this answer, and leaving them in the fold would make the
+         *   answer appear out of nowhere (requirement: thinking should accompany the trailing
+         *   content). Tool cards break the backtracking — thinking separated by a tool is not
+         *   continuous with the trailing answer, and forcing the lift would scramble the order;
+         * - at least one text block must be lifted for this to apply: when the segment ends with
+         *   thinking (e.g. the turn was aborted), nothing is lifted and the fold keeps it all, so a
+         *   whole "message without an answer" is never moved outside;
+         * - **no distinction on "is there a task"**: the exploration segment (before the first
+         *   write_todos) is now always laid out flat, and ordinary Q&A has to be lifted the same way
+         *   (caught on the simulation rig: when the lift was missed the ordinary answer body
+         *   disappeared entirely).
          *
-         * **整轮结束前只在「收尾阶段」摘**（用户 2026-09-25 选定的口径）：
-         * 流式期间，只有当模型**自己把清单收口**（最后一次 `write_todos` 里至少一项 completed、
-         * 且没有 in_progress——真实会话里最终回答就紧跟在那次写入之后）时，末尾那段
-         * 「思考 + 正文」才边流边渲染到折叠外；其余情形（每项任务结束时那句话、任务进行中的
-         * 思考）一律留在任务段折叠里 / 探索段铺开处，不搬出来、也不会被收回去。
-         * 判据见 `answerPhaseFrom`（纯块数据，不是猜 loading）。
+         * **Before the turn ends it is lifted only in the "wrap-up phase"** (the rule chosen on
+         * 2026-09-25): while streaming, only when the model **wrapped up the checklist itself** (at
+         * least one item completed in the last `write_todos` and no in_progress — in real sessions
+         * the final answer follows right after that write) is the trailing "thinking + text"
+         * rendered outside the fold as it streams; every other case (the sentence when each task
+         * ends, thinking while a task is running) stays inside the task segment fold / the flat
+         * exploration area, never moved out and never taken back. The criterion is `answerPhaseFrom`
+         * (pure block data, it does not guess from loading).
          *
-         * 整轮结束时（done）：按协议层结论定格——`message.answer` 是 `Set` 就用它；
-         * `undefined`（主进程没给结论：老版本/异常路径）退回反向扫描；`null`（明确没有答复）
-         * 不摘。这条兜底覆盖「模型忘了写收尾清单」的轮次（那时最终回答只能等整轮结束定格，
-         * 因为流式期间没有任何能把最终回答与「每项任务那句话」区分开的数据信号）。
+         * When the turn ends (done): freeze on the protocol-layer conclusion — use `message.answer`
+         * when it is a `Set`; `undefined` (the main process gave no conclusion: older version /
+         * abnormal path) falls back to the reverse scan; `null` (explicitly no answer) lifts
+         * nothing. This fallback covers turns where "the model forgot to write the wrap-up
+         * checklist" (there the final answer can only be fixed when the turn ends, because while
+         * streaming no data signal separates the final answer from "the sentence for each task").
          */
         const answerIndices = allIndices.filter((i) => answerBlockSet.has(i))
         /**
-         * 切分必须**按集合过滤**，不能拿 `answerIndices.length` 去减：
-         * 协议层的答复边界是「末尾 N 块」的集合，一旦它与本段下标不连续
-         * （例如答复跨段、或标记与块的对应关系漂移），长度相减会切出负数长度、
-         * 把整段内容吞掉。用集合同步滤出两侧，任何形态都只会「少摘」不会「错切」。
+         * Splitting must **filter by set**, never subtract `answerIndices.length`: the protocol-layer
+         * answer boundary is a set of "the trailing N blocks", and once it is not contiguous with
+         * this segment's indices (e.g. the answer spans segments, or the marker/block correspondence
+         * drifts), subtracting lengths yields a negative length and swallows the whole segment.
+         * Filtering both sides by the set only ever lifts too little, never cuts wrongly, whatever
+         * the shape.
          */
         const answerSet = new Set(answerIndices)
         const visibleIndices = allIndices.filter((i) => !answerSet.has(i))
-        // 连续同名工具调用在这里被并成折叠组（见 renderBlockSequence / buildToolRuns）
+        // Consecutive same-name tool calls are merged into fold groups here (see
+        // renderBlockSequence / buildToolRuns)
         const blocksNode = renderBlockSequence(visibleIndices)
         const answerNode = answerIndices.map(renderBlockAt)
 
         /**
-         * 本段改过哪些文件（按段内 write_file / edit_file 块推导）。
+         * Which files this segment changed (derived from the write_file / edit_file blocks in it).
          *
-         * 这是「折叠之后改动还在不在聊天里」的答案：段体折起时卡片会被卸载，段头这个
-         * 徽标仍然在折叠之外——用户一眼能看到「这一段动了 1 个文件、还有 3 处没审」，
-         * 点一下直接打开差异视图。
+         * This is the answer to "are the changes still visible in the chat after folding": when the
+         * segment body folds the cards are unmounted, but this header badge sits outside the fold —
+         * the user sees at a glance "this segment touched 1 file and 3 places are still unreviewed",
+         * and one click opens the diff view.
          *
-         * 计数以 `pendingByPath`（主进程的待审查列表）为准，已保留的不再计入。
-         * 注意**路径形态不一致**：块里的 `file_path` 是虚拟路径（`/frontend/README.md`），
-         * 待审查列表给的是真实绝对路径（`E:\...\frontend\README.md`），直接查是查不到的
-         * （这条踩过：徽标文字会空掉）。所以两侧都按「分隔符统一 + 小写 + 取末段」建索引。
+         * Counts come from `pendingByPath` (the main process's pending review list); retained ones
+         * are not counted again. Note the **path shapes differ**: `file_path` in a block is a virtual
+         * path (`/frontend/README.md`), while the pending list contains real absolute paths
+         * (`E:\...\frontend\README.md`), so a direct lookup finds nothing (this was hit: the badge
+         * text turned empty). Both sides are therefore indexed by "normalized separators + lowercase
+         * + last segment".
          */
         const pathKey = (raw: string): string =>
           raw.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
@@ -2244,8 +2392,10 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           const full = pathKey(path)
           const direct = pendingIndex.byFull.get(full)
           if (direct !== undefined) return direct
-          // 虚拟路径（/frontend/README.md）对不上真实路径时按文件名兜底：
-          // 同名文件可能不止一个，宁可多报一处（徽标只是提示，点开的是真差异）
+          // When the virtual path (/frontend/README.md) does not match a real path, fall back to
+          // the
+          // file name: several files may share it, and over-reporting one place is acceptable (the
+          // badge is only a hint, what opens is the real diff)
           return pendingIndex.byTail.get(pathTail(path)) ?? 0
         }
         const changedFiles = (() => {
@@ -2263,7 +2413,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           for (const path of paths) pendingCount += pendingFor(path)
           return { paths, pendingCount }
         })()
-        /** 段头改动徽标：只在真有改动时出现（普通问答不该多一行装饰） */
+        /** Segment-header change badge: appears only when there really are changes (ordinary Q&A
+         * should not gain an extra decorative row) */
         const changedChip =
           changedFiles.paths.length > 0 ? (
             <button
@@ -2271,7 +2422,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               data-segment-changes={changedFiles.paths.length}
               data-segment-pending={changedFiles.pendingCount}
               onClick={(e) => {
-                // 别冒泡到 Collapse 标签：点徽标是「去看差异」，不是「折叠这一段」
+                // Do not bubble to the Collapse label: clicking the badge means "go see the diff",
+                // not "fold this segment"
                 e.stopPropagation()
                 const target = changedFiles.paths[changedFiles.paths.length - 1]
                 if (target) onOpenChangedFile?.(target)
@@ -2302,16 +2454,25 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               </span>
             </button>
           ) : null
-        // ── 规划前的那一段（第一个 write_todos 之前）─────────────────────────
-        // 用户 2026-09-25：「**不需要前期探索这个东西，即前面的内容不要折叠起来了。只有任务才折叠**」。
+        // ── The segment before planning (before the first write_todos) ────────────────
+        // User, 2026-09-25: "**no need for this early exploration thing, i.e. do not fold the
+        // content
+        // before it. Only tasks fold**".
         //
-        // 所以这一段的折叠壳（「前期探索」标签 + 步数胶囊 + 改动徽标 + 固定高度的内容框）整体去掉，
-        // 内容原样铺在消息里：思考块自己仍是可折的「思考过程」、工具卡各有自己的折叠，
-        // 铺开并不是一堵墙。
+        // So this segment's fold shell ("early exploration" label + step pill + change badge +
+        // fixed
+        // height content box) is removed as a whole and its content lies in the message as is:
+        // thinking blocks are still a collapsible "thinking process" and tool cards have their own
+        // folds, so laying it out flat is not a wall.
         //
-        // 边界因此简化成一条：**任务段折，其余一律不折**。这也顺带解决了改动徽标当初存在的理由
-        // （用户 2026-09-23：段一折起，段里的编辑卡片就全被卸载了）——这一段不再折，卡片不会被卸载。
-        // 唯一例外：段里没有可展示内容（整条消息只有答复正文）——那就不留空壳，直接返回答复。
+        // The boundary therefore simplifies to one rule: **task segments fold, everything else
+        // never
+        // folds**. This also resolves the original reason for the change badge (user, 2026-09-23:
+        // once a segment folds, all its edit cards are unmounted) — this segment no longer folds,
+        // so
+        // its cards are never unmounted. The only exception: when the segment has nothing
+        // displayable (the whole message is just the answer body) — then no empty shell is left and
+        // the answer is returned directly.
         if (!segment.task) {
           if (visibleIndices.length === 0) return answerNode
           return (
@@ -2325,18 +2486,24 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
         }
 
         /**
-         * 流式中：把**已经完成、且后面还有内容在写**的段收起；结束后/历史消息一律折起。
+         * While streaming: collapse segments that are **already completed and have content still
+         * being written after them**; after the turn ends, or for historical messages, always fold.
          *
-         * 注意 `segment.status === 'completed'` 不只是「有下一个任务段」——write_todos 把
-         * 本段任务标成 completed 也算，所以「任务干完了、模型正在写总结」这一刻它会立刻收起，
-         * 不必等整轮结束（用户 2026-09-22 报的「这一段跑完还敞着」就是这个口径；当时同源的问题
-         * 出在现已删除的探索段自动收起上）。
+         * Note `segment.status === 'completed'` does not only mean "there is a next task segment" —
+         * write_todos marking this segment's task completed counts too, so at the moment "the task is
+         * done and the model is writing the summary" it folds at once, without waiting for the turn
+         * to end (the 2026-09-22 report "this segment is still open after it finished" refers to
+         * exactly this rule; the same-origin problem back then was in the now-deleted auto-collapse
+         * of the exploration segment).
          *
-         * **末段例外**（用户 2026-09-24：答复不能从折叠里搬到外面、也不能被收回去）：
-         * 整轮结束前，答复只能待在折叠里（那时边界还没定论），所以承载它的**末段必须敞着**，
-         * 否则内容一折就看不见——到 done 落地才一次性收起并把答复定格到折叠外。
+         * **Last segment exception** (user, 2026-09-24: the answer must not be moved out of the fold
+         * or taken back in): before the turn ends the answer can only stay inside the fold (the
+         * boundary is not settled yet), so the **last segment carrying it must stay open**, otherwise
+         * one fold hides the content — everything folds at once when done lands, fixing the answer
+         * outside the fold.
          *
-         * `foldOverride` 仍然优先：用户手动折过/开过的段照他的来。
+         * `foldOverride` still wins: segments the user folded/unfolded manually follow the user's
+         * choice.
          */
         const defaultCollapsed = message.loading
           ? segment.status === 'completed' && segIndex !== lastSegIndex
@@ -2351,10 +2518,12 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             className="flex items-center min-w-0"
             style={{ width: '100%', gap: 8 }}
           >
-            {/* 任务名占据剩余宽度并可截断：这样右侧的状态点 + 计数胶囊与清单按钮才会贴到最右，
-                长任务名也不会把整行顶出容器。
-                刻意**不加光泽动效**：shiny-text 是 1.5s 无限循环，而一个任务常常跑几分钟，
-                会让整行从头闪到尾（用户明确反馈「一直在闪」）；状态由右侧圆点 + 加粗表达。 */}
+            {/* The task name takes the remaining width and can truncate, so the status dot + count pill
+                and the checklist button on the right stay flush right and a long task name cannot push
+                the row out of the container.
+                Deliberately **no shine animation**: shiny-text is a 1.5s infinite loop while a task
+                often runs for minutes, so the whole row would blink from start to finish (users
+                explicitly reported "it keeps blinking"); status is expressed by the dot + bold text. */}
             <span
               style={{
                 flex: '1 1 auto',
@@ -2371,19 +2540,23 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             >
               {segment.task}
             </span>
-            {/* 状态点 + 计数：点与数字同在胶囊里居中（见 countPill） */}
+            {/* Status dot + count: dot and number centered together inside the pill (see
+                countPill) */}
             {countPill(
               visibleIndices.length,
-              // 完成 = 绿、进行中 = 主色、未开始 = 描边灰（用户要求：已完成的任务要显示绿色）
+              // Completed = green, running = primary color, not started = border grey (requirement:
+              // completed tasks must show green)
               done ? token.colorSuccess : active ? token.colorPrimary : colorBorderSecondary
             )}
-            {/* 改动徽标：段体折起后段里唯一还能说明「这轮改了什么」的东西 */}
+            {/* Change badge: once the segment body folds, the only thing left saying "what changed
+                this round" */}
             {changedChip}
             {segment.snapshot.length > 0 ? (
               <button
                 type="button"
                 onClick={(e) => {
-                  // 别冒泡到 Collapse 标签，否则会连带折叠整段
+                  // Do not bubble to the Collapse label, otherwise toggling the list folds the
+                  // whole segment as well
                   e.stopPropagation()
                   setListOpenKeys((prev) =>
                     prev.includes(segment.key)
@@ -2424,8 +2597,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       <div className="flex harness-message-body">
         <div className="w-full">
           {renderBlocks()}
-          {/* 流式静默指示：正文已出现但超过阈值无新 chunk（模型仍在生成大参数等）。
-              自带走时时钟，tick 不会重渲染整条消息。 */}
+          {/* Streaming silence hint: the body is already on screen but no new chunk arrived past the
+              threshold (the model is still generating large arguments etc.).
+              It carries its own wall clock, so a tick does not re-render the whole message. */}
           {showSilenceGenerating ? (
             <SilenceGeneratingHint
               loading
@@ -2434,7 +2608,8 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               color={colorTextSecondary}
             />
           ) : null}
-          {/* 仅展示「注入记忆」卡片期间的生成中指示（压缩/重试进行中不显示，避免与过渡行重复） */}
+          {/* Generating indicator while only the "injected memory" card is shown (hidden during
+              compaction/retry to avoid duplicating the transition rows) */}
           {message.loading &&
           !message.content &&
           !message.reasoning_content &&
@@ -2451,7 +2626,7 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
               </ShinyText>
             </div>
           ) : null}
-          {/* 内容输出中不展示操作栏 */}
+          {/* Hide the action bar while content is streaming */}
           {!message.loading && (
             <MessageActions
               message={message}

@@ -2,12 +2,12 @@ import { eq, sql } from 'drizzle-orm'
 import { withOrm } from '../../orm'
 import { topic_compactions } from '../../schema'
 
-// --- 类型定义 ---
+// --- Type definitions ---
 
-/** 压缩 checkpoint 行（字段直接由 schema 推导，不再手工与 SQL 对齐） */
+/** Compaction checkpoint row (fields inferred directly from the schema, no manual SQL alignment) */
 export type CompactionRow = typeof topic_compactions.$inferSelect
 
-/** 读取话题的压缩 checkpoint（无则 null） */
+/** Read a topic's compaction checkpoint (null if none) */
 export async function getCompactionByTopic(topicId: number): Promise<CompactionRow | null> {
   return withOrm('getCompactionByTopic', async (db) => {
     const rows = await db
@@ -19,7 +19,7 @@ export async function getCompactionByTopic(topicId: number): Promise<CompactionR
   })
 }
 
-/** 写入/覆盖话题的压缩 checkpoint（每个话题一行） */
+/** Write/overwrite a topic's compaction checkpoint (one row per topic) */
 export async function upsertCompaction(row: {
   topic_id: number
   boundary_id: number
@@ -31,7 +31,7 @@ export async function upsertCompaction(row: {
       .values(row)
       .onConflictDoUpdate({
         target: topic_compactions.topic_id,
-        // updated_at 走数据库时钟，避免客户端时间漂移
+        // updated_at uses the database clock to avoid client-side clock drift
         set: { boundary_id: row.boundary_id, summary: row.summary, updated_at: sql`now()` }
       })
       .returning()
@@ -39,7 +39,7 @@ export async function upsertCompaction(row: {
   })
 }
 
-/** 删除话题的压缩 checkpoint（话题删除时清理） */
+/** Delete a topic's compaction checkpoint (cleaned up when the topic is deleted) */
 export async function deleteCompactionByTopic(topicId: number): Promise<void> {
   await withOrm('deleteCompactionByTopic', async (db) => {
     await db.delete(topic_compactions).where(eq(topic_compactions.topic_id, topicId))

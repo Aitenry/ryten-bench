@@ -11,26 +11,31 @@ import {
 } from '../../../shared/harness/subagent'
 
 /**
- * 子代理作者化工具（`agent_create`）—— 主智能体可以「委派构建」一个可复用的子代理配置。
+ * Subagent authoring tool (`agent_create`) — the main agent can "delegate the construction" of a
+ * reusable subagent config.
  *
- * 与设置页「智能体」写入同一条服务链路（`services/harness/subagents.ts`）：
- * - 校验/归一/落库/缓存失效全部同源，不会出现两套规则；
- * - 创建后写入 `agent_config`（按工作区隔离，重启保留），用户可在设置页看到并编辑；
- * - `task` 工具在调用期重新解析子代理清单，因此**同一轮对话内**创建完即可派发；
- * - 工具只挂给主代理（lead），子代理不获得作者化能力，避免递归造代理。
+ * It writes through the same service path as the Settings "Agents" page
+ * (`services/harness/subagents.ts`):
+ * - validation/normalization/persistence/cache invalidation are shared, so there is only one set of
+ *   rules;
+ * - after creation it writes an `agent_config` row (isolated per workspace, kept across restarts)
+ *   that the user can see and edit in Settings;
+ * - the `task` tool re-resolves the subagent list at call time, so a just-created subagent can be
+ *   dispatched **within the same turn**;
+ * - the tool is mounted only on the main agent (lead); subagents get no authoring ability, which
+ *   prevents recursive agent creation.
  *
- * 这是 DSH「agent preset authoring」的 RytenBench 对应物：DSH 由模型作者化 preset，
- * 这里作者化的是 `agent_config` 行（字段一一对应）。
+ * The model authors an `agent_config` row (its fields map one-to-one to the authoring inputs).
  */
 export interface AgentAuthoringContext {
-  /** 当前工作区 id：配置按工作区隔离，且必须已存在 */
+  /** Current workspace id: configs are isolated per workspace and it must already exist */
   workspaceId: number
-  /** 主代理本轮的工具名（`tools` 省略时由新建子代理继承这份清单） */
+  /** Main agent tool names this turn (a new subagent inherits this list when `tools` is omitted) */
   availableToolNames: string[]
 }
 
 export function createAgentAuthoringTool(ctx: AgentAuthoringContext): StructuredToolInterface {
-  /** 默认工具集：继承主代理本轮可用的真实工具（内部工具在构建子代理工具时会被注册表过滤） */
+  /** Default toolset: inherits the main agent's real tools this turn (internal tools are filtered out by the registry when building subagent tools) */
   const defaultTools = Array.from(new Set(ctx.availableToolNames))
 
   const schema = z.object({
@@ -91,7 +96,8 @@ export function createAgentAuthoringTool(ctx: AgentAuthoringContext): Structured
           id: result.id
         })
       } catch (err) {
-        // 校验失败属于模型可以自行纠正的输入错误：回一段可读文本让它重试，不炸整轮
+        // A validation failure is an input error the model can fix itself: return readable text so
+        // it can retry instead of failing the whole turn
         return mainFormat(m.agentAuthoring.failed, {
           message: err instanceof Error ? err.message : String(err)
         })

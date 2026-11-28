@@ -16,7 +16,7 @@ const entityParser = StructuredOutputParser.fromZodSchema(EntitiesArraySchema)
 const unifiedParser = StructuredOutputParser.fromZodSchema(UnifiedExtractionSchema)
 
 /**
- * 统一抽取：从文本块中同时抽取实体和关系（一次 LLM 调用）
+ * Unified extraction: extract entities and relations from a text chunk in a single LLM call.
  */
 export async function extractEntitiesAndRelations(
   ctx: ServiceContext,
@@ -91,7 +91,8 @@ export async function extractEntitiesAndRelations(
 }
 
 /**
- * Gleaning：二次扫描遗漏实体（使用 StructuredOutputParser + Zod 校验）
+ * Gleaning: a second pass that scans for missed entities (validated with StructuredOutputParser
+ * and Zod).
  */
 export async function gleanEntities(
   ctx: ServiceContext,

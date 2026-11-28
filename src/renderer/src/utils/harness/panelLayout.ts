@@ -1,42 +1,48 @@
 /**
- * 助手页三栏（话题列表 / 对话 / 工作区面板）的宽度策略。
+ * Width policy for the three columns of the assistant page (topic list / conversation /
+ * workspace panel).
  *
- * 抽出来的原因：这些数字原来散在 Index.tsx 内联样式与几处计算里，
- * 同一件事有**两个真源**就必然漂移——2026-09-24 把对话列的下限从 410 提到 420 时
- * 只改了 JSX 的 `minWidth`，计算里仍是 410，于是拖到上限时面板比整行能容纳的宽 10px，
- * 被 `.harness-layout { overflow: hidden }` 无声裁掉（用户 2026-09-25 反馈
- * 「最大屏下文件编辑器拖不动宽，只能把对话顶到 420」）。
- * 现在所有宽度都从这里取值，改一处即全局生效。
+ * Why it was extracted: these numbers used to be scattered across inline styles and a few
+ * computations in Index.tsx, and having **two sources of truth** for one thing always drifts —
+ * on 2026-09-24 the conversation column's lower bound was raised from 410 to 420 only in the
+ * JSX `minWidth` while the computation still used 410, so when dragged to the maximum the panel
+ * was 10px wider than the row could hold and got silently clipped by
+ * `.harness-layout { overflow: hidden }` (user feedback 2026-09-25: "on the largest screen the
+ * file editor can't be dragged wider, the conversation can only be pushed to 420").
+ * Now all widths are taken from here, so one change applies globally.
  */
 
-/** 对话列的最小宽度。它是**最后的兜底**：面板/话题栏的上限都围着它算 */
+/** Minimum width of the conversation column. It is the **last fallback**: the panel/topic-bar maxima are computed around it */
 export const MAIN_MIN_WIDTH = 420
 
-/** 分栏拖拽条宽度（左右两根都一样宽） */
+/** Width of a column resizer (the left and right ones are equally wide) */
 export const RESIZER_WIDTH = 6
 
-/** 工作区面板：打开文件（显示编辑器）时不能比这更窄，否则编辑器只剩一条缝 */
+/** Workspace panel: it must not get narrower than this when a file is open (editor visible), or the editor is left with just a sliver */
 export const PANEL_MIN_WITH_EDITOR = 450
 
-/** 工作区面板：没打开文件时只有文件树，固定窄栏 */
+/** Workspace panel: with no file open it only holds the file tree, so keep it a fixed narrow column */
 export const PANEL_MIN_WITHOUT_EDITOR = 220
 
-/** 打开文件时面板的自动展开宽度比例（用户自己拖过之后不再套用） */
+/** Auto-expand width ratio for the panel when a file is opened (no longer applied once the user has dragged it) */
 export const PANEL_AUTO_OPEN_RATIO = 0.35
 
 /**
- * 面板占聊天区的比例上限随可用宽度放开：小窗口 45%，大屏最多 65%。
+ * The panel's maximum share of the chat area widens with the available width: 45% in a small
+ * window, up to 65% on a large screen.
  *
- * 为什么不能固定 45%：比例上限比「对话下限」先到，屏幕越大越轮不到下限说话——
- * 1920 窗口下面板最多 838px、对话还留着 784px 空着，用户在大屏上根本拖不动编辑器。
- * 45%→65% 的线性区间取 layoutWidth 1200（最小窗口附近）到 2400（宽屏）。
+ * Why a fixed 45% doesn't work: the ratio cap is reached before the "conversation minimum", so
+ * the bigger the screen the less the minimum gets a say — in a 1920 window the panel was capped
+ * at 838px while the conversation still left 784px empty, making the editor impossible to drag
+ * wider on large screens. The 45%→65% linear range goes from layoutWidth 1200 (near the minimum
+ * window) to 2400 (wide screens).
  */
 const RATIO_MIN_LAYOUT_WIDTH = 1200
 const RATIO_MAX_LAYOUT_WIDTH = 2400
 const RATIO_AT_MIN_LAYOUT_WIDTH = 0.45
 const RATIO_AT_MAX_LAYOUT_WIDTH = 0.65
 
-/** 当前可用宽度对应的面板比例上限 */
+/** Panel ratio cap for the current available width */
 export const panelMaxRatio = (layoutWidth: number): number => {
   const progress = Math.min(
     1,
@@ -50,16 +56,19 @@ export const panelMaxRatio = (layoutWidth: number): number => {
   )
 }
 
-/** 工作区面板的宽度下限（打开文件后要求更宽） */
+/** Lower width bound of the workspace panel (wider once a file is open) */
 export const panelMinWidthFor = (hasEditor: boolean): number =>
   hasEditor ? PANEL_MIN_WITH_EDITOR : PANEL_MIN_WITHOUT_EDITOR
 
 /**
- * 工作区面板的宽度上限：比例上限与「对话至少 MAIN_MIN_WIDTH」取小。
+ * Upper width bound of the workspace panel: the smaller of the ratio cap and "conversation keeps
+ * at least MAIN_MIN_WIDTH".
  *
- * 不变量：`话题栏 + 分隔条 + 对话 + 分隔条 + 面板 <= layoutWidth`（行内不溢出 → 不会被裁）。
- * 极端窄的窗口下 `Math.max(PANEL_MIN_WITH_EDITOR, ...)` 的兜底会主动打破它：此时优先保证
- * 编辑器不是一条缝（面板元素的 minWidth 同样顶着），代价是整行溢出被 `overflow: hidden` 裁掉。
+ * Invariant: `topic bar + resizer + conversation + resizer + panel <= layoutWidth` (the row does
+ * not overflow → nothing gets clipped). In extremely narrow windows the
+ * `Math.max(PANEL_MIN_WITH_EDITOR, ...)` fallback deliberately breaks it: at that point it is
+ * more important that the editor isn't a sliver (the panel element's minWidth pushes the same
+ * way), at the cost of the overflowing row being clipped by `overflow: hidden`.
  */
 export const computePanelMaxWidth = (input: {
   layoutWidth: number
@@ -82,14 +91,16 @@ export const computePanelMaxWidth = (input: {
 }
 
 /**
- * 话题栏（左侧）的宽度范围。
- * 上限必须与 Index.tsx 里话题列的 CSS `maxWidth` 一致：两处不一致时状态能拖到更大的值、
- * 元素却停在 CSS 上限，拖拽末尾就有一段「指针在动、布局不动」的死区（原来是 260 vs 239）。
+ * Width range of the topic bar (left side).
+ * The maximum must match the CSS `maxWidth` of the topic column in Index.tsx: when the two
+ * disagree, the state can be dragged past the CSS cap while the element stops there, leaving a
+ * dead zone at the end of the drag where "the pointer moves but the layout doesn't" (it used to
+ * be 260 vs 239).
  */
 export const SIDEBAR_MIN_WIDTH = 200
 export const SIDEBAR_MAX_WIDTH = 239
 
-/** 话题栏（左侧）的宽度上限：同样要留够对话区与工作区面板 */
+/** Upper width bound of the topic bar (left side): it also has to leave enough room for the conversation and the workspace panel */
 export const computeSidebarMaxWidth = (input: {
   layoutWidth: number
   panelOpen: boolean
@@ -105,10 +116,10 @@ export const computeSidebarMaxWidth = (input: {
   )
 }
 
-/** 拖拽 / 窗口变化后的宽度收敛：先夹进「下限~上限」区间 */
+/** Width convergence after a drag / window resize: first clamp into the [min, max] range */
 export const clampWidth = (width: number, minWidth: number, maxWidth: number): number =>
   Math.min(Math.max(width, minWidth), maxWidth)
 
-/** 打开文件时面板的自动展开宽度（夹在上限之内） */
+/** Auto-expanded panel width when a file is opened (clamped to the upper bound) */
 export const autoOpenPanelWidth = (layoutWidth: number, maxWidth: number): number =>
   Math.min(Math.floor(layoutWidth * PANEL_AUTO_OPEN_RATIO), maxWidth)

@@ -69,10 +69,10 @@ const EntityDetail: React.FC<EntityDetailProps> = ({
     token: { colorBgContainer, borderRadiusLG }
   } = theme.useToken()
   const { t, i18n } = useTranslation()
-  /** 时间戳按当前界面语言格式化（原先硬编码 zh-CN，英文界面下仍是中文习惯） */
+  /** Format timestamps in the current UI language (previously hardcoded to zh-CN, which kept Chinese conventions on English screens) */
   const dateLocale = i18n.resolvedLanguage === 'en-US' ? 'en-US' : 'zh-CN'
 
-  // 构建 entity id → name 的快速查找表
+  // Build an entity id → name lookup table
   const entityNameMap = React.useMemo(() => {
     const map = new Map<number, string>()
     for (const e of entities) {
@@ -81,7 +81,7 @@ const EntityDetail: React.FC<EntityDetailProps> = ({
     return map
   }, [entities])
 
-  // 获取来源文档的标题
+  // Fetch titles of the source docs
   const [docTitles, setDocTitles] = useState<Map<number, string>>(new Map())
 
   useEffect(() => {
@@ -209,7 +209,7 @@ const EntityDetail: React.FC<EntityDetailProps> = ({
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           <Tag color={ENTITY_TYPE_COLORS[entity.type]}>{entityTypeLabel}</Tag>
-          {/* confidence 库列为可空（DEFAULT 1），null 按默认置信度 1 处理 */}
+          {/* The confidence column is nullable (DEFAULT 1); treat null as the default confidence of 1 */}
           {(entity.confidence ?? 1) < 1 && (
             <Tag>
               {t('graph.detail.confidence', {

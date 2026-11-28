@@ -1,23 +1,27 @@
 /**
- * 用户侧**真终端**会话（node-pty + xterm.js）。
+ * User-facing **real terminal** session (node-pty + xterm.js).
  *
- * 与模型侧 `terminal_*` 的行模式会话（terminal-sessions.ts）**刻意分开**：
- * - 行模式那套为工具调用设计（发送命令 → 完成标记切分 → 返回文本），没有 TTY；
- * - 这里给人类用：真 PTY，有回声、真实 prompt、Ctrl+C、颜色、列宽、全屏程序（vim/top）。
+ * Deliberately separate from the model-side `terminal_*` line-mode sessions
+ * (terminal-sessions.ts):
+ * - line mode is built for tool calls (send a command -> split on a completion marker -> return
+ *   text) and has no TTY;
+ * - this one is for humans: a real PTY with echo, a real prompt, Ctrl+C, colors, column width and
+ *   full-screen programs (vim/top).
  *
- * 本模块不 import electron / i18n（可被 node 单测直接驱动）；事件通过 `onData` /
- * `onExit` 回调交给 IPC 层转发。node-pty 1.1 自带 N-API 预编译产物（不依赖 Electron ABI）。
+ * This module imports neither electron nor i18n (node unit tests can drive it directly); events
+ * are handed to the IPC layer through the `onData` / `onExit` callbacks. node-pty 1.1 ships N-API
+ * prebuilt binaries (independent of the Electron ABI).
  */
 import { spawn as nodePtySpawn, type IPty } from 'node-pty'
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 
-/** 每个话题允许的终端会话数（与行模式一致） */
+/** Terminal sessions allowed per topic (same as line mode) */
 export const MAX_PTY_SESSIONS_PER_TOPIC = 3
-/** 空闲多久自动关闭（毫秒） */
+/** How long an idle session lives before it is closed (ms) */
 export const PTY_IDLE_TIMEOUT_MS = 30 * 60_000
-/** 每个会话保留的输出回放上限（字符） */
+/** Output replay cap per session (characters) */
 export const PTY_BUFFER_CHARS = 200_000
 
 export type PtyShellKind = 'pwsh' | 'cmd' | 'sh'
@@ -54,13 +58,13 @@ interface PtyRecord {
 }
 
 export interface PtyTerminalManagerOptions {
-  /** 测试注入：默认 node-pty 的 spawn */
+  /** Test injection: defaults to node-pty's spawn */
   spawn?: typeof nodePtySpawn
-  /** 测试注入：默认 60s 巡检一次空闲会话 */
+  /** Test injection: sweeps idle sessions every 60s by default */
   idleSweepMs?: number
 }
 
-/** 平台默认 shell（可强制指定；找不到可执行文件时由 spawn 抛错→spawn-failed） */
+/** Platform default shell (forced kind; a missing executable makes spawn throw -> spawn-failed) */
 export function resolvePtyShell(requested?: PtyShellKind): {
   file: string
   args: string[]
@@ -76,19 +80,22 @@ export function resolvePtyShell(requested?: PtyShellKind): {
   return { file: shell, args: ['-i'], kind: 'sh' as PtyShellKind }
 }
 
-/** cwd 归一：必须是已存在目录，否则回落到主目录 */
+/** Normalize cwd: it must be an existing directory, otherwise fall back to the home directory */
 export function resolvePtyCwd(cwd: string | undefined): string | null {
   const candidate = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : ''
   if (!candidate) return null
   try {
     if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate
   } catch {
-    // 无权限/竞态：回落
+    // No permission / race: fall back
   }
   return null
 }
 
-/** 列宽/行数归一（xterm fit 给的是小数；异常值回落到 80x24，过大的夹到安全上限） */
+/**
+ * Normalize cols/rows (xterm fit yields fractions; bad values fall back to 80x24, oversized ones
+ * are clamped)
+ */
 export function clampPtySize(cols: unknown, rows: unknown): { cols: number; rows: number } {
   const rawCols = Number.isFinite(cols) ? Math.floor(Number(cols)) : 0
   const rawRows = Number.isFinite(rows) ? Math.floor(Number(rows)) : 0
@@ -103,11 +110,11 @@ export class PtyTerminalManager {
   private readonly spawnFn: typeof nodePtySpawn
   private readonly sweepTimer: NodeJS.Timeout
 
-  /** 输出事件（IPC 层可做批处理后再转发） */
+  /** Output event (the IPC layer may batch it before forwarding) */
   onData?: (sessionId: string, data: string) => void
-  /** 退出事件（exitCode=null 表示被主动关闭时没有退出码） */
+  /** Exit event (exitCode=null means it was closed on purpose and has no exit code) */
   onExit?: (sessionId: string, exitCode: number | null) => void
-  /** 列表变化（新建/退出/关闭）——前端刷新页签用 */
+  /** List changed (created/exited/closed) — used by the frontend to refresh tabs */
   onSessionsChanged?: () => void
 
   constructor(options: PtyTerminalManagerOptions = {}) {
@@ -117,7 +124,7 @@ export class PtyTerminalManager {
     this.sweepTimer.unref?.()
   }
 
-  /** 新建 PTY 会话 */
+  /** Open a new PTY session */
   open(input: {
     topicId: number
     cwd?: string
@@ -176,7 +183,8 @@ export class PtyTerminalManager {
       record.exitCode = exitCode
       this.onExit?.(record.id, exitCode)
       this.onSessionsChanged?.()
-      // 退出后保留 10 分钟（前端还能看到最后一屏并用关闭按钮清理），再回收
+      // Keep it for 10 minutes after exit (the frontend can still show the last screen and clear
+      // it with the close button), then reclaim
       const cleanup = setTimeout(() => this.sessions.delete(record.id), 10 * 60_000)
       cleanup.unref?.()
     })
@@ -184,7 +192,7 @@ export class PtyTerminalManager {
     return { ok: true, session: this.viewOf(record) }
   }
 
-  /** 键盘输入原样写入 PTY（xterm onData 直接转发，含 Ctrl+C、方向键、粘贴） */
+  /** Write keyboard input straight into the PTY (xterm onData as-is: Ctrl+C, arrows, paste) */
   write(sessionId: string, data: string): boolean {
     const record = this.sessions.get(sessionId)
     if (!record || !record.alive) return false
@@ -197,7 +205,7 @@ export class PtyTerminalManager {
     }
   }
 
-  /** 终端尺寸变化（xterm fit → pty.resize） */
+  /** Terminal resized (xterm fit -> pty.resize) */
   resize(sessionId: string, cols: unknown, rows: unknown): boolean {
     const record = this.sessions.get(sessionId)
     if (!record || !record.alive) return false
@@ -213,7 +221,7 @@ export class PtyTerminalManager {
     }
   }
 
-  /** 主动关闭（杀掉整棵进程树由 node-pty kill 处理） */
+  /** Close on purpose (killing the whole process tree is handled by node-pty kill) */
   close(sessionId: string): { ok: true; found: boolean } {
     const record = this.sessions.get(sessionId)
     if (!record) return { ok: true, found: false }
@@ -221,7 +229,7 @@ export class PtyTerminalManager {
     try {
       record.process.kill()
     } catch {
-      // 已退出：kill 抛错无所谓
+      // Already exited: a throwing kill is harmless
     }
     record.alive = false
     this.onExit?.(sessionId, null)
@@ -245,7 +253,7 @@ export class PtyTerminalManager {
       .map((record) => this.viewOf(record))
   }
 
-  /** 输出回放（切页签/重开面板时 xterm 先写这份再续实时流） */
+  /** Output replay (on tab switch / panel reopen, xterm writes this first, then goes live) */
   buffer(sessionId: string): string {
     return this.sessions.get(sessionId)?.buffer ?? ''
   }
@@ -279,17 +287,17 @@ export class PtyTerminalManager {
     }
   }
 
-  /** 诊断：当前活跃进程数（测试用） */
+  /** Diagnostics: number of currently active processes (for tests) */
   get activeCount(): number {
     return [...this.sessions.values()].filter((record) => record.alive).length
   }
 
-  /** 全局统计（开始页/侧栏角标用）：活跃 + 全部保留中的会话数 */
+  /** Global stats (start page / sidebar badge): active plus all retained session counts */
   stats(): { alive: number; total: number } {
     const all = [...this.sessions.values()]
     return { alive: all.filter((record) => record.alive).length, total: all.length }
   }
 }
 
-/** 进程级单例（IPC 层接线 onData/onExit） */
+/** Process-level singleton (the IPC layer wires up onData/onExit) */
 export const ptyTerminals = new PtyTerminalManager()

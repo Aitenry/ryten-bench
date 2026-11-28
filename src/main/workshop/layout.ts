@@ -3,26 +3,34 @@ import * as path from 'path'
 import { listDraftFiles, readDraftFile } from './store'
 
 /**
- * 插件界面的**布局与主题体检**（验收电池的 `layout.scan` 项）。
+ * **Layout and theme health check** for the plugin UI (the `layout.scan` item of the
+ * verification battery).
  *
- * 为什么单独做这一块：插件最常见的三类「装上去能用、但界面是坏的」问题，
- * 都不是编译错误、也不是宿主契约错误，而是**样式约定**错误——
+ * Why a dedicated module: the three most common "installs fine but the UI is broken" problems
+ * in plugins are neither compile errors nor host-contract violations, but **styling
+ * convention** mistakes —
  *
- * 1. **整页滚动条**：插件根节点写了 `overflow-auto`（尤其 `h-full overflow-auto`）。
- *    宿主的插件页面挂在 `.frame-body-center`（`flex:1; overflow:auto; min-height:0`）里，
- *    它的高度是确定的；根节点自己滚会把标题、页签一起滚出窗口，看起来就是「整个应用在滚」。
- * 2. **页签全部叠在一起**：给 antd 6 Tabs 的 `styles.content` 写了 `display`。
- *    antd 靠 `.ant-tabs-content-hidden` 这个**类选择器**隐藏非激活页签，而内联样式优先级更高
- *    —— 写成 flex/block 之后隐藏失效，访问过的每个 pane（各自是一个 `.ant-tabs-content`）
- *    都绝对定位铺满 body，同时画出来，症状是「内容都挤在一堆」。
- * 3. **暗色主题不生效**：用了 Tailwind 的 `dark:` 变体。插件编出来的 `plugin.css` 没有
- *    `@custom-variant dark`，`dark:` 落成的是 `@media (prefers-color-scheme: dark)`（跟**操作系统**
- *    配色），而宿主是靠 `document.documentElement` 的 `.dark` 类 + antd `darkAlgorithm` 切主题的，
- *    两者对不上：应用暗色 + 系统亮色 = 插件仍画浅色。
+ * 1. **Full-page scrollbar**: the plugin root node carries `overflow-auto` (especially
+ *    `h-full overflow-auto`). The host's plugin page is mounted inside `.frame-body-center`
+ *    (`flex:1; overflow:auto; min-height:0`) and its height is fixed; a scrolling root drags
+ *    the title and tabs out of the window, which looks like "the whole app is scrolling".
+ * 2. **All tabs stacked on top of each other**: `display` is set on antd 6 Tabs'
+ *    `styles.content`. antd hides inactive tabs via the `.ant-tabs-content-hidden` **class
+ *    selector**, and inline styles have higher priority — once flex/block is written the
+ *    hiding stops working, and every visited pane (each a `.ant-tabs-content`) is absolutely
+ *    positioned over the whole body and painted at the same time, so "the content is all
+ *    crammed together".
+ * 3. **Dark theme does not apply**: the Tailwind `dark:` variant is used. The plugin's compiled
+ *    `plugin.css` has no `@custom-variant dark`, so `dark:` lands as
+ *    `@media (prefers-color-scheme: dark)` (following the **operating system** color scheme),
+ *    while the host switches themes via the `.dark` class on `document.documentElement` plus
+ *    antd's `darkAlgorithm`; the two do not match: app dark + system light = plugin still
+ *    paints light.
  *
- * 这些都是**源码级**判据（不需要跑界面），所以能放进离线验收电池里；
- * 真机取证仍然靠探针与真装（见 README 的回归表）。检查是**只读**的：
- * 报告给「哪个文件、哪一行、怎么改」，绝不改用户的代码。
+ * These are all **source-level** criteria (no need to run the UI), so they fit into the offline
+ * verification battery; real-device evidence still comes from the probe and a real install. The
+ * check is **read-only**: the report says "which file, which line, how to fix", and never
+ * modifies the user's code.
  */
 
 export type LayoutFindingKind =
@@ -34,23 +42,25 @@ export type LayoutFindingKind =
 
 export interface LayoutFinding {
   kind: LayoutFindingKind
-  /** 草稿内相对路径 */
+  /** Relative path within the draft */
   file: string
   line: number
   excerpt: string
-  /** 判据与改法（会原样进验收报告） */
+  /** Criterion and fix (goes verbatim into the verification report) */
   message: string
 }
 
-/** 只扫这些后缀的源码（渲染层才是画界面的地方） */
+/** Scan only source files with these extensions (the renderer is where the UI is drawn) */
 const RENDERER_EXT = /\.(tsx|jsx|ts|js)$/
 
 /**
- * 去掉注释，**保留行号**（把注释放成等量空白）。
+ * Strip comments while **preserving line numbers** (comments become equal-length blank space).
  *
- * 为什么必须先去注释：模板与真实插件都习惯在注释里贴反例（「不要写 `h-full overflow-auto`」），
- * 不去注释就会把「教人别这么写」的文档本身判成违规。字符串字面量原样保留——
- * 类名就在字符串里。小状态机处理 `'` / `"` / 反引号与 `//` / 斜杠星号。
+ * Why comments must be stripped first: templates and real plugins habitually paste
+ * counter-examples in comments ("do not write `h-full overflow-auto`"); without stripping, the
+ * documentation that teaches people not to do this would itself be flagged as a violation.
+ * String literals are preserved as-is — class names live in strings. A small state machine
+ * handles `'` / `"` / backticks and `//` / slash-star.
  */
 export function stripComments(source: string): string {
   let out = ''
@@ -96,7 +106,7 @@ export function stripComments(source: string): string {
   return out
 }
 
-/** 渲染层的源码文本（草稿里没有 node_modules，全部是纯文本文件） */
+/** Renderer source texts (a draft has no node_modules; everything is a plain text file) */
 function rendererSources(draft: string): Array<{ file: string; text: string }> {
   const out: Array<{ file: string; text: string }> = []
   for (const entry of listDraftFiles(draft)) {
@@ -106,13 +116,13 @@ function rendererSources(draft: string): Array<{ file: string; text: string }> {
     try {
       out.push({ file: rel, text: stripComments(readDraftFile(draft, rel)) })
     } catch {
-      // 读不到的文件跳过（正在被删 / 权限问题）：体检不该因此炸掉整条验收
+      // Skip files that cannot be read (being deleted / permission issues): the health check should not break the whole verification because of that
     }
   }
   return out
 }
 
-/** 逐行扫描（报告里要给出可跳转的行号） */
+/** Scan line by line (the report needs jumpable line numbers) */
 function eachLine(
   text: string,
   visit: (line: string, index: number) => LayoutFinding | null
@@ -125,7 +135,7 @@ function eachLine(
   return out
 }
 
-/** `className` 属性位置上的类名（双引号 / 单引号 / JSX 表达式里的字符串字面量都算） */
+/** Class names at `className` attribute positions (double quotes / single quotes / string literals inside JSX expressions all count) */
 function classNameTextOf(line: string): string[] {
   const out: string[] = []
   const re = /className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\})/g
@@ -145,14 +155,14 @@ function classNameTextOf(line: string): string[] {
 const hasClass = (text: string, name: string): boolean =>
   new RegExp('(^|[\\s\'"`{])' + name + '($|[\\s\'"`}])').test(text)
 
-/** 规则 1：撑满高度的容器不能自己滚（整页滚动条的来源） */
+/** Rule 1: a container that fills the height must not scroll itself (the source of full-page scrollbars) */
 function scanScrollRoot(file: string, text: string): LayoutFinding[] {
   return eachLine(text, (line, index) => {
     const offender = classNameTextOf(line).find(
       (value) => hasClass(value, 'overflow-auto') || hasClass(value, 'overflow-scroll')
     )
     if (!offender) return null
-    // 只有「同时又撑满高度」时才是那类整页滚动条；局部滚动块（某个面板内部）不点
+    // It is that kind of full-page scrollbar only when the container also fills the height; local scroll blocks (inside some panel) are not flagged
     const fullHeight =
       hasClass(offender, 'h-full') ||
       hasClass(offender, 'h-screen') ||
@@ -169,12 +179,12 @@ function scanScrollRoot(file: string, text: string): LayoutFinding[] {
   })
 }
 
-/** 规则 2：不要给 Tabs 的 pane（`styles.content`）写 display —— 隐藏靠的是类选择器 */
+/** Rule 2: do not set display on a Tabs pane (`styles.content`) — hiding relies on a class selector */
 function scanTabsPane(file: string, text: string): LayoutFinding[] {
   const out: LayoutFinding[] = []
   const lines = text.split(/\r?\n/)
-  // 只看 `content:` 键自己那一对花括号里的东西：
-  // 兄弟键 `body: { display: 'flex' }`（撑满高度必须写的那条）不能被算进来。
+  // Only look at what is inside the braces of the `content:` key itself:
+  // a sibling key `body: { display: 'flex' }` (which must be written to fill the height) must not be counted here.
   const re = /(^|[\s{,])(?:content|contentStyle)\s*:/g
   let match: RegExpExecArray | null
   while ((match = re.exec(text)) !== null) {
@@ -205,7 +215,7 @@ function scanTabsPane(file: string, text: string): LayoutFinding[] {
   return out
 }
 
-/** 规则 2b：不要给 pane 写 flex:1（pane 会瓜分高度） */
+/** Rule 2b: do not set flex:1 on a pane (panes would divide the height) */
 function scanTabsContentFlex(file: string, text: string): LayoutFinding[] {
   return eachLine(text, (line, index) => {
     if (!/(^|[\s{,])content\s*:\s*\{[^}]*flex\s*:\s*1/.test(line)) return null
@@ -220,7 +230,7 @@ function scanTabsContentFlex(file: string, text: string): LayoutFinding[] {
   })
 }
 
-/** 规则 3：不能用 Tailwind 的 dark: 变体（跟的是系统配色，不是应用主题） */
+/** Rule 3: the Tailwind dark: variant must not be used (it follows the system color scheme, not the app theme) */
 function scanDarkVariant(file: string, text: string): LayoutFinding[] {
   return eachLine(text, (line, index) => {
     const offenders = classNameTextOf(line).filter((value) => /(^|\s)dark:/.test(value))
@@ -236,13 +246,13 @@ function scanDarkVariant(file: string, text: string): LayoutFinding[] {
   })
 }
 
-/** 规则 4：Modal 必须有高度上限（否则矮窗口下冒出整页滚动条） */
+/** Rule 4: a Modal must have a height cap (otherwise a full-page scrollbar appears in short windows) */
 function scanModalHeight(file: string, text: string): LayoutFinding[] {
   const out: LayoutFinding[] = []
   const lines = text.split(/\r?\n/)
   lines.forEach((line, index) => {
     if (!/<Modal\b/.test(line)) return
-    // 开标签可能跨多行：取到第一个 `>` 为止（自闭合也一样）
+    // The opening tag may span multiple lines: take up to the first '>' (self-closing tags too)
     const window = lines.slice(index, index + 8).join('\n')
     const end = window.indexOf('>')
     const openTag = end >= 0 ? window.slice(0, end + 1) : window
@@ -264,7 +274,7 @@ function scanModalHeight(file: string, text: string): LayoutFinding[] {
   return out
 }
 
-/** 单份源码的全部体检结果 */
+/** All health-check results for a single source file */
 export function scanRendererSource(file: string, text: string): LayoutFinding[] {
   const code = stripComments(text)
   return [
@@ -277,9 +287,10 @@ export function scanRendererSource(file: string, text: string): LayoutFinding[] 
 }
 
 /**
- * 扫一份草稿的渲染层源码。
+ * Scan the renderer sources of a draft.
  *
- * 返回值只包含「确定是坑」的命中；每一条都带文件、行号与改法，验收报告直接展示给用户/模型。
+ * The return value contains only hits that are "definitely a pitfall"; each entry carries the
+ * file, line number, and fix, and the verification report shows them directly to the user/model.
  */
 export function scanWorkshopLayouts(draft: string): LayoutFinding[] {
   const out: LayoutFinding[] = []
@@ -289,7 +300,7 @@ export function scanWorkshopLayouts(draft: string): LayoutFinding[] {
   return out
 }
 
-/** 草稿目录里有没有可扫的渲染层源码（草稿被删后 verify 不该抛） */
+/** Whether the draft directory has renderer sources to scan (verify must not throw after the draft is deleted) */
 export function layoutScanAvailable(draft: string): boolean {
   try {
     return fs.statSync(path.join(draft, 'renderer')).isDirectory()

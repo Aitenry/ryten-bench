@@ -3,15 +3,16 @@ import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from '@tiptap/react'
 
 /**
- * 文件引用内联节点（chip）。
+ * Inline file reference node (chip).
  *
- * 用 ProseMirror 的 atom 节点实现：不可编辑、可整体删除（光标紧贴时退格/删除键
- * 自动删除整个节点）、IME 组合、粘贴、撤销全部由 ProseMirror 内核托管，
- * 无需手工维护 DOM。
+ * Implemented as a ProseMirror atom node: non-editable, removable as a whole (when the cursor
+ * sits next to it, backspace/delete removes the entire node), IME composition, paste, and undo
+ * are all handled by the ProseMirror core, so no manual DOM management is needed.
  *
- * 渲染为 NodeView（React 组件），样式复用原 contentEditable 方案的 chip
- * 高度契约：13px 字号 + 2px padding + 1px border = 19px 行高。
- * 颜色使用 CSS 变量（--file-chip-*），由 HarnessInput 容器按主题注入。
+ * Rendered as a NodeView (React component); styling preserves the chip height contract of the
+ * previous contentEditable approach: 13px font size + 2px padding + 1px border = 19px line
+ * height. Colors use CSS variables (--file-chip-*) injected by the HarnessInput container per
+ * theme.
  */
 const FileRef = Node.create({
   name: 'fileRef',
@@ -36,7 +37,7 @@ const FileRef = Node.create({
     return ['span', mergeAttributes(HTMLAttributes, { 'data-file-ref': '' })]
   },
 
-  // editor.getText() 时以路径文本参与，与发送内容兼容
+  // Contributes its path text to editor.getText(), keeping it compatible with sent content
   renderText({ node }) {
     return node.attrs.path ?? ''
   },

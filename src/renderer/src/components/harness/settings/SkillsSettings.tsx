@@ -31,12 +31,15 @@ interface SkillDetail extends SkillInfo {
 }
 
 /**
- * 技能页：目录配置 + 技能卡片。
+ * Skills page: directory configuration + skill cards.
  *
- * 用户 2026-11-27 口径：
- * - 技能是否启用仍在对话输入框下面逐会话选择；技能页**不做启用开关**；
- * - 技能页只负责管理：点卡片看 SKILL.md 正文，卡片右下角「编辑 / 删除」；
- * - 列表不再分页：技能多时让卡片网格自己滚动，页面标题/目录区固定在顶部。
+ * User wording 2026-11-27:
+ * - Whether a skill is enabled is still chosen per conversation under the chat input; the skills
+ *   page has **no enable switch**;
+ * - The skills page only manages: click a card to read SKILL.md, and "Edit / Delete" sits at the
+ *   card's bottom-right;
+ * - The list is no longer paged: with many skills the card grid scrolls by itself, while the page
+ *   title / directory area stay fixed at the top.
  */
 const SkillsSettings: React.FC = () => {
   const {
@@ -49,26 +52,29 @@ const SkillsSettings: React.FC = () => {
 
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   /**
-   * 目录输入框的**草稿**：允许用户先输入/浏览，点「保存」才生效。
-   * 技能列表与搜索只看已保存的 `savedSkillsPath`——否则每敲一个字都要重扫旧目录，
-   * 界面上还会出现「输入框是新路径、列表是旧目录」的对不上。
+   * **Draft** of the directory input: the user may type / browse first; it takes effect only on
+   * "Save". The skill list and search only look at the saved `savedSkillsPath` - otherwise every
+   * keystroke would rescan the old directory, and the UI would show a mismatch between "input is
+   * the new path, list is the old directory".
    */
   const [skillsPathDraft, setSkillsPathDraft] = useState('')
   const savedSkillsPath = settings?.harness?.skillsPath ?? ''
   const [skills, setSkills] = useState<SkillInfo[]>([])
-  /** 「已发现的技能」标题右侧的搜索词：只过滤当前列表，不改目录/启用状态 */
+  /** Search term right of the "Discovered skills" title: filters only the current list, does
+   * not change the directory / enabled state */
   const [skillQuery, setSkillQuery] = useState('')
   const [loadingSkills, setLoadingSkills] = useState(false)
   const [skillsLoadFailed, setSkillsLoadFailed] = useState(false)
   const [savingPath, setSavingPath] = useState(false)
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0)
 
-  /** 查看正文：先放元信息开弹窗，正文回来再填（读盘很快，但保持有反馈） */
+  /** View content: open the modal with metadata first, fill in the content when it arrives
+   * (disk reads are fast, but keep feedback) */
   const [detail, setDetail] = useState<SkillDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const detailRequestRef = useRef(0)
 
-  /** 编辑：SKILL.md 原文（含 frontmatter） */
+  /** Edit: raw SKILL.md content (including frontmatter) */
   const [editingSkill, setEditingSkill] = useState<SkillInfo | null>(null)
   const [editRaw, setEditRaw] = useState('')
   const [editLoading, setEditLoading] = useState(false)
@@ -94,8 +100,9 @@ const SkillsSettings: React.FC = () => {
     loadSettings().then()
   }, [loadSettings])
 
-  // 已保存目录有效时加载全部技能：技能数量是「本地目录里的子目录数」，一页 5 个会让宽屏
-  // 只剩一行、下面大片空白，也看不到后面的技能；直接全量（主进程只读 frontmatter）。
+  // Load all skills when the saved directory is valid: the count is "subdirectories in the local
+  // directory", and a page size of 5 would leave one row plus a big empty area on widescreen with
+  // later skills unseen; load everything instead (the main process only reads frontmatter).
   useEffect(() => {
     if (!savedSkillsPath) {
       setSkills([])
@@ -124,12 +131,14 @@ const SkillsSettings: React.FC = () => {
     }
   }, [savedSkillsPath, skillsRefreshKey])
 
-  // 换目录后上一份搜索词没有意义，清掉，避免新目录一进来就是空列表
+  // The previous search term is meaningless after changing directories; clear it so the new
+  // directory does not start with an empty list
   useEffect(() => {
     setSkillQuery('')
   }, [savedSkillsPath])
 
-  /** 搜索：名称 / 目录 id / 描述都认（与输入框面板的搜索口径一致） */
+  /** Search: matches name / directory id / description (same matching rules as the input
+   * panel's search) */
   const filteredSkills = useMemo(() => {
     const keyword = skillQuery.trim().toLowerCase()
     if (!keyword) return skills
@@ -184,7 +193,8 @@ const SkillsSettings: React.FC = () => {
     }
   }
 
-  /** 打开正文：先显示弹窗骨架，读到后替换；关掉或换技能会作废旧请求 */
+  /** Open content: show the modal skeleton first and replace it when loaded; closing or
+   * switching skills invalidates the old request */
   const handleOpenDetail = async (skill: SkillInfo): Promise<void> => {
     const requestId = detailRequestRef.current + 1
     detailRequestRef.current = requestId
@@ -218,7 +228,8 @@ const SkillsSettings: React.FC = () => {
     setDetailLoading(false)
   }
 
-  /** 打开编辑：拉 SKILL.md 原文（含 frontmatter），保存时原样写回 */
+  /** Open edit: fetch the raw SKILL.md (including frontmatter) and write it back unchanged on
+   * save */
   const handleOpenEdit = async (skill: SkillInfo): Promise<void> => {
     const requestId = editRequestRef.current + 1
     editRequestRef.current = requestId
@@ -324,7 +335,7 @@ const SkillsSettings: React.FC = () => {
         description={t('skillsSettings.pageDescription')}
       />
 
-      {/* 目录选择（固定在顶部，不随技能列表滚动） */}
+      {/* Directory selection (fixed at the top, does not scroll with the skill list) */}
       <SettingsSection
         style={{ flexShrink: 0 }}
         title={t('skillsSettings.dirSectionTitle')}
@@ -364,7 +375,7 @@ const SkillsSettings: React.FC = () => {
         )}
       </SettingsSection>
 
-      {/* 技能列表：吃掉剩余高度，卡片网格自己滚动 */}
+      {/* Skill list: takes the remaining height, the card grid scrolls by itself */}
       {savedSkillsPath ? (
         <SettingsSection
           style={{
@@ -422,7 +433,8 @@ const SkillsSettings: React.FC = () => {
                   onClick={() => void handleOpenDetail(skill)}
                   footerEnd={
                     <div
-                      // 编辑 / 删除自己处理点击，不要把「开卡片详情」一起触发
+                      // Edit / delete handle their own clicks; do not also trigger
+                      // "open card detail"
                       onClick={(event) => event.stopPropagation()}
                       className="flex items-center"
                       style={{ gap: 2, marginLeft: 'auto' }}
@@ -475,7 +487,8 @@ const SkillsSettings: React.FC = () => {
         </SettingsSection>
       ) : null}
 
-      {/* 技能正文：复用资料库的 Markdown 预览弹窗（同一套整窗宽布局与滚动容器） */}
+      {/* Skill content: reuses the library's Markdown preview modal (same full-window layout
+          and scroll container) */}
       <MarkdownPreviewModal
         open={detail !== null}
         onCancel={closeDetail}
@@ -485,7 +498,7 @@ const SkillsSettings: React.FC = () => {
         loading={detailLoading}
       />
 
-      {/* 编辑 SKILL.md 原文（含 frontmatter） */}
+      {/* Edit raw SKILL.md (including frontmatter) */}
       <Modal
         open={editingSkill !== null}
         title={t('skillsSettings.editTitle', {

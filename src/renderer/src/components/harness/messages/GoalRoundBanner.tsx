@@ -3,31 +3,34 @@ import { RiArrowLeftSLine, RiArrowRightSLine, RiFlag2Line } from '@remixicon/rea
 import { useTranslation } from '@renderer/i18n'
 
 /**
- * 目标自动续跑的批次横幅：居中的一行虚框，显示「第 N/M 轮」+ 目标原文，多轮时带左右切换。
+ * Batch banner for automatic goal-continuation rounds: a centered dashed row showing "round N/M"
+ * plus the goal objective, with left/right navigation when there are multiple rounds.
  *
- * 两个约束都来自用户 2026-09-19 的反馈：
- *  ①「这个内容在窄窗口时，会导致滚动条的出现，优化布局」——横幅**任何宽度下都不许撑宽容器**：
- *     外层 min-width:0、横幅 max-width:100% + min-width:0 + overflow:hidden，
- *     除了 13px 的旗标与切换按钮外，文字一律可收缩并按省略号截断（单行）；
- *  ②「同一个批次里面的 AI 回复这些轮次合并起来，使用左右点击切换」——轮次切换就落在这里：
- *     ‹ › 紧跟标签，永远可见（不参与收缩），未选中的轮次由调用方**不挂载**。
+ * Both constraints come from user feedback on 2026-09-19:
+ *  ① "This content causes a scrollbar in narrow windows — optimize the layout" — the banner must
+ *     **never widen its container at any width**: outer min-width:0, banner max-width:100% +
+ *     min-width:0 + overflow:hidden; apart from the 13px flag and the nav buttons, all text can
+ *     shrink and is truncated with an ellipsis (single line);
+ *  ② "Merge these AI reply rounds within the same batch and switch them with left/right clicks" —
+ *     round switching lives here: ‹ › sit right after the label, always visible (never shrink),
+ *     and unselected rounds are **not mounted** by the caller.
  */
 export interface GoalRoundBannerProps {
-  /** 当前轮次（1 基，批次内位置） */
+  /** Current round (1-based, position within the batch) */
   current: number
-  /** 批次总轮次；不传表示这条横幅不属于多轮批次（无左右切换） */
+  /** Total rounds in the batch; omit when this banner does not belong to a multi-round batch (no left/right navigation) */
   total?: number
-  /** 目标原文（可收缩、单行省略） */
+  /** Goal objective (shrinkable, single-line ellipsis) */
   objective: string
   colorTextSecondary: string
   colorBorderSecondary: string
-  /** 上一轮（current > 1 时才可点） */
+  /** Previous round (clickable only when current > 1) */
   onPrev?: () => void
-  /** 下一轮（current < total 时才可点） */
+  /** Next round (clickable only when current < total) */
   onNext?: () => void
 }
 
-/** 单行可收缩文本：min-width 0 是能省略号截断的前提（flex 项默认 min-width:auto 不会缩到内容以下） */
+/** Single-line shrinkable text: min-width 0 is required for ellipsis truncation (flex items default to min-width:auto and will not shrink below their content) */
 const shrinkable: React.CSSProperties = {
   minWidth: 0,
   flex: '0 1 auto',
@@ -37,9 +40,10 @@ const shrinkable: React.CSSProperties = {
 }
 
 /**
- * 目标原文：收缩优先级远高于「第 N/M 轮」标签（shrink 权重 100 : 1）。
- * 否则窄窗口下两个可收缩项会按内容大小平分压缩，标签被挤成「目…」——轮次信息反而没了。
- * 目标原文本身在输入框上方的 GoalBar 里也有完整版，这里先让它缩。
+ * Goal objective: shrinks with much higher priority than the "round N/M" label (shrink weight 100 : 1).
+ * Otherwise, in a narrow window the two shrinkable items would share compression by content size and
+ * the label would be squeezed into "G…" — losing the round information. The full objective is also
+ * available in the GoalBar above the input box, so let it shrink first here.
  */
 const objectiveStyle: React.CSSProperties = {
   ...shrinkable,
@@ -92,8 +96,9 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
 
   return (
     <>
-      {/* min-width:0 / max-width:100%：让居中的一行在窄容器里能整体收缩，
-          且永远不会比父级更宽（否则 flex 项按内容最小宽撑宽父级 → 横向滚动条） */}
+      {/* min-width:0 / max-width:100%: let the single centered row shrink as a whole in a narrow
+          container and never be wider than the parent (otherwise the flex item would widen the
+          parent by its min-content width → horizontal scrollbar) */}
       <div className="flex justify-center mb-4" style={{ minWidth: 0, maxWidth: '100%' }}>
         <div
           data-goal-banner
@@ -112,8 +117,10 @@ const GoalRoundBanner: React.FC<GoalRoundBannerProps> = ({
           }}
         >
           <RiFlag2Line size={13} style={{ flex: '0 0 auto' }} />
-          {/* 轮次标签不参与收缩：它是这条横幅的主要信息（目标原文在 GoalBar 里有完整版）。
-              `text-overflow: ellipsis` 对 1px 溢出也会触发，让标签可缩会被目标原文挤掉一个字。 */}
+          {/* The round label does not shrink: it is the banner's main information (the full
+              objective is in the GoalBar). `text-overflow: ellipsis` triggers even at 1px of
+              overflow, so making the label shrinkable would let the objective squeeze one
+              character out of it. */}
           <span style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>
             {t('harness.userMessage.goalRound', {
               round: navigable ? `${current}/${totalRounds}` : current

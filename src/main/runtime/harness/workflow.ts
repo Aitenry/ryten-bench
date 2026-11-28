@@ -11,21 +11,26 @@ import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
 /**
- * 工作流工具（workflow）— 对应 deepseek-harness 的 dsh-workflow / dsh-tool-workflow 体系
+ * Workflow tool — fanning work out to many subagents from a JavaScript script
  *
- * 机制（参考 DSH，v1 主进程内执行）：
- * - 模型编写一段 JavaScript 编排脚本（纯脚本体，支持顶层 await，以 return 结束），
- *   用 agent / pipeline / parallel / phase / log / args 六个钩子做多代理 fan-out；
- * - 脚本在主进程 node:vm 沙箱执行（无 fs/网络/定时器/Node 全局），初始同步切片 5s 超时；
- * - 所有错误码都是 fatal（误用钩子/非法选项/超上限 → 整个脚本终止），
- *   而 pipeline 的 stage 抛错只丢弃该项、parallel 的 thunk 抛错解析为 null；
- * - agent() 启动一次性子代理（业务工具 + 文件工具，不含 task/goal/jobs/ask，
- *   防止递归嵌套）；有 opts.schema 时校验为对象（失败/非对象 → null）；
- * - 上限：并发（默认 4）、总代理数（默认 50）；
- * - 工具前台阻塞直至运行结束，返回 { stopReason, value, error?, agentsStarted }。
+ * Mechanism (v1 runs in the main process):
+ * - The model writes a JavaScript orchestration script (plain script body, top-level await
+ *   supported, ends with return) and uses the six hooks agent / pipeline / parallel / phase /
+ *   log / args to fan work out across subagents;
+ * - The script runs in a node:vm sandbox in the main process (no fs/network/timers/Node globals);
+ *   the initial synchronous slice has a 5s timeout;
+ * - Every error code is fatal (misused hook / invalid option / cap exceeded → the whole script
+ *   terminates), while a throwing pipeline stage drops only that item and a throwing parallel
+ *   thunk resolves to null;
+ * - agent() starts a one-shot subagent (business tools + file tools, without task/goal/jobs/ask,
+ *   to prevent recursive nesting); when opts.schema is given, the result is validated as an
+ *   object (failure or non-object → null);
+ * - Limits: concurrency (default 4) and total agents (default 50);
+ * - The tool blocks in the foreground until the run ends and returns
+ *   { stopReason, value, error?, agentsStarted }.
  */
 
-/** 工作流运行结果 */
+/** Workflow run result */
 export interface WorkflowRunResult {
   stopReason: 'completed' | 'cancelled' | 'error'
   value?: unknown
@@ -33,19 +38,19 @@ export interface WorkflowRunResult {
   agentsStarted: number
 }
 
-/** 工作流工具上下文（由 Runtime 注入，复用主运行时组件） */
+/** Workflow tool context (injected by the Runtime, reusing main runtime components) */
 export interface WorkflowToolContext {
   mainModel: BaseChatModel
   resolveModel: (spec: string | undefined) => Promise<BaseChatModel | undefined>
-  /** 工作流子代理工具集（业务工具 + 文件工具；不含任务/目标/提问/续接控制） */
+  /** Tool set for workflow subagents (business + file tools; no task/goal/ask/continuation) */
   buildAgentTools: () => StructuredToolInterface[]
   recursionLimit: number
-  /** 工具调用总次数上限（模型级「工具调用轮数」；与主图共用同一模型设置） */
+  /** Total tool call cap (model-level "tool call rounds"; shared with the main graph) */
   maxToolCalls: number
   spillRef?: { current?: SpillStore }
 }
 
-/** JSON Schema 子集校验（仅 DSH 允许的关键字） */
+/** JSON Schema subset validation (only the allowed keywords) */
 const ALLOWED_SCHEMA_KEYS = new Set([
   'type',
   'properties',
@@ -143,18 +148,20 @@ function validateSubset(schema: Record<string, unknown>, value: unknown, path = 
   }
 }
 
-/** 并发上限（desktop 保守值；DSH 为 min(16, CPU-2)） */
+/** Concurrency cap (a conservative desktop value) */
 const MAX_CONCURRENT_AGENTS = 4
-/** 总代理数上限 */
+/** Total agent cap */
 const DEFAULT_MAX_TOTAL_AGENTS = 50
 /**
- * 工作流脚本墙钟硬上限：vm 的 timeout 只约束同步执行段，脚本若返回永不 settle 的
- * Promise（如 `await new Promise(() => {})`）会让工具调用永久挂起——宿主侧加一道竞速
- * 保证工具能返回；正常编排（即使 50 个子代理串行）也远达不到 30 分钟。
+ * Hard wall-clock cap for a workflow script: the vm timeout only constrains synchronous
+ * execution, and a script returning a never-settling Promise (such as
+ * `await new Promise(() => {})`) would hang the tool call forever — the host adds a race so the
+ * tool always returns; normal orchestration (even 50 subagents in series) stays far below 30
+ * minutes.
  */
 const WORKFLOW_HARD_TIMEOUT_MS = 30 * 60 * 1000
 
-/** 运行一次工作流脚本 */
+/** Run a workflow script once */
 export async function runWorkflow(
   script: string,
   meta: Record<string, unknown>,
@@ -164,7 +171,7 @@ export async function runWorkflow(
   maxTotalAgents = DEFAULT_MAX_TOTAL_AGENTS
 ): Promise<WorkflowRunResult> {
   const m = getAgentToolTexts()
-  // meta 前置校验（DSH start() 同步校验：meta 非法 → META_INVALID）
+  // Upfront meta validation (meta is validated synchronously: invalid meta → META_INVALID)
   if (!meta || typeof meta !== 'object') {
     return {
       stopReason: 'error',
@@ -197,13 +204,15 @@ export async function runWorkflow(
   let agentsStarted = 0
   let cancelled = false
   let rejectGuard: ((reason: Error) => void) | null = null
-  // 工作流级取消控制器：外部取消/脚本失败/超时都会中止在飞的子代理
-  //（修复：此前脚本出错后已启动的子代理继续跑完，白烧 token 且输出无人消费）
+  // Workflow-level cancel controller: external cancellation, script failure, and timeout all
+  // abort in-flight subagents (fix: previously subagents started before a script error kept
+  // running to completion, burning tokens with nobody consuming their output)
   const workflowAbort = new AbortController()
   const onSignalAbort = (): void => {
     cancelled = true
     workflowAbort.abort()
-    // 唤醒墙钟竞速（见下方 hardGuard）：用户停止后工具调用立即返回，不等脚本自行结束
+    // Wake the wall-clock race (see hardGuard below): after the user stops, the tool call
+    // returns immediately instead of waiting for the script to finish on its own
     rejectGuard?.(new Error('CANCELLED'))
   }
   if (signal) {
@@ -215,7 +224,7 @@ export async function runWorkflow(
     }
   }
 
-  // 并发信号量
+  // Concurrency semaphore
   let active = 0
   const waiters: Array<() => void> = []
   const acquire = async (): Promise<void> => {
@@ -233,7 +242,7 @@ export async function runWorkflow(
     if (cancelled) throw new Error('CANCELLED')
   }
 
-  /** agent 钩子：启动一次性子代理，返回最终文本或校验对象 */
+  /** agent hook: start a one-shot subagent and return its final text or validated object */
   const agentHook = async (prompt: string, opts?: Record<string, unknown>): Promise<unknown> => {
     checkCancelled()
     if (agentsStarted >= maxTotalAgents) {
@@ -241,7 +250,8 @@ export async function runWorkflow(
         `AGENT_CAP: ${mainFormat(m.workflow.agentCapExceeded, { limit: maxTotalAgents })}`
       )
     }
-    // 选项白名单（DSH：其余如 effort/isolation/agentType 一律拒绝杀脚本）
+    // Option allowlist (anything else, such as effort/isolation/agentType, is rejected and
+    // kills the script)
     if (opts) {
       const allowed = new Set(['label', 'phase', 'schema', 'model'])
       for (const key of Object.keys(opts)) {
@@ -303,7 +313,8 @@ export async function runWorkflow(
       return text
     } catch (err) {
       if (cancelled) throw new Error('CANCELLED')
-      // 子代理失败 → null（DSH：子失败/未完成 → null，调用方 .filter(Boolean)）
+      // Subagent failure → null (failed/incomplete subagents yield null; callers filter with
+      // .filter(Boolean))
       logger.warn('[Workflow] agent failed to run (returning null):', err)
       return null
     } finally {
@@ -311,7 +322,8 @@ export async function runWorkflow(
     }
   }
 
-  // 宿主侧钩子实现（不直接注入沙箱，经下方 vm realm 包装函数暴露）
+  // Host-side hook implementations (not injected into the sandbox directly; exposed through the
+  // vm realm wrapper functions below)
   const hooks = {
     agent: agentHook,
     pipeline: async (
@@ -354,14 +366,18 @@ export async function runWorkflow(
     }
   }
 
-  // 沙箱硬化（修复：宿主 realm 函数直入沙箱时，脚本内 `agent.constructor("return process")()`
-  // 可借宿主 Function 构造器在主进程执行任意代码；实测 Node 22 下 vm 上下文全局代理的
-  // 构造链（this/globalThis.constructor.constructor）同样可逃逸，注入宿主对象亦会泄漏）：
-  // 1. 上下文目标用 null 原型对象，切断 globalThis/this 的原型链；
-  // 2. codeGeneration 禁用字符串编译，沙箱内 eval/Function 全部失效；
-  // 3. 钩子以 vm realm 内创建的包装函数暴露（闭包持有宿主实现）——沙箱代码经
-  //    constructor 链只能拿到沙箱自己的 Function，且其字符串编译被禁用；
-  // 4. 跨边界数据 JSON 深拷贝：args 在 vm 内解析、宿主返回值在 vm 内重建，宿主对象不回流入沙箱。
+  // Sandbox hardening (fix: when host-realm functions are passed straight into the sandbox,
+  // `agent.constructor("return process")()` inside the script can use the host Function
+  // constructor to run arbitrary code in the main process; on Node 22 the vm context's global
+  // proxy constructor chain (this/globalThis.constructor.constructor) also escapes, and injected
+  // host objects leak):
+  // 1. The context target is a null-prototype object, cutting the globalThis/this prototype chain;
+  // 2. codeGeneration disables string compilation, so eval/Function no longer work in the sandbox;
+  // 3. Hooks are exposed as wrapper functions created inside the vm realm (the closure holds the
+  //    host implementation) — sandbox code can only reach the sandbox's own Function through the
+  //    constructor chain, and its string compilation is disabled;
+  // 4. Cross-boundary data is deep-copied through JSON: args is parsed inside the vm and host
+  //    return values are rebuilt inside the vm, so host objects never flow back into the sandbox.
   const context = vm.createContext(Object.create(null), {
     codeGeneration: { strings: false, wasm: false }
   })
@@ -388,8 +404,8 @@ export async function runWorkflow(
     const hardGuard = new Promise<never>((_, reject) => {
       rejectGuard = reject
       hardTimer = setTimeout(() => {
-        // 置 cancelled 拦截仍在后台运行的脚本的后续钩子调用（不再启动新子代理），
-        // 并中止已启动的在飞子代理
+        // Set cancelled so later hook calls from the still-running script are blocked (no new
+        // subagents) and abort the subagents already in flight
         cancelled = true
         workflowAbort.abort()
         reject(new Error(`WORKFLOW_TIMEOUT: ${m.workflow.timeout}`))
@@ -401,10 +417,12 @@ export async function runWorkflow(
     return { stopReason: 'completed', value, agentsStarted }
   } catch (err) {
     if (hardTimer) clearTimeout(hardTimer)
-    // 脚本失败/取消/超时：中止仍在飞行的子代理（其输出已无人消费）
+    // Script failure/cancellation/timeout: abort subagents still in flight (their output is no
+    // longer consumed)
     workflowAbort.abort()
-    // 竞速已结束（超时/取消先到），吞掉脚本晚到的拒绝，避免 unhandled rejection；
-    // 仍在后台运行的脚本后续钩子调用会被 cancelled 拦截（不再启动新子代理）
+    // The race is already over (timeout/cancellation won), so swallow the script's late rejection
+    // to avoid an unhandled rejection; later hook calls from the still-running script are blocked
+    // by cancelled (no new subagents started)
     vmExecution?.catch(() => undefined)
     signal?.removeEventListener('abort', onSignalAbort)
     const message = err instanceof Error ? err.message : String(err)
@@ -415,7 +433,7 @@ export async function runWorkflow(
   }
 }
 
-/** 构建工作流工具（仅注入主代理） */
+/** Build the workflow tool (injected into the main agent only) */
 export function buildWorkflowTool(ctx: WorkflowToolContext): StructuredToolInterface {
   return tool(
     async ({ script, meta, args }, config) => {

@@ -1,68 +1,77 @@
 /**
- * 应用级生命周期钩子的**宿主契约**（主进程侧，core 所有）。
+ * **Host contract** for app-level lifecycle hooks (main-process side, owned by core).
  *
- * 为什么要有它：core 的应用流程里有几个固定时机需要「插件也参与」——
- * 加载页预取数据、退出前释放资源、渲染进程崩溃时落内存快照、工作区切换后重启监听。
- * 这些动作的实现都在插件里（例如 `preloadHarnessData` / `closeAllMnemon` 属 harness），
- * 但时机属于 core。若 core 直接 `import` 插件模块，插件就不再是可停用的内容，
- * 而是长在壳上的代码（core 收尾要消除的正是这种依赖）。
+ * Why it exists: several fixed moments in core's app flow need plugins to take part too —
+ * prefetching data on the loading page, releasing resources before quit, dumping a memory snapshot
+ * when the renderer crashes, and restarting listeners after a workspace switch. The implementations
+ * live in plugins (e.g. `preloadHarnessData` / `closeAllMnemon` belong to harness), but the moments
+ * belong to core. If core imported plugin modules directly, plugins would no longer be removable
+ * content but code grafted into the shell (removing exactly that dependency is the goal).
  *
- * 做法：**复用多值贡献点**（`src/main/plugins/contributions.ts`），不为每处各造一套机制。
- * - `APP_PRELOAD` / `APP_BEFORE_QUIT` / `APP_RENDERER_MEMORY_DUMP` 是多值贡献点：
- *   插件在 `install(ctx)` 里 `ctx.contribute(KEY, hook)`，core 在固定时机
- *   `listContributions<AppHook>(KEY)` 后逐个执行（每个都单独 try/catch，单个插件失败不影响其他）；
- * - 贡献随 `ctx.dispose()` 摘除 ⇒ **停用插件后钩子不再执行**（本轮的验收点之一）；
- * - 工作区切换等「core 主动通知」的时机用事件总线（`app-events.ts`）：
- *   插件 `ctx.effect(() => onAppEvent(KEY, handler))` 订阅，效果随插件回滚。
+ * Approach: **reuse the multi-value contribution points** (`src/main/plugins/contributions.ts`)
+ * instead of building a separate mechanism for each moment.
+ * - `APP_PRELOAD` / `APP_BEFORE_QUIT` / `APP_RENDERER_MEMORY_DUMP` are multi-value contribution
+ *   points: a plugin does `ctx.contribute(KEY, hook)` in `install(ctx)`, and core runs them one by
+ *   one at the fixed moment after `listContributions<AppHook>(KEY)` (each with its own try/catch, so
+ *   one plugin failing does not affect the others);
+ * - contributions are removed with `ctx.dispose()` ⇒ **hooks no longer run after a plugin is
+ *   disabled** (one of the acceptance criteria);
+ * - moments where core actively notifies (e.g. workspace switch) use the event bus
+ *   (`app-events.ts`): plugins subscribe with `ctx.effect(() => onAppEvent(KEY, handler))` and the
+ *   effect is rolled back with the plugin.
  *
- * 注意：这些键只描述「谁在什么时机被调用」，不描述插件身份——core 因此完全不认识插件。
+ * Note: these keys only describe "who is called at which moment", never plugin identity — core
+ * therefore knows nothing about plugins.
  */
 
 /**
- * 钩子：`label` 只用于日志，`run` 是插件自己的动作（可异步）。
+ * Hook: `label` is only used for logging, `run` is the plugin's own action (may be async).
  *
- * `run` 的入参按贡献点不同而不同：`app.renderer-memory-dump` 收到
- * `(reason, exitCode)`（渲染进程退出原因），其余钩子忽略入参——
- * 类型上统一成 optional，调用方按需传、实现方按需声明。
+ * The arguments of `run` vary by contribution point: `app.renderer-memory-dump` receives
+ * `(reason, exitCode)` (the renderer exit reason) while other hooks ignore arguments — the type
+ * makes them optional uniformly, so callers pass what they need and implementations declare what
+ * they need.
  */
 export interface AppHook {
   run: (reason?: string, exitCode?: number) => void | Promise<void>
   label: string
 }
 
-/** 加载页：应用初始化完成后、主窗口交接前的预取时机（可多插件贡献） */
+/** Loading page: prefetch moment after app init and before the main window takes over (multiple plugins may contribute) */
 export const APP_PRELOAD = 'app.preload'
 
-/** 退出前：core 的 before-quit 清理阶段（支持异步，逐个等待并 catch） */
+/** Before quit: core's before-quit cleanup phase (async supported; awaited and caught one by one) */
 export const APP_BEFORE_QUIT = 'app.before-quit'
 
-/** 渲染进程异常退出（崩溃/OOM）时落诊断快照的时机 */
+/** Moment to dump a diagnostic snapshot when the renderer exits abnormally (crash/OOM) */
 export const APP_RENDERER_MEMORY_DUMP = 'app.renderer-memory-dump'
 
 /**
- * core → 插件的应用事件名（主进程内，与渲染层宿主事件总线无关）。
- * 载荷见 `AppWorkspaceChangedPayload`；消费方按需读取，不必依赖载荷。
+ * App event names from core → plugins (within the main process, unrelated to the renderer host event
+ * bus). Payloads are in `AppWorkspaceChangedPayload`; consumers read only what they need and need not
+ * depend on the payload.
  */
 export const APP_EVENT_WORKSPACE_CHANGED = 'app.workspace-changed'
 
 /**
- * 卸载时用户勾选了「清除本机数据」，且插件的 `plugin.purge` 已执行。
+ * The user checked "clear local data" on uninstall and the plugin's `plugin.purge` has run.
  *
- * **只代表本机数据被清**：云端安装记录/数据快照保留（用户 2026-11-23 口径）。
- * 插件中心（`lattice/sync`）借此丢掉本地 `data_rev` 缓存，这样下次 pull 才会
- * 把云端数据重新写回本机（否则本地 rev 还停在旧值，会误以为「已经是最新」）。
+ * **This only means local data was cleared**: the cloud install record/data snapshot are kept.
+ * The plugin hub (`lattice/sync`) uses this to drop the local `data_rev` cache so the next pull
+ * writes the cloud data back to this machine (otherwise the local rev would stay at the old value
+ * and wrongly assume "already up to date").
  */
 export const APP_EVENT_PLUGIN_DATA_PURGED = 'app.plugin-data-purged'
 
-/** `app.plugin-data-purged` 载荷 */
+/** `app.plugin-data-purged` payload */
 export interface AppPluginDataPurgedPayload {
   pluginId: string
 }
 
-/** `app.workspace-changed` 载荷：切换后的活动工作区（未配置时为 null） */
+/** `app.workspace-changed` payload: the active workspace after the switch (null when not configured) */
 export interface AppWorkspaceChangedPayload {
-  /** 活动工作区 id（未配置 = null） */
+  /** Active workspace id (not configured = null) */
   workspaceId: number | null
-  /** 活动工作区绝对路径（未配置 = 空串） */
+  /** Active workspace absolute path (not configured = empty string) */
   workspacePath: string
 }

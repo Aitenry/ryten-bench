@@ -1,9 +1,14 @@
 /**
- * ${vars.title} 的中文词条。
+ * Chinese entries for ${vars.title}.
  *
- * 顶层键 = 插件 id，里面的结构随你——宿主界面只按 labelKey 取用
- * （例如菜单的 labelKey 是 `${vars.id}.menu.title`）。
- * 英文那份必须**逐键对齐**（少一个键，切到英文就会显示原始键名）。
+ * Top-level key = plugin id, and the structure inside is up to you - the host UI only reads it via
+ * labelKey (for example the menu labelKey is `${vars.id}.menu.title`).
+ * The English file must be **aligned key for key** (one missing key and switching to English shows
+ * the raw key name).
+ *
+ * Wording (shared by the settings page and the page): labels are noun phrases ("Hide completed"),
+ * hints state **what it affects** ("only affects the list display, records are not deleted"), no
+ * implementation details, and no words like "example" or "template".
  */
 export const ${vars.pascal}ZhCN = {
   '${vars.id}': {
@@ -13,10 +18,12 @@ export const ${vars.pascal}ZhCN = {
       title: ${vars.titleJson},
       add: '新建',
       empty: '还没有记录，点「新建」加一条。',
+      emptyFiltered: '没有未完成的记录。',
       deleteConfirm: '删除这条记录？',
       moreItems: '还有 {{count}} 项（窗口拉高就能看到）',
-      on: '已启用',
-      off: '已停用',
+      overview: '概览',
+      records: '记录',
+      pending: '待完成',
       loading: '读取中…'
     },
     form: {
@@ -28,10 +35,13 @@ export const ${vars.pascal}ZhCN = {
       notePlaceholder: '可选'
     },
     settingsPage: {
-      intro: '这一页由插件自己注册（settingsSection 挂载点）；停用插件后这一页随之消失。',
-      enabledLabel: '启用示例开关',
-      noteLabel: '备注（保存后持久化）',
-      save: '保存',
+      section: { list: '列表' },
+      hideDoneLabel: '隐藏已完成',
+      hideDoneHint: '只影响列表显示，记录不会被删除。',
+      noteLabel: '页面备注',
+      notePlaceholder: '写一句给自己看的说明',
+      noteHint: '显示在页面右侧的概览面板里，留空则不显示。',
+      saveFailed: '保存失败，请重试。',
       storageHint: '记录存在应用数据库里，设置存在 userData 的 plugin-state 目录下。'
     }
   }

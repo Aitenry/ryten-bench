@@ -2,32 +2,37 @@ import type { RuntimeRecord } from './types'
 import type { SubAgentToolContext } from './agent'
 
 /**
- * 模型流式 chunk → 运行时记录 的转换（独立模块，供测试脚本直接验证框架处理行为）。
+ * Model streaming chunk -> runtime record conversion (a separate module so test scripts can verify
+ * the framework's handling directly).
  *
- * 模型工具调用两阶段语义：
- *   阶段一：模型吐出工具名（tool_call_chunks 首个 delta，含 name/id）→ tool_block_start
- *   阶段二：模型为每个工具生成参数（后续 delta 的 args 片段）→ tool_args（节流保活）
- * 非流式 provider 一次性给出完整 tool_calls 时走 fullCalls 兜底分支。
+ * Two-phase tool-call semantics:
+ *   Phase 1: the model emits the tool name (first delta of tool_call_chunks, with name/id) ->
+ *   tool_block_start
+ *   Phase 2: the model generates arguments for each tool (args fragments in later deltas) ->
+ *   tool_args (throttled keep-alive)
+ * Non-streaming providers that return complete tool_calls in one go take the fullCalls fallback
+ * branch.
  */
 
-/** 轻量消息块接口：流式 chunk（AIMessageChunk）的兼容形状 */
+/** Lightweight message-block interface: compatible shape of a streaming chunk (AIMessageChunk) */
 export interface StreamMessageLike {
   content?: unknown
   additional_kwargs?: Record<string, unknown>
   tool_call_chunks?: Array<{ index?: number; name?: string; id?: string; args?: string }>
   tool_calls?: Array<{ name?: string; id?: string; args?: unknown }>
-  /** chunk 类型（'ai' / 'tool' / ...），用于过滤非模型消息 */
+  /** chunk type ('ai' / 'tool' / ...), used to filter out non-model messages */
   _getType?: () => string
 }
 
-/** 将模型 chunk 转换为消息流记录（推理/文本/工具块） */
+/** Convert a model chunk into message-stream records (reasoning/text/tool blocks) */
 export function pushMessageRecords(
   chunk: StreamMessageLike,
   queue: { push(record: RuntimeRecord): void },
   seenIndexes: Set<number>,
   subagentCtx?: SubAgentToolContext
 ): void {
-  // 只处理 AI 消息 chunk：messages 模式下工具结果（ToolMessage）等也会以 chunk 流出，需过滤
+  // Only handle AI message chunks: in messages mode tool results (ToolMessage) etc. also stream out
+  // as chunks and must be filtered
   const chunkType = chunk._getType?.()
   if (chunkType && chunkType !== 'ai') return
 
@@ -37,7 +42,7 @@ export function pushMessageRecords(
     pushRecord(queue, { kind: 'reasoning', text: reasoning }, subagentCtx)
   }
 
-  // 文本内容（字符串或多模态内容块中的文本部分）
+  // Text content (a string, or the text parts of multimodal content blocks)
   const content = chunk.content
   if (typeof content === 'string' && content) {
     pushRecord(queue, { kind: 'text', text: content }, subagentCtx)
@@ -51,7 +56,7 @@ export function pushMessageRecords(
     }
   }
 
-  // 工具调用增量（流式）
+  // Tool-call increments (streaming)
   const toolCallChunks = chunk.tool_call_chunks
   if (Array.isArray(toolCallChunks)) {
     for (const tc of toolCallChunks) {
@@ -69,8 +74,9 @@ export function pushMessageRecords(
     }
   }
 
-  // 完整工具调用（非流式形态，部分 provider 一次给全）。
-  // 仅当尚未通过增量块登记任何工具时处理，避免与 tool_call_chunks 重复。
+  // Complete tool calls (non-streaming shape; some providers return them all at once).
+  // Only handled when no tool was registered through incremental chunks yet, to avoid duplicating
+  // tool_call_chunks.
   const fullCalls = chunk.tool_calls
   if (Array.isArray(fullCalls) && fullCalls.length > 0 && seenIndexes.size === 0) {
     for (const tc of fullCalls) {
@@ -82,7 +88,7 @@ export function pushMessageRecords(
   }
 }
 
-/** 按上下文推送记录（主代理直推；子代理包一层 sub_* 记录） */
+/** Push a record per context (main agent pushes directly; subagents wrap it in a sub_* record) */
 export function pushRecord(
   queue: { push(record: RuntimeRecord): void } | ((record: RuntimeRecord) => void),
   record: RuntimeRecord,
@@ -101,7 +107,8 @@ export function pushRecord(
   } else if (record.kind === 'tool_call') {
     doPush({ kind: 'sub_tool_call', name, causeId, tool: record })
   } else if (record.kind === 'tool_block_start') {
-    // 阶段一：子代理工具名已知 → 前端嵌套工具卡「参数构建中…」（与主代理同款两阶段展示）
+    // Phase 1: subagent tool name known -> nested card shows "building arguments…" (same two-phase
+    // display as the main agent)
     doPush({
       kind: 'sub_tool_block_start',
       name,
@@ -111,7 +118,7 @@ export function pushRecord(
       id: record.id
     })
   } else if (record.kind === 'tool_args') {
-    // 阶段二：子代理工具参数增量（节流保活）
+    // Phase 2: subagent tool argument increments (throttled keep-alive)
     doPush({ kind: 'sub_tool_args', name, causeId, index: record.index })
   }
 }

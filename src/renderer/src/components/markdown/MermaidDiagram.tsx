@@ -7,7 +7,7 @@ interface MermaidDiagramProps {
   isDarkMode?: boolean
 }
 
-/** 只读预览中的 Mermaid 图表（mermaid 包懒加载，主题跟随明暗） */
+/** Mermaid diagram in read-only preview (mermaid package lazy-loaded, theme follows light/dark) */
 const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, isDarkMode = false }) => {
   const { t } = useTranslation()
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -17,7 +17,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, isDarkMode = fals
 
   useEffect(() => {
     let cancelled = false
-    // 保留上一张图直到新图就绪，避免内容更新时闪烁/高度跳动
+    // Keep the previous diagram until the new one is ready, avoiding flicker/height jumps on update
     renderMermaidDiagram(code, isDarkMode)
       .then((result) => {
         if (cancelled) return
@@ -34,7 +34,8 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, isDarkMode = fals
     }
   }, [code, isDarkMode])
 
-  // 把 SVG 等比缩小到可见区域（聊天/预览无画布交互，须保证整图可见）
+  // Scale the SVG down proportionally into the visible area (chat/preview has no canvas
+  // interaction, so the whole diagram must remain visible)
   useEffect(() => {
     if (state !== 'ready' || !blockRef.current) return
     const svgEl = blockRef.current.querySelector('svg')
@@ -55,7 +56,7 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, isDarkMode = fals
     )
   }
 
-  // 加载中但已有旧图：继续展示旧图（仅首次无图时显示加载提示）
+  // Loading but an old diagram exists: keep showing it (loading hint only when there is none yet)
   if (!svg) {
     return <div className="mermaid-block mermaid-loading">{t('markdown.mermaid.loading')}</div>
   }

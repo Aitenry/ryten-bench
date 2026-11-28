@@ -3,8 +3,8 @@ import { toString } from 'mdast-util-to-string'
 import type { Root } from 'mdast'
 
 /* ════════════════════════════════════════════════════════════
-   MDX 预览适配：把 JSX / import / export 构造转成 mdx 源码块展示，
-   避免被 rehype-raw + rehype-sanitize 吞掉或破坏
+   MDX preview adaptation: turn JSX / import / export constructs into mdx source
+   blocks for display, so rehype-raw + rehype-sanitize cannot swallow or break them
    ════════════════════════════════════════════════════════════ */
 
 function looksLikeMdxHtml(raw: string): boolean {

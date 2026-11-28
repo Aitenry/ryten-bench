@@ -2,56 +2,70 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { harnessApi } from '../../api/harness'
 
 /**
- * 会话运行状态（侧栏行首那个 16px 指示槽）里流之外的两端状态。
+ * The two non-streaming end states of a conversation's run status (the 16px indicator slot at the
+ * start of a sidebar row).
  *
- * 用户口径 2026-11-23（原话）：「当前这个是在进行中的图标，当需要用户继续确认操作时，
- * 这个图标需要变成黄色的点在呼吸，当用户确认之后，这个图标要变成进行中；当任务完成时，
- * 需要将进行中，变成绿色的点在呼吸，当用户点击这个会话时，这个绿色的点会消失。」
+ * User requirement 2026-11-23 (verbatim): "this is currently the in-progress icon; when the user
+ * needs to confirm an action, this icon should become a yellow dot breathing; after the user
+ * confirms, the icon should go back to in-progress; when the task completes, the in-progress icon
+ * should become a green dot breathing, and when the user clicks this conversation, the green dot
+ * disappears."
  *
- * 三种状态各自的真源刻意分开：
- * - **进行中**不在这里：那是 `useHarnessHandlers` 的 `loadingTopicIds`（主进程流的生命周期）；
- * - **等待确认**（黄）：主进程在提问 / 审批挂起与结算时各广播一次（`harness-topic-pending`），
- *   本 hook 只记「哪些话题正挂着」；
- * - **刚完成**（绿）：一轮**自然跑完**时点亮（`turnFinal.settled`），用户点开这条会话时熄灭；
- *   **跑完时正显示在对话窗口里的那条不点亮**——用户口径 2026-11-23「如果当前是这个会话窗口，
- *   任务完成后自动移除」，人就在屏幕前看着结果出来，再挂一个绿点只是噪音。
+ * The sources of truth for the three states are deliberately kept separate:
+ * - **Running** is not here: that is `loadingTopicIds` in `useHarnessHandlers` (the main process
+ *   stream lifecycle);
+ * - **Awaiting confirmation** (yellow): the main process broadcasts once each when a question /
+ *   approval is raised and settled (`harness-topic-pending`); this hook only records which topics
+ *   are currently pending;
+ * - **Just completed** (green): lit when a turn **finishes naturally** (`turnFinal.settled`) and
+ *   cleared when the user opens that conversation; **it is not lit when that conversation is
+ *   currently shown in the conversation window** — per the user requirement 2026-11-23 "if this is
+ *   the current conversation window, remove it automatically after the task completes", the user is
+ *   watching the result appear, so an extra green dot is only noise.
  *
- * 为什么不从 loadingTopicIds 的消失推「完成」：一轮的结束有三种（自然跑完 / 用户停止 /
- * 模型失败），loading 消失时三种长得一模一样；用户要的绿点只属于**真的干完了**那一种，
- * 所以判据用主进程随 done 事件下发的 turnFinal，而不是前端猜。
+ * Why not infer "completed" from `loadingTopicIds` disappearing: a turn can end three ways (finished
+ * naturally / user stopped / model failed), and all three look identical once loading goes away; the
+ * green dot the user wants belongs only to **actually finished**, so the criterion is the turnFinal
+ * sent by the main process with the done event, not a frontend guess.
  *
- * 绿点也**不落盘**：它是「这条会话你还没看过」的临时提示，关掉应用就没有意义；
- * 重启后所有会话都从「没在跑、没等人、没新结果」的安静态开始。
+ * The green dot is also **not persisted**: it is a temporary "you haven't looked at this
+ * conversation yet" hint that means nothing after the app is closed; after a restart every
+ * conversation begins in the quiet state of "not running, nobody waiting, no new result".
  */
 
-/** 两个标记的集合形态（行首按 topicId 查） */
+/** Set form of the two marks (looked up by topicId for a row start) */
 export interface TopicRunStatusMarks {
-  /** 正挂着提问 / 审批、等用户确认的会话 */
+  /** Conversations with a pending question / approval waiting for user confirmation */
   awaitingTopicIds: Set<number>
-  /** 刚自然跑完、且跑完时不在对话窗口里的会话（绿点） */
+  /** Conversations that just finished naturally and were not in the conversation window at that time (green dot) */
   completedTopicIds: Set<number>
 }
 
 export interface TopicRunStatusOptions {
   /**
-   * 这条会话此刻是不是就显示在对话窗口里（= 当前会话）。
+   * Whether this conversation is currently displayed in the conversation window (= the current
+   * conversation).
    *
-   * 是的话，它跑完时不点亮绿点（等同「完成后自动移除」）；必须是函数而不是快照值：
-   * 一轮可能跑很久，完成那一刻人在哪条会话里由 ref 现取，不能用渲染时捕获的旧值。
+   * If so, no green dot is lit when it finishes (equivalent to "remove automatically after
+   * completion"); it must be a function rather than a snapshot value: a turn can run for a long
+   * time, and which conversation the user is in at completion time must be read from the ref at that
+   * moment, not from a value captured during render.
    */
   isTopicActive?: (topicId: number) => boolean
 }
 
-/** 会话行行首指示器的四种外观（值也写进 DOM 的 data-topic-status，工装按它断言） */
+/** The four appearances of the conversation row start indicator (the value is also written to the DOM's data-topic-status, which tests assert on) */
 export type TopicRunStatus = 'idle' | 'running' | 'awaiting' | 'completed'
 
 /**
- * 三个来源合成行首的最终状态（优先级就是用户口径里的顺序）：
+ * Combine the three sources into the final row start status (the priority order is the one in the
+ * user requirement):
  *
- * 1. `awaiting`（黄点呼吸）——挂着提问 / 审批时流程是**停**的、等的是人，比「在跑」更该被看见；
- * 2. `running`（追逐点）——主进程的流在跑；
- * 3. `completed`（绿点呼吸）——自然跑完且还没被点开；
- * 4. `idle`——行首 16px 槽位留空。
+ * 1. `awaiting` (breathing yellow dot) — while a question / approval is pending the flow is
+ *    **stopped** and waiting on a human, which deserves to be seen more than "running";
+ * 2. `running` (chase dots) — the main process stream is running;
+ * 3. `completed` (breathing green dot) — finished naturally and not opened yet;
+ * 4. `idle` — the 16px row start slot stays empty.
  */
 export function resolveTopicRunStatus(input: {
   awaiting: boolean
@@ -65,19 +79,20 @@ export function resolveTopicRunStatus(input: {
 }
 
 export interface TopicRunStatusApi extends TopicRunStatusMarks {
-  /** 新一轮开始（用户发送 / 目标续跑）：清掉这条会话的黄点与绿点，回到「进行中」 */
+  /** A new turn begins (user sends / goal continues): clear this conversation's yellow and green dots, back to "running" */
   beginTopicTurn: (topicId: number) => void
-  /** 用户点开了这条会话：绿点消失（黄点不动——那是「还在等你」，不该被看一眼就抹掉） */
+  /** The user opened this conversation: the green dot disappears (the yellow one stays — it means "still waiting for you" and shouldn't be wiped by a glance) */
   acknowledgeTopic: (topicId: number) => void
-  /** 会话被删除：两个标记一起清，避免 id 复用时错标到别的会话上 */
+  /** The conversation was deleted: clear both marks so a reused id doesn't get attributed to another conversation */
   forgetTopic: (topicId: number) => void
 }
 
 /**
- * 往 Set 里加/删一个 id，**值没变时返回原集合**。
+ * Add/remove an id in a Set, **returning the original set when the value didn't change**.
  *
- * 流式期间 done / error 事件可能重复到达（多监听器、插话切段），每次都 new Set 会让
- * 整个侧栏跟着重渲染；这里用同一个 Set 引用短路掉无变化的更新。
+ * During streaming, done / error events may arrive repeatedly (multiple listeners, interjection
+ * splitting the turn); creating a new Set every time would re-render the whole sidebar, so the same
+ * Set reference short-circuits updates that change nothing.
  */
 function withFlag(set: Set<number>, topicId: number, present: boolean): Set<number> {
   if (set.has(topicId) === present) return set
@@ -91,34 +106,39 @@ export function useTopicRunStatus(options: TopicRunStatusOptions = {}): TopicRun
   const [awaitingTopicIds, setAwaitingTopicIds] = useState<Set<number>>(() => new Set())
   const [completedTopicIds, setCompletedTopicIds] = useState<Set<number>>(() => new Set())
 
-  // 「当前是哪条会话」放 ref：完成事件到达时要的是**那一刻**的窗口内容，
-  // 不能用渲染时捕获的旧值（一轮可能跑几分钟，期间人可能已经切走或切回来）
+  // "Which conversation is current" goes in a ref: when the completion event arrives we need the
+  // window contents **at that moment**, not a stale value captured during render (a turn can run for
+  // minutes, during which the user may switch away or back)
   const isTopicActiveRef = useRef(options.isTopicActive)
   isTopicActiveRef.current = options.isTopicActive
 
-  // 常驻订阅（不随当前话题变化）：别的会话在挂起 / 跑完时，那一条行首也要跟着变。
-  // 三个通道都是 Set 分发，与 useTopicPending 的弹窗订阅、每轮的流订阅互不影响。
+  // Persistent subscriptions (independent of the current topic): when another conversation pends /
+  // finishes, that row start must update too. All three channels dispatch through Sets, so they
+  // don't interfere with useTopicPending's popup subscription or the per-turn stream subscriptions.
   useEffect(() => {
     const api = harnessApi.harness
     const offPending = api.onTopicPending(({ topicId, pending }) => {
       if (!Number.isFinite(topicId) || topicId <= 0) return
       setAwaitingTopicIds((prev) => withFlag(prev, topicId, pending))
-      // 又在等人了 = 上一轮的「刚完成」已经被新一轮盖过，绿点不该还亮着
+      // Waiting on a human again = the previous "just completed" has been superseded by a new turn, so the green dot shouldn't stay lit
       if (pending) setCompletedTopicIds((prev) => withFlag(prev, topicId, false))
     })
 
     const offDone = api.onStreamDone((result) => {
       const topicId = result.topicId
       if (!Number.isFinite(topicId) || topicId <= 0) return
-      // 本轮已收尾：无论怎么结束，都不可能再挂着等确认的东西
+      // This turn has wrapped up: however it ended, nothing can still be pending confirmation
       setAwaitingTopicIds((prev) => withFlag(prev, topicId, false))
       /**
-       * 绿点只给「自然跑完」：
-       * - `settled=false` = 用户点了停止 / 渲染帧失效中止（错误另有 stream-error）；
-       * - `goalWillContinue=true` = 目标还会自动续跑下一轮，这一轮的 done 不是终点
-       *   （goal-driver 紧接着就发下一轮的 goalRound chunk，亮了会闪一下）；
-       * - **这条会话正显示在对话窗口里** = 人眼看着结果出来，不再点绿点（完成即自动移除，
-       *   顺带把可能残留的旧绿点清掉）。
+       * The green dot is only for "finished naturally":
+       * - `settled=false` = the user clicked stop / the render frame was invalidated (errors have
+       *   their own stream-error path);
+       * - `goalWillContinue=true` = the goal will automatically continue with the next round, so this
+       *   turn's done is not the endpoint (the goal-driver emits the next round's goalRound chunk
+       *   right after, and lighting it would flicker);
+       * - **this conversation is currently shown in the conversation window** = the user is
+       *   watching the result appear, so don't light a green dot (completed equals automatically
+       *   removed, and any stale old green dot is cleared on the way).
        */
       if (result.turnFinal?.settled && result.turnFinal.goalWillContinue !== true) {
         const activeNow = isTopicActiveRef.current?.(topicId) ?? false
@@ -128,7 +148,7 @@ export function useTopicRunStatus(options: TopicRunStatusOptions = {}): TopicRun
 
     const offError = api.onStreamError(({ topicId }) => {
       if (typeof topicId !== 'number' || !Number.isFinite(topicId) || topicId <= 0) return
-      // 出错时主进程可能补发 done（无 turnFinal）：先把「等确认」收掉，绿点不亮
+      // On error the main process may follow up with a done (without turnFinal): clear "awaiting confirmation" first, but don't light the green dot
       setAwaitingTopicIds((prev) => withFlag(prev, topicId, false))
     })
 

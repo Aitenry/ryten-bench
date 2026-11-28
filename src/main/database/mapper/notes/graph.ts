@@ -3,7 +3,7 @@ import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import { withOrm } from '../../orm'
 import { graph_build_jobs, graph_entities, graph_relations } from '../../schema'
 
-// --- 类型定义（全部由 schema 推导） ---
+// --- Type definitions (all inferred from the schema) ---
 
 export type GraphEntity = typeof graph_entities.$inferSelect
 export type GraphRelation = typeof graph_relations.$inferSelect
@@ -14,7 +14,7 @@ export interface GraphData {
   relations: GraphRelation[]
 }
 
-/** 保证写入 source_note_ids 的是合法 JSON 数组字符串 */
+/** Ensure a valid JSON array string is written to source_note_ids */
 function toSourceNoteIds(value: unknown): string | null {
   if (value === null || value === undefined) return null
   return typeof value === 'string' ? value : JSON.stringify(value)
@@ -22,7 +22,7 @@ function toSourceNoteIds(value: unknown): string | null {
 
 // ==================== Entity CRUD ====================
 
-/** 只显示「来源文档仍在本知识库目录下」的实体（jsonb 展开无法用构造器表达，保留原 SQL） */
+/** Only show entities whose source documents are still in this knowledge base's directories (jsonb expansion cannot be expressed by the builder, so raw SQL is kept) */
 function entitySourceInWiki(wikiId: number): SQL {
   return sql`
     EXISTS (
@@ -74,7 +74,8 @@ async function getEntityById(id: number): Promise<GraphEntity | null> {
 
 async function searchEntities(wikiId: number, query: string): Promise<GraphEntity[]> {
   return withOrm('searchEntities', async (db) => {
-    // LIKE 通配符转义（修复：搜索词含 %/_/\ 时结果异常放大,普通字符搜索应视为字面量）
+    // Escape LIKE wildcards (fix: searches containing %/_/\ were wrongly broadened; normal
+    // characters should be treated literally)
     const escaped = query.replace(/[\\%_]/g, (m) => `\\${m}`)
     const pattern = `%${escaped}%`
     return db
@@ -86,7 +87,8 @@ async function searchEntities(wikiId: number, query: string): Promise<GraphEntit
           or(
             ilike(graph_entities.name, pattern),
             ilike(graph_entities.aliases, pattern),
-            // 也搜描述：用户常记得「那个做 RAG 的公司」，不一定记得实体名
+            // Also search descriptions: users often remember "the company that does RAG" rather
+            // than the entity name
             ilike(graph_entities.description, pattern)
           )
         )
@@ -206,7 +208,7 @@ async function getRelationsByWikiId(wikiId: number, noteIds?: number[]): Promise
   })
 }
 
-/** 关系唯一键：wiki_id + source_id + target_id + relation_type */
+/** Relation unique key: wiki_id + source_id + target_id + relation_type */
 function relationKey(
   relation: Pick<GraphRelation, 'wiki_id' | 'source_id' | 'target_id' | 'relation_type'>
 ): SQL | undefined {
@@ -271,8 +273,8 @@ async function deleteRelationsByWikiId(wikiId: number): Promise<number> {
 // ==================== Build Job CRUD ====================
 
 /**
- * Upsert 构建任务（每个 wiki 仅一条记录）
- * 如果该 wiki 已有任务则重置为 pending 状态，否则新建
+ * Upsert a build job (only one record per wiki).
+ * Resets the wiki's existing job to pending, otherwise creates a new one.
  */
 async function upsertBuildJob(wikiId: number, config?: Record<string, unknown>): Promise<number> {
   return withOrm('upsertBuildJob', async (db) => {
@@ -373,8 +375,8 @@ async function getLatestBuildJob(wikiId: number): Promise<GraphBuildJob | null> 
 // ==================== Batch Operations ====================
 
 /**
- * 批量 upsert 实体（在单个事务中完成，大幅提升性能）
- * 返回 entity name → entity id 的映射
+ * Batch upsert entities (completed in a single transaction, greatly improving performance).
+ * Returns a mapping of entity name → entity id.
  */
 async function batchUpsertEntities(
   entities: Omit<GraphEntity, 'id' | 'created_at' | 'updated_at'>[]
@@ -406,8 +408,9 @@ async function batchUpsertEntities(
         const existingId = existingMap.get(key)
         if (existingId !== undefined) {
           nameToId.set(entity.name, existingId)
-          // source_note_ids 取并集（修复：此前整列覆盖,跨文档来源只留最后一篇,
-          // 删文档按「摘除 doc_id、摘空才删」工作时会误删仍受其它文档支撑的实体）
+          // Union source_note_ids (fix: previously the whole column was overwritten, so
+          // cross-document sources kept only the last document and the "remove doc_id, delete when
+          // empty" cleanup could delete entities still supported by other documents)
           await tx
             .update(graph_entities)
             .set({
@@ -432,8 +435,9 @@ async function batchUpsertEntities(
             .returning({ id: graph_entities.id })
           const id = rows[0].id
           nameToId.set(entity.name, id)
-          // 修复：批内同名实体（不同 chunk 抽到同一实体是常态）第二个不再走 INSERT,
-          // 否则画布出现重复节点
+          // Fix: a second same-named entity in the batch (different chunks extracting the same
+          // entity is common) must not go through INSERT again, otherwise the canvas shows
+          // duplicate nodes
           existingMap.set(key, id)
         }
       }
@@ -443,8 +447,9 @@ async function batchUpsertEntities(
 }
 
 /**
- * 合并两段 `source_note_ids`（JSON 数组字符串），按元素去重后返回 JSON 字符串。
- * 保留元素原始类型（文档 id 是数字，不能在这里被字符串化）。
+ * Merge two `source_note_ids` segments (JSON array strings) and return a JSON string deduplicated
+ * by element.
+ * Preserves each element's original type (document ids are numbers and must not be stringified here).
  */
 function mergeSourceNoteIds(a: string | null, b: string | null): string | null {
   const parse = (value: string | null): unknown[] => {
@@ -466,15 +471,17 @@ function mergeSourceNoteIds(a: string | null, b: string | null): string | null {
 }
 
 /**
- * 批量 upsert 关系（单条语句完成）。
+ * Batch upsert relations (in a single statement).
  *
- * 旧实现「每条关系先 SELECT 再 UPDATE/INSERT」在 PGlite 单连接上等于 2N 次串行语句，
- * 图构建最后一阶段动辄上千条关系，期间所有 UI 查询排队。现在依赖
- * `uq_graph_relations_key`（wiki_id/source_id/target_id/relation_type 唯一索引）
- * 用一条 `INSERT ... ON CONFLICT DO UPDATE` 完成；批内重复先按业务键去重并合并
- * source_note_ids（Postgres 不允许同一条语句两次命中同一行）。
+ * The old implementation did "SELECT then UPDATE/INSERT per relation", which on PGlite's
+ * single connection meant 2N serial statements; the last stage of graph building often involves
+ * thousands of relations, queueing every UI query meanwhile. It now relies on
+ * `uq_graph_relations_key` (unique index on wiki_id/source_id/target_id/relation_type) to do the
+ * work in one `INSERT ... ON CONFLICT DO UPDATE`; duplicates within the batch are deduplicated by
+ * business key first and their source_note_ids merged (Postgres does not allow the same statement
+ * to hit the same row twice).
  *
- * 返回实际写入的关系数（去重后的行数）。
+ * Returns the number of relations actually written (deduplicated row count).
  */
 async function batchUpsertRelations(
   relations: Omit<GraphRelation, 'id' | 'created_at'>[]
@@ -547,8 +554,8 @@ async function batchUpdateEntityConfidence(
 
   await withOrm('batchUpdateEntityConfidence', async (db) => {
     await db.transaction(async (tx) => {
-      // 按置信度分组，每组一条 UPDATE ... IN (...)：合并阶段更新数 =
-      // 不同置信度档位数（通常个位数），而不是实体数。
+      // Group by confidence, one UPDATE ... IN (...) per group: during merging the number of
+      // updates equals the number of distinct confidence levels (usually single digits), not entities.
       const byConfidence = new Map<number, number[]>()
       for (const { id, confidence } of updates) {
         const bucket = byConfidence.get(confidence)
@@ -566,12 +573,15 @@ async function batchUpdateEntityConfidence(
 }
 
 /**
- * 持久化实体合并结果（build-graph 消歧合并阶段专用）：
- * - 规范名行存在则更新（source_note_ids 取自身与全部被合并行的并集），不存在则插入；
- * - 被合并掉的旧名行删除前，把引用它的关系 source_id/target_id 重指向规范行
- *   （graph_relations 对实体是 ON DELETE CASCADE，不重指向会连关系一起删掉）；
- * - renameMap 未覆盖的旧名保守保留，不删除。
- * 返回合并后「实体名 → id」映射（含新建规范名），供置信度更新与关系保存使用。
+ * Persist entity merge results (used by the disambiguation merge stage of build-graph):
+ * - If a row for the canonical name exists, update it (source_note_ids becomes the union of its
+ *   own and all merged rows); otherwise insert it.
+ * - Before deleting a merged-away old-name row, repoint the relations referencing it
+ *   (source_id/target_id) to the canonical row (graph_relations has ON DELETE CASCADE to
+ *   entities, so leaving them unrepointed would delete the relations too).
+ * - Old names not covered by renameMap are conservatively kept and not deleted.
+ * Returns the post-merge "entity name → id" map (including newly created canonical names), used
+ * by confidence updates and relation saves.
  */
 async function persistEntityMerges(
   wikiId: number,
@@ -613,7 +623,7 @@ async function persistEntityMerges(
         rowsByName.set(row.name, { id: row.id, sourceIds })
       }
 
-      // 规范名 → 被合并掉的旧名列表
+      // Canonical name → list of merged-away old names
       const removedByCanonical = new Map<string, string[]>()
       for (const [oldName, canonical] of renameMap) {
         if (oldName === canonical) continue
@@ -627,7 +637,7 @@ async function persistEntityMerges(
         const existing = rowsByName.get(canonical)
         const removed = removedByCanonical.get(canonical) ?? []
 
-        // 来源并集：自身 + 既有行 + 被合并行的 source_note_ids
+        // Source union: own + existing row + merged rows' source_note_ids
         const unionSourceIds = new Set<number>(entity.source_doc_ids)
         if (existing) {
           for (const id of existing.sourceIds) unionSourceIds.add(id)
@@ -674,7 +684,8 @@ async function persistEntityMerges(
         }
         nameToId.set(canonical, canonicalId)
 
-        // 旧名行：先重指向引用它的关系，再删除行本身（外键为 CASCADE，不重指向会连带删关系）
+        // Old-name row: repoint the relations referencing it first, then delete the row itself
+        // (the FK is CASCADE, so leaving them unrepointed deletes the relations too)
         for (const oldName of removed) {
           const oldRow = rowsByName.get(oldName)
           if (!oldRow || oldRow.id === canonicalId) continue
@@ -695,7 +706,8 @@ async function persistEntityMerges(
         }
       }
 
-      // 重指向可能产生自环关系（A→B 且 B 合并进 A），抽取阶段本就过滤自环，这里兜底清理
+      // Repointing may create self-loop relations (A→B while B merges into A); extraction already
+      // filters self-loops, so this is a safety cleanup
       await tx
         .delete(graph_relations)
         .where(

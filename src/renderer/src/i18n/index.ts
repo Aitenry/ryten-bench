@@ -10,28 +10,28 @@ import { DEFAULT_LANGUAGE, LANGUAGES, detectSystemLanguage, type ResolvedLanguag
 export * from './types'
 export { DEFAULT_NS, resources }
 export { useTranslation, Trans }
-/* 具名导出实例：在拿不到 hook 的地方（tiptap NodeView、非组件模块）用 i18n.t() 取当前语言文案 */
+/* Named export of the instance: where hooks are unavailable (tiptap NodeViews, non-component modules), use i18n.t() to read copy in the current language */
 export { i18n }
 
-/* 同步初始化：资源内联打包，不需要后端加载；
-   首帧语言先按操作系统语言决定（默认偏好即「跟随系统」），
-   持久化的偏好随后由 LanguageProvider 异步校对。 */
+/* Synchronous initialization: resources are bundled inline, so no backend loading is needed;
+   the first-frame language follows the OS language first (the default preference is "follow system"),
+   and the persisted preference is reconciled asynchronously afterwards by LanguageProvider. */
 i18n.use(initReactI18next).init({
   resources,
   lng: detectSystemLanguage(),
   fallbackLng: DEFAULT_LANGUAGE,
   supportedLngs: ['zh-CN', 'en-US'],
-  // 只认完整 locale（zh-CN / en-US），避免 i18next 再去尝试 zh / en 变体
+  // Accept only full locales (zh-CN / en-US) so i18next does not try zh / en variants
   load: 'currentOnly',
   defaultNS: DEFAULT_NS,
   ns: [DEFAULT_NS],
   interpolation: { escapeValue: false },
-  // 内联资源下同步初始化，避免首帧出现未翻译的键名（i18next v23+ 的选项名）
+  // Initialize synchronously with inline resources so the first frame never shows untranslated key names (option name in i18next v23+)
   initAsync: false,
   returnNull: false
 })
 
-/** 同步 React 之外的语言相关全局状态：`<html lang>` 与 dayjs locale */
+/** Synchronize language-related global state outside React: `<html lang>` and the dayjs locale */
 export function applyLanguageGlobals(language: ResolvedLanguage): void {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = language
@@ -39,7 +39,7 @@ export function applyLanguageGlobals(language: ResolvedLanguage): void {
   dayjs.locale(LANGUAGES[language].dayjs)
 }
 
-/** 切换界面语言（react-i18next 会广播 languageChanged，订阅方自动重渲染） */
+/** Switch the UI language (react-i18next broadcasts languageChanged, so subscribers re-render automatically) */
 export async function changeLanguage(language: ResolvedLanguage): Promise<void> {
   applyLanguageGlobals(language)
   if (i18n.resolvedLanguage !== language) {
@@ -47,7 +47,7 @@ export async function changeLanguage(language: ResolvedLanguage): Promise<void> 
   }
 }
 
-// 首帧就把 <html lang> 与 dayjs locale 对齐到初始语言
+// Align <html lang> and the dayjs locale with the initial language on the first frame
 applyLanguageGlobals(i18n.resolvedLanguage === 'en-US' ? 'en-US' : DEFAULT_LANGUAGE)
 
 export default i18n

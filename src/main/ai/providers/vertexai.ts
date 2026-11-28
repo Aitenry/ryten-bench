@@ -1,10 +1,11 @@
 /**
- * Google Vertex AI 实现（与 Gemini 共用报文，只换 URL 与鉴权）。
+ * Google Vertex AI implementation (shares the payload format with Gemini, differing only in URL
+ * and auth).
  *
- * 两种接入方式（与旧实现保持一致）：
- * - **Express Mode**：配置了 apiKey → `https://aiplatform.googleapis.com/v1/publishers/google/models/<model>`；
- * - **项目模式**：未配置 apiKey → 服务账号 / gcloud ADC 换 OAuth token，
- *   请求 `https://<location>-aiplatform.googleapis.com/v1/projects/<project>/locations/<location>/publishers/google/models/<model>`。
+ * Two access modes:
+ * - **Express Mode**: an apiKey is configured → `https://aiplatform.googleapis.com/v1/publishers/google/models/<model>`;
+ * - **Project mode**: no apiKey → a service account / gcloud ADC is exchanged for an OAuth token,
+ *   requesting `https://<location>-aiplatform.googleapis.com/v1/projects/<project>/locations/<location>/publishers/google/models/<model>`.
  */
 import { GoogleChatModelBase, GoogleFields } from './google'
 import { getGoogleAccessToken, GoogleCredential, resolveGoogleCredential } from './google-auth'
@@ -12,18 +13,18 @@ import { modelConfigError } from '../http'
 
 export interface VertexFields extends GoogleFields {
   model?: string
-  /** GCP 项目（缺省读凭据 / GOOGLE_CLOUD_PROJECT） */
+  /** GCP project (defaults to the value from credentials / GOOGLE_CLOUD_PROJECT) */
   projectId?: string
-  /** 区域（缺省 us-central1；`global` 表示全球端点） */
+  /** Region (defaults to us-central1; `global` means the global endpoint) */
   location?: string
-  /** 服务账号凭据对象 */
+  /** Service account credential object */
   credentials?: unknown
-  /** 旧实现字段名：与 credentials 等价 */
+  /** Equivalent to credentials (legacy field name) */
   authOptions?: { credentials?: unknown }
   credentialsPath?: string
 }
 
-/** 去掉 `models/` 前缀 */
+/** Strip the `models/` prefix */
 function bareModelName(model: string): string {
   return model.replace(/^models\//, '')
 }
@@ -57,7 +58,7 @@ export class ChatVertexAI extends GoogleChatModelBase {
     return 'vertexai'
   }
 
-  /** 项目模式的 access token（getGoogleAccessToken 内部按凭据缓存到过期前 60 秒） */
+  /** Access token for project mode (getGoogleAccessToken caches it per credential until 60 seconds before expiry) */
   private async accessTokenValue(): Promise<string> {
     const credential = await this.credential
     if (!credential) {

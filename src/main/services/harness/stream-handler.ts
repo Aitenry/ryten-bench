@@ -10,12 +10,12 @@ import type { UploadedFileRef } from './message-builder'
 import type { ModelUsageRecord } from '../../runtime/harness/usage'
 import { produceMessages, produceToolCalls, produceSubAgents } from './stream-producers'
 
-/** 流式处理所需的 HarnessService 依赖（避免循环引用） */
+/** HarnessService dependencies needed for stream processing (avoids circular imports) */
 export interface StreamDeps {
-  /** 创建运行时（自研 Agent 运行时） */
+  /** Create the runtime (in-house agent runtime) */
   createRuntime(): Runtime
 
-  /** 加载历史上下文（含本轮摘要压缩信息与压缩开始/重试回调；signal 贯通到摘要压缩调用） */
+  /** Load history context (including this turn's summary compaction info and compaction start/retry callbacks; signal is threaded through to summary compaction calls) */
   loadContextMessages(
     topicId: number,
     onCompactionStart?: () => void,
@@ -23,48 +23,50 @@ export interface StreamDeps {
     signal?: AbortSignal,
     onCompactionRetry?: (attempt: number, retries: number) => void,
     turnSource?: string,
-    /** 当前模型上下文窗口（token）：压缩压力按真实 token 判定时用 */
+    /** Current model context window (tokens): used when compaction pressure is judged by real token count */
     contextWindow?: number
   ): Promise<{ messages: BaseMessage[]; compaction?: HistoryCompaction }>
 
-  /** 将上传文件复制到 agent 工作区，返回虚拟路径引用 */
+  /** Copy uploaded files into the agent workspace and return virtual path references */
   copyUploadedFiles(
     docs?: { fileName: string; filePath: string }[]
   ): Promise<UploadedFileRef[] | undefined>
 
-  /** 本轮模型真实用量（流结束、判定是否落库之后回调；模型未回传时为首次空数组） */
+  /** Real model usage for this turn (called after the stream ends and persistence has been decided; empty array on the first call if the model returned none) */
   onUsage?(records: ModelUsageRecord[]): void
 }
 
 /**
- * 发送消息并以流式方式返回内容
- * @param deps HarnessService 的运行时和历史加载方法
- * @param message 用户输入
- * @param options 可选配置（含 topicId 用于加载历史）
- * @returns 异步生成器，返回 StructuredMessage
+ * Send a message and stream the content back
+ * @param deps HarnessService runtime and history loading methods
+ * @param message User input
+ * @param options Optional config (includes topicId for loading history)
+ * @returns Async generator yielding StructuredMessage
  */
 export async function* runStream(
   deps: StreamDeps,
   message: string,
   options?: HarnessOptions
 ): AsyncGenerator<StructuredMessage> {
-  // 修复：此前 JSON.stringify(options) 会把图片 base64 整张写进日志（数 MB/条，含用户截图内容）
-  // 且 signal 不可序列化——改为只记录关键字段
+  // Fix: previously JSON.stringify(options) wrote full image base64 into the log (several MB per
+  // entry, including user screenshot content) and signal is not serializable — log key fields only
   logger.info(
     `[Harness] Stream options: topicId=${options?.topicId ?? 'none'}, images=${options?.images?.length ?? 0}, documents=${options?.documents?.length ?? 0}`
   )
   const signal = options?.signal
 
   try {
-    // 计划模式按话题持久化：Runtime 的提示词 / 工具清单是同步拼装的，
-    // 这里先把开关回填进内存缓存，保证进程启动后的第一轮也带着正确的模式。
+    // Plan mode is persisted per topic: the Runtime's prompt / tool list are assembled
+    // synchronously, so backfill the flags into the in-memory cache first, ensuring the first turn
+    // after process start also carries the correct mode.
     if (options?.topicId) {
       await planModeStore.ensure(options.topicId)
       await teamModeStore.ensure(options.topicId)
     }
     const runtime = deps.createRuntime()
 
-    // 首个 chunk 下发本轮注入的热记忆内容，前端在 AI 消息顶部显示「注入记忆」
+    // The first chunk carries the hot memory injected for this turn; the frontend shows
+    // "injected memory" at the top of the AI message
     const injection = runtime.memoryInjection
     if (injection) {
       yield { memoryInjected: injection }
@@ -92,28 +94,32 @@ export async function* runStream(
         `[Harness] Context roles: ${contextMessages.map((m) => m._getType()).join(' → ')}`
       )
     }
-    // 本轮早期对话被压缩为 checkpoint：在正文流开始前下发，前端在 AI 消息顶部显示压缩卡片
+    // Early conversation of this turn was compacted into a checkpoint: emit it before the body
+    // stream starts; the frontend shows a compaction card at the top of the AI message
     if (context?.compaction) {
       yield { historyCompacted: context.compaction }
     }
 
-    // 图执行（模型请求的自动重试发生在图内 model 节点对单次 LLM 调用的原地重试上
-    // ——见 agent.ts callModel：失败只重试那一次请求，已执行工具与已流出内容全部保留，不会整轮重跑）
+    // Graph execution (automatic retries of model requests happen as in-place retries of a single
+    // LLM call in the graph's model node — see agent.ts callModel: a failure retries only that one
+    // request; executed tools and already-streamed content are all kept, the whole turn never reruns)
     const run = runtime.stream(
       [...contextMessages, userMessage],
       signal,
       options?.topicId,
       options?.turnMeta,
-      // 回合内插话（steering）：工具节点边界排空用户插话并并入模型上下文（未配置则关闭）
+      // In-turn steering: drain user steering messages at tool node boundaries and merge them into
+      // the model context (disabled when not configured)
       options?.drainInjections
     )
 
-    // 使用队列实现消息和工具调用的并发流式输出
+    // Use a queue to stream messages and tool calls concurrently
     const queue: StructuredMessage[] = []
     let waiting: (() => void) | null = null
     let producersAlive = 3
-    // 仅统计真实输出（正文/推理/工具/子代理）；重试进度等过渡信号不计入，
-    // 使「重试耗尽且从未产出内容」仍走零输出失败文本路径
+    // Count only real output (content/reasoning/tools/sub-agents); transitional signals such as
+    // retry progress are excluded, so "retries exhausted with no content ever produced" still
+    // takes the zero-output failure-text path
     let emittedCount = 0
 
     const enqueue = (item: StructuredMessage): void => {
@@ -133,7 +139,7 @@ export async function* runStream(
       }
     }
 
-    /** 安全获取 tool call output，捕获 abort 触发的 rejection */
+    /** Safely get tool call output, catching rejections triggered by abort */
     const safeGetOutput = async (call: { output: unknown }): Promise<unknown> => {
       try {
         return await call.output
@@ -147,24 +153,28 @@ export async function* runStream(
       }
     }
 
-    // 共享标志：工具开始执行（模型消息结束）后，消息生产者停止「参数构建中」保活，
-    // 防止已完成的工具卡被复活（用户报障：不要阻塞）；新一轮模型输出开始时重置
+    // Shared flag: after tool execution starts (model message ends), the message producer stops the
+    // "building arguments" keep-alive to prevent completed tool cards from being revived (user
+    // report: do not block); reset when a new model output round starts
     const toolsStarted = { value: false }
 
-    // 共享标志：「本段内容是否属于这一轮的最终答复」（协议层真源）。
-    // 内容流出时默认为 true，一旦出现工具/子代理活动就翻 false（撤回），
-    // 新一轮模型输出的正文重新打 true——最后留下的那一段才是这一轮的答复。
-    // 渲染端据此把答复摆在任务折叠之外，不再靠自己的 loading 状态猜（见 answer-boundary.ts）。
+    // Shared flag: "does this segment belong to this turn's final answer" (protocol-level source of
+    // truth). Defaults to true while content streams; flips to false (retracted) as soon as
+    // tool/sub-agent activity appears, and is set back to true for the body of a new model output
+    // round — the last segment left is this turn's answer. The renderer places the answer outside
+    // the task collapse based on this, no longer guessing from its own loading state (see
+    // answer-boundary.ts).
     const answerMark = { value: true }
 
-    // 启动三个生产者
+    // Start the three producers
     const msgProducer = produceMessages(
       run,
       signal,
       enqueue,
       markDone,
       toolsStarted,
-      // 回合内插话：消息流在「本轮工具已完成下发」的段落边界排空待注入插话
+      // In-turn steering: the message stream drains pending steering messages at the segment
+      // boundary where this round's tools have all been emitted
       options?.drainInjections,
       answerMark
     ).catch(() => {})
@@ -176,7 +186,8 @@ export async function* runStream(
       safeGetOutput,
       toolsStarted,
       options?.topicId,
-      // 每条工具调用完成下发后也排空一次（工具尚未开始执行的窗口由消息流守卫排空兜底）
+      // Drain once after each tool call is emitted as completed (the window where tools haven't
+      // started executing is covered by the message stream's guarded drain)
       options?.drainInjections,
       answerMark
     ).catch(() => {})
@@ -190,7 +201,7 @@ export async function* runStream(
       answerMark
     ).catch(() => {})
 
-    // 主消费者循环：从队列中取出并 yield
+    // Main consumer loop: take from the queue and yield
     while (producersAlive > 0 || queue.length > 0) {
       if (signal?.aborted) {
         break
@@ -204,12 +215,14 @@ export async function* runStream(
       }
     }
 
-    // 等待所有生产者完成（捕获潜在错误）
+    // Wait for all producers to finish (catching potential errors)
     await Promise.allSettled([msgProducer, toolProducer, subAgentProducer])
 
-    // 图执行失败透传（model 节点内部自动重试/换模型兜底均已失效时才走到这里）：
-    // - 零输出：直接下发失败文本；
-    // - 已有输出：下发 streamError 标记，由 IPC 层转发错误事件并跳过落库
+    // Forward graph execution failures (reached only when the model node's in-place retry / fallback
+    // model have both failed):
+    // - zero output: emit the failure text directly;
+    // - some output already emitted: emit the streamError marker; the IPC layer forwards the error
+    //   event and skips persistence
     if (run.error && !signal?.aborted) {
       if (emittedCount === 0) {
         logger.error('[Harness] Runtime failed with no output:', run.error)
@@ -226,7 +239,8 @@ export async function* runStream(
       yield { content: mainFormat(m.responseFailed, { reason: m.emptyModelResponse }) }
     }
 
-    // 本轮真实用量：交给调用方（IPC 层）在助手消息落库后写入 harness_dialogue_usage
+    // Real usage for this turn: handed to the caller (IPC layer) to write into
+    // harness_dialogue_usage after the assistant message is persisted
     deps.onUsage?.(runtime.usage)
   } catch (error) {
     logger.error('Error in sendMessageStream:', error)

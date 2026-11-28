@@ -8,17 +8,18 @@ import { draftSourceHash } from './fingerprint'
 import { readDraftMeta } from './store'
 
 /**
- * 工坊的**宿主接线**：服务本身不 import electron（离线工装才能跑全链路），
- * 一切「只有应用里才有」的能力都从这里注入。
+ * **Host wiring** for the workshop: the service itself does not import electron (so offline
+ * tooling can run the whole pipeline); every capability that "only exists in the app" is
+ * injected from here.
  *
- * 注入分三层，缺一层只降级对应功能，不阻塞其余部分：
- * - **模块加载器**（`loader`）：esbuild / tailwindcss / jszip —— 拿不到时构建/样式/导出各自报可读错误；
- * - **宿主表**（`hostMainKeys` / `hostUiKeys`）：验收电池据此判断产物的宿主说明符是否都真的能解析；
- * - **安装动作**（`installPackage` / `enable` / `uninstall` / `notify`）：发布与卸载走宿主既有的
- *   插件装载链路（与面板上的安装、卸载**完全同一套**代码），工坊不另造一条。
+ * Injection has three layers; a missing layer only degrades the corresponding feature and
+ * does not block the rest:
+ * - **Module loader** (`loader`): esbuild / tailwindcss / jszip — when unavailable, build/style/export each report a readable error;
+ * - **Host tables** (`hostMainKeys` / `hostUiKeys`): the verification battery uses them to check that every host specifier in the output actually resolves;
+ * - **Install actions** (`installPackage` / `enable` / `uninstall` / `notify`): publish and uninstall go through the host's existing plugin-loading chain (**exactly the same code** as install/uninstall in the panel); the workshop does not build a second one.
  */
 
-/** 宿主插件包的安装结果（core `installPackageDir` 的子集） */
+/** Installation result of a host plugin package (a subset of core `installPackageDir`) */
 export interface InstalledPackageLike {
   id: string
   name: string
@@ -29,56 +30,58 @@ export interface InstalledPackageLike {
 }
 
 export interface WorkshopHost {
-  /** 工坊根目录（`<userData>/plugin-workshop`） */
+  /** Workshop root directory (`<userData>/plugin-workshop`) */
   root: string
-  /** 宿主主进程运行时表的键（`@host/main/**`、`@host/shared/**`） */
+  /** Keys of the host main-process runtime table (`@host/main/**`, `@host/shared/**`) */
   hostMainKeys: () => string[]
-  /** 宿主渲染层 UI 表的键；`null` = 渲染层还没上报（此时只跳过对应检查） */
+  /** Keys of the host renderer UI table; `null` = the renderer has not reported yet (skip the corresponding check) */
   hostUiKeys: () => string[] | null
-  /** 是否已安装（`userData/plugins/<id>` 存在） */
+  /** Whether it is installed (`userData/plugins/<id>` exists) */
   isInstalled: (id: string) => boolean
-  /** 是否已启用（含「装了但停用」） */
+  /** Whether it is enabled (includes "installed but disabled") */
   isEnabled: (id: string) => boolean
   /**
-   * 已占用的通道命名空间（撞名检查）。
+   * Channel namespaces already in use (name-collision check).
    *
-   * `exceptId` 是**要排除的插件 id**：命名空间是插件 id 去掉 `plugin.` 段得到的，
-   * 因此「草稿 `twin` 自己已安装」与「另一个插件 `plugin.twin` 占了 `plugin:twin:`」
-   * 必须区分开——前者不是冲突，后者是。宿主按 id 过滤，工坊只比对命名空间。
+   * `exceptId` is the **plugin id to exclude**: a namespace is the plugin id with the
+   * `plugin.` segment removed, so "the draft `twin` itself is already installed" and
+   * "another plugin `plugin.twin` occupies `plugin:twin:`" must be distinguished — the
+   * former is not a conflict, the latter is. The host filters by id; the workshop only
+   * compares namespaces.
    */
   usedNamespaces: (exceptId?: string) => string[]
-  /** 模块加载器（esbuild / tailwindcss / jszip 从它取） */
+  /** Module loader (esbuild / tailwindcss / jszip are taken from it) */
   loader: ModuleLoader
-  /** 安装（或升级）一个已落盘的插件包目录 */
+  /** Install (or upgrade) a plugin package directory already written to disk */
   installPackage: (dir: string) => InstalledPackageLike
-  /** 启用：写启用覆写 + 装载主模块 */
+  /** Enable: write the enabled override + load the main module */
   enable: (id: string) => void
-  /** 停用：只摘主模块，保留已装目录 */
+  /** Disable: unload only the main module, keep the installed directory */
   disable: (id: string) => void
-  /** 卸载：摘主模块 + 删目录 + 清覆写（数据由插件自己的 purge 贡献处理） */
+  /** Uninstall: unload the main module + delete the directory + clear the override (data is handled by the plugin's own purge contribution) */
   uninstall: (id: string) => void
-  /** 持久化「插件存放路径」（harness 设置的 pluginsPath） */
+  /** Persist the "plugin storage path" (the harness `pluginsPath` setting) */
   setPluginsRoot: (dir: string) => void
-  /** 广播插件状态变化（渲染层据此重新 fetch 插件模块与样式） */
+  /** Broadcast a plugin state change (the renderer re-fetches plugin modules and styles based on it) */
   notify: () => void
-  /** 渲染层实时探针（没有可用窗口时返回 `skip`） */
+  /** Live renderer probe (`skip` when no window is available) */
   probeRenderer?: (id: string) => Promise<WorkshopRendererProbe>
 }
 
 let host: WorkshopHost | null = null
 
-/** 接线（插件 install 的 effect 里调用；传 null = 关闭工坊） */
+/** Wire up (called in the plugin install effect; null = turn the workshop off) */
 export function configureWorkshopHost(next: WorkshopHost | null): void {
   host = next
   configureWorkshopRoot(next?.root)
 }
 
-/** 工坊是否可用（工具与通道据此给可读错误） */
+/** Whether the workshop is available (tools and channels use it for readable errors) */
 export function isWorkshopConfigured(): boolean {
   return host !== null && isWorkshopReady()
 }
 
-/** 取宿主接线（未接线时抛可读错误） */
+/** Get the host wiring (throws a readable error when not wired) */
 export function workshopHost(): WorkshopHost {
   if (!host) {
     throw new Error('插件工坊尚未接线（宿主未注入工坊能力）')
@@ -86,17 +89,19 @@ export function workshopHost(): WorkshopHost {
   return host
 }
 
-/** 取宿主接线（可能为 null；给「能优雅降级」的调用方用） */
+/** Get the host wiring (may be null; for callers that can degrade gracefully) */
 export function workshopHostOrNull(): WorkshopHost | null {
   return host
 }
 
 /**
- * 用 Node 解析路径造一个模块加载器（应用里用 `app.getAppPath()` 等基准）。
+ * Build a module loader from Node resolution paths (the app uses bases such as
+ * `app.getAppPath()`).
  *
- * 为什么按候选基准逐个试：dev 下 esbuild/tailwindcss 在仓库 `node_modules` 里；
- * 打包后只有 `app.asar.unpacked` 下被 `asarUnpack` 解出来的那一份能被 `spawn`/读盘。
- * 逐个 `resolve` 直到命中，比「猜一个路径」稳。
+ * Why try candidate bases one by one: in dev, esbuild/tailwindcss live in the repo
+ * `node_modules`; after packaging, only the copy unpacked by `asarUnpack` under
+ * `app.asar.unpacked` can be `spawn`ed or read from disk. Resolving one by one until a hit
+ * is more reliable than "guessing a path".
  */
 export function createNodeLoader(bases: string[]): ModuleLoader {
   const clean = [...new Set(bases.filter((b): b is string => typeof b === 'string' && b !== ''))]
@@ -109,7 +114,7 @@ export function createNodeLoader(bases: string[]): ModuleLoader {
         req.resolve(id)
         return req
       } catch {
-        // 换下一个基准
+        // Try the next base
       }
     }
     return null
@@ -135,7 +140,7 @@ export function createNodeLoader(bases: string[]): ModuleLoader {
   }
 }
 
-/** 产物目录里是否有构建结果（有 plugin.json 即算） */
+/** Whether the output directory has build results (a plugin.json counts) */
 export function hasBuild(id: string): boolean {
   try {
     return fs.existsSync(path.join(distDir(id), 'plugin.json'))
@@ -145,10 +150,12 @@ export function hasBuild(id: string): boolean {
 }
 
 /**
- * 当前草稿源码的指纹（读 `workshop.json` 的 css 模式后交给 `draftSourceHash`）。
+ * Fingerprint of the current draft source (reads the css mode from `workshop.json`, then
+ * hands it to `draftSourceHash`).
  *
- * 这是发布闸门与构建写入的同一个口径：产物/报告里记的指纹与它不一致，就说明
- * 源码在那之后变过（或产物不是这份源码构建出来的）。
+ * This is the same measure used by the publish gate and by build output: if the fingerprint
+ * recorded in the output/report differs from it, the source changed after that point (or the
+ * output was not built from this source).
  */
 export function currentSourceHash(id: string): string {
   const meta = readDraftMeta(id)
@@ -156,13 +163,16 @@ export function currentSourceHash(id: string): string {
 }
 
 /**
- * 产物是否落后于草稿源码（发布/验收前据此提示「先重新构建」）。
+ * Whether the output lags behind the draft source (used before publish/verify to suggest a
+ * rebuild first).
  *
- * **比内容指纹，不比 mtime**：构建结束会回写 `workshop.json`，mtime 口径会让
- * 每次构建完都立刻判成过期（`plugin_publish` 因此永久拒绝安装，2026-11-23 用户事故）。
+ * **Compares content fingerprints, not mtime**: the build writes `workshop.json` back at the
+ * end, and the mtime measure would declare staleness immediately after every build
+ * (`plugin_publish` then refuses to install forever, the 2026-11-23 user incident).
  *
- * 没有记录指纹的老产物走 mtime 兜底（排除 `workshop.json`）——升级后第一次构建
- * 就会写入指纹，之后一律走内容比对。
+ * Old outputs without a recorded fingerprint fall back to mtime (excluding `workshop.json`) —
+ * the first build after the upgrade writes the fingerprint, and afterwards it is always a
+ * content comparison.
  */
 export function isBuildStale(id: string): boolean {
   try {
@@ -173,12 +183,12 @@ export function isBuildStale(id: string): boolean {
     }
     return legacyMtimeStale(id)
   } catch {
-    // 读不到源码（目录被移走/权限）时不阻断：发布闸门会先因「没有验收报告/没有产物」拒绝
+    // Do not block when the source cannot be read (directory moved/permissions): the publish gate first rejects for "no verification report / no output"
     return false
   }
 }
 
-/** 老产物（没有 sourceHash）的兜底：mtime 比对，但排除工坊自己回写的 workshop.json */
+/** Fallback for old outputs (no sourceHash): compare mtime, but exclude the workshop.json the workshop writes back */
 function legacyMtimeStale(id: string): boolean {
   const out = path.join(distDir(id), 'plugin.json')
   if (!fs.existsSync(out)) return false
@@ -193,7 +203,7 @@ function legacyMtimeStale(id: string): boolean {
         walk(full)
         continue
       }
-      // 这个文件由工坊在构建之后回写（builtAt/updatedAt），不算源码变更
+      // This file is written back by the workshop after the build (builtAt/updatedAt); it does not count as a source change
       if (entry.name === 'workshop.json') continue
       newest = Math.max(newest, fs.statSync(full).mtimeMs)
     }

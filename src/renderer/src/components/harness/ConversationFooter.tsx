@@ -1,17 +1,20 @@
 import React from 'react'
 
 /**
- * 对话主区的底部输入区外壳（主智能体 / 子智能体共用）。
+ * Footer shell for the input area of the conversation main region (shared by the main agent
+ * and subagents).
  *
- * 用户 2026-11-26 口径："全部内容实现复用" —— 主对话和子代理会话的输入区必须是
- * 同一套外壳：同样的左右留白、最大宽度、背景、顶部分隔线和渐隐遮罩、欢迎态居中宽度。
- * 差异只在内层控件（主对话放完整 HarnessInput，子代理放 simpleMode 的 HarnessInput）
- * 与上半部分的主题卡片（目标/任务/队列只属于主对话，用 `top` 槽位传）。
+ * Per the 2026-11-26 requirement ("reuse everything"), the input area of the main conversation
+ * and of subagent sessions must be one and the same shell: the same horizontal padding, max
+ * width, background, top divider and fade mask, and the same centered width in welcome state.
+ * Only the inner control differs (full HarnessInput for the main conversation, simpleMode
+ * HarnessInput for subagents), plus the topic cards above it (goal/tasks/queue belong only to
+ * the main conversation and are passed through the `top` slot).
  */
 interface ConversationFooterProps {
-  /** 空白会话（欢迎页）布局：无顶部分隔线、更窄的最大宽度、上下留白更大 */
+  /** Empty-conversation (welcome page) layout: no top divider, narrower max width, more vertical padding */
   welcome?: boolean
-  /** 输入框上方的主题卡片（主对话：任务进度 / 目标 / 队列；子代理没有） */
+  /** Topic cards above the input box (main conversation: task progress / goal / queue; subagents have none) */
   top?: React.ReactNode
   colorBgContainer: string
   colorBorderSecondary: string
@@ -33,8 +36,9 @@ const ConversationFooter: React.FC<ConversationFooterProps> = ({
         borderTop: welcome ? 'none' : `1px solid ${colorBorderSecondary}`
       }}
     >
-      {/* 输入区上方的渐隐遮罩：滚到边界时消息淡出，不再像被输入框硬生生切断。
-          空白会话没有消息可淡出，遮罩只在常规布局里生效。 */}
+      {/* Fade mask above the input area: messages fade out at the scroll boundary instead of
+          looking cut off by the input box. The welcome layout has no messages to fade, so the
+          mask only applies in the regular layout. */}
       {!welcome ? (
         <div
           aria-hidden="true"

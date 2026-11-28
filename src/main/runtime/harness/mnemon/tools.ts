@@ -13,22 +13,22 @@ import {
 } from './types'
 
 /**
- * mnemon_* 模型工具集
+ * mnemon_* model toolset
  *
- * 移植自 dsh-mnemon 的工具面：
- * - 只读：mnemon_memory_bodies / mnemon_recall / mnemon_related / mnemon_status / mnemon_document_search
- * - 写：mnemon_runtime_memory / mnemon_document_manage / mnemon_remember / mnemon_link /
+ * The tool surface:
+ * - Read-only: mnemon_memory_bodies / mnemon_recall / mnemon_related / mnemon_status / mnemon_document_search
+ * - Writes: mnemon_runtime_memory / mnemon_document_manage / mnemon_remember / mnemon_link /
  *       mnemon_forget / mnemon_memory_body_create / mnemon_memory_body_update / mnemon_memory_body_merge
  *
- * 与 dsh-mnemon 的差异：本实现不区分 root/worker 路径（RytenBench 无 worker 体系），
- * 全部直接调用确定性服务层。
+ * This implementation does not distinguish root/worker paths (RytenBench has no worker system);
+ * all tools call the deterministic service layer directly.
  */
 
 export interface MnemonToolContext {
   service: MnemonService
   runtimeMemory: RuntimeMemoryController
   documents: DocumentController
-  /** 当前工作区名（用于默认记忆空间命名） */
+  /** Current workspace name (used for default Memory Space naming) */
   workspaceName?: string
 }
 
@@ -37,13 +37,13 @@ const sourceEnum = z.enum(MNEMON_SOURCES)
 const edgeTypeEnum = z.enum(MNEMON_EDGE_TYPES)
 const targetEnum = z.enum(['user', 'memory'])
 
-/** 构建全部 mnemon 工具 */
+/** Builds all mnemon tools */
 export function buildMnemonTools(ctx: MnemonToolContext): StructuredToolInterface[] {
   const { service, runtimeMemory, documents } = ctx
 
   return [
     // ========================================================================
-    // 只读工具
+    // Read-only tools
     // ========================================================================
 
     tool(
@@ -220,7 +220,7 @@ export function buildMnemonTools(ctx: MnemonToolContext): StructuredToolInterfac
     ),
 
     // ========================================================================
-    // 写工具
+    // Write tools
     // ========================================================================
 
     tool(
@@ -483,7 +483,7 @@ export function buildMnemonTools(ctx: MnemonToolContext): StructuredToolInterfac
         schema: z.object({
           name: z
             .string()
-            .describe('Space name (human-readable, e.g. "Blog project", "DSH environment")'),
+            .describe('Space name (human-readable, e.g. "Blog project", "Research notes")'),
           description: z
             .string()
             .describe('Routing boundary: what content belongs here and when to recall it')
@@ -551,7 +551,7 @@ export function buildMnemonTools(ctx: MnemonToolContext): StructuredToolInterfac
   ]
 }
 
-/** 工具错误统一记录（供调用方诊断） */
+/** Unified tool error logging (for caller diagnostics) */
 export function logToolError(name: string, err: unknown): void {
   logger.warn(`[Mnemon] Tool ${name} failed:`, err)
 }

@@ -5,15 +5,16 @@ import { hasUserDataDirOverride, resolveEnvironment, type AppEnvironment } from 
 export * from './resolve'
 
 /**
- * 进程启动早期的环境装配：确定「开发 / 打包」两套数据目录，并把它应用到 Electron。
+ * Early-startup environment setup: determine the "development / packaged" data directories and apply them to Electron.
  *
- * **时机是硬约束**，不是偏好：`context.ts` 的 electron-store 和 `database/loading.ts`
- * 的数据库目录都在**模块求值阶段**解析 `app.getPath('userData')`。等到 `app.whenReady()`
- * 再设置就晚了——它们早把路径定死在旧目录里。因此本模块被 import 时立即执行
- * `applyEnvironment()`，并要求 `src/main/index.ts` 把它放在**第一条 import**（见那里的注释）。
+ * **Timing is a hard constraint**, not a preference: the electron-store in `context.ts` and the database directory in
+ * `database/loading.ts` both resolve `app.getPath('userData')` during **module evaluation**. Waiting until
+ * `app.whenReady()` would be too late — they have already pinned the paths to the old directory. This module therefore
+ * runs `applyEnvironment()` immediately when imported, and requires `src/main/index.ts` to place it as the **first
+ * import** (see the comment there).
  *
- * 覆盖规则：命令行带 `--user-data-dir`（自动化隔离）时只改应用名、不动 userData，
- * 让工装拿到的临时目录原样生效。
+ * Override rule: when the command line carries `--user-data-dir` (automation isolation), only the app name is changed and
+ * userData is left alone, so the temporary directory handed to the test tooling takes effect as-is.
  */
 
 let applied: AppEnvironment | null = null
@@ -26,18 +27,18 @@ export function applyEnvironment(): AppEnvironment {
     appDataDir: app.getPath('appData')
   })
 
-  // 必须在 ready 之前：app.name 影响系统菜单、关于面板与 macOS 的日志目录。
-  // 开发态带 Dev 后缀，桌面/日志里一眼能区分两套环境。
+  // Must happen before ready: app.name affects the system menu, the About panel, and the macOS log directory.
+  // The dev build carries a Dev suffix so the two environments are easy to tell apart in the desktop and logs.
   app.setName(environment.appName)
 
   const overridden = hasUserDataDirOverride(process.argv, app.commandLine)
   if (!overridden) {
     try {
-      // Electron 的 setPath 要求目录已存在，否则直接抛错。
+      // Electron's setPath requires the directory to exist, otherwise it throws directly.
       fs.mkdirSync(environment.userDataDir, { recursive: true })
       app.setPath('userData', environment.userDataDir)
     } catch (error) {
-      // 绝不静默退回默认目录：默认目录就是另一套环境的数据，正是本模块要防的事。
+      // Never silently fall back to the default directory: it belongs to the other environment's data, which is exactly what this module guards against.
       throw new Error(
         `无法准备 ${environment.name} 环境的用户数据目录 ${environment.userDataDir}：` +
           (error instanceof Error ? error.message : String(error))
@@ -49,12 +50,12 @@ export function applyEnvironment(): AppEnvironment {
   return environment
 }
 
-/** 当前进程使用的环境（import 本模块时已应用；这里补一次，幂等） */
+/** Environment used by the current process (already applied when this module is imported; applying once more here is idempotent) */
 export function currentEnvironment(): AppEnvironment {
   return applied ?? applyEnvironment()
 }
 
-/** 当前进程真正在用的 userData 根目录（尊重 `--user-data-dir` 覆盖） */
+/** userData root actually in use by the current process (respects the `--user-data-dir` override) */
 export function currentUserDataDir(): string {
   currentEnvironment()
   return app.getPath('userData')

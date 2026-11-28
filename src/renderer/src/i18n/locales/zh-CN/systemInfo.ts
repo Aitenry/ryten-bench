@@ -1,4 +1,4 @@
-/* 系统信息页词条。 */
+/* Strings for the system info page. */
 export const zhCNSystemInfo = {
   pageTitle: '系统信息',
   pageDescription: '当前系统运行环境信息',

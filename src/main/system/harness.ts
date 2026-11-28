@@ -67,21 +67,28 @@ import { searchWeb } from '../search/registry'
 import { EffectScope, registerIpcHandlers } from '../ipc/register'
 
 /**
- * 「AI 助手」主进程装配（系统级功能，不再是插件）。
+ * Main-process assembly for the AI assistant (system-level feature, no longer a plugin).
  *
- * 六件事：
- * - **通道表**：8 个域各一个文件（助手主体 / 话题对话 / 对话模式的目录与会话 / Mnemon 记忆 /
- *   工作区文件与改动审查 / 智能体配置 / 插件工坊 / 在应用中打开），全部是普通 `harness:*` 通道；
- * - **事件通道**：主进程 → 渲染层的推送（流式 chunk、队列、目标、后台任务、子代理、
- *   提问、计划清单、工作区磁盘变化、改动记录、文档改写、工坊状态变化与装载探针）；
- *   通道名以 `harness:` 开头，preload 的系统桥按前缀放行，不需要再声明清单；
- * - **启动接线**：文件改动快照目录、工具结果目录、插件工坊宿主、MCP 客户端、工作区监听；
- * - **生命周期钩子**：加载页预取、渲染进程内存快照、退出前释放（导出的三个函数，
- *   由 core 在固定时机直接调用——不再经贡献点绕一圈）；
- * - **工具注册表**：本地工具 time/weather/工坊 + 第三方插件的 `harness.tool` 贡献；
- * - **第三方插件协作**：`harness.tool` 仍由第三方插件经插件注册表贡献，这里只做消费。
+ * Six responsibilities:
+ * - **Channel table**: one file per domain (assistant core / topic conversations / chat-mode
+ *   directories and sessions / Mnemon memory / workspace files and change review / agent
+ *   configuration / plugin workshop / open in app), all ordinary `harness:*` channels;
+ * - **Event channels**: pushes from the main process to the renderer (stream chunks, queues,
+ *   goals, background jobs, subagents, questions, plan lists, workspace disk changes, change
+ *   records, document rewrites, workshop status changes and load probes); channel names start
+ *   with `harness:` and the preload system bridge allows them by prefix, so no manifest is
+ *   needed;
+ * - **Startup wiring**: file change snapshot directory, tool result directory, plugin workshop
+ *   host, MCP client, workspace watcher;
+ * - **Lifecycle hooks**: loading-page prefetch, renderer memory snapshot, release before quit
+ *   (the three exported functions are called directly by core at fixed points — no longer routed
+ *   through a contribution point);
+ * - **Tool registry**: local time/weather/workshop tools + third-party `harness.tool`
+ *   contributions;
+ * - **Third-party plugin collaboration**: `harness.tool` is still contributed by third-party
+ *   plugins through the plugin registry; this module only consumes it.
  *
- * 装配是幂等的：core 启动时调用一次 `startHarness()`，退出时调用 `stopHarness()`。
+ * Assembly is idempotent: core calls `startHarness()` once at startup and `stopHarness()` at quit.
  */
 let started = false
 let disposers: Array<() => void> = []
@@ -91,11 +98,13 @@ export function startHarness(): void {
   if (started) return
   started = true
 
-  // 冷恢复接线：恢复的 inactive 会话第一次 send 时按话题/配置重建 runtime
+  // Cold resume wiring: a restored inactive session rebuilds its runtime from the topic/config
+  // on the first send
   subagentSessions.setRuntimeFactory(buildResumedSubagentRuntime)
 
-  // 任务板持久化接线：运行时只依赖 TeamBoardPersistence 接口，DB 实现放在这里装配。
-  // 整板 JSON 快照（含 deleted tombstone）+ revision/counter，重启后懒加载恢复。
+  // Task board persistence wiring: the runtime depends only on the TeamBoardPersistence
+  // interface; the DB implementation is assembled here. A whole-board JSON snapshot (including
+  // deleted tombstones) plus revision/counter is restored lazily after a restart.
   teamStore.setPersistence({
     load: async (topicId) => {
       const row = await getTeamBoard(topicId)
@@ -132,7 +141,7 @@ export function startHarness(): void {
   const effects = new EffectScope()
   scope = effects
 
-  // ── 通道表（7 个域）─────────────────────────────────────────────────────
+  // ── Channel table (7 domains) ─────────────────────────────────────────────
   disposers = [
     registerHarnessIpc(effects),
     registerIpcHandlers(harnessTopicIpcHandlers()),
@@ -143,31 +152,38 @@ export function startHarness(): void {
     registerIpcHandlers(agentIpcHandlers()),
     registerIpcHandlers(workshopIpcHandlers()),
     registerIpcHandlers(mcpIpcHandlers()),
-    // 持久终端的用户侧面板（与模型 terminal_* 工具共用同一会话管理器）
+    // User-side panel for persistent terminals (shares one session manager with the model's
+    // terminal_* tools)
     registerIpcHandlers(terminalIpcHandlers()),
-    // 用户侧真终端（node-pty + xterm.js，人类操作；与模型行模式终端独立）
+    // User-side real terminal (node-pty + xterm.js, human-driven; independent of the model's
+    // line-mode terminal)
     registerIpcHandlers(ptyTerminalIpcHandlers())
   ]
 
-  // ── 启动接线：目录、工坊、MCP、文件监听 ─────────────────────────────────
+  // ── Startup wiring: directories, workshop, MCP, file watcher ──────────────
   effects.effect(() => {
-    // PTY 终端的输出/退出事件 → 渲染层 xterm（批处理后推送）
+    // PTY terminal output/exit events → renderer xterm (pushed after batching)
     const unwirePtyTerminalEvents = wirePtyTerminalEvents()
-    // 文件改动快照目录：放 userData 而不是工作区——工作区挂载为虚拟 '/'，
-    // 写进去会污染用户项目，也会出现在模型自己的 ls/glob 结果里
+    // File change snapshot directory: keep it in userData, not in the workspace — the workspace
+    // is mounted as a virtual '/', so writing there would pollute the user's project and show up
+    // in the model's own ls/glob results
     configureFileHistory(join(app.getPath('userData'), 'file-history'))
 
-    // 工具结果详情存储目录（内置工具的结果不再随流下发/落库，点开卡片时按需读取）
+    // Tool result detail storage directory (built-in tool results are no longer streamed or
+    // persisted; they are read on demand when a card is opened)
     configureToolOutputStore(join(app.getPath('userData'), 'tool-output'))
 
-    // ── 插件工坊接线 ─────────────────────────────────────────────────────
-    // 工坊自己不做 IO 约定：宿主运行时表、插件装载/卸载、模块加载器、渲染层探针
-    // 都在 wiring.ts 里一次性注入（那边刻意是唯一 import electron/core 的地方）。
+    // ── Plugin workshop wiring ──────────────────────────────────────────────
+    // The workshop does no IO conventions itself: the host runtime table, plugin load/unload,
+    // the module loader and the renderer probe are all injected once in wiring.ts (which is
+    // deliberately the only place that imports electron/core).
     installWorkshopHost()
     /**
-     * 工坊删除/重建草稿时，如果目录正被工作区监听（= 插件模式打开着它的源码），
-     * Windows 上会 EPERM。把「先放掉监听、做完再挂回去」的实现注入给工坊服务：
-     * 服务层保持 electron-free（离线工装仍可跑），主进程这里负责真实监听。
+     * When the workshop deletes/rebuilds a draft while the directory is being watched by the
+     * workspace watcher (i.e. plugin mode has its sources open), Windows returns EPERM. Inject
+     * a "drop the watcher first, restore it afterwards" implementation into the workshop
+     * service: the service layer stays electron-free (offline tooling still runs) and the main
+     * process owns the real watcher.
      */
     configureWorkshopDirReleaseHook(
       (dir) => {
@@ -196,16 +212,18 @@ export function startHarness(): void {
       }
     )
 
-    // ── MCP 客户端接线 ───────────────────────────────────────────────────
-    // 配置读取器由这里注入（管理器本身不 import electron，可离线回归）；
-    // 应用根一并注入：MCP SDK 是 ESM-only，而主进程产物是 CJS，
-    // 只能用 createRequire(应用根) 惰性加载（理由见 runtime/harness/mcp.ts 顶部注释）。
+    // ── MCP client wiring ────────────────────────────────────────────────────
+    // The config reader is injected here (the manager itself does not import electron, so it can
+    // be regression-tested offline); the app root is injected too: the MCP SDK is ESM-only while
+    // the main-process build is CJS, so it can only be loaded lazily via createRequire(app root)
+    // (rationale in the header comment of runtime/harness/mcp.ts).
     configureMcp(readMcpServers)
     setMcpModuleBase(app.getAppPath())
     setMcpToolProvider(currentMcpTools)
-    // MCP 资源三件套的数据源：与工具提供者同一套接线。
-    // `resourceCapableServers` 决定「要不要挂」：只有声明了 resources 能力的服务器才挂，
-    // 一台都没有时这三个工具根本不进本轮工具集（不占上下文）。
+    // Data source for the three MCP resource tools: same wiring as the tool provider.
+    // `resourceCapableServers` decides whether anything is attached: only servers declaring the
+    // resources capability are attached; with none of them these three tools do not enter the
+    // round's tool set at all (so they take no context).
     setMcpResourceOps({
       servers: connectedMcpServerNames,
       resourceCapableServers: resourceCapableMcpServers,
@@ -214,15 +232,18 @@ export function startHarness(): void {
       read: readMcpResource
     })
 
-    // 定时任务：存储在后端数据库（PGlite 表），执行入口由 IPC 层注入；
-    // 计时器只在应用运行期间生效，错过的触发不补跑（见 schedule-runner 设计说明）。
-    // 数据库就绪后装配存储后端、导入旧 JSON 任务，再启动计时器（见 awaitInitialized 块）。
+    // Scheduled tasks: stored in the backend database (PGlite tables), the execution entry point
+    // is injected by the IPC layer; timers only run while the app is running, and missed
+    // triggers are not replayed (see the design notes in schedule-runner). Once the database is
+    // ready, wire the storage backend, import legacy JSON tasks, then start the timers (see the
+    // awaitInitialized block).
 
-    // 工作区文件监听：数据库初始化完成（设置已加载）后跟随当前工作区启动。
+    // Workspace file watcher: starts for the current workspace after database initialization
+    // (settings loaded).
     let stopped = false
     void awaitInitialized().then(async () => {
       if (stopped) return
-      // 定时任务装配：存储后端 + 旧 JSON 导入 + 计时器
+      // Scheduled task assembly: storage backend + legacy JSON import + timers
       try {
         configureScheduleStoreBackend(new DbScheduleStore())
         const migrated = await migrateLegacySchedules(join(app.getPath('userData'), 'schedules'))
@@ -233,7 +254,9 @@ export function startHarness(): void {
       } catch (err) {
         logger.warn('[Harness] Failed to initialize scheduled tasks:', err)
       }
-      // 联网搜索：web_search 工具走统一入口（默认服务/密钥来自设置页；未配置时内置搜索兜底）
+      // Web search: the web_search tool goes through a unified entry point (the default
+      // service/key come from the settings page; the built-in search is the fallback when
+      // unconfigured)
       try {
         setWebSearchImplementation((query, maxResults) =>
           searchWeb({ query, maxResults })
@@ -246,12 +269,15 @@ export function startHarness(): void {
       } catch (err) {
         logger.warn('[Harness] Failed to start workspace file watcher:', err)
       }
-      // MCP 服务器预热：连接与工具发现都在后台跑（起子进程/联网可能要几秒），
-      // 不阻塞启动；连不上的那台只在设置页与日志里体现，不影响其余工具。
+      // MCP server warm-up: connections and tool discovery run in the background (spawning
+      // subprocesses / reaching the network can take seconds) so startup is not blocked; a
+      // server that fails to connect only shows up in the settings page and logs, and does not
+      // affect the other tools.
       void refreshCatalog().catch((err) => logger.warn('[Harness] MCP warm-up failed:', err))
     })
 
-    // 系统设置里切换/重建工作区（core 发 `app.workspace-changed`）→ 监听换根目录
+    // Switching/rebuilding the workspace in system settings (core emits
+    // `app.workspace-changed`) → the watcher switches root
     const offWorkspaceChanged = onAppEvent(APP_EVENT_WORKSPACE_CHANGED, () => {
       try {
         syncWorkspaceWatcher()
@@ -273,9 +299,9 @@ export function startHarness(): void {
       scheduleRunner.stop()
       configureScheduleStoreBackend(undefined)
       setWebSearchImplementation(undefined)
-      // 退出前收掉所有持久终端（整树 kill，不留孤儿 shell）
+      // Close all persistent terminals before quit (kill the whole tree, leaving no orphan shells)
       terminalSessions.closeAll()
-      // 用户侧真终端（PTY）也要收干净
+      // The user-side real terminals (PTY) must be closed cleanly too
       unwirePtyTerminalEvents()
       ptyTerminals.closeAll()
       configureMcp(undefined)
@@ -285,7 +311,7 @@ export function startHarness(): void {
   })
 }
 
-/** 退出装配（应用退出或测试收尾）：摘掉通道与全部订效，按 LIFO 回滚 */
+/** Tear down the assembly (app quit or test cleanup): drop channels and all effects, rolling back LIFO */
 export function stopHarness(): void {
   if (!started) return
   started = false
@@ -301,27 +327,31 @@ export function stopHarness(): void {
   scope = null
 }
 
-// ── 应用生命周期钩子（core 在固定时机直接调用）──────────────────────────────
+// ── App lifecycle hooks (called directly by core at fixed points) ──────────
 
-/** 加载页预取：初始化完成后、主窗口交接前，把常用数据读进缓存并恢复子代理会话历史 */
+/** Loading-page prefetch: after initialization and before the main window takes over, read common data into cache and restore subagent session history */
 export function preloadHarness(): Promise<void> {
   return Promise.all([
     preloadHarnessData(),
-    // 恢复历史会话（inactive）：先只读可看；第一次续聊时再按快照冷恢复 runtime
+    // Restore historical sessions (inactive): read-only viewing first; the runtime is
+    // cold-restored from the snapshot on the first continued chat
     subagentSessions.restorePersistedSessions()
   ]).then(() => undefined)
 }
 
 /**
- * 丢掉全部**按账号数据**缓存的内存状态（运行中切换账号数据空间时调用）。
+ * Drop all in-memory state cached **per account's data** (called when switching the account data
+ * space at runtime).
  *
- * 为什么必须清：这些单例按 `topicId` / `workspaceId` 这类**数据库自增 id** 索引，
- * 而每个账号的库是独立的——换库后同一个 id 可能指向另一个账号的数据。不清掉会出现
- * 「新账号的话题显示上一个账号的待办 / 目标 / 排队消息」，属于串号（只是发生在内存里）。
+ * Why it must be cleared: these singletons are indexed by **database auto-increment ids** such as
+ * `topicId` / `workspaceId`, and each account has its own database — after a switch the same id
+ * may point at another account's data. If not cleared, "the new account's topic shows the previous
+ * account's todos / goals / queued messages", i.e. id bleed-through (only in memory, though).
  *
- * 只清缓存、不落盘：真实数据都在各自账号的数据库里，清掉后按需重新读即可。
- * 记忆组件（Mnemon）与 MCP 子进程不在这些缓存里，由切换流程（`profiles/live.ts`）
- * 单独关闭后重新按新库装载。
+ * Cache only, nothing written to disk: the real data lives in each account's database, so it is
+ * re-read on demand after clearing. The memory component (Mnemon) and MCP subprocesses are not
+ * part of these caches; the switch flow (`profiles/live.ts`) closes them separately and reloads
+ * them against the new database.
  */
 export function resetHarnessAccountState(): void {
   clearSubAgentCache()
@@ -331,28 +361,33 @@ export function resetHarnessAccountState(): void {
   teamModeStore.reset()
   harnessQueue.reset()
   goalRoundDriver.reset()
-  // 后台命令按 topicId 归属，换账号后同一个 id 可能属于另一个会话：
-  // 不清掉会出现「新账号的顶部栏里挂着上一个账号的 dev server」
+  // Background commands belong to a topicId; after an account switch the same id may belong to
+  // another session: if not cleared, "the new account's top bar still shows the previous
+  // account's dev server"
   jobsRegistry.clearAll()
-  // 后台子代理会话同样按 topicId 索引（含会话事件流）：换账号后必须清掉，否则串号
+  // Background subagent sessions are indexed by topicId too (including the session event stream):
+  // they must be cleared after an account switch, otherwise ids bleed through
   subagentSessions.clearAll()
-  // 换库后从新账号库恢复子代理会话历史（旧库数据保留，只清内存）
+  // Restore subagent session history from the new account's database (old database data is kept;
+  // only memory is cleared)
   void subagentSessions.restorePersistedSessions()
-  // 共享任务板同样按 topicId 索引，换账号必须清空
+  // The shared task board is indexed by topicId as well and must be cleared on an account switch
   teamStore.clearAll()
   logger.info('[Harness] Account-scoped in-memory state cleared for profile switch')
 }
 
-/** 渲染进程异常退出时落诊断快照（未启动/无 dump 目录时静默） */
+/** Write a diagnostic snapshot when the renderer crashes (silent when not started / no dump directory) */
 export function dumpHarnessMemory(reason: string, exitCode: number): void {
   dumpRendererMemory(reason, exitCode)
 }
 
-/** 退出前释放：Mnemon 会话与 MCP stdio 子进程都不能留在系统里 */
+/** Release before quit: neither Mnemon sessions nor MCP stdio subprocesses may be left in the system */
 export function closeHarnessResources(): void {
-  // 后台 execute 是真实系统进程（dev server / watcher）：退出时不取消会留下孤儿进程
+  // Background execute runs real system processes (dev server / watcher): not cancelling them at
+  // quit would leave orphan processes
   jobsRegistry.clearAll()
-  // 后台子代理会话：退出时中止在途运行，避免闭包继续写已销毁的窗口/任务
+  // Background subagent sessions: abort in-flight runs at quit so closures stop writing to
+  // destroyed windows/tasks
   subagentSessions.clearAll()
   teamStore.clearAll()
   closeAllMnemon()

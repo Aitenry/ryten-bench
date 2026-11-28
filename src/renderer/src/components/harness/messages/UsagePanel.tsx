@@ -5,18 +5,21 @@ import { useTranslation } from '@renderer/i18n'
 import type { UsageDetails } from '../../../utils/harness/usage'
 
 /**
- * 「本轮用量」面板（悬停用量徽标时弹出；默认挂在徽标上方，上方余量不够时翻到下方）。
+ * "Usage this turn" panel (pops up when hovering the usage badge; anchored above the badge by
+ * default and flipped below when there is not enough room above).
  *
- * 结构：标题（左标签 / 右总量）→ 发丝线 → 提供方 / 模型（长文本单独占一行，
- * 塞进右对齐的值列会被折断）→ dt/dd 数值明细 → 输出下的推理子行。
- * 数据全部来自模型真实回传的 token（归一化见 utils/usage.ts），
- * 字段缺失的行不渲染——例如没有缓存明细就不显示「缓存命中」。
+ * Structure: title (label on the left / total on the right) → hairline → provider / model (long
+ * text gets its own row; cramming it into the right-aligned value column would wrap it) → dt/dd
+ * value rows → reasoning sub-row under output. All values come from the token counts actually
+ * returned by the model (normalized in utils/usage.ts); rows for missing fields are not rendered —
+ * e.g. no "cache hit" row when there are no cache details.
  *
- * 宽度由调用方给：窗口/消息区变窄时要跟着收窄，写死宽度会顶破裁剪容器
- * （见 MessageActions 的 measureUsagePanel）。
+ * The width is supplied by the caller: it must shrink along with the window/message area, since a
+ * hard-coded width would break out of the clipping container
+ * (see measureUsagePanel in MessageActions).
  */
 
-/** 千分位（面板里显示精确值） */
+/** Thousands separators (the panel shows exact values) */
 const exact = (value: number): string => value.toLocaleString('en-US')
 
 const UsagePanel: React.FC<{ details: UsageDetails; width: number }> = ({ details, width }) => {
@@ -77,7 +80,7 @@ const UsagePanel: React.FC<{ details: UsageDetails; width: number }> = ({ detail
         pointerEvents: 'none'
       }}
     >
-      {/* 标题：左「本轮用量」，右总量 */}
+      {/* Title: "usage this turn" on the left, total on the right */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span
           style={{
@@ -106,7 +109,7 @@ const UsagePanel: React.FC<{ details: UsageDetails; width: number }> = ({ detail
 
       <div style={{ height: 1, background: token.colorBorderSecondary, margin: '8px 0' }} />
 
-      {/* 提供方 / 模型：长路径独占一行，不塞进右对齐的值列 */}
+      {/* Provider / model: long paths get their own row instead of the right-aligned value column */}
       {details.route && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 11.5, color: token.colorTextTertiary }}>
@@ -125,7 +128,7 @@ const UsagePanel: React.FC<{ details: UsageDetails; width: number }> = ({ detail
         </div>
       )}
 
-      {/* 数值明细：dt 左 / dd 右对齐等宽数字 */}
+      {/* Value details: dt on the left / dd right-aligned with tabular figures */}
       <dl
         style={{
           margin: 0,

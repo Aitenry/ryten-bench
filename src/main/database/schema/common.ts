@@ -1,8 +1,8 @@
 import { pgTable, serial, text, timestamp, real, unique } from 'drizzle-orm/pg-core'
 
 /**
- * 图片表：主键为 md5(dataUrl)，data 存完整 data URL。
- * documents_content / wiki / music_folders / music_tracks 通过 image_id 外键引用。
+ * Images table: primary key is md5(dataUrl), data holds the full data URL.
+ * documents_content / wiki / music_folders / music_tracks reference it via the image_id foreign key.
  */
 export const images = pgTable('images', {
   id: text().primaryKey().notNull(),
@@ -10,7 +10,7 @@ export const images = pgTable('images', {
   created_at: timestamp({ mode: 'string' }).defaultNow()
 })
 
-/** 画布节点坐标表（全局，按 node_id 记录 x/y） */
+/** Canvas node position table (global; records x/y per node_id) */
 export const node_positions = pgTable('node_positions', {
   node_id: text().primaryKey().notNull(),
   x: real().default(0).notNull(),
@@ -19,8 +19,9 @@ export const node_positions = pgTable('node_positions', {
 })
 
 /**
- * 早期手写迁移记录表（由 001_schema_migrations.sql 建立）。
- * 当前代码从未读写它，保留仅为兼容老库、避免 baseline 迁移删表。
+ * Early hand-written migration record table (created by 001_schema_migrations.sql).
+ * Current code never reads or writes it; it is kept only for compatibility with old databases and
+ * so the baseline migration does not drop the table.
  */
 export const schema_migrations = pgTable(
   'schema_migrations',

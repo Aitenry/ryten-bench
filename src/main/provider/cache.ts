@@ -1,12 +1,15 @@
 import type { LlmProviderConfig } from '../database/mapper/provider'
 
 /**
- * 模型 Provider 的启动期缓存（core 的 provider-* 通道与加载页预取共用）。
+ * Startup cache for model providers (shared by core's provider-* channels and the loading page's
+ * prefetch).
  *
- * 归属说明：这段缓存原先和 harness 的子代理定义缓存挤在 `src/main/services/harness/preload-cache.ts`
- * 里。harness 整块搬进 `src/main/**` 后，provider-* 是 core 的通道（模型 Provider
- * 不属于「AI 助手」插件），因此把 provider 这三项缓存留在 core，由 harness 的
- * `preloadHarnessData()` 在预取时写入（插件 → core 的只读依赖，方向合法）。
+ * Ownership note: this cache used to be crammed together with harness's sub-agent definition cache
+ * in `src/main/services/harness/preload-cache.ts`. After harness moved wholesale into
+ * `src/main/**`, provider-* is a core channel (model providers do not belong to the "AI assistant"
+ * plugin), so these three provider cache entries stay in core, and harness's
+ * `preloadHarnessData()` writes them during prefetch (a read-only plugin -> core dependency, a
+ * legal direction).
  */
 let cachedEnabledProviders: LlmProviderConfig[] | null = null
 let cachedDefaultProvider: LlmProviderConfig | null = null

@@ -13,25 +13,25 @@ import { dumpHarnessMemory } from '../system/harness'
 import { syncWindowBorderColor } from './dwm-border'
 import { attachLockScreen, isLockScreenLocked } from '../lock/service'
 
-/** 各窗口的最大化状态（主窗口与 mermaid 预览窗口共用；随窗口销毁清理） */
+/** Maximized state per window (shared by the main and mermaid preview windows; cleared on destroy) */
 const windowMaxStates = new Map<
   number,
   { isMaximized: boolean; normalBounds: Electron.Rectangle | null }
 >()
 
 /**
- * 窗口控制 IPC 绑定窗口的**唯一性守卫**。
+ * **Uniqueness guard** for per-window close cleanup registered by the window control IPC.
  *
- * 为什么需要（2026-09-26 用户实测 `MaxListenersExceededWarning: 11 closed listeners
- * added to [BrowserWindow]`）：此前 `winFromEvent` **每处理一次窗口控制 IPC** 就往
- * 该窗口挂一个 `once('closed', …)` 清理器（最小化/最大化/关闭/查询是否最大化各挂一次，
- * 且渲染层窗口按钮会频繁调用）——同一个窗口上堆到 11 个就触发 Node 的监听器上限告警。
- * 现在按「一个窗口只注册一次清理」记账：WeakSet 不阻止窗口回收，窗口关闭后由
- * `closed` 事件自己把状态与守卫一起清掉。
+ * Why it is needed (`MaxListenersExceededWarning: 11 closed listeners added to [BrowserWindow]`
+ * observed in practice): previously `winFromEvent` attached one `once('closed', …)` cleanup per
+ * window control IPC call (minimize/maximize/close/query-maximized each added one, and the
+ * renderer's window buttons call them frequently) — 11 on the same window triggered Node's
+ * listener limit warning. Cleanup is now registered once per window: the WeakSet does not keep
+ * windows alive, and the `closed` event clears both the state and the guard.
  */
 const windowCleanupWatched = new WeakSet<Electron.BrowserWindow>()
 
-/** 登记某窗口的关闭清理（幂等：同一个窗口无论被调用多少次都只挂一个监听） */
+/** Register close cleanup for a window (idempotent: one listener no matter how often it is called) */
 function watchWindowCleanup(win: Electron.BrowserWindow): void {
   if (windowCleanupWatched.has(win)) return
   windowCleanupWatched.add(win)
@@ -44,17 +44,17 @@ function watchWindowCleanup(win: Electron.BrowserWindow): void {
 
 let windowControlIpcRegistered = false
 
-/** 渲染进程异常退出时的内存快照：系统功能（AI 助手）直接调用 + 第三方插件贡献的钩子 */
+/** Memory snapshot on abnormal renderer exit: the system capability (AI assistant) plus hooks contributed by third-party plugins */
 function runRendererMemoryDumpHooks(reason: string, exitCode: number): void {
   try {
-    // 快照是诊断旁路：不阻塞崩溃恢复流程
+    // The snapshot is a diagnostic side path: it must not block crash recovery
     dumpHarnessMemory(reason, exitCode)
   } catch (err) {
     logger.warn('[Memory] AI assistant memory snapshot failed:', err)
   }
   for (const hook of listContributions<AppHook>(APP_RENDERER_MEMORY_DUMP)) {
     try {
-      // 快照是诊断旁路：不阻塞崩溃恢复流程，异步失败也只记日志
+      // Diagnostic side path: never blocks crash recovery; async failures are only logged
       void Promise.resolve(hook.run(reason, exitCode)).catch((err) => {
         logger.warn(`[Memory] Memory snapshot hook failed (${hook.label}):`, err)
       })
@@ -65,18 +65,20 @@ function runRendererMemoryDumpHooks(reason: string, exitCode: number): void {
 }
 
 /**
- * 内置浏览器（`<webview>`）的持久化分区名，与渲染层 `BrowserPanel.tsx` 的
- * `partition="persist:ryten-browser"` 保持一致。
+ * Persistent partition name of the built-in browser (`<webview>`), matching
+ * `partition="persist:ryten-browser"` in the renderer's `BrowserPanel.tsx`.
  */
 const BROWSER_PARTITION = 'persist:ryten-browser'
 
 /**
- * 允许页面申请的权限（其余一律拒绝）。
+ * Page permissions that may be requested (everything else is denied).
  *
- * 为什么必须显式裁决：Electron 在**没有**安装 `setPermissionRequestHandler` 时，
- * 默认会批准权限请求——访客页可以直接拿到摄像头/麦克风/地理位置/通知；而持久分区
- * (`persist:`) 会让授权跨会话保留。这里只放行不影响隐私的浏览器基础能力：
- * 全屏播放、指针锁定、剪贴板写入；摄像头/麦克风/定位/通知/MIDI/屏幕捕获等全部拒绝。
+ * Why an explicit decision is required: with **no** `setPermissionRequestHandler` installed,
+ * Electron approves permission requests by default — guest pages could get the camera/microphone/
+ * geolocation/notifications directly, and a persistent partition (`persist:`) keeps grants across
+ * sessions. Only basic browser capabilities that do not affect privacy are allowed here:
+ * fullscreen playback, pointer lock and clipboard write; camera/microphone/location/notifications/
+ * MIDI/screen capture and the rest are all denied.
  */
 const ALLOWED_PAGE_PERMISSIONS: ReadonlySet<string> = new Set([
   'fullscreen',
@@ -86,7 +88,7 @@ const ALLOWED_PAGE_PERMISSIONS: ReadonlySet<string> = new Set([
 
 let sessionPermissionsConfigured = false
 
-/** 为主窗口与内置浏览器的会话安装统一的权限裁决（全局只配一次） */
+/** Install the same permission policy on the main window and built-in browser sessions (once globally) */
 function configureSessionPermissions(win: BrowserWindow): void {
   if (sessionPermissionsConfigured) return
   sessionPermissionsConfigured = true
@@ -103,22 +105,23 @@ function configureSessionPermissions(win: BrowserWindow): void {
   }
 }
 
-/** 渲染端警告去重窗口（KaTeX 等库会为同一条消息连发数百次） */
+/** Renderer warning dedupe window (libraries such as KaTeX emit the same message hundreds of times) */
 const CONSOLE_WARN_DEDUPE_WINDOW_MS = 10_000
 const CONSOLE_WARN_REPEAT_SUMMARY_AT = 100
 const consoleWarnSeen = new Map<string, { count: number; lastAt: number }>()
 
 /**
- * 允许转交操作系统的站外链接协议白名单。
+ * Allowlist of external protocols that may be handed to the OS.
  *
- * 为什么需要：聊天正文 / 网页抓取结果里的链接会经 `setWindowOpenHandler` 与
- * `will-navigate` 交给 `shell.openExternal`，而 Windows 上 `file:`、`ms-msdt:`、
- * `search-ms:`、`smb://` 等会被系统协议处理器直接接管（Electron 安全清单明确要求
- * 对 openExternal 做 scheme 白名单）。这里只放行浏览器语义的三种协议，其余拒绝并留日志。
+ * Why it is needed: links in chat text / web fetch results are passed to `shell.openExternal`
+ * through `setWindowOpenHandler` and `will-navigate`, and on Windows `file:`, `ms-msdt:`,
+ * `search-ms:`, `smb://` etc. are taken over directly by system protocol handlers (Electron's
+ * security checklist requires a scheme allowlist for openExternal). Only the three browser
+ * protocols are allowed; everything else is denied and logged.
  */
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
-/** 解析 URL；非法 URL 返回 null（不抛错，调用方按"拒绝"处理） */
+/** Parse a URL; returns null for an invalid one (no throw; callers treat it as "deny") */
 function parseUrlOrNull(url: string): URL | null {
   try {
     return new URL(url)
@@ -127,7 +130,7 @@ function parseUrlOrNull(url: string): URL | null {
   }
 }
 
-/** 同源判断：用于开发态渲染页导航（`startsWith` 会把 `localhost:5173.evil.com` 误判为同源） */
+/** Same-origin check for dev renderer navigation (`startsWith` would treat `localhost:5173.evil.com` as same-origin) */
 function isSameOrigin(url: string, origin: string): boolean {
   const target = parseUrlOrNull(url)
   const base = parseUrlOrNull(origin)
@@ -135,9 +138,10 @@ function isSameOrigin(url: string, origin: string): boolean {
 }
 
 /**
- * 把站外链接交给系统浏览器：只放行白名单协议。
+ * Hand external links to the system browser: only allowlisted protocols pass.
  *
- * 日志只记协议名、不记完整 URL：链接查询串里可能带 OAuth token / 分享密钥。
+ * Logs record the protocol only, never the full URL: query strings may carry OAuth tokens or
+ * share keys.
  */
 function openExternalIfAllowed(url: string, context: string): void {
   const parsed = parseUrlOrNull(url)
@@ -151,10 +155,10 @@ function openExternalIfAllowed(url: string, context: string): void {
 }
 
 /**
- * 窗口控制 IPC（作用于发送方窗口）：全局只注册一次。
- * 修复：此前注册在 createMainWindow 内——macOS 关闭全部窗口后 activate 重开主窗口会
- * 触发 ipcMain.handle 重复注册抛错（Attempted to register a second handler），
- * ipcMain.on 也会双绑（一次点击触发两次处理）。
+ * Window control IPC (acts on the sender's window): registered only once globally.
+ * Previously it was registered inside createMainWindow — on macOS, activate reopening the main
+ * window after all windows were closed made ipcMain.handle throw on duplicate registration
+ * (Attempted to register a second handler) and ipcMain.on bind twice (one click handled twice).
  */
 function registerWindowControlIpcOnce(): void {
   if (windowControlIpcRegistered) return
@@ -180,11 +184,11 @@ function registerWindowControlIpcOnce(): void {
       windowMaxStates.set(win.id, st)
     }
     if (st.isMaximized) {
-      // 还原到之前的尺寸和位置
+      // Restore the previous size and position
       if (st.normalBounds) win.setBounds(st.normalBounds)
       st.isMaximized = false
     } else {
-      // 保存当前尺寸，然后最大化到可用工作区
+      // Save the current bounds, then maximize to the work area
       st.normalBounds = win.getBounds()
       const { workArea } = screen.getPrimaryDisplay()
       win.setBounds({
@@ -206,8 +210,9 @@ function registerWindowControlIpcOnce(): void {
   })
 
   /**
-   * 窗口标题（原生标题栏）：渲染层按当前内容更新成 `xxx - RytenBench`。
-   * 只接受纯文本并截断，避免把超长/带换行的内容塞进标题栏。
+   * Window title (native title bar): the renderer updates it to `xxx - RytenBench` with the
+   * current content. Only plain text is accepted and it is truncated, so overly long or multiline
+   * content never ends up in the title bar.
    */
   ipcMain.on('window-set-title', (event, title: unknown) => {
     const win = winFromEvent(event)
@@ -220,9 +225,10 @@ function registerWindowControlIpcOnce(): void {
   })
 
   /**
-   * 自绘标题栏（Window Controls Overlay，Windows / Linux）的主题同步：
-   * 渲染层把测得的侧栏底色与前景色送上来，主进程更新系统绘制的窗口按钮配色。
-   * 窗口按钮本身仍是**系统绘制**的（不是渲染层画出来的假按钮），只是配色/底条跟着主题走。
+   * Theme sync for the custom title bar (Window Controls Overlay, Windows / Linux): the renderer
+   * sends the measured sidebar background and foreground colors, and the main process updates the
+   * colors of the system-drawn window buttons. The buttons themselves remain **system-drawn** (not
+   * fake buttons painted by the renderer); only their colors and background strip follow the theme.
    */
   ipcMain.on('window-titlebar-overlay', (event, payload: unknown) => {
     const win = winFromEvent(event)
@@ -241,25 +247,28 @@ function registerWindowControlIpcOnce(): void {
       try {
         win.setTitleBarOverlay(overlay)
       } catch (err) {
-        // 平台不支持 WCO（macOS / 老 Electron）时静默降级；标题栏仍能正常显示
+        // Silently degrade where WCO is unsupported (macOS / older Electron); the title bar still renders
         logger.debug('[Window] setTitleBarOverlay unavailable:', err)
       }
-      // 系统窗口边框（DWM 画的那 1~2px）颜色跟随标题栏底色，避免亮色主题下顶部残留深色边
+      // Match the system window border (the 1–2px drawn by DWM) to the title bar background, so no
+      // dark edge remains at the top in light theme
       if (color) syncWindowBorderColor(win, color)
     }
     apply()
-    // Windows 的 WCO 覆盖层在切主题时偶尔不会立刻重绘（最大化窗口里尤其明显）；
-    // 下一帧与稍后再补两次，确保系统按钮条和渲染层自绘标题条的底色同步。
+    // Windows occasionally does not repaint the WCO overlay immediately after a theme switch
+    // (most visible in maximized windows); apply again on the next frame and shortly after so the
+    // system button strip and the renderer-drawn title strip stay in sync.
     setTimeout(apply, 80)
     setTimeout(apply, 260)
   })
 
   /**
-   * 让**系统绘制的窗口边框/标题栏明暗**跟随应用主题。
+   * Make the **light/dark of the system-drawn window border/title bar** follow the app theme.
    *
-   * 用户 2026-11-19 反馈「顶部会出现这种情况」：应用切到亮色后，窗口最上沿仍有一条深灰边
-   * ——那是 Windows 按「系统深色模式」画的 DWM 窗口边框，不跟随应用内主题。
-   * 通过 nativeTheme.themeSource 把系统侧明暗声明成与应用一致，DWM 边框/阴影就会跟着变。
+   * Reported symptom: after switching the app to light, the very top edge of the window still had
+   * a dark gray line — that is the DWM window border Windows draws from "system dark mode", which
+   * does not follow the in-app theme. Declaring the system-side light/dark through
+   * nativeTheme.themeSource keeps the DWM border/shadow in sync.
    */
   ipcMain.on('window-native-theme', (_event, mode: unknown) => {
     if (mode === 'light' || mode === 'dark' || mode === 'system') {
@@ -267,11 +276,13 @@ function registerWindowControlIpcOnce(): void {
     }
   })
 
-  // 应用菜单命令（自绘标题栏的「应用 / 编辑」下拉）：只做窗口内动作，不暴露任意 IPC
+  // App menu commands (the Application / Edit dropdowns of the custom title bar): in-window
+  // actions only, with no arbitrary IPC exposed
   ipcMain.on('window-reload', (event) => {
-    // 锁屏期间禁止刷新：刷新会重新加载页面，而「锁屏只是渲染层状态」的旧实现
-    // 一刷新就解锁了。现在 locked 在主进程，刷新后仍会锁回去；这里再堵一道，
-    // 避免刷新瞬间闪出内容（macOS 自绘标题栏的菜单仍可点到）。
+    // No reload while locked: a reload reloads the page, and the old implementation where "the
+    // lock was only renderer state" unlocked with a single reload. Lock state now lives in the
+    // main process and re-locks after a reload; this also blocks the content flash at the moment
+    // of reload (the macOS custom title bar menu is still reachable).
     if (isLockScreenLocked()) return
     winFromEvent(event)?.webContents.reload()
   })
@@ -310,26 +321,26 @@ function registerWindowControlIpcOnce(): void {
 export function createMainWindow(): void {
   const isWindows = process.platform === 'win32'
   const isMac = process.platform === 'darwin'
-  /** 标题栏底色（窗口首帧兜底色；macOS 的 hiddenInset 也用它） */
+  /** Title bar background color (first-frame fallback; also used by hiddenInset on macOS) */
   const TITLEBAR_BG = '#1b1b1d'
-  /** 窗口标题（原生标题栏左侧显示的名称；渲染层会按当前内容更新成 `xxx - RytenBench`） */
+  /** Window title (name shown on the left of the native title bar; the renderer updates it to `xxx - RytenBench`) */
   const APP_TITLE = 'RytenBench'
 
   const win = new BrowserWindow({
     width: 1200,
-    height: 800, // 打开应用时即为最小尺寸（与 min 一致），可后续手动拉大
+    height: 800, // starting size equals the minimum (same as min); can be enlarged later
     minWidth: 1200,
     minHeight: 800,
     show: false,
     /**
-     * 标题栏形态（用户 2026-11-20 口径）：
+     * Title bar style:
      *
-     * 「把顶部的那个区域的内容移除掉换成原生的内容」——放弃自绘标题栏 + WCO
-     * （应用/编辑 菜单那套颜色同步问题反复调不好），Windows 改用**系统原生标题栏**：
-     * 拖动、最小化/最大化/关闭全部由系统绘制；左侧保留项目自己的图标 + 名称
-     * （用户 2026-11-20 追加「增加名称」）。
-     * 明暗仍跟随应用主题（nativeTheme.themeSource 由渲染层同步）。
-     * macOS 保持 hiddenInset + 交通灯位置；Linux 本来就是原生边框。
+     * Remove the content of the top area and replace it with native content — dropping the custom
+     * title bar + WCO (the color sync of the Application/Edit menus was never quite right); on
+     * Windows the **native system title bar** is used: dragging, minimize/maximize/close are all
+     * system-drawn, and the project's own icon + name stay on the left.
+     * Light/dark still follows the app theme (nativeTheme.themeSource synced by the renderer).
+     * macOS keeps hiddenInset + traffic light position; Linux already has the native frame.
      */
     ...(isWindows
       ? {
@@ -353,20 +364,22 @@ export function createMainWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       /**
-       * 应用内浏览器面板用 `<webview>` 挂真实网页（不是 iframe，避免 X-Frame-Options 拦截）。
-       * 必须显式开启 webviewTag；访客页的安全参数在下面的 will-attach-webview 里强制收紧。
+       * The in-app browser panel uses `<webview>` for real web pages (not an iframe, which
+       * X-Frame-Options would block). webviewTag must be enabled explicitly; guest page security
+       * preferences are tightened in will-attach-webview below.
        */
       webviewTag: true
     }
   })
   setMainWindow(win)
-  // 页面权限裁决（摄像头/麦克风/定位/通知等）：默认放行是 Electron 的历史行为，
-  // 内置浏览器会打开任意站点，必须在宿主侧显式收紧。
+  // Page permission policy (camera/microphone/location/notifications etc.): allowing by default is
+  // Electron's historical behavior, and the built-in browser opens arbitrary sites, so the host
+  // must tighten it explicitly
   configureSessionPermissions(win)
 
   /**
-   * 应用内浏览器 guest 的安全基线：无论页面怎么写 `<webview>` 属性，
-   * 一律剥掉 preload、禁用 Node 集成、开上下文隔离与沙箱。
+   * Security baseline for in-app browser guests: no matter how the page sets `<webview>`
+   * attributes, strip preload, disable Node integration and enable context isolation and sandbox.
    */
   win.webContents.on('will-attach-webview', (_event, webPreferences) => {
     delete (webPreferences as { preload?: string }).preload
@@ -374,14 +387,16 @@ export function createMainWindow(): void {
     webPreferences.contextIsolation = true
     webPreferences.sandbox = true
   })
-  // 锁屏状态机接管：页面每次加载完成补发锁屏状态（刷新/崩溃重建不会解锁）、
-  // 最小化/隐藏即锁、锁屏期间拦截刷新与开发者工具快捷键。
+  // Lock screen state machine takeover: re-send the lock state after every page load (reload or
+  // crash recovery never unlocks), lock on minimize/hide, and block reload and devtools shortcuts
+  // while locked.
   attachLockScreen(win)
 
   if (isWindows) {
-    // 原生标题栏：去掉菜单栏；标题固定为应用名（页面 document.title 的回写不覆盖它）。
-    // 图标保留：Windows 原生标题栏的图标位去不掉（置空会回退成 Electron 默认图标），
-    // 所以用项目自己的 logo（吉祥物，见 resources/logo.png，由 BrowserWindow 的 icon 指定）。
+    // Native title bar: no menu bar; the title is fixed to the app name (writing document.title
+    // does not override it). The icon stays: the icon slot of the Windows native title bar cannot
+    // be removed (clearing it falls back to the Electron default icon), so the project's own logo
+    // is used (the mascot in resources/logo.png, set via BrowserWindow's icon).
     win.setMenu(null)
     win.on('page-title-updated', (event) => {
       event.preventDefault()
@@ -389,8 +404,9 @@ export function createMainWindow(): void {
     })
   }
 
-  // 渲染就绪后**立即**显示主窗口：启动页（StartupSplash）盖在渲染层最上面，
-  // 等初始化任务与首屏数据完成后再淡出进入主界面（不再由主进程控制「交接」时机）
+  // Show the main window **immediately** once the renderer is ready: the startup splash
+  // (StartupSplash) covers the renderer, then fades out into the main UI after initialization and
+  // first-screen data finish (the main process no longer controls the handoff timing)
   win.on('ready-to-show', () => {
     logger.info('[Window] Main window ready-to-show')
     markMainWindowReady()
@@ -400,7 +416,8 @@ export function createMainWindow(): void {
     if (getMainWindow() === win) setMainWindow(null)
   })
 
-  // 关闭拦截：开启「关闭到系统托盘」时，关闭窗口改为隐藏到托盘（真正退出时放行）
+  // Close interception: with "close to system tray" enabled, closing hides to the tray (a real
+  // quit passes through)
   win.on('close', (event) => {
     if (isCloseToTrayEnabled() && isTrayAvailable() && !isQuittingNow()) {
       event.preventDefault()
@@ -408,28 +425,32 @@ export function createMainWindow(): void {
     }
   })
 
-  // 窗口显隐时同步托盘状态（右键菜单文案实时反映）
+  // Sync tray state on show/hide (the context menu text reflects it immediately)
   win.on('show', () => syncTrayState())
   win.on('hide', () => syncTrayState())
 
-  // 系统关机/注销（Windows）：窗口事件（Electron 43 中 session-end 为窗口事件而非 app 事件）。
-  // 托盘驻留时窗口不会关闭，若不放行，Windows 只能强杀进程，可能丢失未落盘数据。
+  // System shutdown/logoff (Windows): a window event (in Electron 43 session-end is a window
+  // event, not an app event). With tray residency the window never closes, and if it is not
+  // allowed through, Windows can only force-kill the process, potentially losing unsaved data.
   win.on('session-end', () => {
     markQuitting()
     app.quit()
   })
 
-  // 渲染进程退出诊断：记录原因（崩溃/OOM/被杀/正常退出），便于排查「运行运行突然白屏」
-  // 等异常；主进程本身不会因渲染进程退出而崩溃。
-  // 修复：崩溃/OOM 后主窗口只剩死帧（应用「跑着跑着用不了/卡住」）——IPC 已全局注册一次，
-  // 直接销毁并重建主窗口恢复可用（新 webContents 不在 safeSend 死名单中）。
+  // Renderer exit diagnostics: log the reason (crash/OOM/killed/clean exit), which helps debug
+  // anomalies such as a sudden blank window while running; the main process itself does not crash
+  // when the renderer exits.
+  // Previously a crash/OOM left the main window with only a dead frame (the app gradually became
+  // unusable/stuck) — the IPC is already registered globally once, so destroy and recreate the
+  // main window to recover (the new webContents is not on the safeSend dead list).
   win.webContents.on('render-process-gone', (_event, details) => {
     const abnormal = details.reason !== 'clean-exit' && details.reason !== 'killed'
     const msg = `[Window] Renderer process exited reason=${details.reason} exitCode=${details.exitCode}`
     if (abnormal) logger.error(msg)
     else logger.info(msg)
-    // 崩溃/OOM 时补一份内存快照（渲染进程已消失，只能靠流式期间的采样缓存）：
-    // 没有这个数字时，日志里只剩 reason=oom，无法判断水位是哪一段流量推上去的。
+    // Capture a memory snapshot on crash/OOM (the renderer is gone, so only the samples cached
+    // during streaming remain): without that number the log only shows reason=oom and there is no
+    // way to tell which traffic segment raised the level.
     if (abnormal) runRendererMemoryDumpHooks(details.reason, details.exitCode)
     if (
       details.reason === 'crashed' ||
@@ -441,21 +462,24 @@ export function createMainWindow(): void {
         '[Window] Renderer process exited abnormally, recreating main window in 300ms to recover...'
       )
       setTimeout(() => {
-        // 应用正在退出时不再自愈（退出清理会关闭数据库，重建的窗口加载必失败）
+        // No self-heal while the app is quitting (quit cleanup closes the database, so a recreated
+        // window would always fail to load)
         if (isQuittingNow()) return
         if (getMainWindow() === win && !win.isDestroyed()) {
-          // 先建新窗口、再销毁已崩溃的旧窗口。
-          // 修复：此前先 win.destroy() 再 createMainWindow()——销毁最后一个窗口会触发
-          // window-all-closed → app.quit()（Windows），随后才创建的新窗口其 loadURL
-          // 会被退出清理掐断报 ERR_FAILED(-2)，一次渲染进程 OOM/崩溃就会带崩整个应用；
-          // 先建后毁使窗口数 1→2→1 永不归零，退出流程不会在自愈期间触发。
+          // Create the new window first, then destroy the crashed old one.
+          // Previously win.destroy() ran before createMainWindow(): destroying the last window
+          // triggers window-all-closed → app.quit() (Windows), and the loadURL of the window
+          // created afterwards was cut off by the quit cleanup with ERR_FAILED(-2), so a single
+          // renderer OOM/crash brought down the whole app; creating first keeps the window count
+          // at 1→2→1 and never zero, so the quit flow does not start during self-heal.
           try {
             createMainWindow()
           } catch (err) {
             logger.error('[Window] Failed to recreate main window for self-heal:', err)
           }
           if (getMainWindow() === win && !win.isDestroyed()) {
-            // 重建失败（构造抛错）时销毁旧窗口走正常退出收尾，避免留下不可用的死窗口
+            // If recreation failed (constructor threw), destroy the old window so the normal quit
+            // path runs instead of leaving an unusable dead window
             win.destroy()
           }
         } else if (!getMainWindow()) {
@@ -465,16 +489,19 @@ export function createMainWindow(): void {
     }
   })
 
-  // 渲染进程 console 错误/警告转发到主进程日志（修复：渲染端异常此前无任何落盘线索,
-  // 崩溃后只剩 exitCode 无法定位根因）。
-  // 修复：KaTeX 等库会为同一条警告连发数百次（如中文入数学模式），警告按 10 秒窗口
-  // 去重（第 100 次重复时留一条计数摘要），错误始终逐条转发。
+  // Forward renderer console errors/warnings to the main-process log (previously renderer
+  // exceptions left no trace on disk, and after a crash only the exitCode remained, making the
+  // root cause impossible to locate).
+  // Libraries such as KaTeX emit the same warning hundreds of times (e.g. Chinese text entering
+  // math mode); warnings are deduped within a 10s window (one count summary at the 100th repeat),
+  // while errors are always forwarded one by one.
   win.webContents.on('console-message', (event, details) => {
     /**
-     * 取字段要兼容两种形态：老版把 level/message/lineNumber/sourceId 直接挂在 event 上，
-     * 新版给第二个参数 MessageDetails（level 是数字、URL 叫 sourceUrl）。
-     * 位置信息是关键：渲染进程的未捕获异常此前只落一句 "Uncaught TypeError: ..."，
-     * 定位不到来源（2026-09-19 那条 startTime 报错就吃了这个亏）。
+     * Field access supports both shapes: older versions put level/message/lineNumber/sourceId
+     * directly on the event, newer ones pass MessageDetails as the second argument (level is a
+     * number, the URL is called sourceUrl).
+     * Location info is essential: uncaught renderer exceptions used to log only
+     * "Uncaught TypeError: ..." with no way to locate the source.
      */
     const info = (details ?? event) as {
       level?: string | number
@@ -511,15 +538,17 @@ export function createMainWindow(): void {
   })
 
   win.webContents.setWindowOpenHandler((details) => {
-    // 站外链接统一走 scheme 白名单，不用把原始 URL 直接交给系统协议处理器
+    // External links go through the scheme allowlist instead of handing raw URLs to system
+    // protocol handlers
     openExternalIfAllowed(details.url, 'window-open')
     return { action: 'deny' }
   })
 
-  // 拦截主窗口导航：仅允许应用自身页面（开发 URL / 生产 file://）。
-  // 聊天正文里的站外链接若不带 target="_blank"，点击会把窗口原地导航到远程页面；
-  // 该窗口的 preload（sandbox:false）暴露了完整 window.api，远程页面可借此调用
-  // 主进程 IPC——必须拦截并转交系统浏览器（hash 路由的页内导航不会触发本事件）。
+  // Intercept main window navigation: only the app's own pages are allowed (dev URL / production
+  // file://). If a link in chat text lacks target="_blank", clicking it navigates the window to the
+  // remote page in place; that window's preload (sandbox:false) exposes the full window.api, so the
+  // remote page could call main-process IPC — it must be intercepted and handed to the system
+  // browser (in-page hash navigation does not fire this event).
   win.webContents.on('will-navigate', (event, url) => {
     const devOrigin = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
     const allowed = devOrigin ? isSameOrigin(url, devOrigin) : url.startsWith('file://')
@@ -544,6 +573,7 @@ export function createMainWindow(): void {
     safeSend(win.webContents, 'main-window-ready')
   })
 
-  // 窗口控制 IPC 全局只注册一次（macOS activate 重开窗口时不得重复注册）
+  // Window control IPC is registered only once globally (no duplicate registration when macOS
+  // activate reopens a window)
   registerWindowControlIpcOnce()
 }

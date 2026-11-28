@@ -8,10 +8,11 @@ import logger from 'electron-log'
 import { getDatabaseInstance } from './instance'
 import * as schema from './schema'
 
-/** drizzle 实例类型（已挂 schema，可用 db.query.xxx 关系查询） */
+/** Drizzle instance type (schema attached, so `db.query.xxx` relational queries work) */
 export type Orm = PgliteDatabase<typeof schema>
-// drizzle 只是 PGlite 客户端之上的一层薄封装，按客户端缓存即可；
-// 客户端被重建（close 后重连）时缓存自动失效，不会出现指向旧连接的问题。
+// Drizzle is just a thin wrapper over the PGlite client, so caching per client is enough;
+// when the client is rebuilt (reconnect after close) the cache invalidates automatically,
+// so it never points at a stale connection.
 let cached: { client: PGlite; orm: Orm } | null = null
 
 function ormFor(client: PGlite): Orm {
@@ -22,32 +23,37 @@ function ormFor(client: PGlite): Orm {
 }
 
 /**
- * 用指定客户端取 drizzle 实例。
- * 初始化阶段（数据库尚未对外暴露）的迁移代码用这个入口，避免依赖 getDatabaseInstance()。
+ * Get the drizzle instance for the given client.
+ * Migration code during initialization (before the database is exposed to the rest of the app)
+ * uses this entry point to avoid depending on getDatabaseInstance().
  */
 export function ormForClient(client: PGlite): Orm {
   return ormFor(client)
 }
 
 /**
- * 取当前数据库的 drizzle 实例。
- * 与 `getDatabaseInstance()` 一样会等待初始化完成，因此只能在初始化结束后调用。
+ * Get the drizzle instance for the current database.
+ * Like `getDatabaseInstance()` it waits for initialization to finish, so call it only after
+ * initialization.
  */
 export async function getOrm(): Promise<Orm> {
   return ormFor((await getDatabaseInstance()).getDatabase())
 }
 
 /**
- * 迁移目录：开发模式读仓库根目录的 drizzle/；打包后随 extraResources 复制到 resources/database/drizzle。
+ * Migrations directory: in development it reads drizzle/ at the repo root; after packaging it is
+ * copied via extraResources to resources/database/drizzle.
  */
 export function getMigrationsFolder(): string {
   /**
-   * 优先用随包分发的迁移目录；不存在时回退到仓库根目录的 drizzle/。
+   * Prefer the migrations directory shipped with the package; fall back to drizzle/ at the repo
+   * root when it does not exist.
    *
-   * 为什么需要回退：某些启动方式（`electron .` / preview）下 `app.isPackaged`
-   * 仍可能为 true，但 `process.resourcesPath` 指向的是 Electron 自己的 resources，
-   * 里面没有本项目迁移文件——只按 isPackaged 判断会让启动停在「迁移缺失」，
-   * 而不是真正跑起来。迁移目录存在与否是更可靠的判据。
+   * Why the fallback: under some launch modes (`electron .` / preview) `app.isPackaged` can still
+   * be true while `process.resourcesPath` points at Electron's own resources, which contain no
+   * migration files for this project — judging only by isPackaged would stop startup at
+   * "migrations missing" instead of actually running. Whether the directory exists is a more
+   * reliable criterion.
    */
   const packaged = path.join(process.resourcesPath, 'database', 'drizzle')
   if (fs.existsSync(path.join(packaged, 'meta', '_journal.json'))) return packaged
@@ -55,11 +61,13 @@ export function getMigrationsFolder(): string {
 }
 
 /**
- * 应用所有待执行的迁移（幂等）。
+ * Apply all pending migrations (idempotent).
  *
- * 已应用的迁移记录在 drizzle.__drizzle_migrations 中，重复调用不会重复执行；
- * 全过程在单个事务里完成，失败会整体回滚，不会留下半截结构。
- * 初始化阶段直接用已连接但尚未对外暴露的客户端，避免依赖 getDatabaseInstance()。
+ * Applied migrations are recorded in drizzle.__drizzle_migrations, so repeated calls do not run
+ * them again; the whole run happens in a single transaction and rolls back entirely on failure,
+ * leaving no half-applied structure.
+ * During initialization it uses the already-connected but not-yet-exposed client, avoiding a
+ * dependency on getDatabaseInstance().
  */
 export async function runMigrations(client: PGlite): Promise<void> {
   const folder = getMigrationsFolder()
@@ -69,13 +77,14 @@ export async function runMigrations(client: PGlite): Promise<void> {
 }
 
 /**
- * mapper 统一入口：注入 drizzle 实例并兜住异常日志。
+ * Unified mapper entry point: injects the drizzle instance and handles exception logging.
  *
- * 替代原先每个函数各写一遍的 `const db = (await getDatabaseInstance()).getDatabase()`
- * 与 `try { ... } catch (error) { logger.error(...); throw error }` 样板；
- * 异常仍然向上抛（IPC 层需要拿到原始错误），只是在这里统一记录一次。
+ * Replaces the `const db = (await getDatabaseInstance()).getDatabase()` and
+ * `try { ... } catch (error) { logger.error(...); throw error }` boilerplate that every function
+ * used to repeat; exceptions are still rethrown (the IPC layer needs the original error), they are
+ * just logged once here.
  *
- * @param op 操作名，仅用于日志，例如 'saveImage'
+ * @param op operation name, used for logging only, e.g. 'saveImage'
  */
 export async function withOrm<T>(op: string, fn: (db: Orm) => Promise<T>): Promise<T> {
   try {

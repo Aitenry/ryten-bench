@@ -26,28 +26,30 @@ interface FileExplorerProps {
   onOpenFile: (filePath: string, fileName: string) => void
   activeFilePath?: string | null
   /**
-   * 请求定位到的（真实绝对）路径：变化即逐级展开目录树并高亮。
-   * 由工具卡片（ls）触发——「在资源管理器中查看这个目录」。
-   * 带 nonce：同一目录被再次请求时（用户收起树后又点了一次卡片）也要重新展开。
+   * The (real absolute) path requested for reveal: when it changes, expand the tree level by level and highlight it.
+   * Triggered from tool cards (ls) — "show this directory in the explorer".
+   * Carries a nonce: requesting the same directory again (the user collapsed the tree and clicked
+   * the card once more) must expand it again.
    */
   revealRequest?: { path: string; nonce: number } | null
-  /** 有待审查改动的文件 → 改动条数（文件行显示计数，父目录显示圆点） */
+  /** Files with pending changes → number of changes (count on file rows, a dot on parent directories) */
   pendingByPath?: Map<string, number>
-  /** 待审查改动总数（>0 时标题栏显示入口，可一次性全部保留） */
+  /** Total number of pending changes (when > 0 the title bar shows an entry that can keep them all at once) */
   pendingTotal?: number
   /**
-   * 有待审查改动的**文件数**（>1 时标题栏同时报出来）。
+   * Number of **files** with pending changes (reported in the title bar too when > 1).
    *
-   * 为什么必须有它：pendingTotal 是**改动记录条数**（模型每次写改各记一条），
-   * 一个文件改 10 次就是 10——只报这个数会让人以为动了 10 个文件
-   * （用户 2026-09-23：「明明就编辑了一个文件，这里显示 10 个」）。
+   * Why it is required: pendingTotal is the **number of change records** (one per model write/edit),
+   * so a file changed 10 times counts as 10 — reporting only that number makes people think 10
+   * files were touched (user feedback 2026-09-23: "only one file was edited, but this shows 10").
    */
   pendingFiles?: number
-  /** 全部保留（清掉所有待审查标记，磁盘内容不变） */
+  /** Keep all (clear every pending-review mark; disk content is unchanged) */
   onKeepAllPending?: () => void
   /**
-   * 磁盘变化事件（模型写入 / 命令执行 / 外部编辑器）：只刷新受影响的目录，
-   * 且**保留展开状态**——这正是「刷新后折叠内容又被收起来」的修复点。
+   * Disk change event (model writes / command execution / external editor): refresh only the
+   * affected directories, and **preserve the expanded state** — this is exactly the fix for
+   * "collapsed content gets collapsed again after refreshing".
    */
   fsEvent?: { nonce: number; paths: string[] } | null
 }
@@ -58,17 +60,17 @@ interface TreeNode extends FileEntry {
   loaded: boolean
 }
 
-/** 展开状态持久化的键（按工作区隔离） */
+/** Persistence key for the expanded state (isolated per workspace) */
 function storageKey(workspacePath: string): string {
   return `workspace-explorer:${workspacePath.replace(/\\/g, '/')}`
 }
 
-/** 路径归一化（比较用：统一正斜杠、去尾斜杠、Windows 大小写不敏感） */
+/** Path normalization (for comparison: forward slashes, no trailing slash, case-insensitive on Windows) */
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
-/** 取父目录（归一化后） */
+/** Get the parent directory (after normalization) */
 function parentOf(p: string): string {
   const normalized = p.replace(/\\/g, '/')
   const index = normalized.lastIndexOf('/')
@@ -94,13 +96,14 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   const [rootNodes, setRootNodes] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
   const { t } = useTranslation()
-  /** 树的当前快照：定位（revealPath）需要在不触发额外渲染的前提下逐级读取/装载子节点 */
+  /** Current snapshot of the tree: revealPath needs to read/load child nodes level by level without triggering extra renders */
   const rootNodesRef = useRef<TreeNode[]>([])
   rootNodesRef.current = rootNodes
   /**
-   * 已展开目录集合（绝对路径，归一化后比较）。
-   * 这是展开状态的**单一真源**：刷新（手动 / 磁盘变化）后按它逐级恢复，
-   * 不再依赖树节点自身的 expanded 标记（重新列目录会把节点整个换掉）。
+   * Set of expanded directories (absolute paths, compared after normalization).
+   * This is the **single source of truth** for the expanded state: after a refresh (manual or
+   * disk-driven) the tree is restored level by level from it, no longer relying on the tree
+   * nodes' own expanded flags (re-listing a directory replaces its nodes entirely).
    */
   const expandedRef = useRef<Set<string>>(new Set())
   const saveTimerRef = useRef<number | null>(null)
@@ -115,7 +118,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     []
   )
 
-  /** 展开状态落盘（防抖：连续展开多个目录只写一次） */
+  /** Persist the expanded state (debounced: expanding several directories in a row writes once) */
   const persistExpanded = useCallback(() => {
     if (!workspacePath) return
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
@@ -124,13 +127,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
       try {
         localStorage.setItem(storageKey(workspacePath), JSON.stringify([...expandedRef.current]))
       } catch {
-        // 存储不可用（隐私模式等）时静默失败：内存里的展开状态仍然有效
+        // Fail silently when storage is unavailable (private mode etc.): the in-memory expanded state remains valid
       }
     }, 200)
   }, [workspacePath])
 
-  // 卸载（切换工作区 / 关闭面板 / 应用退出）时把待写的展开状态立刻落盘，
-  // 否则刚展开目录就关掉面板，下次打开又变回「全部收起」
+  // On unmount (workspace switch / panel close / app quit) flush the pending expanded state immediately,
+  // otherwise expanding a directory and closing the panel makes it "all collapsed" again next time
   useEffect(() => {
     return () => {
       if (saveTimerRef.current === null || !workspacePath) return
@@ -139,12 +142,12 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
       try {
         localStorage.setItem(storageKey(workspacePath), JSON.stringify([...expandedRef.current]))
       } catch {
-        // 同上：存储不可用时忽略
+        // Same as above: ignore when storage is unavailable
       }
     }
   }, [workspacePath])
 
-  /** 按已保存的展开集合逐级恢复（只加载展开路径上的目录） */
+  /** Restore level by level from the saved expanded set (load only directories on expanded paths) */
   const restoreExpanded = useCallback(
     async (nodes: TreeNode[], cancelled: () => boolean): Promise<void> => {
       for (const node of nodes) {
@@ -155,7 +158,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
             node.children = makeNodes(await fetchDir(node.path))
             node.loaded = true
           } catch {
-            // 目录可能已被删除：跳过，保留父级
+            // The directory may have been deleted: skip it but keep the parent
             continue
           }
         }
@@ -168,9 +171,9 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   )
 
   /**
-   * 重新加载根目录（刷新按钮 / 根目录变化）。
-   * 关键：**保留展开状态**——按 expandedRef 重新逐级装载并展开，
-   * 这是用户报的「刷新资源管理器后折叠内容又被收起来」的直接修复。
+   * Reload the root directory (refresh button / root change).
+   * Key point: **preserve the expanded state** — reload and expand level by level from expandedRef;
+   * this is the direct fix for "collapsed content gets collapsed again after refreshing the explorer".
    */
   const loadRoot = useCallback(() => {
     if (!workspacePath) return
@@ -183,7 +186,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
         if (cancelled) return
         setRootNodes(nodes)
       })
-      // 目录被删/权限异常时此前无 catch,会产生未处理 rejection 且界面只剩空白
+      // Previously there was no catch here, so a deleted directory / permission error produced an unhandled rejection and a blank UI
       .catch((err) => {
         console.error('Failed to load workspace root:', err)
         if (!cancelled) setRootNodes([])
@@ -196,7 +199,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     }
   }, [workspacePath, fetchDir, makeNodes, restoreExpanded])
 
-  // 工作区变化：先读回该工作区的展开状态，再加载根目录
+  // Workspace change: first read back this workspace's expanded state, then load the root directory
   useEffect(() => {
     if (!workspacePath) return
     expandedRef.current = new Set<string>()
@@ -209,13 +212,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
         }
       }
     } catch {
-      // 解析失败按「全部收起」处理
+      // Treat a parse failure as "everything collapsed"
     }
     const cancel = loadRoot()
     return cancel
   }, [workspacePath, loadRoot])
 
-  /** 在树里按路径找目录节点 */
+  /** Find a directory node by path in the tree */
   const findNode = useCallback((targetPath: string): TreeNode | null => {
     const wanted = normalizePath(targetPath)
     const walk = (nodes: TreeNode[]): TreeNode | null => {
@@ -232,9 +235,10 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   }, [])
 
   /**
-   * 重新列出某个目录并合并结果：
-   * 仍在的条目**复用原节点对象**（展开状态、已装载的子节点都不丢），
-   * 新增的条目插入，消失的条目移除。这样磁盘变化刷新不会把树折叠回去。
+   * Re-list a directory and merge the results:
+   * entries that still exist **reuse the original node objects** (expanded state and loaded
+   * children are preserved), new entries are inserted, disappeared ones removed. This way a
+   * disk-change refresh does not collapse the tree.
    */
   const refreshDir = useCallback(
     async (dirPath: string): Promise<void> => {
@@ -266,11 +270,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   )
 
   /**
-   * 定位（工具卡片 ls 点开）：从根出发逐级找到目标目录并展开。
+   * Reveal (when a tool card's ls is clicked): walk from the root to the target directory and expand it.
    *
-   * 比较路径时统一正斜杠——工作区路径与主进程返回的子路径在 Windows 上都是反斜杠，
-   * 但渲染层手里的目标路径来自虚拟路径拼接，两边的分隔符不保证一致。
-   * 未装载过的层级就地装载（与 toggleExpand 同一套 fetchDir），最后整体刷新一次。
+   * Paths are compared with forward slashes — the workspace path and the sub-paths returned by the
+   * main process both use backslashes on Windows, but the target path held by the renderer comes
+   * from virtual path concatenation, so the two sides are not guaranteed to use the same separator.
+   * Levels not yet loaded are loaded in place (same fetchDir as toggleExpand), then the tree is
+   * refreshed once at the end.
    */
   useEffect(() => {
     const target = revealRequest?.path
@@ -318,16 +324,17 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     return () => {
       cancelled = true
     }
-    // rootNodes.length 进依赖：面板刚挂载时根目录还在异步加载，定位请求会扑空；
-    // 根节点装载完成后（长度变化）自动重跑一次。run 是幂等的（只做展开），不会自激。
+    // rootNodes.length is a dependency: when the panel just mounted the root is still loading
+    // asynchronously and the reveal request would miss; once the root is loaded (length changes)
+    // it reruns automatically. run is idempotent (expansion only) and cannot self-trigger.
   }, [revealRequest, workspacePath, fetchDir, makeNodes, persistExpanded, rootNodes.length])
 
-  /** 磁盘变化：只刷新涉事目录（保留展开状态），不整树重载 */
+  /** Disk change: refresh only the affected directories (preserving the expanded state), not the whole tree */
   useEffect(() => {
     const changes = fsEvent?.paths
     if (!changes || changes.length === 0) return
     const rootNorm = normalizePath(workspacePath)
-    // 归一化路径 → 实际用于列目录的路径（列目录必须用原样路径，Windows 分隔符不能想当然地换掉）
+    // Normalized path → the path actually used for listing (listing must use the original path; Windows separators must not be swapped blindly)
     const targets = new Set<string>()
     for (const changed of changes) {
       const normalized = normalizePath(changed)
@@ -404,7 +411,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     e.dataTransfer.effectAllowed = 'copy'
   }
 
-  /** 待审查改动所在目录集合（父目录显示圆点，展开与否都能看到） */
+  /** Set of directories containing pending changes (parent directories show a dot, visible whether expanded or not) */
   const pendingDirs = React.useMemo(() => {
     const dirs = new Set<string>()
     if (!pendingByPath) return dirs
@@ -469,7 +476,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
             )
           ) : (
             (() => {
-              // 图标按文件类型着色（文件名保持正文色，不做彩虹）
+              // Icons are colored by file type (file names keep the body text color — no rainbow)
               const { Icon, color } = getFileIcon(node.path, isDarkMode)
               return (
                 <Icon size={16} style={{ color, flexShrink: 0, opacity: isActiveFile ? 1 : 0.9 }} />
@@ -530,10 +537,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
           {t('harness.fileExplorer.title')}
         </span>
         <div className="flex items-center gap-1 shrink-0">
-          {/* 待审查改动总入口：不打开文件也能一次性确认（清掉所有徽标，磁盘内容不动）。
-              文案口径：**文件数在前、改动条数在后**——同一次任务里同一个文件被改多次
-              会产生多条记录，只报条数会被读成「动了这么多文件」（用户 2026-09-23）。
-              按钮自身 shrink-0 + nowrap：面板窄时宁可把标题挤掉，也不让入口折行/被裁掉。 */}
+          {/* Global pending-changes entry: confirm everything at once without opening the files
+              (clears all badges; disk content is untouched).
+              Label wording: **file count first, change count second** — the same file edited
+              several times in one task produces several records, so reporting only the record
+              count reads as "that many files were touched" (user feedback 2026-09-23).
+              The button itself is shrink-0 + nowrap: on a narrow panel the title may be squeezed
+              out, but the entry must not wrap or be clipped. */}
           {pendingTotal > 0 && onKeepAllPending && (
             <button
               className="flex items-center gap-1 px-1.5 h-5 rounded-md transition-opacity hover:opacity-80 shrink-0 whitespace-nowrap"

@@ -48,11 +48,12 @@ import {
 import { harnessApi } from '../api/harness'
 
 /**
- * AI 助手页面（路由 `/harness`）。
+ * AI assistant page (route `/harness`).
  *
- * 外壳负责侧栏与标题，这一页是对话主区：
- * 顶部状态条 → 消息区 → 目标/任务/队列浮层 → 输入框，右侧可展开工作区面板。
- * 懒加载入口见 `route/MainRoutes.tsx`；页面内部状态全部来自 HarnessProvider。
+ * The shell owns the sidebar and title; this page is the main conversation area:
+ * top status bar → message area → goal/task/queue overlays → input box, with a collapsible
+ * workspace panel on the right.
+ * Lazy-loaded from `route/MainRoutes.tsx`; all in-page state comes from HarnessProvider.
  */
 const Harness: React.FC = () => {
   const {
@@ -81,7 +82,10 @@ const Harness: React.FC = () => {
     setInputValue,
     copiedId,
     currentTopicId,
-    /** 当前会话已归档 = 只读：不渲染输入框（用户 2026-11-25「选中之后对话输入框应该不要显示」） */
+    /**
+     * Current topic is archived = read-only: do not render the input (user request 2026-11-25: hide
+     * the chat input once selected)
+     */
     currentTopicArchived,
     selectedProviderId,
     setSelectedProviderId,
@@ -99,7 +103,10 @@ const Harness: React.FC = () => {
     messagesLoadingMore,
     handleCopy,
     handleSend,
-    /** 每次外部请求聚焦输入框自增（插件行的 ＋）：输入框据此把光标放进去 */
+    /**
+     * Incremented on every external focus request (the + in plugin rows): the input moves the caret
+     * in on change
+     */
     focusInputToken,
     handleDeleteMessagePair,
     handleStartEditMessage,
@@ -118,35 +125,54 @@ const Harness: React.FC = () => {
     handleSteerQueued,
     agentSelection,
     setAgentSelection,
-    /** 会话检索命中后的待定位消息（侧栏搜索 → 打开会话并滚到那条） */
+    /**
+     * Team-collaboration draft for a blank conversation (persisted when the first message creates
+     * the topic)
+     */
+    pendingTeamMode,
+    setPendingTeamMode,
+    /**
+     * Message to jump to after a conversation search hit (sidebar search → open topic and scroll to
+     * it)
+     */
     pendingJumpDialogueId,
     clearPendingJumpDialogueId
   } = useHarness()
 
-  /** 目标编辑 / 计划模式切换的触发计数器：斜杠命令只负责递增，具体内联区自己处理 */
+  /**
+   * Trigger counter for goal editing / plan mode toggling: slash commands only increment it, the
+   * inline areas handle the rest
+   */
   const [planToggleSignal, setPlanToggleSignal] = useState(0)
   /**
-   * 目标输入态：不在目标卡片里再开一个 textarea，而是复用底部对话输入框。
-   * 点目标铅笔 / `/goal` 进入；Enter 保存目标并立即发起一轮 LLM，Esc 退出。
+   * Goal compose mode: instead of opening another textarea inside the goal card, reuse the
+   * bottom chat input. Entered via the goal pencil / `/goal`; Enter saves the goal and starts
+   * an LLM turn immediately, Esc exits.
    */
   const [goalCompose, setGoalCompose] = useState(false)
-  /** 目标输入态的轮次上限（null = 后端默认 256） */
+  /** Round limit for goal compose mode (null = backend default of 256) */
   const [goalRoundsLimit, setGoalRoundsLimit] = useState<number | null>(null)
-  /** 计划评审挂起：锁目标操作与输入框，评审反馈只在计划卡内 */
+  /**
+   * Plan review pending: locks goal actions and the input; review feedback stays in the plan card
+   */
   const [planReviewPending, setPlanReviewPending] = useState(false)
 
   /**
-   * 待确认的 propose_action（输入区预填条用，2026-11-27 用户口径）。
+   * Pending propose_action (used by the input-area prefill bar; user request 2026-11-27).
    *
-   * 只认「最后一条用户消息之后的最新一条助手消息」里的 propose_action；消息流里不再渲染
-   * 任何卡片。✕ 关闭后把 key 记进 dismissedProposalKey，同一条提议不会再弹回来。
+   * Only a propose_action in the latest assistant message after the last user message counts;
+   * no cards are rendered in the message stream anymore. Dismissing with ✕ records the key in
+   * dismissedProposalKey so the same proposal does not pop up again.
    */
   const pendingProposal = useMemo(() => findPendingProposal(messages), [messages])
   const [dismissedProposalKey, setDismissedProposalKey] = useState<string | null>(null)
   const visibleProposal =
     pendingProposal && pendingProposal.key !== dismissedProposalKey ? pendingProposal : null
 
-  /** 预填条 › / Enter：与手动发送同一条管线（生成中会排队），并立即收起输入条 */
+  /**
+   * Prefill bar › / Enter: same pipeline as a manual send (queued while generating), and the bar
+   * collapses immediately
+   */
   const handleSendProposalText = useCallback(
     (text: string): void => {
       if (pendingProposal) setDismissedProposalKey(pendingProposal.key)
@@ -155,7 +181,10 @@ const Harness: React.FC = () => {
     [pendingProposal]
   )
 
-  /** 权限授权：挂起审批存在时，输入区整体让位给内联审批面板 */
+  /**
+   * Permission approval: while a pending approval exists, the input area yields entirely to the
+   * inline approval panel
+   */
   const fetchApprovalPending = useCallback(
     (topicId: number) => harnessApi.harness.getApproval(topicId),
     []
@@ -189,9 +218,10 @@ const Harness: React.FC = () => {
   )
 
   /**
-   * 提问（ask_user_question）：输入区内联面板（不再弹窗）。
-   * sort 优先级：权限授权 > 提问 > propose_action 预填条 > 普通输入框。
-   * 「换模型继续」「计划评审」仍由各自的专用弹窗处理，这里过滤掉。
+   * Questions (ask_user_question): inline panel in the input area (no more popup).
+   * Sort priority: permission approval > question > propose_action prefill bar > regular input.
+   * "Switch model and continue" and "plan review" are still handled by their own dedicated
+   * popups and are filtered out here.
    */
   const fetchQuestionPending = useCallback(
     (topicId: number) => harnessApi.harness.getQuestion(topicId),
@@ -229,8 +259,9 @@ const Harness: React.FC = () => {
     [questionPending, questionSubmitting, clearQuestionPending, message]
   )
   /**
-   * 取消回答：**不终止本轮**。先收起面板，再让主进程按 cancelled 结算挂起提问，
-   * 模型拿到「用户取消回答」后继续执行；输入区立即恢复。
+   * Cancel answering: **does not end the turn**. Collapse the panel first, then have the main
+   * process settle the pending question as cancelled so the model receives "user cancelled the
+   * answer" and continues; the input area is restored immediately.
    */
   const handleCancelQuestion = useCallback((): void => {
     if (!questionPending) return
@@ -241,35 +272,50 @@ const Harness: React.FC = () => {
     })
   }, [questionPending, clearQuestionPending])
 
-  // 模型就绪检查：应用即开即用，只有「助手」页依赖模型配置——未配置时在本页内引导
+  // Model readiness check: the app is usable immediately; only the Assistant page depends on
+  // model configuration — guide in-page when unconfigured
   const hasModels = providers.length > 0
   const [workspacePath, setWorkspacePath] = useState<string>('')
-  /** 是否已配置工作区：null = 检查中（此时不显示引导，避免闪现） */
+  /**
+   * Whether a workspace is configured: null = checking (no guidance shown yet, to avoid flashing)
+   */
   const [hasWorkspace, setHasWorkspace] = useState<boolean | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelHasEditor, setPanelHasEditor] = useState(false)
   /**
-   * 右侧终端面板（持久终端）。与工作区面板**同一列二选一**：打开一个就收起另一个，
-   * 宽度复用同一份可拖拽面板宽度，观感与工作区面板一致。
+   * Right terminal panel (persistent terminal). Mutually exclusive with the workspace panel in
+   * the **same column**: opening one collapses the other, and both reuse the same draggable
+   * panel width so they look consistent.
    */
   const [terminalOpen, setTerminalOpen] = useState(false)
-  /** 应用内浏览器面板：与终端/工作区同一列互斥（开始页选择后打开） */
+  /**
+   * In-app browser panel: mutually exclusive in the same column with terminal/workspace (opened
+   * from a start-page choice)
+   */
   const [browserOpen, setBrowserOpen] = useState(false)
-  /** 「开始」面板：工具选择入口（右列面板之一，与工作区/终端/浏览器互斥） */
+  /**
+   * "Start" panel: tool picker entry (one of the right-column panels, exclusive with
+   * workspace/terminal/browser)
+   */
   const [startPanelOpen, setStartPanelOpen] = useState(false)
   /**
-   * 正在查看的后台子代理会话（顶部栏右侧入口点开）。
+   * Background subagent conversation currently being viewed (opened from the entry at the
+   * right of the top bar).
    *
-   * 非空时主对话区（用户圈中的区域）整体切换成该子代理的流式会话视图；
-   * 「返回主智能体」把这里置回 null，主对话的 messages/流式状态在 Provider 里
-   * 原样保留，切回来不会丢内容或中断主代理。
+   * When non-null, the main conversation area switches entirely to that subagent's streaming
+   * session view; "back to main agent" resets it to null. The main conversation's
+   * messages/streaming state is kept as-is in the Provider, so switching back loses nothing
+   * and does not interrupt the main agent.
    */
   const [subagentView, setSubagentView] = useState<{
     topicId: number
     agentId: string
     label: string
   } | null>(null)
-  /** 切换会话：子代理会话按话题隔离，换话题必须回到主对话 */
+  /**
+   * Switching topics: subagent sessions are isolated per topic, so changing topics must return to
+   * the main conversation
+   */
   useEffect(() => {
     setSubagentView(null)
   }, [currentTopicId])
@@ -282,7 +328,10 @@ const Harness: React.FC = () => {
     [currentTopicId]
   )
   const handleBackToMainAgent = useCallback((): void => setSubagentView(null), [])
-  /** 主对话「已派发」卡片 → 打开对应子代理的会话视图（agentId 来自 block.subAgent.subagentId） */
+  /**
+   * Main-conversation "dispatched" card → open that subagent's session view (agentId comes from
+   * block.subAgent.subagentId)
+   */
   const handleOpenSubagentById = useCallback(
     (agentId: string): void => {
       if (currentTopicId == null || !agentId) return
@@ -290,25 +339,35 @@ const Harness: React.FC = () => {
     },
     [currentTopicId]
   )
-  /** 引用稳定的桥对象：AssistantMessage 的块级渲染缓存不感知函数 props（见 subagent-view-bridge 注释） */
+  /**
+   * Referentially stable bridge object: AssistantMessage's block-level render cache does not see
+   * function props (see the subagent-view-bridge comment)
+   */
   const subagentViewBridge = useMemo(
     () => ({ openSubagent: handleOpenSubagentById }),
     [handleOpenSubagentById]
   )
   /**
-   * 子代理会话数据：顶部栏面包屑与会话视图共用同一份订阅（一个 agent 只 watch 一次）。
-   * 非查看态传入 null，hook 返回空状态，不产生 IPC。
+   * Subagent conversation data: the top-bar breadcrumb and the session view share one
+   * subscription (each agent is watched only once). When not viewing, null is passed in, the
+   * hook returns empty state, and no IPC is issued.
    */
   const subagentConversation = useSubagentConversation(
     subagentView?.topicId ?? null,
     subagentView?.agentId ?? null
   )
-  /** 子代理会话消息区的底部锚点（与主对话各用各的 ref，切 target 时 ConversationPane 实例复用） */
+  /**
+   * Bottom anchor for the subagent conversation message area (separate ref from the main
+   * conversation; the ConversationPane instance is reused when the target switches)
+   */
   const subagentMessagesEndRef = useRef<HTMLDivElement | null>(null)
-  /** 子代理会话是只读视图：编辑/删除/分支/分页一律 no-op */
+  /** Subagent conversations are read-only: edit/delete/branch/pagination are all no-ops */
   const subagentNoop = useCallback((): void => {}, [])
   const subagentNoopAsync = useCallback(async (): Promise<void> => {}, [])
-  /** 查看子代理会话时 Esc = 返回主智能体（输入框内不拦截，避免吞掉输入法/取消语义） */
+  /**
+   * While viewing a subagent conversation, Esc returns to the main agent (not intercepted inside
+   * the input, to preserve IME/cancel semantics)
+   */
   useEffect(() => {
     if (!subagentView) return
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -326,12 +385,16 @@ const Harness: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [handleBackToMainAgent, subagentView])
   /**
-   * 待审查改动（路径 → 条数），由右侧面板回传。
-   * 用途只有一个：任务段头上的改动徽标——段折起后段里的编辑卡片会被卸载，
-   * 聊天里必须有个还看得见「这段改了什么」的地方（用户 2026-09-23 报的问题）。
+   * Pending changes under review (path → count), reported back by the right panel.
+   * It serves exactly one purpose: the change badge on task section headers — once a section is
+   * collapsed its edit cards unmount, so the chat needs somewhere that still shows what that
+   * section changed (issue reported by the user on 2026-09-23).
    */
   const [pendingByPath, setPendingByPath] = useState<Map<string, number>>(new Map())
-  /** 右侧工作区面板的命令式入口（工具卡片点击 → 打开文件 / 定位目录 / 结果详情页签） */
+  /**
+   * Imperative handle to the right workspace panel (tool card click → open file / reveal directory
+   * / result detail tab)
+   */
   const workspacePanelRef = useRef<WorkspacePanelHandle>(null)
 
   const checkWorkspace = useCallback(async (): Promise<boolean> => {
@@ -352,7 +415,8 @@ const Harness: React.FC = () => {
     checkWorkspace().then()
   }, [checkWorkspace])
 
-  // 引导项：选择目录创建并激活工作区（与侧边栏「新建工作区」同一套流程）
+  // Guidance action: pick a directory to create and activate a workspace (same flow as "new
+  // workspace" in the sidebar)
   const handleWorkspaceSetup = useCallback(async (): Promise<void> => {
     try {
       const dir = await harnessApi.harness.selectWorkspace()
@@ -372,29 +436,34 @@ const Harness: React.FC = () => {
       setWorkspacePath(dir)
       setHasWorkspace(true)
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: id } }))
-      // 会话列表由 Provider 的 `workspace-changed` 订阅统一重拉（见 useHarnessHandlers），
-      // 这里再拉一次只会多打一次库
+      // The conversation list is refetched centrally by the Provider's `workspace-changed`
+      // subscription (see useHarnessHandlers); fetching again here would just add a DB query
     } catch (err) {
       console.error('Failed to setup workspace:', err)
     }
   }, [t])
 
   /**
-   * 工作区切换后刷新工作区路径（资源管理器根 / 虚拟路径映射）。
+   * Refresh the workspace path after a workspace switch (explorer root / virtual path mapping).
    *
-   * 会话列表**不在这里**拉：那条订阅已经挪到 Provider（`useHarnessHandlers`），因为切工作区的
-   * 入口大多在 `/plugins` 与常驻侧栏上——本页没挂载时收不到事件，列表就会停在上一个工作区，
-   * 侧栏一直显示加载骨架。
+   * The conversation list is **not** fetched here: that subscription moved to the Provider
+   * (`useHarnessHandlers`), because most workspace-switch entry points are on `/plugins` and
+   * the persistent sidebar — when this page is not mounted the event would be missed and the
+   * list would stay on the previous workspace while the sidebar keeps showing the loading
+   * skeleton.
    */
   const handleWorkspaceChange = useCallback(async () => {
     await checkWorkspace()
   }, [checkWorkspace])
 
-  // 全局工作区切换：本页只重读工作区路径（资源管理器根 / 虚拟路径映射）；
-  // 会话列表由 Provider 的同名订阅负责，见 useHarnessHandlers。
-  // 不再顺带 handleNewHarness()——「点开其他工作区下的会话」时那一步会把刚选中的会话清空再重设，
-  // 造成列表与选中高亮闪动；需要回到空白欢迎态的入口（新建会话/新建工作区/删除工作区）
-  // 由侧边栏显式调用 onNewHarness()。
+  // Global workspace switch: this page only re-reads the workspace path (explorer root / virtual
+  // path mapping); the conversation list is handled by the Provider's subscription of the same
+  // name, see useHarnessHandlers.
+  // No longer also calls handleNewHarness() — when opening a conversation under another
+  // workspace that step clears and re-sets the just-selected conversation, causing the list and
+  // selection highlight to flicker; entry points that need a blank welcome state (new
+  // conversation / new workspace / delete workspace) call onNewHarness() explicitly from the
+  // sidebar.
   const handleWorkspaceChangedRef = useRef<() => void>(() => {})
   useEffect(() => {
     handleWorkspaceChangedRef.current = () => {
@@ -410,11 +479,12 @@ const Harness: React.FC = () => {
   }, [])
 
   /**
-   * 虚拟路径 → 工作区真实路径。
+   * Virtual path → real workspace path.
    *
-   * 工具卡片里的路径是虚拟路径（'/' 挂在 AI 工作区、'/memories/' 挂在记忆目录）。
-   * 资源管理器只认真实绝对路径，所以只有工作区挂载能映射；记忆挂载返回 null，
-   * 这类文件由面板以只读页签打开（主进程的挂载解析负责边界校验）。
+   * Paths in tool cards are virtual ('/' mounts the AI workspace, '/memories/' mounts the
+   * memories directory). The explorer only accepts real absolute paths, so only the workspace
+   * mount can be mapped; the memories mount returns null and such files are opened by the panel
+   * in a read-only tab (mount resolution in the main process enforces boundary checks).
    */
   const toRealPath = useCallback(
     (virtualPath: string): string | null => {
@@ -430,7 +500,10 @@ const Harness: React.FC = () => {
     [workspacePath]
   )
 
-  /** 面板尚未挂载时（第一次从关闭状态点卡片）暂存动作，挂载完成后补执行 */
+  /**
+   * Stash the action while the panel is not yet mounted (first card click from the closed state)
+   * and run it once mounted
+   */
   const pendingPanelActionRef = useRef<((handle: WorkspacePanelHandle) => void) | null>(null)
   const runOnPanel = useCallback((action: (handle: WorkspacePanelHandle) => void): void => {
     const handle = workspacePanelRef.current
@@ -449,7 +522,7 @@ const Harness: React.FC = () => {
     action(handle)
   }, [panelOpen, panelHasEditor])
 
-  /** 终端面板开关：与工作区/浏览器/开始面板互斥 */
+  /** Terminal panel toggle: mutually exclusive with workspace/browser/start panels */
   const toggleTerminalPanel = useCallback((): void => {
     setTerminalOpen((prev) => {
       const next = !prev
@@ -463,12 +536,13 @@ const Harness: React.FC = () => {
   }, [])
 
   /**
-   * 右侧是否已有任意面板（开始/工作区/终端/浏览器）。
-   * 顶部栏只有一个按钮：有面板时点它 = 全部收起；没有面板时点它 = 打开「开始」。
+   * Whether any panel is already open on the right (start/workspace/terminal/browser).
+   * The top bar has a single button: with a panel open it collapses everything; without one it
+   * opens "Start".
    */
   const anyPanelOpen = panelOpen || terminalOpen || browserOpen || startPanelOpen
 
-  /** 顶部栏按钮：收起所有右侧面板 / 打开开始面板 */
+  /** Top-bar button: collapse all right panels / open the start panel */
   const toggleStartPanel = useCallback((): void => {
     if (anyPanelOpen) {
       setPanelOpen(false)
@@ -480,7 +554,9 @@ const Harness: React.FC = () => {
     setStartPanelOpen(true)
   }, [anyPanelOpen])
 
-  /** 开始页选工具：收起开始页，直接打开右列对应面板 */
+  /**
+   * Tool picked on the start page: collapse the start page and open the matching right-column panel
+   */
   const handleStartSelect = useCallback(
     (kind: StartToolKind): void => {
       setStartPanelOpen(false)
@@ -502,8 +578,9 @@ const Harness: React.FC = () => {
   )
 
   /**
-   * 工具卡片 → 右侧工作区面板的桥（见 contexts/WorkspaceBridgeContext）。
-   * 点击行为按工具语义分派：文件类打开真实文件、ls 定位目录、其余打开结果详情页签。
+   * Bridge from tool cards → right workspace panel (see contexts/WorkspaceBridgeContext).
+   * Click behavior is dispatched by tool semantics: file tools open the real file, ls reveals a
+   * directory, everything else opens a result detail tab.
    */
   const workspaceBridge = useMemo<WorkspaceBridge>(
     () => ({
@@ -528,10 +605,12 @@ const Harness: React.FC = () => {
   const inputScrollbarThumbColor = isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'
   const inputScrollbarThumbHoverColor = isDarkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)'
   /**
-   * 当前模型的上下文窗口：输入框底栏的占用圆环按它算百分比。
+   * Context window of the current model: the input footer's usage ring uses it to compute a
+   * percentage.
    *
-   * 唯一来源是供应商档案的 `metadata.context_window`（设置里可手填、从模型档案带出）；
-   * 没填就返回 null，底栏只显示 token 与缓存命中，不画圆环——不猜窗口大小。
+   * The only source is the provider profile's `metadata.context_window` (can be entered manually
+   * in settings or inherited from the model profile); if unset it returns null and the footer
+   * shows only tokens and cache hits, drawing no ring — the window size is never guessed.
    */
   const modelContextWindow = useMemo(() => {
     const provider = providers.find((item) => item.id === selectedProviderId)
@@ -539,14 +618,19 @@ const Harness: React.FC = () => {
     return typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : null
   }, [providers, selectedProviderId])
   /**
-   * 空白会话（还没有任何消息）：把「欢迎语 + 输入框」当成一组整体垂直居中。
+   * Blank conversation (no messages yet): treat "welcome text + input" as one group and center
+   * it vertically.
    *
-   * 用户 2026-11-19 口径「对话窗口的输入框应该垂直居中和标语一样垂直居中」——
-   * 空会话时输入框不再钉在底部，而是跟欢迎标语一起作为开场画面居中；
-   * 发第一条消息后自动切回「消息列表 + 底部输入框」的常规布局。
+   * Per the user request on 2026-11-19 ("the chat input should be vertically centered like the
+   * tagline"), in an empty conversation the input is no longer pinned to the bottom but sits
+   * centered as part of the opening screen with the welcome tagline; after the first message it
+   * switches back to the regular "message list + bottom input" layout automatically.
    */
   const isWelcomeMode = messages.length === 0
-  /** 进入目标输入态：把目标正文放进底部输入框（不额外造输入控件） */
+  /**
+   * Enter goal compose mode: put the goal text into the bottom input (no extra input control is
+   * created)
+   */
   const beginGoalCompose = useCallback(
     async (prefill?: string): Promise<void> => {
       if (currentTopicId == null) {
@@ -554,7 +638,8 @@ const Harness: React.FC = () => {
         return
       }
       if (planReviewPending) return
-      // 无论是否带 prefill 都读一次目标：轮次上限要以已保存的值为准（新建则留空 = 默认）
+      // Read the goal regardless of prefill: the round limit must come from the saved value
+      // (empty when new = default)
       const goal = await harnessApi.harness.getGoal(currentTopicId).catch(() => null)
       const text = prefill ?? goal?.objective ?? ''
       setGoalRoundsLimit(goal?.maxGoalRounds ?? null)
@@ -570,13 +655,17 @@ const Harness: React.FC = () => {
     setInputValue('')
   }, [setInputValue])
 
-  /** 目标输入态回车：先写 GoalStore，再把输入框原文当作执行指令发出去 */
+  /**
+   * Enter in goal compose mode: write to the GoalStore first, then send the raw input text as the
+   * execution instruction
+   */
   const submitGoalFromInput = useCallback(async (): Promise<void> => {
     const topicId = currentTopicId
     const text = inputValue.trim()
     if (topicId == null || !text) return
     const existing = await harnessApi.harness.getGoal(topicId).catch(() => null)
-    // 轮次上限：输入框里填了就带上；留空 = 不改（新建时走后端默认 256）
+    // Round limit: include it when filled in; empty = leave unchanged (backend default 256 when
+    // creating)
     const rounds = goalRoundsLimit ?? undefined
     const result =
       existing && existing.phase !== 'complete'
@@ -601,7 +690,7 @@ const Harness: React.FC = () => {
     await handleStartGoal(text)
   }, [currentTopicId, goalRoundsLimit, handleStartGoal, inputValue, message, setInputValue, t])
 
-  /** 输入框在目标输入态下的发送入口（Enter 与发送按钮共用） */
+  /** Send entry for the input in goal compose mode (shared by Enter and the send button) */
   const handleComposerSend = useCallback((): void => {
     if (planReviewPending) return
     if (goalCompose) {
@@ -631,7 +720,8 @@ const Harness: React.FC = () => {
     [cancelGoalCompose, goalCompose, handleKeyDown, planReviewPending, submitGoalFromInput]
   )
 
-  // 目标输入态：切换话题时退出；挂全局 Esc（HarnessInput 只在 Enter 时回调）
+  // Goal compose mode: exits when the topic changes; global Esc listener (HarnessInput only
+  // calls back on Enter)
   useEffect(() => {
     if (!goalCompose) return
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -662,7 +752,10 @@ const Harness: React.FC = () => {
     setInputValue('')
   }, [goalCompose, planReviewPending, setInputValue])
 
-  /** 输入区：主对话与子代理共用同一个 ConversationFooter 外壳，只有内层控件不同 */
+  /**
+   * Input area: the main conversation and subagents share the same ConversationFooter shell; only
+   * the inner controls differ
+   */
   const inputArea = approvalPending ? (
     <ConversationFooter
       welcome={false}
@@ -676,7 +769,7 @@ const Harness: React.FC = () => {
       />
     </ConversationFooter>
   ) : questionPending ? (
-    /* 提问内联面板：不再弹独立窗口；取消不会终止本轮 */
+    /* Inline question panel: no separate window anymore; cancelling does not end the turn */
     <ConversationFooter
       welcome={false}
       colorBgContainer={colorBgContainer}
@@ -691,7 +784,7 @@ const Harness: React.FC = () => {
       />
     </ConversationFooter>
   ) : visibleProposal ? (
-    /* propose_action 预填条：替换输入框，消息流零留痕 */
+    /* propose_action prefill bar: replaces the input box, leaving no trace in the message stream */
     <ConversationFooter
       welcome={false}
       colorBgContainer={colorBgContainer}
@@ -755,7 +848,8 @@ const Harness: React.FC = () => {
         modelSupportsTools={modelSupportsTools}
         modelSupportsVision={modelSupportsVision}
         currentTopicId={currentTopicId}
-        /* 助手形象只在空白会话里出现：有对话内容时会压住消息/思考过程 */
+        /* The assistant mascot appears only in blank conversations: with content it would cover
+           messages/reasoning */
         showMascot={isWelcomeMode}
         modelContextWindow={modelContextWindow}
         isDarkMode={isDarkMode}
@@ -775,11 +869,14 @@ const Harness: React.FC = () => {
         onPlanCommand={() => setPlanToggleSignal((value) => value + 1)}
         agentSelection={agentSelection}
         onAgentSelectionChange={setAgentSelection}
+        pendingTeamMode={pendingTeamMode}
+        onPendingTeamModeChange={setPendingTeamMode}
       />
     </ConversationFooter>
   )
 
-  // 对话区实际可用宽度（主内容区宽度）；面板宽度上限以它为准
+  // Actual available width of the conversation area (main content width); panel max width is
+  // derived from it
   const layoutRef = useRef<HTMLDivElement>(null)
   const [layoutWidth, setLayoutWidth] = useState(0)
 
@@ -798,16 +895,23 @@ const Harness: React.FC = () => {
     Math.max(500, Math.floor(window.innerWidth * 0.4))
   )
 
-  /** 终端/浏览器面板的最小可读宽度（工作区面板没有文件时只有 220） */
+  /**
+   * Minimum readable width for terminal/browser panels (the workspace panel is only 220 when no
+   * file is open)
+   */
   const TERMINAL_PANEL_MIN_WIDTH = 360
-  /** 工作区 / 终端 / 浏览器占同一列：统一宽度上下限，切换面板不跳宽度 */
+  /**
+   * Workspace / terminal / browser occupy the same column: unified width limits so switching panels
+   * does not jump
+   */
   const workspaceMinWidth = panelMinWidthFor(panelHasEditor)
   const panelMinWidth = anyPanelOpen ? TERMINAL_PANEL_MIN_WIDTH : workspaceMinWidth
   /*
-   * 面板宽度上限：比例上限（大屏会从 45% 放开到 65%）与「对话至少 MAIN_MIN_WIDTH」取小。
-   * 终端面板按「有编辑器」那一档计算上限，否则会被工作区面板的 220px 无文件上限卡死。
-   * 宽度策略与全部常量同源在 utils/panelLayout.ts——<main> 的 minWidth 也取同一个常量，
-   * 不再两处各写一份（曾经的 410/420 漂移会让面板多出 10px 被裁掉）。
+   * Panel max width: the smaller of the ratio cap (relaxed from 45% to 65% on large screens) and
+   * "conversation keeps at least MAIN_MIN_WIDTH". The terminal panel uses the "has editor" tier,
+   * otherwise the workspace panel's 220px no-file cap would clamp it. The width policy and all
+   * constants live together in utils/panelLayout.ts — <main>'s minWidth uses the same constants,
+   * so they are no longer written twice (the old 410/420 drift clipped 10px off the panel).
    */
   const panelMaxWidth = computePanelMaxWidth({
     layoutWidth,
@@ -816,11 +920,13 @@ const Harness: React.FC = () => {
     sidebarWidth: 0
   })
 
-  // 面板宽度策略：编辑器打开/关闭时自动展开/收窄；其余变化（窗口缩放）
-  // 只把宽度收敛回合法区间，保留用户拖拽结果，避免溢出出现横向滚动条
+  // Panel width policy: auto-expand/shrink when an editor opens/closes; other changes (window
+  // resize) only clamp the width back into the valid range, preserving the user's drag result
+  // and avoiding overflow horizontal scrollbars
   const prevHasEditorRef = useRef(panelHasEditor)
   useEffect(() => {
-    // 任意右侧面板打开时宽度由下面统一的打开 effect 负责：三种面板共用同一宽度，不因内容跳变
+    // When any right panel opens, width is handled by the unified open effect below: all three
+    // panels share one width and do not jump with content
     if (anyPanelOpen) {
       setPanelWidth((prev) => clampWidth(prev, panelMinWidth, panelMaxWidth))
       return
@@ -835,7 +941,8 @@ const Harness: React.FC = () => {
     )
   }, [anyPanelOpen, panelHasEditor, layoutWidth, panelMinWidth, panelMaxWidth])
 
-  // 打开任一面板时给一个可读的默认宽度；三种面板之后都保持这个宽度（统一）
+  // Give a readable default width when any panel opens; all three panels then keep that width
+  // (unified)
   const prevAnyPanelOpenRef = useRef(anyPanelOpen)
   useEffect(() => {
     if (anyPanelOpen === prevAnyPanelOpenRef.current) return
@@ -961,7 +1068,9 @@ const Harness: React.FC = () => {
               }}
             >
               {hasWorkspace === null ? null : hasWorkspace === false ? (
-                /* 未配置工作区：对话按工作区隔离，先引导选择目录（同「配置模型」的页内引导） */
+                /* No workspace configured: conversations are isolated per workspace, so
+                   guide the user to pick a directory first (same in-page guidance as
+                   "configure model") */
                 <div
                   className="flex-1 flex items-center justify-center"
                   style={{ minHeight: 0, padding: 24 }}
@@ -999,7 +1108,8 @@ const Harness: React.FC = () => {
                   </div>
                 </div>
               ) : !hasModels ? (
-                /* 模型未配置：仅「助手」页内引导，不影响其他功能使用 */
+                /* Model not configured: in-page guidance on the Assistant page only; other
+                   features remain usable */
                 <div
                   className="flex-1 flex items-center justify-center"
                   style={{ minHeight: 0, padding: 24 }}
@@ -1067,9 +1177,11 @@ const Harness: React.FC = () => {
                     }
                   />
 
-                  {/* 对话主区：主智能体与后台子智能体共用同一个 ConversationPane
-                     （消息窗口 + 底部输入区）。切 target 时组件实例复用、只换数据源——
-                     用户口径：消息区域也要复用之前的对话窗口。 */}
+                  {/* Main conversation area: the main agent and background subagents share the
+                     same ConversationPane (message window + bottom input area). When the target
+                     switches the component instance is reused and only the data source changes —
+                     per the user, the message area should also reuse the previous conversation
+                     window. */}
                   {subagentView ? (
                     <ConversationPane
                       messages={subagentConversation.messages}
@@ -1130,9 +1242,10 @@ const Harness: React.FC = () => {
                       }
                     />
                   ) : isWelcomeMode ? (
-                    /* 空白会话：欢迎语和输入框作为一组整体垂直居中。
-                     顶部栏保留——工作区面板开关在空白会话里也要能开/关，
-                     否则在已有会话里打开面板后再新建会话就关不掉了。 */
+                    /* Blank conversation: welcome text and input are centered vertically as one
+                     group. The top bar stays — the workspace panel toggle must still work in a
+                     blank conversation, otherwise a panel opened in an existing conversation
+                     could not be closed after starting a new one. */
                     <div className="flex-1 min-h-0 flex flex-col justify-center pt-6 pb-10">
                       <div className="w-full max-w-2xl mx-auto px-8">
                         <WelcomeIntro
@@ -1140,7 +1253,8 @@ const Harness: React.FC = () => {
                           colorTextSecondary={colorTextSecondary}
                         />
                       </div>
-                      {/* 归档会话只读：输入框整个不渲染（用户口径：不要提示条，什么都不要留） */}
+                      {/* Archived conversations are read-only: the input is not rendered at all
+                        (per the user: no hint bar, nothing left behind) */}
                       {currentTopicArchived ? null : inputArea}
                     </div>
                   ) : (
@@ -1169,7 +1283,8 @@ const Harness: React.FC = () => {
                       messagesEndRef={messagesEndRef}
                       pendingByPath={pendingByPath}
                       onOpenChangedFile={(realPath) => {
-                        // 段头徽标 → 直接打开该文件的差异视图（工作区内的真实路径）
+                        // Section header badge → open that file's diff view directly (a real path
+                        // in the workspace)
                         runOnPanel((handle) => handle.openVirtualFile(realPath, realPath))
                       }}
                       jumpToDialogueId={pendingJumpDialogueId}
@@ -1235,8 +1350,10 @@ const Harness: React.FC = () => {
             )}
           </div>
 
-          {/* 提问弹窗：ask_user_question 工具挂起时收集用户回答（已改为输入区内联面板） */}
-          {/* 模型请求失败弹窗：自动重试耗尽后选择是否切换模型继续（原位继续，不重发问题） */}
+          {/* Question popup: collects user answers while the ask_user_question tool is pending
+            (now an inline panel in the input area) */}
+          {/* Model request failure popup: after automatic retries are exhausted, choose whether
+            to switch models and continue (continues in place, without resending the question) */}
           <ModelRecoveryModal currentTopicId={currentTopicId} />
         </div>
       </WorkspaceBridgeContext.Provider>

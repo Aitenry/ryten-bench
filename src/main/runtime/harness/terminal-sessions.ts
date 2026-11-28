@@ -1,12 +1,14 @@
 /**
- * 持久终端会话语义层：真正启动长驻 shell（pwsh / cmd / bash）并按完成标记切分输出。
+ * Persistent terminal session layer: really starts a long-lived shell (pwsh / cmd / bash) and
+ * splits output at the completion marker.
  *
- * 安全边界（见 `docs/terminal-sandbox-design-2026-11.md`）：**只允许在
- * `danger-full-access` 档使用**——本模块不做任何隔离，与现有 `execute` 在完全权限档
- * 的行为一致；档位判断在工具层（`terminal-tools.ts`），这一层只管进程。
+ * Security boundary: **usable only in the `danger-full-access` tier** — this module performs no
+ * isolation and matches the existing `execute` behavior at the full-permission tier; the tier
+ * check lives in the tool layer (`terminal-tools.ts`), while this layer only manages processes.
  *
- * 本模块**不 import electron / i18n**：错误以稳定代码返回，由工具层翻译；这样它也能被
- * esbuild 打进的 node 集成测试直接驱动（真实 shell，真开机）。
+ * This module **does not import electron / i18n**: errors come back as stable codes that the tool
+ * layer translates; that also lets the node integration tests bundled by esbuild drive it
+ * directly (real shell, really started).
  */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -28,19 +30,19 @@ import {
   type TerminalShell
 } from './terminal-core'
 
-/** 每个话题允许的终端会话数 */
+/** Maximum terminal sessions per topic */
 export const MAX_SESSIONS_PER_TOPIC = 3
-/** 空闲多久自动关闭（毫秒） */
+/** How long a session may be idle before it is closed (ms) */
 export const IDLE_TIMEOUT_MS = 10 * 60_000
-/** `terminal_send` 默认等待时间与上限（毫秒） */
+/** Default wait time and cap for `terminal_send` (ms) */
 export const DEFAULT_WAIT_MS = 15_000
 export const MAX_WAIT_MS = 60_000
-/** 单条返回给模型的输出上限（字符） */
+/** Cap on output returned to the model per read (characters) */
 export const MAX_RESULT_CHARS = 50_000
-/** 打开会话时等待 shell 就绪的上限 */
+/** Cap on waiting for the shell to become ready when opening a session */
 const INIT_WAIT_MS = 8_000
 
-/** 稳定错误码（工具层翻译成界面语言） */
+/** Stable error codes (translated into UI language by the tool layer) */
 export type TerminalErrorCode =
   | 'too-many-sessions'
   | 'no-shell'
@@ -63,13 +65,13 @@ export interface TerminalSessionView {
 }
 
 export interface TerminalSendResult {
-  /** 已清理 ANSI 的本轮输出 */
+  /** This round's output with ANSI cleaned */
   output: string
-  /** 等待超时（命令可能还在跑，需要 terminal_read 继续取） */
+  /** Wait timed out (the command may still be running; keep reading with terminal_read) */
   timedOut: boolean
-  /** 输出看起来是二进制（已省略正文） */
+  /** Output looks binary (the body has been omitted) */
   binary: boolean
-  /** 仍有未读输出（字符数） */
+  /** Still-unread output (characters) */
   unreadChars: number
 }
 
@@ -94,16 +96,17 @@ interface SessionRecord {
   exitCode: number | null
 }
 
-/** 会话管理结果（错误码与细节分开，便于工具层本地化） */
+/** Session open result (error code and detail kept separate so the tool layer can localize) */
 export type TerminalOpenResult =
   | { ok: true; session: TerminalSessionView; initOutput: string }
   | { ok: false; error: TerminalErrorCode; detail?: string }
 
 /**
- * 进程级终端会话管理器。
+ * Process-level terminal session manager.
  *
- * 会话按话题归属（topicId），最多 {@link MAX_SESSIONS_PER_TOPIC} 条；空闲上限
- * {@link IDLE_TIMEOUT_MS} 后由后台定时器回收；应用退出时由系统装配层调用 `closeAll`。
+ * Sessions belong to a topic (topicId), at most {@link MAX_SESSIONS_PER_TOPIC}; a background
+ * timer reclaims them after {@link IDLE_TIMEOUT_MS} of idleness; the system wiring layer calls
+ * `closeAll` when the application exits.
  */
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, SessionRecord>()
@@ -111,7 +114,7 @@ export class TerminalSessionManager {
   private pwshChecked = false
   private pwshAvailable = false
 
-  /** pwsh（PowerShell 7+）是否可用（缓存探测结果） */
+  /** Whether pwsh (PowerShell 7+) is available (probe result cached) */
   hasPwsh(): boolean {
     if (this.pwshChecked) return this.pwshAvailable
     this.pwshChecked = true
@@ -128,13 +131,13 @@ export class TerminalSessionManager {
     return this.pwshAvailable
   }
 
-  /** 打开一个会话（供工具与测试使用） */
+  /** Open a session (used by tools and tests) */
   async open(options: {
     topicId: number
     workspaceRoot: string
     cwd?: string
     shell?: TerminalShell
-    /** 测试用：跳过 init 等待（默认不跳） */
+    /** Test only: skip the init wait (not skipped by default) */
     initTimeoutMs?: number
   }): Promise<TerminalOpenResult> {
     const forTopic = [...this.sessions.values()].filter((item) => item.topicId === options.topicId)
@@ -198,7 +201,8 @@ export class TerminalSessionManager {
     child.stdout.on('data', (chunk: Buffer) => this.onData(session, chunk.toString('utf8')))
     child.stderr.on('data', (chunk: Buffer) => this.onData(session, chunk.toString('utf8')))
     child.stdin.on('error', () => {
-      // 进程已退出时写入会报 EPIPE：交给 exit 处理，这里不抛出
+      // Writing after the process has exited raises EPIPE: let the exit handler deal with it, do
+      // not throw here
     })
     child.on('exit', (code) => {
       session.alive = false
@@ -216,7 +220,8 @@ export class TerminalSessionManager {
       }
     })
 
-    // 注入初始化命令（抑制提示符），并等它跑完，保证 open 返回后输出干净
+    // Inject the init commands (suppress the prompt) and wait for them to finish, so output is
+    // clean once open returns
     const init = await this.runInit(session, options.initTimeoutMs ?? INIT_WAIT_MS)
     if (!init.ok) {
       this.terminate(session)
@@ -232,7 +237,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /** 发送一条命令并等待完成标记（或超时） */
+  /** Send a command and wait for the completion marker (or timeout) */
   async send(
     sessionId: string,
     rawCommand: string,
@@ -279,7 +284,8 @@ export class TerminalSessionManager {
     try {
       session.child.stdin.write(buildCommandLine(normalized.command, sentinel, session.shell))
     } catch {
-      // TS 的控制流不知道 Promise executor 里同步赋过值，这里显式标注类型
+      // TS control flow does not know about the synchronous assignment inside the Promise
+      // executor, so annotate the type explicitly
       const pending = session.pending as PendingCommand | null
       session.pending = null
       if (pending) {
@@ -291,7 +297,7 @@ export class TerminalSessionManager {
     return { ok: true, result: await result }
   }
 
-  /** 读取会话自上次读取以来的增量输出 */
+  /** Read the session's incremental output since the last read */
   read(
     sessionId: string,
     maxChars: number = MAX_RESULT_CHARS
@@ -310,11 +316,13 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 只读快照（用户侧终端面板轮询用）：返回最近 maxChars 的合并输出，**不消费**未读缓冲，
-   * 因此不会抢走模型 `terminal_read` 该读的内容；同时带回会话存活与 cwd 供面板展示。
+   * Read-only snapshot (for polling by the user-facing terminal panel): returns the most recent
+   * maxChars of merged output **without consuming** the unread buffer, so it does not steal
+   * content that the model's `terminal_read` should read; it also returns session liveness and cwd
+   * for the panel.
    *
-   * `raw: true` 时保留 ANSI 转义序列（xterm.js 前端要自己渲染颜色/光标控制）；
-   * 模型侧 `read()` 与默认 peek 仍走 stripAnsi 的纯文本。
+   * With `raw: true` ANSI escape sequences are kept (the xterm.js frontend renders colors/cursor
+   * control itself); the model-side `read()` and the default peek still use stripAnsi plain text.
    */
   peek(
     sessionId: string,
@@ -352,7 +360,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /** 关闭一个会话（整树终止；幂等） */
+  /** Close a session (terminate the whole tree; idempotent) */
   close(sessionId: string): { ok: true; found: boolean; exitCode: number | null } {
     const session = this.sessions.get(sessionId)
     if (!session) return { ok: true, found: false, exitCode: null }
@@ -361,21 +369,21 @@ export class TerminalSessionManager {
     return { ok: true, found: true, exitCode: session.exitCode }
   }
 
-  /** 列出某话题的会话 */
+  /** List the sessions of a topic */
   list(topicId: number): TerminalSessionView[] {
     return [...this.sessions.values()]
       .filter((session) => session.topicId === topicId)
       .map((session) => this.viewOf(session))
   }
 
-  /** 关闭某话题的全部会话（话题删除/切换时用） */
+  /** Close all sessions of a topic (used when a topic is deleted/switched) */
   closeTopic(topicId: number): void {
     for (const session of [...this.sessions.values()]) {
       if (session.topicId === topicId) this.close(session.id)
     }
   }
 
-  /** 关闭全部会话（应用退出时用） */
+  /** Close all sessions (used on application exit) */
   closeAll(): void {
     for (const id of [...this.sessions.keys()]) this.close(id)
     if (this.idleTimer) {
@@ -384,12 +392,12 @@ export class TerminalSessionManager {
     }
   }
 
-  /** 当前活跃会话总数（测试/诊断用） */
+  /** Current number of active sessions (for tests/diagnostics) */
   get activeCount(): number {
     return this.sessions.size
   }
 
-  /** 会话视图 */
+  /** Session view */
   viewOf(session: SessionRecord): TerminalSessionView {
     return {
       sessionId: session.id,
@@ -401,7 +409,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /** 输出到达：进环形缓冲 + 若有等待中的命令则尝试切出完成标记 */
+  /** Output arrived: add it to the ring buffer + try to split out the completion marker if a command is waiting */
   private onData(session: SessionRecord, text: string): void {
     session.lastUsedAt = Date.now()
     session.ring.push(text)
@@ -420,7 +428,7 @@ export class TerminalSessionManager {
     })
   }
 
-  /** 清理 ANSI、尾部截断、空输出兜底 */
+  /** Clean ANSI, truncate the tail, fall back for empty output */
   private cleanOutput(text: string): string {
     const cleaned = stripAnsi(stripSentinelLines(text))
       .replace(/^\r?\n/, '')
@@ -428,14 +436,15 @@ export class TerminalSessionManager {
     return truncateTail(cleaned, MAX_RESULT_CHARS).text
   }
 
-  /** 跑初始化命令并等完成标记 */
+  /** Run the init commands and wait for the completion marker */
   private runInit(
     session: SessionRecord,
     timeoutMs: number
   ): Promise<{ ok: true; output: string } | { ok: false; output: string }> {
     const sentinel = createSentinel(randomUUID())
-    // cmd 在 stdin 是管道时只会在**第一条命令前**打印一次提示符（无换行），
-    // 必须先用一条空 echo 收掉这一行，否则首条命令的完成标记会被拼到提示符后面。
+    // When stdin is a pipe, cmd prints its prompt only once **before the first command** (no
+    // newline); an empty echo must flush that line first, otherwise the first command's
+    // completion marker gets appended to the prompt.
     const flushLine =
       session.shell.kind === 'cmd'
         ? 'echo.'
@@ -469,7 +478,7 @@ export class TerminalSessionManager {
     })
   }
 
-  /** 整树终止 */
+  /** Terminate the whole tree */
   private terminate(session: SessionRecord): void {
     session.alive = false
     if (session.pending) {
@@ -483,18 +492,18 @@ export class TerminalSessionManager {
           stdio: 'ignore'
         })
       } catch {
-        // 忽略：进程可能已退出
+        // Ignore: the process may have already exited
       }
       return
     }
     try {
       session.child.kill('SIGKILL')
     } catch {
-      // 同上
+      // Same as above
     }
   }
 
-  /** 空闲回收定时器（60s 粒度） */
+  /** Idle-reclaim timer (60s granularity) */
   private ensureIdleTimer(): void {
     if (this.idleTimer) return
     this.idleTimer = setInterval(() => {
@@ -511,8 +520,8 @@ export class TerminalSessionManager {
   }
 }
 
-/** 进程级单例（工具层与系统退出清理共用） */
+/** Process-level singleton (shared by the tool layer and system exit cleanup) */
 export const terminalSessions = new TerminalSessionManager()
 
-/** 命令长度上限（供工具 schema 校验文案引用） */
+/** Command length cap (referenced by the tool schema validation message) */
 export const TERMINAL_MAX_COMMAND_CHARS = MAX_COMMAND_CHARS

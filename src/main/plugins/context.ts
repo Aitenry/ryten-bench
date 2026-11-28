@@ -4,43 +4,50 @@ import { addContribution, listContributions, removeContributions } from './contr
 import { withPluginScope } from './plugin-guard'
 
 /**
- * 主进程插件上下文（与渲染层 `plugin-host/context.ts` 对称的轻量实现）。
+ * Main-process plugin context (a lightweight counterpart of the renderer `plugin-host/context.ts`).
  *
- * 契约（见 src/main/workshop/README.md 与每个草稿里生成的 WORKSHOP.md）：
- * - `install(ctx)` 是可逆装配：注册的 IPC 通道与 `ctx.effect` 里登记的效果，
- *   在插件停用/卸载时由宿主一次性回滚（效果 LIFO）；
- * - IPC 通道必须落在本插件命名空间 `plugin:<命名空间>:` 内，宿主权威校验，
- *   防止插件互相顶掉通道（与 preload 的通道白名单同一套规则）；
- * - 主进程 → 渲染层的事件通道（只 send、无 handler）用 `registerEvent` 声明：
- *   preload 的插件通道白名单只收录「本插件声明过的通道」，未声明的事件通道
- *   `window.api.plugin.on(...)` 会被拒绝（内置插件的订阅同样受白名单门控）；
- * - 插件业务代码可以照常 import 核心模块（orm / settings / workspace 等），
- *   但**不得**在 core 的 ipc 分组表里登记通道——归属与生命周期都由本契约表达；
- * - `contribute(key, value)` 挂载的多值贡献（例如 AI 工具）也是可逆装配的一部分：
- *   停用/卸载时随 `dispose()` 摘除，消费方（harness 工具注册表）下一次拉取即生效。
+ * Contract:
+ * - `install(ctx)` is reversible assembly: registered IPC channels and effects registered through
+ *   `ctx.effect` are rolled back at once by the host when the plugin is disabled/uninstalled (effects
+ *   in LIFO order);
+ * - IPC channels must stay inside the plugin's own namespace `plugin:<namespace>:`; the host
+ *   validates authoritatively to prevent plugins from taking each other's channels over (the same
+ *   rules as the preload channel whitelist);
+ * - main → renderer event channels (send only, no handler) are declared with `registerEvent`: the
+ *   preload plugin channel whitelist only includes "channels this plugin declared", and event
+ *   channels that were not declared are rejected by `window.api.plugin.on(...)` (subscribing from
+ *   built-in plugins is gated by the same whitelist);
+ * - plugin business code may import core modules (orm / settings / workspace, etc.) as usual, but
+ *   **must not** register channels in core's IPC group table — ownership and lifecycle are expressed
+ *   by this contract;
+ * - multi-value contributions mounted with `contribute(key, value)` (e.g. AI tools) are part of the
+ *   reversible assembly too: they are removed with `dispose()` on disable/uninstall, and consumers
+ *   (the harness tool registry) see the change on their next pull.
  */
 
-/** 通道命名空间：插件 id 去掉开头的 `plugin.` 段（plugin.demo → demo） */
+/** Channel namespace: the plugin id without the leading `plugin.` segment (plugin.demo → demo) */
 export function channelNamespace(id: string): string {
   return id.startsWith('plugin.') ? id.slice('plugin.'.length) : id
 }
 
 /**
- * 命名空间占用表：内置 `music` 与外部 `plugin.music` 会映射到同一个 `plugin:music:`，
- * 必须挡住（否则两者互相顶掉通道）。占用在构造时声明、dispose 时释放。
+ * Namespace ownership table: the built-in `music` and the external `plugin.music` both map to
+ * `plugin:music:`, which must be blocked (otherwise they take each other's channels over).
+ * Ownership is declared at construction and released on dispose.
  */
 const namespaceOwners = new Map<string, string>()
 
 /**
- * 「请求一次云同步」的宿主接线（`lattice/index.ts` 注入 `scheduleLatticePush`）。
+ * Host wiring for "request a cloud sync" (`lattice/index.ts` injects `scheduleLatticePush`).
  *
- * 用注入而不是直接 import `lattice/sync`：sync → plugins/host → 本文件，
- * 静态 import 会成环（CJS 打包下先求值的一侧拿到半初始化的导出）。
- * 未接线（单元测试、未启用插件中心）时静默忽略，插件写入不受影响。
+ * Injected instead of importing `lattice/sync` directly: sync → plugins/host → this file, and static
+ * imports would form a cycle (under the CJS bundle the side evaluated first gets half-initialized
+ * exports). When not wired (unit tests, plugin hub not enabled) it is silently ignored and plugin
+ * writes are unaffected.
  */
 let syncRequester: ((pluginId: string) => void) | null = null
 
-/** 由 `lattice/index.ts` 在启动时接线（传 null 解绑） */
+/** Wired by `lattice/index.ts` at startup (pass null to unbind) */
 export function setPluginSyncRequester(fn: ((pluginId: string) => void) | null): void {
   syncRequester = fn
 }
@@ -57,52 +64,60 @@ function releaseNamespace(id: string, namespace: string): void {
   if (namespaceOwners.get(namespace) === id) namespaceOwners.delete(namespace)
 }
 
-/** IPC 处理器表：通道名 → 处理函数（参数由渲染层经通用桥传入） */
+/** IPC handler table: channel name → handler (arguments come in from the renderer through the generic bridge) */
 export type IpcHandlerMap = Record<string, (...args: never[]) => unknown>
 
 export interface MainPluginContext {
-  /** 插件 id（manifest.id） */
+  /** Plugin id (manifest.id) */
   readonly id: string
-  /** 本插件的通道命名空间（`plugin:<namespace>:` 里的 `<namespace>`） */
+  /** This plugin's channel namespace (the `<namespace>` in `plugin:<namespace>:`) */
   readonly namespace: string
 
-  /** 注册 IPC 处理器；返回只注销本次注册通道的逆操作 */
+  /** Registers IPC handlers; returns an undo action that removes only the channels registered by this call */
   registerIpc(handlers: IpcHandlerMap): () => void
 
   /**
-   * 声明本插件「主进程 → 渲染层」的事件通道（没有 ipcMain 处理器，只有发送方）。
+   * Declares this plugin's "main → renderer" event channels (no ipcMain handler, only a sender).
    *
-   * 这些通道与 `registerIpc` 注册的通道一起进入 `activePluginChannels()`，
-   * 由 `pushPluginChannels()` 推给 preload 的白名单缓存；不声明就等于渲染层
-   * 订阅不到（preload 只会在订阅时告警，主进程侧根本没有人往该通道发送）。
-   * 通道同样必须落在 `plugin:<命名空间>:` 内。
+   * These channels enter `activePluginChannels()` together with the channels registered by
+   * `registerIpc` and are pushed to the preload whitelist cache by `pushPluginChannels()`; without
+   * the declaration the renderer cannot subscribe (preload only warns on subscribe, and nobody in
+   * the main process ever sends on that channel) — and the channel must also stay inside
+   * `plugin:<namespace>:`.
    */
   registerEvent(...channels: string[]): void
 
-  /** 注册可逆效果（例如一个后台服务/定时器），停用时 LIFO 回滚 */
+  /** Registers a reversible effect (e.g. a background service/timer); rolled back in LIFO order on disable */
   effect(register: () => void | (() => void)): void
 
   /**
-   * 挂载一个**多值贡献**（同一个键可由多个插件分别贡献；同一插件也可贡献多项）。
+   * Mounts a **multi-value contribution** (the same key may be contributed by several plugins; one
+   * plugin may also contribute several entries).
    *
-   * 语义（与 `contributions` 成对）：
-   * - **拉取**：贡献不派发、不通知，消费方在自己需要时调 `contributions(key)` 取当前全量；
-   * - **顺序无关**：谁的 install 先跑都能被取到，同 key 内按装载顺序排列；
-   * - **随插件停用移除**：宿主按 pluginId 记账，停用/卸载时 `dispose()` 一并摘除，
-   *   下一次拉取就看不到（例如 harness 组装的 AI 工具集里不再出现该插件的工具）。
+   * Semantics (pairing with `contributions`):
+   * - **pull**: contributions are not dispatched or notified; consumers call `contributions(key)`
+   *   whenever they need the current full set;
+   * - **order-independent**: it can be read no matter whose install ran first; within the same key,
+   *   entries are ordered by load order;
+   * - **removed with the plugin**: the host tracks contributions by pluginId and removes them in
+   *   `dispose()` on disable/uninstall, so the next pull no longer sees them (e.g. the plugin's tools
+   *   no longer appear in the AI tool set assembled by harness).
    *
-   * key 为空的贡献没有意义，直接抛错（装配期失败会连累插件装载，早暴露早修）。
+   * A contribution with an empty key is meaningless and throws directly (a failure during assembly
+   * affects plugin loading — expose it early and fix it early).
    */
   contribute<T>(key: string, value: T): void
 
-  /** 读取某贡献点的全部贡献（宿主/注册表所有者用，例如 harness 读 'harness.tool'） */
+  /** Reads all contributions for a contribution point (for the host / registry owner, e.g. harness reading 'harness.tool') */
   contributions<T>(key: string): T[]
 
   /**
-   * 请求宿主安排一次云同步（本插件的数据已落库）。
+   * Asks the host to schedule a cloud sync (this plugin's data has been persisted).
    *
-   * 宿主按**5 秒防抖**合并成一次 push；未登录插件中心 / 未接线时静默忽略。
-   * 典型用法：写业务表之后调一次，别每次循环里都调（防抖只吸收短时间内的重复请求）。
+   * The host merges requests into one push with a **5-second debounce**; silently ignored when not
+   * signed in to the plugin hub / not wired. Typical usage: call once after writing business tables,
+   * not inside every loop iteration (the debounce only absorbs duplicate requests within a short
+   * window).
    */
   requestSync(): void
 }
@@ -112,7 +127,7 @@ export class MainPluginContextImpl implements MainPluginContext {
 
   private readonly effects: Array<() => void> = []
   private readonly ownedChannels = new Set<string>()
-  /** 仅有发送方的事件通道（无 ipcMain 处理器，只参与 preload 白名单） */
+  /** Event channels with only a sender (no ipcMain handler; they only take part in the preload whitelist) */
   private readonly eventChannels = new Set<string>()
   private disposed = false
 
@@ -121,7 +136,7 @@ export class MainPluginContextImpl implements MainPluginContext {
     claimNamespace(id, this.namespace)
   }
 
-  /** 当前占用的通道（IPC 处理器 + 事件通道；用于日志/白名单推送） */
+  /** Channels currently owned (IPC handlers + event channels; used for logging/whitelist push) */
   get channels(): string[] {
     return [...this.ownedChannels, ...this.eventChannels]
   }
@@ -148,9 +163,9 @@ export class MainPluginContextImpl implements MainPluginContext {
           throw new Error(`通道 '${channel}' 缺少处理函数`)
         }
         ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
-          // 每次调用都进插件上下文：① 让插件的 `process.exit` 之类被归因并拦住；
-          // ② handler 里的异常带上插件 id 记日志（否则只剩一句没有上下文的
-          //    "Error invoking remote method"）。
+          // Every call enters the plugin context: 1) so things like a plugin's `process.exit` are
+          // attributed and blocked; 2) so exceptions in the handler are logged with the plugin id
+          // (otherwise only a context-free "Error invoking remote method" remains).
           return await withPluginScope({ id: this.id, surface: 'ipc', channel }, async () => {
             try {
               return await handler(...(args as never[]))
@@ -164,12 +179,12 @@ export class MainPluginContextImpl implements MainPluginContext {
         registered.push(channel)
       }
     } catch (err) {
-      // 半途失败：已注册的先摘掉，避免留下半个插件
+      // Partial failure: remove what was already registered so no half-registered plugin remains
       for (const channel of registered) {
         try {
           ipcMain.removeHandler(channel)
         } catch {
-          // 忽略
+          // Ignore
         }
         this.ownedChannels.delete(channel)
       }
@@ -181,7 +196,7 @@ export class MainPluginContextImpl implements MainPluginContext {
         try {
           ipcMain.removeHandler(channel)
         } catch {
-          // 忽略
+          // Ignore
         }
         this.ownedChannels.delete(channel)
       }
@@ -191,8 +206,9 @@ export class MainPluginContextImpl implements MainPluginContext {
   effect(register: () => void | (() => void)): void {
     let undo: void | (() => void)
     try {
-      // 注册本身就在 install 的插件上下文里；回滚发生在停用时（上下文已不在），
-      // 这里也套一层，让「停用时的清理代码」同样不能 process.exit 把应用带走。
+      // Registration itself happens inside install's plugin context; rollback happens on disable
+      // (when the context is gone), so wrap it too so that "cleanup code on disable" cannot take the
+      // app down with process.exit either.
       undo = withPluginScope({ id: this.id, surface: 'effect' }, register)
     } catch (err) {
       logger.warn(`[Plugins] ${this.id} failed to register effect:`, err)
@@ -207,7 +223,7 @@ export class MainPluginContextImpl implements MainPluginContext {
     if (typeof key !== 'string' || key.trim() === '') {
       throw new Error(`贡献点 key 不能为空（插件 '${this.id}'）`)
     }
-    // 已停用的上下文再贡献会挂进注册表却永不被回收，直接挡住
+    // Contributing from an already-disposed context would land in the registry and never be reclaimed, so block it
     if (this.disposed) {
       throw new Error(`插件 '${this.id}' 已停用，不能再贡献 '${key}'`)
     }
@@ -223,12 +239,12 @@ export class MainPluginContextImpl implements MainPluginContext {
     try {
       syncRequester?.(this.id)
     } catch (err) {
-      // 同步请求失败绝不能影响插件的写入结果
+      // A failed sync request must never affect the plugin's write result
       logger.warn(`[Plugins] ${this.id} requestSync failed:`, err)
     }
   }
 
-  /** 回滚本插件全部效果与通道（幂等） */
+  /** Rolls back all of this plugin's effects and channels (idempotent) */
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -244,12 +260,12 @@ export class MainPluginContextImpl implements MainPluginContext {
       try {
         ipcMain.removeHandler(channel)
       } catch {
-        // 忽略
+        // Ignore
       }
     }
     this.ownedChannels.clear()
     this.eventChannels.clear()
-    // 贡献点随插件停用一并摘除（拉取语义：下一次消费就看不到本插件的贡献）
+    // Contributions are removed with the plugin on disable (pull semantics: the next consumption no longer sees this plugin's contributions)
     removeContributions(this.id)
     releaseNamespace(this.id, this.namespace)
   }

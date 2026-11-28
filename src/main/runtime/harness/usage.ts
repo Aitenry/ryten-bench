@@ -1,33 +1,36 @@
 /**
- * 模型用量（真实 token）采集与归集。
+ * Collection and aggregation of model usage (real tokens).
  *
- * 数据来源：模型响应上的 `usage_metadata`（与旧实现同形的统一字段）。
- *  - 部分供应商放在 `response_metadata.usage` / `response_metadata.tokenUsage`，这里一并兜住；
- *  - 一轮对话可能发生多次模型往返（工具循环），所以采集的是**每次调用一条**，
- *    落库时再累加成整轮总量，原始明细以 JSON 数组保留。
+ * Data source: `usage_metadata` on the model response (a unified field with the same shape as the
+ * previous implementation).
+ *  - Some providers nest it under `response_metadata.usage` / `response_metadata.tokenUsage`;
+ *    both are handled here;
+ *  - A single turn may involve several model round trips (tool loop), so one record is collected
+ *    **per call**, accumulated into turn totals when persisted, and the raw details are kept as a
+ *    JSON array.
  */
 
-/** 单次模型调用的用量记录 */
+/** Usage record for a single model call */
 export interface ModelUsageRecord {
-  /** usage_metadata 原始对象（input_tokens / output_tokens / total_tokens / … 各家可能还有明细） */
+  /** Raw usage_metadata object (input/output/total tokens plus provider-specific details) */
   usage: Record<string, unknown>
-  /** 模型名（响应里带的优先，其次取当前绑定的模型） */
+  /** Model name (taken from the response if present, otherwise the currently bound model) */
   model?: string
-  /** 是否来自子代理（子代理图与主图共用 callModel） */
+  /** Whether it comes from a subagent (subagent graphs share callModel with the main graph) */
   subagent?: boolean
 }
 
-/** 整轮累加结果 */
+/** Accumulated result for a full turn */
 export interface UsageTotals {
   inputTokens: number
   outputTokens: number
   totalTokens: number
   calls: number
-  /** 明细里是否真的取到了 token 数字（全都没有时前端不显示用量） */
+  /** Whether token numbers were found in the details (the frontend hides usage when none exist) */
   hasTokens: boolean
 }
 
-/** 取数字字段（各家命名不一，按优先级兜） */
+/** Read a numeric field (names differ across providers; try them in priority order) */
 function pickNumber(source: Record<string, unknown>, keys: string[]): number | null {
   for (const key of keys) {
     const value = source[key]
@@ -37,8 +40,9 @@ function pickNumber(source: Record<string, unknown>, keys: string[]): number | n
 }
 
 /**
- * 从模型响应里抽 usage_metadata。
- * 抽不到就返回 null——**不估算**，宁可前端不显示用量。
+ * Extract usage_metadata from a model response.
+ * Returns null when nothing can be extracted — **no estimation**; it is better to hide usage in
+ * the frontend.
  */
 export function extractUsageMetadata(response: unknown): Record<string, unknown> | null {
   const message = response as {
@@ -59,7 +63,7 @@ export function extractUsageMetadata(response: unknown): Record<string, unknown>
   return null
 }
 
-/** 把若干次调用的明细累加成整轮总量 */
+/** Accumulate the details of several calls into full-turn totals */
 export function sumUsage(records: ModelUsageRecord[]): UsageTotals {
   let inputTokens = 0
   let outputTokens = 0
@@ -87,13 +91,16 @@ export function sumUsage(records: ModelUsageRecord[]): UsageTotals {
   return { inputTokens, outputTokens, totalTokens, calls: records.length, hasTokens }
 }
 
-/* ── 上下文规模（压缩压力用） ───────────────────────────────────────────── */
+/* ── Context size (for compression pressure) ─────────────────────────────── */
 
 function objectOf(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
-/** 缓存读取：OpenAI 记在 prompt_tokens_details.cached_tokens，Anthropic 系单列 */
+/**
+ * Cache reads: OpenAI records prompt_tokens_details.cached_tokens; Anthropic-style providers use
+ * a separate field
+ */
 function cacheReadOf(usage: Record<string, unknown>): number {
   const inputDetails = objectOf(usage.input_token_details)
   const promptDetails = objectOf(usage.prompt_tokens_details)
@@ -105,7 +112,7 @@ function cacheReadOf(usage: Record<string, unknown>): number {
   )
 }
 
-/** 缓存写入（Anthropic 系有；没有就是 0） */
+/** Cache writes (Anthropic-style providers have them; otherwise 0) */
 function cacheWriteOf(usage: Record<string, unknown>): number {
   const inputDetails = objectOf(usage.input_token_details)
   return (
@@ -116,14 +123,15 @@ function cacheWriteOf(usage: Record<string, unknown>): number {
 }
 
 /**
- * 单次模型调用的上下文规模（token）= 该次 prompt + 该次输出。
+ * Context size of a single model call (tokens) = that call's prompt + that call's output.
  *
- * 与渲染层 `utils/harness/usage.ts` 的 `entryContextTokens` 同口径：
- * OpenAI / DeepSeek 系的 prompt_tokens 已含缓存命中（明细只是子集，不能再加），
- * Anthropic 系的 input_tokens 之外另有 cache_read / cache_creation，必须补上。
+ * Uses the same accounting as `entryContextTokens` in the renderer's `utils/harness/usage.ts`:
+ * for OpenAI / DeepSeek-style providers prompt_tokens already includes cache hits (the details
+ * are only a subset and must not be added again), while Anthropic-style providers have cache_read
+ * / cache_creation on top of input_tokens, which must be added.
  *
- * 压缩判定用它而不是字符数：它包含系统提示词、工具 schema、注入记忆，
- * 就是模型真正看到的占用。
+ * Compression decisions use this instead of character counts: it covers the system prompt, tool
+ * schemas, and injected memory — the actual occupancy the model sees.
  */
 export function contextTokensOf(usage: Record<string, unknown>): number {
   const input =
@@ -139,17 +147,19 @@ export function contextTokensOf(usage: Record<string, unknown>): number {
   return Math.max(0, input + extra + output)
 }
 
-/** 能提供 usage_metadata 列的最小行形态（数据库行天然满足） */
+/** Minimal row shape that provides a usage_metadata column (database rows satisfy it naturally) */
 export interface UsageMetadataCarrier {
   usage_metadata: string | null
 }
 
 /**
- * 话题最近一次模型调用的上下文规模（token）。
+ * Context size (tokens) of the most recent model call in a topic.
  *
- * 用量行按 id 升序（一轮一行），行内 `usage_metadata` 是该轮每次调用的 JSON 数组，
- * **最后一条**才是最近一次调用——前面几次的 prompt 更小，对「现在多满」没有参考价值。
- * 最后一行解析不出来就往前退一行；全都拿不到返回 null（调用方退回字符口径）。
+ * Usage rows are ordered by ascending id (one row per turn), and the row's `usage_metadata` is a
+ * JSON array holding each call of that turn; only the **last entry** is the most recent call —
+ * earlier prompts are smaller and say nothing about how full the context is now.
+ * If the last row cannot be parsed, step back one row; return null when nothing is available
+ * (callers then fall back to the character-based measure).
  */
 export function lastCallContextTokens(rows: UsageMetadataCarrier[]): number | null {
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -164,7 +174,7 @@ export function lastCallContextTokens(rows: UsageMetadataCarrier[]): number | nu
       const tokens = contextTokensOf(usage)
       if (tokens > 0) return tokens
     } catch {
-      // 该行明细坏了：继续找更早的一行，不因为一条脏数据退回字符口径
+      // Corrupt row details: keep looking at older rows instead of falling back to characters
     }
   }
   return null

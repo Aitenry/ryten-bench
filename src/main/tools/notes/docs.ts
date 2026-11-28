@@ -1,14 +1,18 @@
-// 文档域处理器（统一由 manage_materials 工具调度）。
+// Document domain handlers (dispatched uniformly by the manage_materials tool).
 //
-// 设计要点（2026-11 资料整理改造）：
-// - 读：doc.search / doc.toc / doc.get / doc.find。doc.get 默认输出**带行号 + 修订号**，
-//   大文档可按 startLine/endLine 分段读；doc.find 返回精确到行、列（码点）的命中位置；
-// - 写：除整篇 update/create/delete 外，新增按行替换、按行内列区间替换、文本片段替换、
-//   插入、删行/删区间、批量 patch。所有写操作支持 dryRun 与 expectedRevision；
-//   replace/delete 还支持 expectedOld 逐字校验，防止行号漂移改错位置；
-// - 并发：每次写前用内容哈希核对 expectedRevision，不一致就拒绝写入并提示重新读取，
-//   避免覆盖用户/编辑器刚做的修改；
-// - 编辑器同步：写成功后仍广播 harness:harness-doc-changed，渲染端编辑器据此重载或提示。
+// Design notes (2026-11 materials organization rework):
+// - Read: doc.search / doc.toc / doc.get / doc.find. doc.get outputs line numbers + the revision
+//   by default, and large documents can be read in segments via startLine/endLine; doc.find
+//   returns matches precise to line and column (code point);
+// - Write: besides whole-document update/create/delete, adds line-range replacement, in-line
+//   column-range replacement, text-fragment replacement, insertion, line/range deletion and batch
+//   patch. All writes support dryRun and expectedRevision; replace/delete also support verbatim
+//   expectedOld checks to prevent wrong edits caused by line-number drift;
+// - Concurrency: before each write the content hash is checked against expectedRevision; on
+//   mismatch the write is rejected with a prompt to re-read, avoiding overwriting changes just
+//   made by the user/editor;
+// - Editor sync: after a successful write, harness:harness-doc-changed is still broadcast so the
+//   renderer editor can reload or prompt accordingly.
 import { BrowserWindow } from 'electron'
 import { mainFormat, mainPlural } from '../../i18n'
 import { getDocsToolTexts } from '../../i18n/tool-results-docs'
@@ -33,21 +37,23 @@ import {
 } from './doc-edit'
 
 /**
- * 广播文档被工具修改/删除（修复：编辑器对工具写入完全无感知,继续编辑会把工具刚写入的
- * 内容整体覆盖——广播后编辑器可重载或提示）
+ * Broadcast that a document was modified/deleted by a tool (fix: the editor was completely
+ * unaware of tool writes, and continuing to edit would overwrite the content the tool had just
+ * written; the broadcast lets the editor reload or prompt)
  */
 function broadcastDocChanged(docId: number, action: 'updated' | 'deleted'): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      // 通道名按「插件不得 import harness」的铁律写成字面量，与 harness 插件
-      // install(ctx) 里 ctx.registerEvent 声明的名字一致（那边有注释互相指向）
+      // The channel name is written as a literal because plugins must not import harness, matching
+      // the name declared via ctx.registerEvent in the harness plugin's install(ctx) (comments on
+      // both sides point at each other)
       safeSend(win.webContents, 'harness:harness-doc-changed', { docId, action })
     }
   }
 }
 
 // ============================================================================
-// 公共小工具
+// Shared helpers
 // ============================================================================
 
 type DocRow = DocWithContent
@@ -74,10 +80,11 @@ interface HeadingRef {
   lineIndex: number
 }
 
-/** 解析 Markdown 标题；id 与旧版一致（h-0、h-1…），保证历史 headingId 仍可用 */
+/** Parse Markdown headings; ids stay compatible with the old version (h-0, h-1, …) so historical headingIds remain usable */
 function collectHeadings(content: string): HeadingRef[] {
   const headings: HeadingRef[] = []
-  // 用 parseDocument 而不是裸 split：CRLF 文档的每行会残留 \r，标题/行号展示要干净
+  // Use parseDocument instead of a bare split: each line of a CRLF document keeps a trailing \r,
+  // and heading/line-number display must be clean
   const lines = parseDocument(content).lines
   let counter = 0
   for (let i = 0; i < lines.length; i++) {
@@ -94,7 +101,7 @@ function collectHeadings(content: string): HeadingRef[] {
   return headings
 }
 
-/** 某标题章节的 1 起闭区间（含标题行，直到下一个同级/更高级标题之前） */
+/** 1-based inclusive line range of a heading's section (includes the heading line, up to the next heading of the same or higher level) */
 function sectionRange(
   headings: HeadingRef[],
   targetIndex: number
@@ -103,7 +110,7 @@ function sectionRange(
   let endLine = Number.MAX_SAFE_INTEGER
   for (let i = targetIndex + 1; i < headings.length; i++) {
     if (headings[i].level <= target.level) {
-      // 0 基 lineIndex 等于「上一行」的 1 起行号
+      // A 0-based lineIndex equals the 1-based line number of the "previous line"
       endLine = headings[i].lineIndex
       break
     }
@@ -117,7 +124,7 @@ function clip(text: string, max = 240): string {
 }
 
 // ============================================================================
-// 查询
+// Queries
 // ============================================================================
 
 export async function searchDocsHandler(params: {
@@ -130,7 +137,8 @@ export async function searchDocsHandler(params: {
   const { getDocPage } = await import('../../database/mapper/notes/document')
   const page = Math.max(1, params.page ?? 1)
   const pageSize = Math.min(50, Math.max(1, params.pageSize ?? 10))
-  // getDocPage 搜索 title/summary/tags + 正文；旧 getAllDocs 漏正文，模型常因此搜不到
+  // getDocPage searches title/summary/tags + body; the old getAllDocs missed the body, which is
+  // why the model often failed to find matches
   const result = await getDocPage(params.query, page, pageSize)
   if (!result.items.length) return mainFormat(tr.docs.searchEmpty, { query: params.query })
   const lines = [
@@ -397,7 +405,7 @@ export async function findInDocHandler(params: {
 }
 
 // ============================================================================
-// 文档写操作（整篇 + 细粒度编辑）
+// Document writes (whole-document + fine-grained edits)
 // ============================================================================
 
 export async function createDocHandler(params: {
@@ -479,7 +487,7 @@ export async function deleteDocHandler(params: { docId: number }): Promise<strin
   return mainFormat(tr.docs.deleted, { docId: params.docId, title: doc.title })
 }
 
-// ── 细粒度编辑的公共装配 ──
+// ── Shared plumbing for fine-grained edits ──
 
 type LoadedEditableDoc =
   { ok: true; doc: DocRow; content: string; revision: string } | { ok: false; message: string }
@@ -611,7 +619,8 @@ export async function replaceDocLinesHandler(params: {
   if (params.startLine === undefined || params.endLine === undefined) {
     return missingParam(params.startLine === undefined ? 'startLine' : 'endLine')
   }
-  // 显式空串=删行；但「没传」不等于空串，避免模型漏参时静默删行
+  // An explicit empty string means delete the lines; "not passed" is not the same as an empty
+  // string, so a model that omits the parameter does not silently delete lines
   if (params.newText === undefined) return missingParam('newText')
   return runDocEdit(params, (content) =>
     replaceLines(content, {
@@ -751,7 +760,7 @@ export async function patchDocHandler(params: {
 }
 
 // ============================================================================
-// 错误文案
+// Error messages
 // ============================================================================
 
 export function formatDocEditError(err: unknown): string {

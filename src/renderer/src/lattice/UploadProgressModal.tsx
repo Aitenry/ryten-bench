@@ -6,19 +6,22 @@ import { useLattice } from './useLattice'
 import { formatBytes } from './format'
 
 /**
- * 发布插件到插件中心时的上传进度弹窗。
+ * Upload progress modal shown while publishing a plugin to the plugin center.
  *
- * 数据来自 Provider 订阅的 `lattice:upload-progress`（主进程按 zip → meta → upload
- * （契约 v2 还有 source）阶段推送），因此插件仓库页和插件详情页可以共用同一个弹窗，
- * 不必各自订阅。
+ * The data comes from `lattice:upload-progress`, which the provider subscribes to (the main
+ * process pushes per phase: zip → meta → upload, and the v2 API also has a source phase), so the
+ * plugin repository page and the plugin detail page can share the same modal instead of each
+ * subscribing on its own.
  *
- * 上传无法从渲染层取消（取消发生在系统选择框里），所以弹窗不给「取消」按钮，
- * 只提示上传期间不要关闭窗口。
+ * Upload cannot be cancelled from the renderer (cancellation happens in the system dialog), so
+ * the modal has no "cancel" button and only warns not to close the window while uploading.
  */
 /**
- * 上传阶段。主进程现有进度推送是 zip → meta → upload 三步（契约 v2 的源码包上传可能
- * 追加一个 `source` 阶段）；这里 UI 固定画三步，若收到 `source` 就把它当成「三步都已完成」，
- * 同时阶段标题换成「正在上传源码包」——旧/新主进程都不会把进度条画错。
+ * Upload phases. The main-process progress pushes currently have three steps: zip → meta →
+ * upload (a v2 source-package upload may append a `source` phase); the UI always draws three
+ * steps, and if `source` arrives it treats it as "all three steps done" while switching the
+ * phase title to "uploading source package" — so neither an old nor a new main process draws the
+ * progress bar incorrectly.
  */
 const PHASE_LABEL_KEY = {
   zip: 'lattice.upload.phaseZip',
@@ -29,7 +32,7 @@ const PHASE_LABEL_KEY = {
 
 type UploadPhase = keyof typeof PHASE_LABEL_KEY
 
-/** 进度条上的三步（source 是追加阶段，不单独占一格） */
+/** The three steps on the progress bar (source is an appended phase and does not get its own slot) */
 const STEPS: UploadPhase[] = ['zip', 'meta', 'upload']
 
 const UploadProgressModal: React.FC<{ open: boolean }> = ({ open }) => {
@@ -37,7 +40,7 @@ const UploadProgressModal: React.FC<{ open: boolean }> = ({ open }) => {
   const { token } = theme.useToken()
   const { uploadProgress } = useLattice()
 
-  /** 主进程现在的 phase 联合类型里没有 source：UI 按字符串收，多出来的阶段也能显示 */
+  /** The main process's current phase union has no source: the UI accepts a string so extra phases still render */
   const phase = uploadProgress?.phase as UploadPhase | undefined
 
   const phaseLabel = useMemo(() => {
@@ -45,7 +48,7 @@ const UploadProgressModal: React.FC<{ open: boolean }> = ({ open }) => {
     return t('lattice.upload.preparing')
   }, [t, phase])
 
-  /** source 阶段 = 前三步都完成（索引落在末尾，三步都显示为 done） */
+  /** source phase = the first three steps are all complete (the index falls past the end, so all three steps show as done) */
   const activeIndex = phase ? (phase === 'source' ? STEPS.length : STEPS.indexOf(phase)) : -1
 
   const hasByteTotal = Boolean(uploadProgress && uploadProgress.total > 0)

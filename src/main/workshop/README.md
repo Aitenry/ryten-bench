@@ -319,8 +319,8 @@ plugin_release  id + version + changelog → 发到插件中心（安装包 + �
 | 面         | full 里对应的东西                                                                             |
 | ---------- | --------------------------------------------------------------------------------------------- |
 | 页面       | `renderer/Page.tsx` + 路由 + 侧栏菜单（列表 + 新建/编辑弹窗 + 删除确认）                      |
-| 设置页     | `renderer/Settings.tsx` + `settingsSection` 挂载点                                            |
-| 界面地基   | `renderer/components/ui.tsx`：`PageShell` / `pageTabsProps` / `formModalProps` / `usePluginPalette` 等原语 |
+| 设置页     | `renderer/Settings.tsx` + `settingsSection` 挂载点（卡片分组 + 改完即时落盘，与真实插件同款） |
+| 界面地基   | `renderer/components/ui.tsx`：`PageShell` / `pageTabsProps` / `formModalProps` / `usePluginPalette` / `SettingsCard` / `SettingRow` 等原语 |
 | 组件拆分   | `renderer/components/ItemForm.tsx`（表单单独一个组件，别塞进页面）                            |
 | 通道封装   | `renderer/api.ts`（组件不直接写通道名）+ `shared/types.ts`（跨进程 DTO）                      |
 | AI 工具    | `main/tools.ts`（`HARNESS_TOOL_CONTRIBUTION`，读本插件自己的 mapper）                         |
@@ -351,7 +351,7 @@ plugin_release  id + version + changelog → 发到插件中心（安装包 + �
 | **重建不毁源码** | `overwrite=true` 先整份备份到 `<userData>/plugin-workshop/backups/<id>-<时间戳>/`（只留最近 3 份），再写 staging 目录、成功才 `rename` 到位；中途失败会把旧目录放回去（`scaffold.ts`） |
 | **契约单写明红线** | 每个模板的 `WORKSHOP.md` 第 8 节「不要影响宿主运转」：不许 `process.exit`/`abort`、不许直接 `ipcMain`、全局样式会被丢弃、后台任务要放 `ctx.effect` 且能停、只写自己的表与 `plugin-state/` |
 | **验收不污染数据** | 模板的 `workshop.smoke.mjs` 先读原值、再写、最后用 `cleanup` + `$result:<通道>#<字段>` 还原：验收不再往用户库里留 `smoke-item`，也不会把用户的设置改成 `false` |
-| **外观** | 设置页模板只保留字段行（标题 + 开关 + 输入 + 保存），不再写「这一页由插件自己注册…」这类解释性段落；菜单图标按 id 散列挑（不再所有草稿都是笔记的图标） |
+| **外观** | 设置页模板与真实插件同款（`global-time-zones` / `personal-ledger`）：`SettingsCard` 分组 + 一行一个字段 + 说明放标签下面（11px 灰字），开关/输入**改完即时落盘**（不再摆「保存」按钮），每个设置项都在页面里真的被读到（`hideDone` 过滤列表、`note` 进概览面板）；不再写「这一页由插件自己注册…」这类解释性段落；菜单图标按 id 散列挑（不再所有草稿都是笔记的图标） |
 
 宿主侧的隔离（每个挂载点的错误边界、路由/菜单/设置页占位冲突、`plugin.css` 全局规则过滤、
 主进程 `process.exit` 拦截、`safety.scan`）见 `src/main/plugins/plugin-guard.ts` 与各挂载点源码；

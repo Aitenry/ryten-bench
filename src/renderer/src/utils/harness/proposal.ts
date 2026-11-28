@@ -1,8 +1,11 @@
 /**
- * `propose_action` 的渲染层纯逻辑（无 React / electron 依赖，便于单元测试）。
+ * Pure renderer-side logic for `propose_action` (no React / electron dependencies, so it is easy
+ * to unit test).
  *
- * 用户 2026-11-27 口径：确认不再作为消息流里的卡片，而是在输入区出现一条**预填 AI 推荐
- * 内容**的单行输入条；消息流零留痕。这里只负责「哪条提议还算待确认」「推荐内容是什么」。
+ * User decision 2026-11-27: confirmation is no longer a card in the message stream; instead a
+ * single-line input bar with **pre-filled AI-recommended content** appears in the input area,
+ * leaving no trace in the message stream. All this module does is decide "which proposal is
+ * still pending" and "what the recommended content is".
  */
 
 export interface ProposalActionItem {
@@ -12,15 +15,15 @@ export interface ProposalActionItem {
 }
 
 export interface PendingProposalView {
-  /** 稳定 key：消息 id + 块下标（没有 tool id 时用它判断「是不是同一条提议」） */
+  /** Stable key: message id + block index (used to tell "is this the same proposal" when there is no tool id) */
   key: string
   question: string
   actions: ProposalActionItem[]
-  /** 默认回填进输入条的内容：第一个动作的 reply（没有则 label） */
+  /** Content pre-filled into the input bar by default: reply of the first action (or its label) */
   recommendedText: string
 }
 
-/** 渲染层消息的最小结构（只取判定所需字段，避免测试依赖完整 Message 类型） */
+/** Minimal renderer message shape (only the fields the decision needs, so tests don't depend on the full Message type) */
 export interface ProposalMessageLike {
   role: string
   id?: string
@@ -57,7 +60,7 @@ function normalizeActions(raw: unknown): ProposalActionItem[] {
     .slice(0, 4)
 }
 
-/** 默认回填内容：第一个动作的 reply → label（保持用户可编辑的完整句子） */
+/** Default pre-filled content: reply of the first action → label (keeping a full sentence the user can edit) */
 export function recommendedProposalText(actions: readonly ProposalActionItem[]): string {
   const first = actions[0]
   if (!first) return ''
@@ -65,10 +68,11 @@ export function recommendedProposalText(actions: readonly ProposalActionItem[]):
 }
 
 /**
- * 找当前待确认的 propose_action：
- * - 只看**最后一条用户消息之后的最新一条助手消息**（旧提议一律过期）；
- * - 取该消息里最后一个已完成的 `propose_action` 工具块，且动作至少 1 条；
- * - 没有则返回 null（输入条不出现）。
+ * Find the currently pending propose_action:
+ * - only look at the **latest assistant message after the last user message** (older proposals
+ *   are always expired);
+ * - take the last completed `propose_action` tool block in that message with at least 1 action;
+ * - return null if there is none (the input bar does not appear).
  */
 export function findPendingProposal(
   messages: readonly ProposalMessageLike[]
@@ -80,7 +84,7 @@ export function findPendingProposal(
       break
     }
   }
-  // 最新一条助手消息才可能承载「本轮刚结束的提议」
+  // Only the latest assistant message can carry "the proposal that just finished this turn"
   for (let i = messages.length - 1; i > lastUserIndex; i -= 1) {
     const message = messages[i]
     if (message.role !== 'assistant') continue
@@ -95,15 +99,16 @@ export function findPendingProposal(
       const actions = normalizeActions(input.actions)
       if (actions.length === 0) return null
       return {
-        // tool id 理论上唯一；仍拼上消息 id + 块下标：同一会话里复用同一 call id（脚本/重放）
-        // 时也不会被上次 ✕ 的 dismissed key 误伤
+        // tool ids are theoretically unique; still append message id + block index so that
+        // reusing the same call id within one session (scripts / replay) is not mistaken for the
+        // dismissed key of a previous ✕
         key: `${tool.id ?? 'no-id'}:${message.id ?? i}:${b}`,
         question: typeof input.question === 'string' ? input.question.trim() : '',
         actions,
         recommendedText: recommendedProposalText(actions)
       }
     }
-    // 最新一条助手消息里没有待确认提议 → 不再往前找
+    // No pending proposal in the latest assistant message → stop searching further back
     return null
   }
   return null

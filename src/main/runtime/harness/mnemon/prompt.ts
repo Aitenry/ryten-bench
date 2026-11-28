@@ -2,14 +2,14 @@ import type { RuntimeMemoryController } from './runtime-memory'
 import { RUNTIME_ENTRY_DELIMITER } from './types'
 
 /**
- * Mnemon 系统提示词注入
+ * Mnemon system prompt injection
  *
- * 移植自 dsh-mnemon 的两个 prompt section：
- * - `mnemon:routing`：分层查询边界（何时用哪一层记忆）；
- * - `mnemon:runtime-memory`：USER.md / MEMORY.md 内容 + 保存准入规则。
+ * Two prompt sections:
+ * - `mnemon:routing`: layered query boundaries (when to use which memory layer);
+ * - `mnemon:runtime-memory`: USER.md / MEMORY.md content + saving rules.
  */
 
-/** 分层查询边界（routing section） */
+/** Layered query boundaries (routing section) */
 export function buildRoutingSection(): string {
   return `\n\n## Memory System (Mnemon)
 This workspace has three memory layers:
@@ -21,7 +21,7 @@ Query order: current conversation and repository facts → hot memory (already i
 If the user already provided the current facts, or the repository can answer directly, do not recall merely to "show memory".`
 }
 
-/** 热记忆内容 + 保存准入规则（runtime-memory section） */
+/** Hot memory content + saving rules (runtime-memory section) */
 export function buildRuntimeMemorySection(controller: RuntimeMemoryController): string {
   const snapshot = controller.snapshot()
   const userEntries = snapshot.entries.filter((e) => e.target === 'user')

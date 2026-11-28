@@ -13,13 +13,15 @@ import { sql } from 'drizzle-orm'
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../../../shared/model-params'
 
 /**
- * 大模型供应商表（全局数据）。
- * provider 是接口协议标识（openai / anthropic / zhipu…），允许自由输入，不做白名单约束；
- * api_key_encrypted 存密文，明文只在主进程运行时路径解密。
+ * LLM provider table (global data).
+ * `provider` is the protocol identifier (openai / anthropic / zhipu…); free-form input, not
+ * constrained by a whitelist; `api_key_encrypted` stores ciphertext, and plaintext is decrypted
+ * only at runtime in the main process.
  *
- * 模型级请求参数（采样/思考/工具轮数）逐列存储，由 ProviderService 直接消费；
- * 上下文窗口与最大输出属于「模型档案」维度，存在 metadata(JSON) 里
- * （context_window / max_output_tokens），不重复建列。
+ * Model-level request parameters (sampling / thinking / tool rounds) are stored per column and
+ * consumed directly by ProviderService; the context window and max output belong to the "model
+ * profile" dimension and live in metadata (JSON) (context_window / max_output_tokens), so no
+ * duplicate columns are created.
  */
 export const llm_providers = pgTable(
   'llm_providers',
@@ -32,19 +34,20 @@ export const llm_providers = pgTable(
     model: text().notNull(),
     temperature: real(),
     max_tokens: integer(),
-    /** Top P 采样：留空(null) = 使用供应商最佳默认值 */
+    /** Top P sampling: empty (null) = use the provider's best default */
     top_p: real(),
-    /** Top K 采样：留空(null) = 使用供应商最佳默认值 */
+    /** Top K sampling: empty (null) = use the provider's best default */
     top_k: integer(),
-    /** 思考模式：auto 跟随模型默认配置 / on 强制开启 / off 强制关闭 */
+    /** Thinking mode: auto follows the model default config / on forces enabled / off forces disabled */
     thinking_mode: text().default('auto'),
     /**
-     * 推理等级：none/minimal/low/medium/high/xhigh/max（协议原值小写）。
-     * 留空(null) = 未设置，不下发档位参数；可选档位来自模型档案
-     * capabilities.reasoning_effort_levels，由 ProviderService 按协议族翻译成各家字段。
+     * Reasoning effort: none/minimal/low/medium/high/xhigh/max (protocol values in lowercase).
+     * Empty (null) = not set, so no effort parameter is sent; the available levels come from the
+     * model profile's capabilities.reasoning_effort_levels, and ProviderService translates them
+     * into each vendor's fields by protocol family.
      */
     reasoning_effort: text(),
-    /** 单次对话工具调用总次数上限（工具调用轮数） */
+    /** Upper bound on total tool calls per conversation (tool-call rounds) */
     max_tool_rounds: integer().default(DEFAULT_MAX_TOOL_ROUNDS),
     extra_config: text(),
     metadata: text(),
@@ -55,7 +58,7 @@ export const llm_providers = pgTable(
     updated_at: timestamp({ mode: 'string' }).defaultNow()
   },
   (table) => [
-    // 全局只有一个默认供应商（PostgreSQL partial unique index）
+    // Only one default provider globally (PostgreSQL partial unique index)
     uniqueIndex('idx_llm_providers_default')
       .using('btree', table.is_default.asc().nullsLast().op('bool_ops'))
       .where(sql`(is_default = true)`),

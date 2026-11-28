@@ -1,12 +1,13 @@
 /**
- * Agent 运行时 — 流式事件契约
+ * Agent runtime — streaming event contract.
  *
- * 设计说明（对应 docs/proposal/04-详细设计.md）：
- * 运行时内部使用「单一事件队列 + 三路过滤迭代器」替代 deepagents 的 streamEvents(v3) 契约，
- * 保持现有 stream-producers 的消费模型（消息/工具/子代理三路并发）。
+ * Design notes:
+ * The runtime internally uses a "single event queue + three-way filtering iterators" instead of
+ * the streamEvents(v3) contract, keeping the existing stream-producers consumption model
+ * (messages / tools / subagents running on three concurrent channels).
  */
 
-/** 主代理消息流记录（文本 / 推理 / 工具块 / 模型请求重试进度） */
+/** Main-agent message stream record (text / reasoning / tool block / model retry progress) */
 export type MessageRecord =
   | { kind: 'reasoning'; text: string }
   | { kind: 'text'; text: string }
@@ -14,7 +15,7 @@ export type MessageRecord =
   | { kind: 'tool_args'; index: number }
   | { kind: 'retry_attempt'; attempt: number; retries: number }
 
-/** 工具调用记录（output 为 Promise，工具完成时解析为字符串） */
+/** Tool call record (output is a Promise that resolves to a string when the tool completes) */
 export interface ToolCallRecord {
   kind: 'tool_call'
   name: string
@@ -22,15 +23,16 @@ export interface ToolCallRecord {
   callId: string
   output: Promise<string>
   /**
-   * 本次工具结果携带的图像（read_image 等媒体工具）。
+   * Images carried by this tool result (media tools such as read_image).
    *
-   * 与 output 同生命周期：工具执行完才 resolve。流生产者把它投影进完成态工具块，
-   * UI 渲染缩略图、历史回放重新注入模型上下文。
+   * Same lifetime as output: resolves only after the tool finishes. Stream producers project it
+   * into the completed tool block; the UI renders thumbnails and history replay re-injects them
+   * into the model context.
    */
   images?: Promise<import('./image-tool').ToolImage[]>
 }
 
-/** 子代理流记录（causeId = 派遣该子代理的 task 工具调用 ID） */
+/** Subagent stream record (causeId = ID of the task tool call that dispatched this subagent) */
 export type SubAgentRecord =
   | { kind: 'sub_start'; name: string; causeId: string; description?: string }
   | { kind: 'sub_reasoning'; name: string; causeId: string; text: string }
@@ -38,7 +40,7 @@ export type SubAgentRecord =
   | { kind: 'sub_tool_call'; name: string; causeId: string; tool: ToolCallRecord }
   | { kind: 'sub_end'; name: string; causeId: string; output: string }
   | {
-      /** 阶段一：子代理模型吐出工具名（参数构建开始） */
+      /** Stage one: the subagent model emits the tool name (argument construction starts) */
       kind: 'sub_tool_block_start'
       name: string
       causeId: string
@@ -47,24 +49,24 @@ export type SubAgentRecord =
       id?: string
     }
   | {
-      /** 阶段二：子代理工具参数增量（节流保活用） */
+      /** Stage two: subagent tool argument deltas (throttled keepalive) */
       kind: 'sub_tool_args'
       name: string
       causeId: string
       index: number
     }
 
-/** 统一运行时事件（单一队列元素） */
+/** Unified runtime event (single queue element) */
 export type RuntimeRecord = MessageRecord | ToolCallRecord | SubAgentRecord
 
-/** 运行时三路流（与 stream-producers 的消费契约一一对应） */
+/** Runtime three-way streams (one-to-one with the stream-producers consumption contract) */
 export interface RuntimeStream {
-  /** 主代理消息流：推理增量 / 文本增量 / 工具块开始 / 工具参数增量 */
+  /** Main-agent message stream: reasoning/text deltas, tool block starts, tool arg deltas */
   messages: AsyncIterable<MessageRecord>
-  /** 主代理工具调用流：executing → completed 状态由输出 Promise 驱动 */
+  /** Main-agent tool call stream: executing → completed state is driven by the output Promise */
   toolCalls: AsyncIterable<ToolCallRecord>
-  /** 子代理活动流 */
+  /** Subagent activity stream */
   subagents: AsyncIterable<SubAgentRecord>
-  /** 图执行错误（执行失败时设置，供调用方透传到前端） */
+  /** Graph execution error (set on failure; callers propagate it to the frontend) */
   error?: Error
 }

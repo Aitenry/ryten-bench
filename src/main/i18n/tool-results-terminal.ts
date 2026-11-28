@@ -1,12 +1,13 @@
 import { getMainLanguage } from './index'
 
 /**
- * 持久终端工具（terminal_*）文案。
+ * Text for the persistent terminal tools (terminal_*).
  *
- * 中文是源语言，英文树用 `typeof` 约束键一致。命令输出属于用户数据、原样返回，不翻译。
+ * Chinese is the source language; the English tree uses `typeof` to keep every key present.
+ * Command output is user data and is returned verbatim, so it is never translated.
  */
 export const zhCNTerminalTexts = {
-  /** 档位不足时的拒绝（A 方案：只有完全权限档可用） */
+  /** Rejection when the permission mode is too low: only full access can run it */
   denied:
     '当前权限档位是「{{mode}}」。持久终端会以你的身份执行任意命令、且不做隔离，因此只在「完全权限」档可用——请让用户切换到该档位后重试。',
   modeReadOnly: '只读',
@@ -25,14 +26,14 @@ export const zhCNTerminalTexts = {
   tooLongCommand: '命令过长（上限 {{max}} 字符）。',
   nulCommand: '命令包含非法字符（NUL）。',
   spawnFailed: 'shell 启动失败：{{message}}',
-  /** terminal_send 结果 */
+  /** terminal_send result */
   sendHeader: '## 终端输出（{{id}}）',
   timedOut:
     '⏱ 等待 {{wait}}ms 仍未结束：命令可能还在运行。用 terminal_read 继续读取输出；不要重复发送同一条命令。',
   outputEmpty: '（本轮没有输出）',
   binaryNote: '（命令输出看起来是二进制内容，正文已省略，共 {{chars}} 字符）',
   unreadNote: '（还有 {{chars}} 字符未读，可用 terminal_read 读取）',
-  /** terminal_read 结果 */
+  /** terminal_read result */
   readHeader: '## terminal_read（{{id}}）',
   readEmpty: '（没有未读输出）',
   readTruncated: '（本次读取有截断，剩余内容仍在缓冲中）',
@@ -90,7 +91,7 @@ export const enUSTerminalTexts: typeof zhCNTerminalTexts = {
   none: '—'
 }
 
-/** 按当前界面语言取终端工具文案 */
+/** Return the terminal tool texts for the current UI language */
 export function getTerminalToolTexts(): typeof zhCNTerminalTexts {
   return getMainLanguage() === 'en-US' ? enUSTerminalTexts : zhCNTerminalTexts
 }

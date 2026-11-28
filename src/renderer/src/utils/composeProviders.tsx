@@ -5,7 +5,7 @@ type ProviderTuple<P = any> =
   [React.ComponentType<P>, P?] | [React.ComponentType<{ children: React.ReactNode }>]
 
 /**
- * 将多个 Provider 组合为一个，消除嵌套层级
+ * Combine multiple Providers into one, removing nested levels
  * @example
  * const AppProviders = composeProviders(
  *   [ProviderA, { value: someValue }],

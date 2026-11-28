@@ -44,8 +44,8 @@ import type {
 // Stable references — prevent ReactMarkdown from re-rendering due to new array on each render
 const remarkPlugins = [remarkGfm, remarkMath, remarkMathBridge, remarkMdxSource]
 
-// sanitize 先于 highlight/katex：KaTeX 输出与 hljs 类名不再被剥掉；
-// 白名单需放行 remarkMathBridge 生成的 .math 类名（rehype-katex 依赖它匹配）
+// sanitize runs before highlight/katex so KaTeX output and hljs class names are not stripped;
+// the allowlist must pass .math class names from remarkMathBridge, which rehype-katex matches on
 const sanitizeSchema = {
   ...defaultSchema,
   attributes: {
@@ -59,7 +59,7 @@ const rehypePlugins: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, sanitizeSchema] as unknown as Pluggable,
   rehypeHighlight,
-  // strict:'ignore'：与 MarkdownLoad 一致，避免中文入数学模式的告警刷屏
+  // strict:'ignore' (same as MarkdownLoad): avoid warning spam when Chinese text hits math mode
   [rehypeKatex, { strict: 'ignore' }]
 ]
 
@@ -320,7 +320,7 @@ const MarkdownView = React.memo(
     const contentRef = useRef<HTMLDivElement>(null)
     const headings = useMemo(() => parseHeadings(content), [content])
 
-    // 构建文档顺序的扁平 ID 列表，与 ReactMarkdown 渲染顺序一致
+    // Build a flat ID list in document order, matching ReactMarkdown's render order
     const headingFlatIds = useMemo(() => {
       const ids: string[] = []
       const traverse = (items: HeadingItem[]): void => {
@@ -465,7 +465,7 @@ const MarkdownView = React.memo(
     }
 
     const handleNavigate = (id: string): void => {
-      // id 格式为 "h-{index}"，直接按 DOM 中标题元素的索引定位，不依赖 DOM id 属性
+      // id format is "h-{index}": locate by heading index in the DOM, not by the id attribute
       const index = parseInt(id.split('-')[1], 10)
       if (isNaN(index)) return
       const allHeadings = contentRef.current?.querySelectorAll('h1, h2, h3, h4, h5, h6')
@@ -526,7 +526,7 @@ const MarkdownView = React.memo(
         ...props
       }: React.ComponentPropsWithoutRef<'pre'>): React.ReactNode {
         const codeText = extractTextFromChildren(children)
-        // Mermaid 代码块 → 渲染为图表
+        // Mermaid code block → render as a diagram
         const codeChild = React.Children.toArray(children).find((c): c is React.ReactElement =>
           React.isValidElement(c)
         )

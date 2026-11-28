@@ -1,18 +1,18 @@
--- 0007：把 task-planner / music-player 两组表从**本仓库的 schema** 里摘出去
--- （它们已改成独立插件，发布在 Lattice 插件中心，建表由插件自带
--- 的 `main/db/ddl.ts` 幂等完成）。
+-- 0007: remove the task-planner / music-player table groups from **this repository's schema**
+-- (they are now separate plugins published in the plugin center; their tables are created
+-- idempotently by the plugin's own `main/db/ddl.ts`).
 --
--- 为什么这条迁移是空的：
---   drizzle-kit 因为 schema 里不再声明这四张表，自动生成了
+-- Why this migration is empty:
+--   drizzle-kit no longer sees these four tables in the schema, so it generated
 --     DROP TABLE "planner_dependencies" CASCADE;  DROP TABLE "planner_tasks" CASCADE;
 --     DROP TABLE "music_folders" CASCADE;         DROP TABLE "music_tracks" CASCADE;
---   而这些表里是**用户数据**（计划任务、歌单、曲目）——照原样执行会把现有用户的计划与
---   音乐库删光。所以四条删表语句被刻意去掉，只保留这条迁移把 drizzle 的快照推进到新状态
---   （drizzle/meta/0007_snapshot.json 已不含这四张表），下一次 generate 就不会再想删它们。
+--   but these tables hold **user data** (plans, playlists, tracks): running them would wipe users'
+--   plans and music libraries. The four DROPs were removed deliberately, keeping only the snapshot
+--   advance (meta/0007_snapshot.json no longer lists them), so the next generate won't drop them.
 --
--- 落到两种库上的效果：
---   老库：四张表与数据原样保留；把插件装回来（设置 → 插件 → 插件中心安装）立刻可用。
---   新库：0000_baseline.sql 仍会建这四张空表（历史迁移不可修改），插件自带的
---         `CREATE TABLE IF NOT EXISTS` 命中即 no-op，功能与「插件自己建表」等价。
---   —— 等以后做一次 schema 收敛（新 baseline）时再把这几张表彻底移出迁移链。
+-- Effect on both kinds of database:
+--   Existing DB: tables and data kept as-is; reinstalling the plugin restores it immediately.
+--   New DB: 0000_baseline.sql still creates these four empty tables (migrations are immutable);
+--         the plugin's own `CREATE TABLE IF NOT EXISTS` no-ops, equal to self-created tables.
+--   — A future schema consolidation (new baseline) can move these tables out of the chain.
 SELECT 1;

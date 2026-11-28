@@ -5,15 +5,16 @@ import { useTranslation } from '@renderer/i18n'
 
 interface ScrollToBottomButtonProps {
   visible: boolean
-  /** 当前话题是否正在流式输出：true 时按钮周边显示旋转光圈 */
+  /** Whether the current topic is streaming: when true a spinning ring is shown around the button */
   streaming: boolean
   isDarkMode: boolean
   onClick: () => void
 }
 
 /**
- * 滚动到底部悬浮按钮：圆形透明毛玻璃。
- * 点击回到最新消息；当前话题流式输出时，按钮周边有一圈沿主题色旋转的光弧。
+ * Floating "scroll to bottom" button: round, transparent, frosted glass.
+ * Clicking returns to the latest message; while the current topic is streaming, a light arc in
+ * the theme color spins around the button.
  */
 const ScrollToBottomButton: React.FC<ScrollToBottomButtonProps> = ({
   visible,

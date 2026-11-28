@@ -1,8 +1,9 @@
 import type { ModelCapabilities, ModelMetadata } from '../types/provider'
 
 /**
- * 模型请求参数预设 / 协议能力判定统一从共享模块转出（主进程与渲染层同源，
- * 避免「界面能选、后端不认」这类漂移）。
+ * Model request parameter presets / protocol capability checks are re-exported from the
+ * shared module (main process and renderer share one source, avoiding drift such as
+ * "selectable in the UI but rejected by the backend").
  */
 export {
   CONTEXT_WINDOW_PRESETS,
@@ -26,7 +27,7 @@ export {
   type ReasoningEffort
 } from '../../../shared/model-params'
 
-/** Token 数量的紧凑展示：4000 → 4k，128000 → 128k，1000000 → 1M */
+/** Compact token counts: 4000 → 4k, 128000 → 128k, 1000000 → 1M */
 export function formatTokenCount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   if (value >= 1_000_000) {
@@ -41,16 +42,18 @@ export function formatTokenCount(value: number | null | undefined): string {
 }
 
 /**
- * metadata 的 capabilities 中可选能力项（与 models-profile.json 字段一致）。
+ * Selectable capability entries in metadata.capabilities (matching the
+ * models-profile.json fields).
  *
- * 只保留 key：原先的 `label` 中文字面量只被已删除的 `getCapabilityLabel` 使用，
- * 界面展示名一律走词条（`modelSettings.capabilityBadge.*`）。
+ * Only the key is kept: the former `label` Chinese literals were used only by the removed
+ * `getCapabilityLabel`, and display names always come from i18n entries
+ * (`modelSettings.capabilityBadge.*`).
  */
 export interface CapabilityOption {
   key: keyof ModelCapabilities
 }
 
-/** 编辑表单中用到的能力选项 */
+/** Capability options used in the edit form */
 export const CAPABILITY_OPTIONS: CapabilityOption[] = [
   { key: 'supports_image_input' },
   { key: 'supports_audio_input' },
@@ -66,7 +69,7 @@ export const CAPABILITY_OPTIONS: CapabilityOption[] = [
   { key: 'supports_embeddings' }
 ]
 
-/** 表格行内展示的关键能力标签（仅取对功能影响最大的几项） */
+/** Key capability badges shown inline in table rows (only the ones that matter most) */
 export const CAPABILITY_BADGES: CapabilityOption[] = [
   { key: 'supports_image_input' },
   { key: 'supports_function_calling' },
@@ -75,13 +78,13 @@ export const CAPABILITY_BADGES: CapabilityOption[] = [
   { key: 'supports_embeddings' }
 ]
 
-/** 安全读取能把 capabilities 对象；非对象（缺失/异常）返回空对象 */
+/** Safely read the capabilities object; returns an empty object for non-objects (missing/invalid) */
 export function getCapabilities(metadata: ModelMetadata | null | undefined): ModelCapabilities {
   const caps = metadata?.capabilities
   return caps && typeof caps === 'object' ? caps : {}
 }
 
-/** 是否为向量/嵌入模型：元数据声明 type=embedding 或 supports_embeddings，或以名称/模型名兜底 */
+/** Whether this is a vector/embedding model: metadata declares type=embedding or supports_embeddings, otherwise fall back to the name/model string */
 export function isEmbeddingProvider(p: {
   name?: string
   model?: string
@@ -96,7 +99,7 @@ export function isEmbeddingProvider(p: {
   return lowered.includes('embedding')
 }
 
-/** 工具栏/视觉等能力判断：元数据缺失时为 false（由用户自行填写元数据后生效） */
+/** Capability check for toolbar/vision etc.: false when metadata is missing (takes effect once the user fills in metadata) */
 export function supportsCapability(
   metadata: ModelMetadata | Record<string, unknown> | null | undefined,
   key: keyof ModelCapabilities
@@ -105,7 +108,7 @@ export function supportsCapability(
   return caps[key] === true
 }
 
-/** 模型展示名称：优先使用元数据里的 display_name（档案/用户填写），缺省回退 name */
+/** Model display name: prefer display_name from metadata (profile/user-provided), otherwise fall back to name */
 export function getProviderDisplayName(p: {
   name?: string
   metadata?: ModelMetadata | Record<string, unknown> | null
@@ -117,33 +120,34 @@ export function getProviderDisplayName(p: {
   return p?.name ?? ''
 }
 
-/* ======== 供应商品牌色（唯一来源，图标/字母徽章共用；改色只改这里） ======== */
+/* ======== Provider brand colors (single source of truth shared by icons/monogram badges; change colors only here) ======== */
 
 /**
- * provider 协议标识 → 官方品牌色（亮色主题用）。
- * 已验证来源：UIColours 官方品牌页 / 2025 官方品牌重塑新闻 / 厂商官网主色。
+ * Provider protocol id → official brand color (for the light theme).
+ * Verified sources: official UIColours brand pages / 2025 official rebrand announcements /
+ * vendor site primary colors.
  */
 export const PROVIDER_BRAND_COLORS: Record<string, string> = {
-  // —— 黑白单色品牌：官方早已弃用彩色，暗色主题下自动换浅色（见 MONOCHROME_PROVIDERS） ——
-  // OpenAI：2025 品牌重塑后为黑白单色（旧绿 #10a37f 已废弃）
+  // —— Monochrome black-and-white brands: color was officially abandoned; light variants are used in dark theme (see MONOCHROME_PROVIDERS) ——
+  // OpenAI: monochrome since the 2025 rebrand (the old green #10a37f is deprecated)
   openai: '#1e1f22',
-  // xAI (Grok)：官方 Near Black #1E1F22 / Warm White #F9F8F7（UIColours）
+  // xAI (Grok): official Near Black #1E1F22 / Warm White #F9F8F7 (UIColours)
   xai: '#1e1f22',
-  // Ollama：黑色羊驼标
+  // Ollama: black llama mark
   ollama: '#1e1f22',
-  // OpenRouter：2025 包豪斯品牌焕新为黑白几何标识
+  // OpenRouter: the 2025 Bauhaus refresh turned it into a black-and-white geometric mark
   openrouter: '#1e1f22',
-  // —— 彩色品牌（UIColours 官方值） ——
+  // —— Colored brands (official UIColours values) ——
   deepseek: '#4d6bfe', // DeepSeek Blue
-  mistral: '#ff7000', // Mistral 官方橙（旧 #ff9900 偏黄）
+  mistral: '#ff7000', // Mistral official orange (the old #ff9900 was too yellow)
   anthropic: '#d97757', // Anthropic Burnt Orange
   'google-genai': '#4285f4', // Google Blue
   'google-vertexai': '#4285f4',
-  groq: '#f55036', // Groq 橙红
-  perplexity: '#20808d', // Perplexity 青绿
-  // —— 国内厂商：近似官方主色的常用值（如有出入可在此微调） ——
+  groq: '#f55036', // Groq orange-red
+  perplexity: '#20808d', // Perplexity teal
+  // —— Chinese vendors: common values approximating the official primary colors (tweak here if they differ) ——
   minimax: '#4e28f5',
-  moonshot: '#2d5bff', // Kimi 星光蓝紫（原误用 OpenAI 旧绿）
+  moonshot: '#2d5bff', // Kimi starlight blue-purple (previously misused OpenAI's old green)
   zhipu: '#3859ff',
   aliyun: '#ff6a00',
   qianfan: '#2932e1',
@@ -154,10 +158,10 @@ export const PROVIDER_BRAND_COLORS: Record<string, string> = {
   lmstudio: '#4d4d4d'
 }
 
-/** 官方为黑白单色的品牌：暗色主题下用浅色以保证可见性 */
+/** Brands that are officially monochrome: use light variants in dark theme for visibility */
 const MONOCHROME_PROVIDERS = new Set(['openai', 'xai', 'ollama', 'openrouter'])
 
-/** 暗色主题下的品牌色（黑白单色品牌换暖白，与编辑部暖纸+墨体系一致） */
+/** Brand colors for the dark theme (monochrome brands switch to warm white, matching the warm-paper-and-ink editorial system) */
 const PROVIDER_DARK_COLORS: Record<string, string> = {
   openai: '#f9f8f7',
   xai: '#f9f8f7',
@@ -166,8 +170,9 @@ const PROVIDER_DARK_COLORS: Record<string, string> = {
 }
 
 /**
- * 供应商图标/徽章品牌色：亮色取官方色，黑白单色品牌在暗色下换浅色。
- * 未收录的协议返回 undefined，调用方自行降级。
+ * Brand color for provider icons/badges: official color in the light theme, light variants
+ * for monochrome brands in the dark theme.
+ * Returns undefined for unknown protocols; the caller decides the fallback.
  */
 export function getProviderColor(
   providerType: string | undefined,
@@ -180,7 +185,7 @@ export function getProviderColor(
   return PROVIDER_BRAND_COLORS[providerType]
 }
 
-/** 供应商无图标时的字母 monogram：连字符/下划线/驼峰分词，多词各取词首字母，单词取前两字母（大写） */
+/** Letter monogram when a provider has no icon: split on hyphens/underscores/camelCase, take the initial of each word for multiple words, the first two letters (uppercased) for a single word */
 export function getProviderMonogram(providerType: string): string {
   if (!providerType) return '?'
   const tokens = providerType
@@ -190,7 +195,7 @@ export function getProviderMonogram(providerType: string): string {
     .filter((t) => /[a-zA-Z]/.test(t))
   if (tokens.length === 0) return providerType.slice(0, 1).toUpperCase()
   if (tokens.length === 1) {
-    // 数字开头的词（如 '123ai'）取首个字母簇，避免 '12' 式哑字
+    // For words starting with digits (e.g. '123ai') take the first letter cluster, avoiding dumb output like '12'
     const word = tokens[0]
     const letterCluster = word.match(/[a-zA-Z]+/)
     const cluster = letterCluster && letterCluster.index ? letterCluster[0] : word

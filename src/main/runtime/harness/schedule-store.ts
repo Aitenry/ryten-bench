@@ -1,12 +1,14 @@
 ﻿/**
- * 定时任务存储的**门面**（facade）：业务层（工具 / 执行器 / IPC）只依赖这个接口。
+ * **Facade** for scheduled-task storage: the business layer (tool / runner / IPC) depends only on
+ * this interface.
  *
- * 真正的存储后端由系统装配层注入：
- * - 应用运行期：`DbScheduleStore`（`src/main/database/schedule-db.ts`，PGlite 表）；
- * - 测试：内存假实现（直接 `configureScheduleStoreBackend(fake)`）。
+ * The real backend is injected by the system wiring layer:
+ * - app runtime: `DbScheduleStore` (`src/main/database/schedule-db.ts`, PGlite tables);
+ * - tests: an in-memory fake (just `configureScheduleStoreBackend(fake)`).
  *
- * 这样工具与 runner 的模块图里**不会**出现 drizzle / PGlite，测试与打包都更轻；
- * 未装配后端时 `isScheduleStoreConfigured()` 为 false，工具给出「暂不可用」而不是静默空表。
+ * This keeps drizzle / PGlite out of the module graph of the tool and runner, which keeps tests
+ * and packaging lighter; when no backend is configured, `isScheduleStoreConfigured()` is false and
+ * the tool reports "temporarily unavailable" instead of silently returning an empty table.
  */
 import type {
   ScheduleCreateInput,
@@ -19,7 +21,7 @@ import type {
 export type { ScheduleCreateInput, ScheduleRunRecord, ScheduleRunStatus, ScheduledTask, ScheduledTaskPatch }
 export { MAX_SCHEDULED_TASKS, DEFAULT_RUNS_PAGE_SIZE } from './schedule-types'
 
-/** 存储后端（异步；数据库实现与内存实现共用） */
+/** Storage backend (async; shared by the database and in-memory implementations) */
 export interface ScheduleStore {
   list(): Promise<ScheduledTask[]>
   get(id: string): Promise<ScheduledTask | undefined>
@@ -36,39 +38,39 @@ export interface ScheduleStore {
       detail?: string | null
     }
   ): Promise<ScheduledTask | undefined>
-  /** 永久执行记录（倒序分页） */
+  /** Permanent run records (paginated, newest first) */
   listRuns(taskId: string, limit?: number, offset?: number): Promise<ScheduleRunRecord[]>
   countRuns(taskId: string): Promise<number>
 }
 
-/** 当前注入的后端（系统装配时设置；退出时清空） */
+/** Currently injected backend (set by system wiring; cleared on exit) */
 let backend: ScheduleStore | null = null
 
-/** 注入/替换存储后端（传 undefined 表示未装配） */
+/** Inject/replace the storage backend (undefined means not configured) */
 export function configureScheduleStoreBackend(next?: ScheduleStore): void {
   backend = next ?? null
 }
 
-/** 是否已装配后端（工具据此给出「暂不可用」提示） */
+/** Whether a backend is configured (the tool uses this to report "temporarily unavailable") */
 export function isScheduleStoreConfigured(): boolean {
   return backend !== null
 }
 
-/** 取后端；未装配时抛错（调用方负责翻成用户可读文案） */
+/** Get the backend; throws when not configured (the caller turns this into user-readable text) */
 function requireBackend(): ScheduleStore {
   if (!backend) throw new Error('schedule store is not configured')
   return backend
 }
 
-/** 生成任务 id（时间 + 随机后缀，稳定可读） */
+/** Generate a task id (time plus random suffix, stable and readable) */
 export function createTaskId(): string {
   return `sched-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-/** 进程级门面：业务层统一从这里访问存储 */
+/** Process-level facade: the business layer accesses storage only through this */
 export const scheduleStore: ScheduleStore = {
-  // 全部包成 async：未装配后端时以 **Promise reject** 的形式失败（而不是同步 throw），
-  // 工具层/测试里的 await / assert.rejects 语义才一致。
+  // Everything is wrapped in async: without a backend it fails as a **Promise reject** (not a
+  // synchronous throw), so await / assert.rejects behave consistently in the tool layer and tests.
   list: async () => requireBackend().list(),
   get: async (id) => requireBackend().get(id),
   create: async (input) => requireBackend().create(input),

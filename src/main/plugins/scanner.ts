@@ -5,10 +5,11 @@ import logger from 'electron-log'
 import { isValidManifest, type PluginManifest } from '../../shared/plugin/types'
 
 /**
- * 外部插件目录扫描（application 目录约定模式，参照 harness/runtime/skills.ts）。
+ * External plugin directory scan (application directory convention pattern).
  *
- * 目录约定：userData/plugins/<id>/plugin.json。
- * 目录名即插件 id（manifest.id 需与目录名一致），非法清单跳过并告警。
+ * Directory convention: userData/plugins/<id>/plugin.json.
+ * The directory name is the plugin id (manifest.id must match the directory name); invalid
+ * manifests are skipped with a warning.
  */
 
 export interface ScannedExternalPlugin {
@@ -18,29 +19,32 @@ export interface ScannedExternalPlugin {
 }
 
 /**
- * **宿主保留 id**：
- * - `host`：`plugin://host/ui.js` 渲染层宿主 UI 桥的地址段，用户插件不能占用；
- * - `harness` / `notes`：已升级为系统级功能，由 `src/main/system/` 直接装配，
- *   不再从 `userData/plugins/**` 扫描或装载（旧版本残留的插件包会被忽略）。
+ * **Host reserved ids**:
+ * - `host`: the address segment of the renderer host UI bridge at `plugin://host/ui.js`, which
+ *   user plugins must not take over;
+ * - `harness` / `notes`: upgraded to system-level features, assembled directly by
+ *   `src/main/system/`, no longer scanned or loaded from `userData/plugins/**` (leftover plugin
+ *   packages from older versions are ignored).
  */
 export const RESERVED_PLUGIN_IDS: ReadonlySet<string> = new Set(['host', 'harness', 'notes'])
 
 /**
- * 已告警过的保留 id。
+ * Reserved ids that have already been warned about.
  *
- * 扫描是热路径（插件列表、查找单插件都会走），旧版本残留的 `userData/plugins/harness`
- * 会跟着每次扫描各告警一次，日志被刷屏反而掩盖真正的问题。按 id 只提示一次即可。
+ * Scanning is a hot path (the plugin list and single-plugin lookups both go through it), and a
+ * leftover `userData/plugins/harness` from an older version would warn on every scan, flooding the
+ * log and hiding real problems. Warning once per id is enough.
  */
 const warnedReservedIds = new Set<string>()
 
-/** 外部插件根目录（userData/plugins），确保存在 */
+/** External plugin root directory (userData/plugins), created if needed */
 export function externalPluginsRoot(): string {
   const root = path.join(app.getPath('userData'), 'plugins')
   fs.mkdirSync(root, { recursive: true })
   return root
 }
 
-/** 扫描全部外部插件（非法目录/清单跳过） */
+/** Scan all external plugins (invalid directories/manifests are skipped) */
 export function scanExternalPlugins(): ScannedExternalPlugin[] {
   const root = externalPluginsRoot()
   const out: ScannedExternalPlugin[] = []
@@ -62,12 +66,13 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
         continue
       }
       const manifest = raw as unknown as PluginManifest
-      // 目录名与 manifest.id 一致性（协议路由按 manifest.id 寻址）
+      // Directory name and manifest.id consistency (protocol routing addresses by manifest.id)
       if (manifest.id !== entry.name) {
         logger.warn(`[Plugins] ${entry.name}: manifest.id(${manifest.id}) does not match directory name, skipping`)
         continue
       }
-      // 保留 id（host 是宿主 UI 桥地址段；harness/notes 是系统级功能）：合法清单也不装载
+      // Reserved ids (host is the host UI bridge address segment; harness/notes are system-level
+      // features): valid manifests are not loaded either
       if (RESERVED_PLUGIN_IDS.has(entry.name)) {
         if (!warnedReservedIds.has(entry.name)) {
           warnedReservedIds.add(entry.name)
@@ -86,27 +91,28 @@ export function scanExternalPlugins(): ScannedExternalPlugin[] {
   return out
 }
 
-/** 按 id 查找单个外部插件 */
+/** Find a single external plugin by id */
 export function findExternalPlugin(id: string): ScannedExternalPlugin | null {
   return scanExternalPlugins().find((p) => p.id === id) ?? null
 }
 
 /**
- * 已安装插件的 id 集合（缓存）。
+ * Installed plugin id set (cached).
  *
- * 为什么缓存：插件面板的列表合并要在每次 `plugins-list` 时问「哪些 id 已经装在
- * `userData/plugins/` 下」，而每次都真去 readdir + 解析 N 份 `plugin.json` 太浪费。
- * 安装 / 卸载 / 重装目录之后调 `invalidateInstalledPluginIds()` 刷新。
+ * Why cache: the plugin panel's list merge asks "which ids are already installed under
+ * `userData/plugins/`" on every `plugins-list`, and really doing readdir + parsing N
+ * `plugin.json` files each time is too wasteful. Call `invalidateInstalledPluginIds()` to refresh
+ * after install / uninstall / reinstalling the directory.
  */
 let installedIdsCache: Set<string> | null = null
 
-/** 已安装插件的 id 集合 */
+/** Installed plugin id set */
 export function installedPluginIds(): Set<string> {
   installedIdsCache ??= new Set(scanExternalPlugins().map((p) => p.id))
   return installedIdsCache
 }
 
-/** 目录被改动过（安装/卸载/重装）后刷新缓存 */
+/** Refresh the cache after the directory was changed (install/uninstall/reinstall) */
 export function invalidateInstalledPluginIds(): void {
   installedIdsCache = null
 }

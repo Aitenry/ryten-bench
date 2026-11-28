@@ -1,7 +1,8 @@
-// ⚠️ 必须是第一条 import：environment 在**模块求值阶段**就把「开发 / 打包」两套 userData
-// 定下来（开发 = <appData>/ryten-bench-dev，打包 = <appData>/ryten-bench）。
-// 下面的 ./plugins/host 会经由 ./context（electron-store）和数据库模块在求值时读
-// app.getPath('userData')；晚一步，设置/数据库/插件/账号/日志就会写进另一套环境。
+// ⚠️ Must be the first import: environment pins the dev/packaged userData pair at **module
+// evaluation time** (dev = <appData>/ryten-bench-dev, packaged = <appData>/ryten-bench).
+// The ./plugins/host import below reads app.getPath('userData') during evaluation via
+// ./context (electron-store) and the database modules; one step later and
+// settings/database/plugins/account/logs would be written into the other environment.
 import { currentEnvironment, currentUserDataDir } from './environment'
 import { app, BrowserWindow, ipcMain, crashReporter } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
@@ -17,18 +18,21 @@ import { setupWeather } from './weather'
 import { bootstrapStorageLayout } from './storage'
 import { initAccountProfile } from './profiles/runtime'
 
-// 单实例锁：防止多开，同时确保安装程序能正确检测和关闭进程。
-// 锁的键就是 userData：开发态（ryten-bench-dev）与打包态（ryten-bench）互不影响，
-// 各自都能开一个实例；同一套数据目录里的两个进程必须只有一个。
+// Single-instance lock: prevents multiple launches and lets the installer detect and close the
+// running process. The lock key is userData, so dev (ryten-bench-dev) and packaged
+// (ryten-bench) are independent and may each run one instance; two processes must never share
+// a single data directory.
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
-  // 必须 app.exit 立即结束：app.quit() 只是排队退出，本模块后面的 whenReady 链仍会跑一遍
-  // ——PGlite 没有跨进程锁，两个进程同时打开同一个数据目录会写出坏库。
-  // （2026-11-24 实测：旧版安装包还开着时启动新包，第二实例会短暂初始化并打开同一个库。）
+  // Must end immediately via app.exit: app.quit() only queues the exit and this module's
+  // whenReady chain still runs once -- PGlite has no cross-process lock, so two processes opening
+  // the same data directory corrupt the database.
+  // (Measured on 2026-11-24: launching a new build while an older installer is still running lets
+  // the second instance briefly initialize and open the same database.)
   app.exit(0)
 } else {
   app.on('second-instance', () => {
-    // 再次启动时恢复主窗口（包括隐藏在系统托盘中的情况）
+    // On a second launch, restore the main window (including when hidden in the system tray)
     const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
     if (win) {
       if (win.isMinimized()) win.restore()
@@ -40,21 +44,25 @@ if (!gotTheLock) {
 
 logger.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}'
 logger.transports.file.fileName = 'main.log'
-// 日志轮转：electron-log 默认 1MB + 单份 .old，长时间运行会把上一次崩溃现场挤出窗口。
-// 放宽到 5MB（仍保留一份 .old，总量有界），保证崩溃栈/错误上下文至少能留最近一轮。
+// Log rotation: electron-log defaults to 1MB plus a single .old file, so a long-running app
+// pushes the previous crash scene out of the window. Raise it to 5MB (still one .old file, so the
+// total stays bounded) to keep at least the latest crash stack / error context.
 logger.transports.file.maxSize = 5 * 1024 * 1024
 
 /**
- * 进程级崩溃兜底：未捕获异常 / 未处理拒绝至少要落进 `main.log`。
+ * Process-level crash backstop: uncaught exceptions / unhandled rejections must at least land in
+ * `main.log`.
  *
- * 为什么必须在这里：打包版没有 stderr 可看，而此前应用级 `uncaughtException` /
- * `unhandledRejection` 处理器为 0——主进程任意一处后台 Promise reject 都可能是
- * 「窗口突然没了」却查不到根因。
+ * Why it has to live here: packaged builds have no visible stderr, and the app previously had
+ * zero `uncaughtException` / `unhandledRejection` handlers -- any background Promise rejection in
+ * the main process could mean the window "suddenly vanished" with no traceable root cause.
  *
- * 策略：
- * - uncaughtException 记完整栈后**受控退出**（主进程状态已不可信，继续跑可能写坏数据）；
- * - unhandledRejection 只记日志不退出（大量后台任务是 fire-and-forget，退出会把
- *   一次可恢复的失败升级成崩溃），并做条数上限避免异常循环刷爆日志。
+ * Strategy:
+ * - uncaughtException logs the full stack, then **exits in a controlled way** (main-process state
+ *   is no longer trustworthy; continuing could write bad data);
+ * - unhandledRejection only logs and does not exit (many background tasks are fire-and-forget;
+ *   exiting would upgrade a recoverable failure into a crash), with a count cap so a rejection
+ *   loop cannot flood the log.
  */
 process.on('uncaughtException', (err) => {
   logger.error('[Main] uncaughtException:', err)
@@ -76,30 +84,33 @@ process.on('unhandledRejection', (reason) => {
   }
 })
 
-// 崩溃转储本地收集（修复：渲染进程崩溃后只有 exitCode、无 dump 可查根因）。
-// 仅落盘不上传：dumps 保存于 userData/Crashpad/reports
+// Collect crash dumps locally (previously a renderer crash left only an exitCode and no dump to
+// inspect). Write to disk only, never upload: dumps live in userData/Crashpad/reports.
 try {
   crashReporter.start({ uploadToServer: false })
 } catch (err) {
   logger.warn('[Main] Failed to start crashReporter:', err)
 }
 
-// 退出前保存流式数据 / 全窗口关闭退出
+// Save streaming data before exit / quit once all windows are closed
 registerLifecycleHooks()
 
-// plugin:// 自定义协议（外部插件文件服务）：scheme 特权声明必须在 app ready 之前
+// plugin:// custom protocol (serves external plugin files): the scheme privilege declaration must
+// happen before the app is ready
 registerPluginScheme()
 
 /**
- * 开发态的 DevTools 快捷键：Ctrl+Shift+I / ⌘+⌥+I 开关。
+ * Dev-mode DevTools shortcut: Ctrl+Shift+I / Cmd+Alt+I toggles the panel.
  *
- * 为什么需要单独接一条：`@electron-toolkit/utils` 的 `watchWindowShortcuts` 在未打包时
- * **只处理 F12**（而且开发态下它不会拦截 Ctrl+Shift+I）；而 Windows 上主窗口用原生标题栏，
- * `win.setMenu(null)` 把默认菜单一起删了——菜单里的 “Toggle Developer Tools” 也就没了。
- * 结果就是：F12 之外没有任何入口，习惯 Ctrl+Shift+I 的人会觉得“打不开开发者工具”。
+ * Why it needs a separate binding: when unpackaged, `watchWindowShortcuts` from
+ * `@electron-toolkit/utils` **only handles F12** (and in dev it does not intercept Ctrl+Shift+I);
+ * meanwhile the main window uses the native title bar on Windows and `win.setMenu(null)` removes
+ * the default menu, so its "Toggle Developer Tools" entry is gone as well. The result is no entry
+ * point besides F12, so people used to Ctrl+Shift+I think DevTools cannot be opened.
  *
- * 这里只补 Ctrl+Shift+I（F12 仍由上面的 helper 处理，避免同一事件被切换两次）。
- * 打包产物不接这条快捷键：DevTools 在发布版里按设计不可用。
+ * Only Ctrl+Shift+I is added here (F12 is still handled by the helper above, so a single event is
+ * not toggled twice). Packaged builds do not get this shortcut: DevTools is unavailable by design
+ * in release builds.
  */
 function installDevToolsAccelerator(win: BrowserWindow): void {
   if (app.isPackaged) return
@@ -119,7 +130,8 @@ function installDevToolsAccelerator(win: BrowserWindow): void {
 app
   .whenReady()
   .then(async () => {
-    // 环境名与 userData 落点先打一条日志：出问题时「哪套数据被读写」一眼可查。
+    // Log the environment name and userData location first, so a problem immediately shows which
+    // data set is being read and written.
     const environment = currentEnvironment()
     logger.info(
       `[Environment] ${environment.name} | appName=${environment.appName} | ` +
@@ -128,53 +140,63 @@ app
 
     electronApp.setAppUserModelId('com.ryten.bench')
 
-    // 账号级本地数据空间：必须在**任何**数据库/插件/同步数据被读写之前完成对调。
-    // （未登录 = anonymous 容器；换账号后重启，由这里把上一账号的数据换进 profiles/）
+    // Account-level local data space: the swap must complete before **any** database/plugin/sync
+    // data is read or written. (Signed out = the anonymous container; after switching accounts and
+    // restarting, this moves the previous account's data into profiles/.)
     if (!initAccountProfile()) return
 
-    // plugin:// 协议处理器（外部插件静态文件；需在 ready 后注册）
+    // plugin:// protocol handler (static files for external plugins; must register after ready)
     registerPluginProtocolHandler()
 
-    // 默认存储布局：<安装目录>/data/{memory,plugins,skills}（不可写时退回 userData/data）。
-    // 必须早于 initPluginHost()：插件工坊在装载期就会读 harness.pluginsPath 注入运行时。
+    // Default storage layout: <install dir>/data/{memory,plugins,skills} (falls back to
+    // userData/data when not writable). Must run before initPluginHost(): during load the plugin
+    // workshop reads harness.pluginsPath to inject the runtime.
     bootstrapStorageLayout()
 
-    // 文件改动快照目录（userData/file-history）、工具结果详情目录（userData/tool-output）
-    // 与工作区文件监听随「AI 助手」一起装配（`src/main/system/harness.ts`），
-    // 由 `initPluginHost()` 里的 `startSystemModules()` 在窗口创建前启动。
+    // The file-change snapshot dir (userData/file-history), tool-result detail dir
+    // (userData/tool-output) and workspace file watching are assembled with the AI assistant
+    // (`src/main/system/harness.ts`) and started by `startSystemModules()` from `initPluginHost()`
+    // before the window is created.
 
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)
-      // 开发态补 Ctrl+Shift+I（F12 由上面的 helper 处理；Windows 删了菜单后没有别的入口）
+      // Add Ctrl+Shift+I in dev (F12 is handled by the helper above; Windows has no other entry
+      // point once the menu is removed)
       installDevToolsAccelerator(window)
-      // 插件通道白名单：启动期推送早于窗口创建（必然丢包），窗口加载完成后补推一次
+      // Plugin channel allowlist: startup pushes happen before the window exists (so they are
+      // always lost); push once more after the page finishes loading
       window.webContents.on('did-finish-load', () => pushPluginChannels())
     })
 
-    // 注册 IPC：core（window/setting/dialog/provider/plugins）常驻 + 按启用态装载插件宿主
-    // （插件全部来自 `userData/plugins/<id>/` 的磁盘包；启停由 plugins-set-enabled 驱动）
+    // Register IPC: core (window/setting/dialog/provider/plugins) is always on, plus the plugin
+    // host loaded according to enabled state (all plugins come from disk packages under
+    // `userData/plugins/<id>/`; toggling is driven by plugins-set-enabled)
     initPluginHost()
-    // 应用版本（加载页展示）
+    // App version (shown on the loading page)
     ipcMain.handle('app-version', () => app.getVersion())
-    // Mermaid 预览窗口（HTML 模板存于资源文件 ./resource/mermaid-preview.html）
+    // Mermaid preview window (the HTML template lives at ./resource/mermaid-preview.html)
     registerMermaidPreviewIpc()
 
-    // 启动页（用户 2026-11-20 口径）：不再有独立加载窗口。
-    // 先建主窗口并立刻显示（渲染层里盖着 StartupSplash 启动页），
-    // 初始化任务同时在后台跑，进度通过 IPC 推给启动页；全部完成后再进入主界面。
+    // Startup page (per the 2026-11-20 requirement): there is no separate loading window.
+    // Create the main window and show it immediately (StartupSplash is overlaid in the renderer),
+    // run initialization in the background and push progress to the splash over IPC; enter the
+    // main UI only once everything is complete.
     registerStartupIpc()
     createMainWindow()
     void runStartupInitialization()
 
-    // 天气 IPC 与自动刷新只注册/启动一次（主窗口推送；修复：此前随 createMainWindow
-    // 重复调用会二次注册 ipcMain.handle 抛错）
+    // Weather IPC and auto-refresh are registered/started exactly once (pushed to the main window;
+    // previously repeated calls alongside createMainWindow registered ipcMain.handle twice and
+    // threw)
     setupWeather()
 
-    // 系统托盘：关闭窗口可驻留后台（是否驻留由「通用设置 → 系统托盘」控制）
+    // System tray: closing the window can keep the app in the background (whether it does is
+    // controlled by General settings -> System tray)
     createTray()
 
-    // macOS activate：窗口全部关闭后只重建主窗口（初始化只需执行一次；此前重跑
-    // createMainWindow 会二次建库、重复注册 IPC 导致崩溃）
+    // macOS activate: rebuild only the main window after all windows close (initialization runs
+    // once; previously re-running createMainWindow created the database twice and re-registered
+    // IPC, which crashed)
     app.on('activate', function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         createMainWindow()

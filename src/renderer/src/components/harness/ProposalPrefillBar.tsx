@@ -5,13 +5,17 @@ import { useTranslation } from '@renderer/i18n'
 import type { PendingProposalView } from '../../utils/harness/proposal'
 
 /**
- * propose_action 的**输入区预填条**（2026-11-27 用户口径，替代消息流卡片）。
+ * **Input-area prefill bar** for propose_action (user-specified behavior on 2026-11-27, replacing
+ * the message-stream card).
  *
- * 形态：`[ ✦ <AI 推荐内容，可编辑>  ✕  › ]` —— 替换输入框、位于沙箱授权同一位置；
- * - 默认回填第一个动作的 reply（无则 label）；
- * - Enter / › 发送当前内容（走与手动发送同一条管线，生成中会排队）；
- * - ✕ 关闭：不发消息（模型本轮已结束，无需通知），普通输入框立即恢复；
- * - 消息流里不再保留任何 propose_action 卡片/问题/选项。
+ * Shape: `[ ✦ <AI-recommended content, editable>  ✕  › ]` — it replaces the input box and sits in
+ * the same position as the sandbox approval bar;
+ * - by default prefills the reply of the first action (label if absent);
+ * - Enter / › sends the current content (through the same pipeline as manual sending; it queues
+ *   while generating);
+ * - ✕ closes: no message is sent (the model's turn has already ended, so no notification is
+ *   needed) and the normal input box returns immediately;
+ * - no propose_action card/question/option remains in the message stream.
  */
 
 interface ProposalPrefillBarProps {
@@ -30,7 +34,7 @@ const ProposalPrefillBar: React.FC<ProposalPrefillBarProps> = ({
   const [value, setValue] = useState(proposal.recommendedText)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // 换了一条提议：重新回填 AI 推荐内容并把光标放到末尾
+  // A different proposal arrived: refill the AI-recommended content and move the caret to the end
   useEffect(() => {
     setValue(proposal.recommendedText)
     requestAnimationFrame(() => {

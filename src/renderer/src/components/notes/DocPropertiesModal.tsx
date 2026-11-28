@@ -8,16 +8,16 @@ const { Text } = Typography
 
 export interface DocPropertiesModalProps {
   open: boolean
-  /** 当前文档元信息 */
+  /** Current document metadata */
   doc: { title: string; summary: string | null; tags: string | null; image: string | null } | null
   onClose: () => void
-  /** 保存回调（仅元信息：标签/摘要/封面） */
+  /** Save callback (metadata only: tags/summary/cover) */
   onSave: (data: { image: string | null; summary: string | null; tags: string[] }) => Promise<void>
 }
 
 /**
- * 文档属性小弹窗（标签 / 摘要 / 封面）。
- * 替代原来带编辑器的大弹窗——正文编辑已全部内联化。
+ * Small document-properties dialog (tags / summary / cover).
+ * Replaces the former large dialog that contained the editor — body editing is fully inline now.
  */
 const DocPropertiesModal: React.FC<DocPropertiesModalProps> = ({ open, doc, onClose, onSave }) => {
   const { token } = theme.useToken()
@@ -97,7 +97,7 @@ const DocPropertiesModal: React.FC<DocPropertiesModalProps> = ({ open, doc, onCl
       centered
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* 标签 */}
+        {/* Tags */}
         <div>
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
             {t('notes.field.tags')}
@@ -141,7 +141,7 @@ const DocPropertiesModal: React.FC<DocPropertiesModalProps> = ({ open, doc, onCl
           </div>
         </div>
 
-        {/* 封面 */}
+        {/* Cover */}
         <div>
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
             {t('notes.field.cover')}
@@ -176,7 +176,7 @@ const DocPropertiesModal: React.FC<DocPropertiesModalProps> = ({ open, doc, onCl
           )}
         </div>
 
-        {/* 摘要 */}
+        {/* Summary */}
         <div>
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
             {t('notes.field.summary')}

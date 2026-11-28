@@ -1,8 +1,9 @@
 ﻿/**
- * 定时任务「执行记录」弹窗。
+ * Schedule "run history" modal.
  *
- * 执行记录**永久保存**（数据库表不裁剪），这里按时间倒序分页展示；
- * 历史多时用「加载更多」继续翻，不做自动清理。
+ * Run records are **kept forever** (the database table is never pruned); they are listed here in
+ * reverse chronological order with pagination, and "Load more" pages further back when there is a
+ * lot of history — nothing is cleaned up automatically.
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { Button, Modal, theme } from 'antd'

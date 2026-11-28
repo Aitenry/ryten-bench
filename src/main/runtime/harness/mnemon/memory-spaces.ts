@@ -15,19 +15,19 @@ import {
 } from './types'
 
 /**
- * Memory Spaces — 长期记忆空间（Mnemon 原生 Store 的 PGlite 实现）
+ * Memory Spaces — long-term memory spaces (PGlite implementation of the Mnemon native store)
  *
- * 移植自 dsh-mnemon 的 MemoryBodyRegistry + MnemonService 的存储面：
- * - 每个记忆空间是 `<storageRoot>/data/<space-id>/` 下的独立 PGlite 数据库；
- * - `.memory-bodies.json` 是空间目录元数据事实源（id/name/description/active）；
- * - insights 表：洞察本体（category/importance/tags/entities/source + 软删除标记）；
- * - edges 表：四类关系（temporal/semantic/causal/entity）；
- * - recall 支持 smart（词元重叠评分）/ keyword / basic（LIKE）三种模式；
- * - related 沿边 BFS 遍历；forget 为软删除；merge 非破坏性导入。
+ * - Each memory space is a separate PGlite database under `<storageRoot>/data/<space-id>/`;
+ * - `.memory-bodies.json` is the metadata source of truth for the space directories
+ *   (id/name/description/active);
+ * - insights table: the insight itself (category/importance/tags/entities/source + soft-delete flag);
+ * - edges table: four relation kinds (temporal/semantic/causal/entity);
+ * - recall supports three modes: smart (token overlap scoring) / keyword / basic (LIKE);
+ * - related traverses edges with BFS; forget is a soft delete; merge is a non-destructive import.
  */
 
 // ============================================================================
-// 空间内数据库
+// Per-space database
 // ============================================================================
 
 const SPACE_SCHEMA_SQL = `
@@ -88,7 +88,7 @@ interface EdgeRow {
   created_at: string
 }
 
-/** 打开一个空间的 PGlite 数据库（目录即数据库） */
+/** Open a space's PGlite database (the directory is the database) */
 export async function openSpaceDatabase(dbDir: string): Promise<PGlite> {
   fs.mkdirSync(dbDir, { recursive: true })
   const db = new PGlite(dbDir)
@@ -103,7 +103,7 @@ function rowToInsight(row: InsightRow, memoryBodyId?: string, memoryBodyName?: s
     tags = row.tags ? JSON.parse(row.tags) : []
     entities = row.entities ? JSON.parse(row.entities) : []
   } catch {
-    // 忽略损坏的 JSON 数组
+    // Ignore corrupted JSON arrays
   }
   return {
     id: row.id,
@@ -122,7 +122,7 @@ function rowToInsight(row: InsightRow, memoryBodyId?: string, memoryBodyName?: s
   }
 }
 
-/** 智能召回评分：查询词元与内容词元重叠 + importance 加权 */
+/** Smart recall scoring: overlap between query tokens and content tokens + importance weighting */
 function smartScore(content: string, queryTerms: string[]): number {
   if (queryTerms.length === 0) return 1
   const text = content.toLowerCase()
@@ -134,7 +134,7 @@ function smartScore(content: string, queryTerms: string[]): number {
 }
 
 // ============================================================================
-// 记忆体注册表
+// Memory body registry
 // ============================================================================
 
 interface RegistryFile {
@@ -145,7 +145,7 @@ interface RegistryFile {
 const REGISTRY_VERSION = 1
 
 /**
- * MemoryBodyRegistry — 记忆空间目录元数据（文件事实源 + 磁盘发现对账）
+ * MemoryBodyRegistry — memory space directory metadata (file source of truth + on-disk discovery reconciliation)
  */
 export class MemoryBodyRegistry {
   readonly directory: string
@@ -178,7 +178,7 @@ export class MemoryBodyRegistry {
     return this.bodies.find((b) => b.id === id)
   }
 
-  /** 创建空间（目录 + 元数据）；写成功后自动激活（对应 dsh-mnemon 行为） */
+  /** Create a space (directory + metadata); activate automatically after a successful write */
   async create(request: {
     name: string
     description: string
@@ -198,7 +198,7 @@ export class MemoryBodyRegistry {
       createdAt: now,
       updatedAt: now
     }
-    // 初始化数据库目录
+    // Initialize the database directory
     const db = await openSpaceDatabase(body.dbPath)
     await db.close()
     this.bodies.push(body)
@@ -222,9 +222,11 @@ export class MemoryBodyRegistry {
   }
 
   /**
-   * 非破坏性合并：把源空间内容导入目标空间；默认将源空间设为未激活。
-   * openDb 注入式数据库获取（可选）：service 层传缓存 provider，避免同目录多实例；
-   * 缺省直开并在用完后关闭。
+   * Non-destructive merge: import the source spaces' content into the target space; sources are set
+   * to inactive by default.
+   * openDb: injectable database access (optional): the service layer passes the cached provider to
+   * avoid multiple instances on the same directory; by default the database is opened directly and
+   * closed after use.
    */
   async merge(
     targetBodyId: string,
@@ -325,7 +327,8 @@ export class MemoryBodyRegistry {
     } catch (err) {
       logger.warn('[Mnemon] Failed to read .memory-bodies.json, using empty registry:', err)
     }
-    // 磁盘发现对账：既有空间目录自动登记（不移动数据库）
+    // On-disk discovery reconciliation: register existing space directories automatically (without
+    // moving the databases)
     try {
       const entries = fs.readdirSync(this.directory, { withFileTypes: true })
       for (const entry of entries) {
@@ -366,10 +369,10 @@ export class MemoryBodyRegistry {
 }
 
 // ============================================================================
-// 空间数据操作（召回 / 写入 / 关系 / 统计）
+// Space data operations (recall / write / relations / stats)
 // ============================================================================
 
-/** 查询洞察：smart / keyword / basic 三种模式 */
+/** Query insights: three modes smart / keyword / basic */
 export async function searchInsights(
   db: PGlite,
   request: SearchRequest,
@@ -393,7 +396,7 @@ export async function searchInsights(
   }
 
   if (request.mode === 'keyword') {
-    // keyword：所有词元必须命中（内容或类别），按词元命中数排序
+    // keyword: all tokens must hit (content or category), sorted by number of token hits
     const result = await db.query<InsightRow>('SELECT * FROM insights WHERE deleted = 0')
     const scored = result.rows
       .map((row) => {
@@ -407,7 +410,7 @@ export async function searchInsights(
     return scored.map((x) => rowToInsight(x.row, bodyId, bodyName))
   }
 
-  // smart：词元重叠评分 + importance 加权
+  // smart: token overlap scoring + importance weighting
   const result = await db.query<InsightRow>('SELECT * FROM insights WHERE deleted = 0')
   const scored = result.rows
     .map((row) => {
@@ -425,7 +428,7 @@ export async function searchInsights(
   }))
 }
 
-/** 写入一条洞察（source_hash 查重） */
+/** Write an insight (deduplicated by source_hash) */
 export async function rememberInsight(
   db: PGlite,
   request: RememberRequest,
@@ -437,7 +440,7 @@ export async function rememberInsight(
   if (!content) throw new Error(tm.errors.contentRequired)
   const sourceHash = hashOf(content)
 
-  // 查重：完全相同内容不重复写入
+  // Deduplication: identical content is not written twice
   const existing = await db.query<{ c: number }>(
     'SELECT COUNT(*) AS c FROM insights WHERE source_hash = $1 AND deleted = 0',
     [sourceHash]
@@ -481,7 +484,7 @@ export async function rememberInsight(
   return insight
 }
 
-/** 关系遍历：沿边 BFS（depth 最多 2 跳，可按边类型过滤） */
+/** Relation traversal: BFS along edges (depth at most 2 hops, filterable by edge type) */
 export async function relatedInsights(
   db: PGlite,
   id: string,
@@ -525,7 +528,7 @@ export async function relatedInsights(
   return results.slice(0, 12)
 }
 
-/** 建立关系 */
+/** Create a relation */
 export async function linkInsights(
   db: PGlite,
   sourceId: string,
@@ -549,7 +552,7 @@ export async function linkInsights(
   )
 }
 
-/** 软删除一条洞察 */
+/** Soft-delete an insight */
 export async function forgetInsight(db: PGlite, id: string): Promise<boolean> {
   const result = await db.query(
     `UPDATE insights SET deleted = 1, deleted_at = $2 WHERE id = $1 AND deleted = 0`,
@@ -558,7 +561,7 @@ export async function forgetInsight(db: PGlite, id: string): Promise<boolean> {
   return (result.affectedRows ?? 0) > 0
 }
 
-/** 空间统计 */
+/** Space stats */
 export async function spaceStats(db: PGlite): Promise<MemoryBodyStats> {
   const total = await db.query<{ c: number }>(
     'SELECT COUNT(*) AS c FROM insights WHERE deleted = 0'
@@ -590,7 +593,7 @@ export async function spaceStats(db: PGlite): Promise<MemoryBodyStats> {
   }
 }
 
-/** 全部洞察（内容浏览） */
+/** All insights (content browsing) */
 export async function listInsights(
   db: PGlite,
   bodyId: string,

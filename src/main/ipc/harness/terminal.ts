@@ -1,14 +1,18 @@
 /**
- * 持久终端的**用户侧** IPC（右侧「终端」面板）。
+ * **User-side** IPC for persistent terminals (the right-side "Terminal" panel).
  *
- * 与模型侧 `terminal_*` 工具共用同一个 `terminalSessions` 进程管理器：
- * - 模型建的会话会出现在面板里，面板里敲的命令也会进入模型之后 `terminal_read` 的视野
- *   （面板读取用非消费的 `peek`，不会抢走模型该读的未读输出）；
- * - 安全边界：**模型侧** `terminal_open` / `terminal_send` 只在 `danger-full-access` 档可用；
- *   **用户侧面板不设档位限制**——用户亲手敲命令等同直接使用操作系统终端，不该被模型档位
- *   挡住（2026-11-27 用户口径「不要限制我」）。`list` / `peek` / `close` 永远可用。
+ * Shares the same `terminalSessions` process manager as the model-side `terminal_*` tools:
+ * - sessions created by the model show up in the panel, and commands typed in the panel also
+ *   enter the model's later `terminal_read` view
+ *   (the panel reads with the non-consuming `peek`, so it doesn't steal unread output the model
+ *   should read);
+ * - safety boundary: **model-side** `terminal_open` / `terminal_send` are available only in the
+ *   `danger-full-access` tier; **the user-side panel has no tier restriction** — a user typing
+ *   commands by hand is equivalent to using the OS terminal directly and should not be blocked
+ *   by the model tier (2026-11-27 user wording: "don't restrict me"). `list` / `peek` / `close`
+ *   are always available.
  *
- * 通道一律 `harness:terminal-*`，随 AI 助手插件启停。
+ * Channels are always `harness:terminal-*`, following the AI assistant plugin's lifecycle.
  */
 import { homedir } from 'node:os'
 import logger from 'electron-log'
@@ -17,7 +21,7 @@ import { MAX_SESSIONS_PER_TOPIC, terminalSessions } from '../../runtime/harness/
 import { getTopicById, getWorkspaceById } from '../../database/mapper/harness/harness'
 import { chatTopicDir, ensureChatTopicDir } from '../../services/harness/chat/workspace'
 
-/** 解析话题对应的终端根目录 / 默认 cwd（与工具运行时注入的 workspacePath 同源） */
+/** Resolve the terminal root directory / default cwd for a topic (same source as the workspacePath injected by the tool runtime) */
 async function resolveScope(
   topicId: number
 ): Promise<{ ok: true; workspaceRoot: string; cwd: string }> {
@@ -42,7 +46,7 @@ export function terminalIpcHandlers(): IpcHandlerMap {
     handlers[`harness:${channel}`] = handler
   }
 
-  /** 当前话题的终端会话列表（含存活状态 / 未读字符数；topicId 0 = 无会话时的全局兜底） */
+  /** Terminal sessions for the current topic (including liveness / unread char count; topicId 0 = global fallback when there are no sessions) */
   handle('terminal-list', async (payload: { topicId?: unknown }) => {
     const raw = Number(payload?.topicId)
     const topicId = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
@@ -54,8 +58,9 @@ export function terminalIpcHandlers(): IpcHandlerMap {
   })
 
   /**
-   * 新建会话。**用户侧不设档位限制**（见文件头注释）；cwd 取当前话题对应的工作区，
-   * 话题缺失/工作区未配置时落到用户主目录，保证面板永远能用。
+   * Create a session. **No tier restriction on the user side** (see the file header comment);
+   * cwd uses the workspace of the current topic, falling back to the user's home directory when
+   * the topic is missing or no workspace is configured, so the panel always works.
    */
   handle(
     'terminal-open',
@@ -84,9 +89,10 @@ export function terminalIpcHandlers(): IpcHandlerMap {
   )
 
   /**
-   * 发送一条命令。`waitMs` 由面板传小值（命令可能长时间运行）：先等一小段拿即时输出，
-   * 超时也正常返回 partial 输出；面板随后用 `terminal-peek` 轮询持续输出。
-   * 用户侧同样不设档位限制。
+   * Send a command. `waitMs` is passed small by the panel (commands may run for a long time):
+   * wait a short while for immediate output, and on timeout still return partial output
+   * normally; the panel then polls for ongoing output with `terminal-peek`.
+   * The user side likewise has no tier restriction.
    */
   handle(
     'terminal-send',
@@ -112,8 +118,8 @@ export function terminalIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  /** 只读输出快照（非消费）：面板轮询用 */
-  /** 只读输出快照（非消费）：面板轮询用；`raw: true` 保留 ANSI 供 xterm 渲染 */
+  /** Read-only output snapshot (non-consuming): used for panel polling */
+  /** Read-only output snapshot (non-consuming): used for panel polling; `raw: true` keeps ANSI for xterm rendering */
   handle(
     'terminal-peek',
     (payload: { sessionId?: unknown; maxChars?: unknown; raw?: unknown }) => {
@@ -125,14 +131,14 @@ export function terminalIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  /** 关闭一个会话（整树终止；幂等） */
+  /** Close a session (terminates the whole tree; idempotent) */
   handle('terminal-close', (payload: { sessionId?: unknown }) => {
     const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
     if (!sessionId) return { ok: false, error: 'invalid-session' }
     return terminalSessions.close(sessionId)
   })
 
-  /** 关闭当前话题的全部会话（面板「全部关闭」/切话题清理） */
+  /** Close all sessions of the current topic (panel "Close all" / cleanup on topic switch) */
   handle('terminal-close-topic', (payload: { topicId?: unknown }) => {
     const topicId = Number(payload?.topicId)
     if (!Number.isFinite(topicId) || topicId <= 0) return { ok: false, error: 'invalid-topic' }

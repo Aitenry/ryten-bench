@@ -2,42 +2,47 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 /**
- * `settings.json` 的启动自检与备份（纯文件操作，不 import electron —— 单测可直接跑）。
+ * Startup self-check and backup for `settings.json` (pure file operations, no electron import —
+ * unit tests can run it directly).
  *
- * 背景（2026-11-24）：有人把 `%APPDATA%/ryten-bench/settings.json` 删了，应用下次启动
- * 会按默认值重建：锁屏被关掉、默认密码回到 123456、主题 / 工作区路径 / 托盘设置全部丢失。
- * 数据库（RytenBenchDB）、记忆、技能、插件都还在，丢的只是这份「应用设置」。
+ * Background (2026-11-24): someone deleted `%APPDATA%/ryten-bench/settings.json`, so the app rebuilt
+ * it with defaults on its next start: the lock screen was disabled, the default password reverted to
+ * 123456, and the theme / workspace path / tray settings were all lost. The database (RytenBenchDB),
+ * memory, skills and plugins were still intact; only this "application settings" file was lost.
  *
- * 这里做两件事：
- * - 每次设置变更后把**当前有效内容**原子地写一份 `settings.backup.json`；
- * - 启动时如果 settings.json 缺失或不是合法 JSON，就尝试用备份恢复；坏文件改名留档，
- *   绝不直接删除（方便事后排查）。
+ * Two things happen here:
+ * - After every settings change, atomically write the **currently effective content** to
+ *   `settings.backup.json`;
+ * - On startup, if settings.json is missing or not valid JSON, try to restore it from the backup;
+ *   invalid files are renamed and archived, never deleted outright (so they can be inspected later).
  *
- * 注意：备份与主文件在同一个目录、同一套 Windows 权限下，能挡住误删 / 随手删除，
- * 挡不住「有本机文件权限的人把两份都删掉再直接读数据库」。真正的数据保密要靠
- * 操作系统账户 / BitLocker / 应用层数据库加密，这层只是让锁屏配置不会因为单文件消失
- * 而静默失效（恢复后见 startup 的强制锁屏）。
+ * Note: the backup lives in the same directory under the same Windows permissions as the main file,
+ * so this guards against accidental or casual deletion, but not against someone with local file
+ * permissions deleting both and reading the database directly. Real confidentiality relies on OS
+ * accounts / BitLocker / application-level database encryption; this layer only keeps the lock-screen
+ * configuration from silently lapsing when a single file disappears (after a restore, startup enforces
+ * the lock screen).
  */
 
 export interface SettingsFilePaths {
-  /** 当前设置文件 */
+  /** Current settings file */
   settings: string
-  /** 最近一份有效设置 */
+  /** Most recent valid settings */
   backup: string
 }
 
 export interface SettingsRecovery {
-  /** 启动时 settings.json 存在且是合法 JSON 对象 */
+  /** settings.json existed and was a valid JSON object at startup */
   settingsExisted: boolean
-  /** 坏文件被改名后的路径（没有坏文件则为 null） */
+  /** Path the invalid file was renamed to (null when there was no invalid file) */
   quarantined: string | null
-  /** 是否从 settings.backup.json 恢复了设置 */
+  /** Whether settings were restored from settings.backup.json */
   restoredFromBackup: boolean
-  /** 备份文件存在但自身不是合法 JSON（恢复失败） */
+  /** Backup file exists but is not valid JSON itself (restore failed) */
   backupInvalid: boolean
 }
 
-/** 两个文件的路径（测试可传任意目录，不依赖 Electron） */
+/** Paths of both files (tests may pass any directory; no Electron dependency) */
 export function settingsFilePaths(userDataDir: string): SettingsFilePaths {
   return {
     settings: path.join(userDataDir, 'settings.json'),
@@ -45,7 +50,7 @@ export function settingsFilePaths(userDataDir: string): SettingsFilePaths {
   }
 }
 
-/** 读文件并解析成对象；不存在 / 读失败 / 不是 JSON 对象都返回 null */
+/** Read a file and parse it into an object; returns null when missing, unreadable or not a JSON object */
 export function readSettingsObject(file: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
@@ -63,11 +68,13 @@ function quarantinePath(settings: string, now: number): string {
 }
 
 /**
- * 启动 store 之前调用：确保 settings.json 可用。
+ * Call before booting the store: make sure settings.json is usable.
  *
- * - 存在且合法：原样使用；
- * - 缺失 / 非法：有合法备份就恢复；非法文件先改名留档（不删）；
- * - 恢复失败：保持缺失，让应用以默认值启动（调用方据此决定是否强制锁屏）。
+ * - Present and valid: use it as-is;
+ * - Missing / invalid: restore from a valid backup if there is one; invalid files are first renamed
+ *   and archived (not deleted);
+ * - Restore failed: leave it missing and let the app start with defaults (the caller uses this to
+ *   decide whether to enforce the lock screen).
  */
 export function restoreSettingsFile(userDataDir: string, now = Date.now()): SettingsRecovery {
   const { settings, backup } = settingsFilePaths(userDataDir)
@@ -90,13 +97,15 @@ export function restoreSettingsFile(userDataDir: string, now = Date.now()): Sett
   }
 
   if (fs.existsSync(settings)) {
-    // 坏 JSON：改名留档，避免应用启动时 electron-store 直接抛错，也避免直接删掉证据
+    // Invalid JSON: rename it aside so electron-store does not throw on startup, and so the evidence
+    // is not simply deleted
     const target = quarantinePath(settings, now)
     try {
       fs.renameSync(settings, target)
       result.quarantined = target
     } catch {
-      // 改名失败（被占用等）：下一步的恢复会覆盖它；仍保留原文件，不额外破坏
+      // Rename failed (file busy, etc.): the restore below will overwrite it; the original file is
+      // still kept, nothing extra is destroyed
     }
   }
 
@@ -108,16 +117,17 @@ export function restoreSettingsFile(userDataDir: string, now = Date.now()): Sett
   }
 
   try {
-    // 备份是完整 JSON，直接覆盖（坏文件已改名时这里是新建）
+    // The backup is complete JSON, so overwrite directly (this creates the file when the invalid one
+    // was renamed away)
     fs.copyFileSync(backup, settings)
     result.restoredFromBackup = true
   } catch {
-    // 磁盘只读 / 被占用：保持缺失，应用用默认值启动
+    // Disk read-only / file busy: leave it missing and let the app start with defaults
   }
   return result
 }
 
-/** 把当前有效的 settings.json 复制成备份；返回是否成功（调用方可决定日志级别） */
+/** Copy the currently valid settings.json into the backup file; returns success */
 export function writeSettingsBackup(userDataDir: string): boolean {
   const { settings, backup } = settingsFilePaths(userDataDir)
   const raw = (() => {
@@ -128,7 +138,8 @@ export function writeSettingsBackup(userDataDir: string): boolean {
     }
   })()
   if (raw === null) return false
-  // 先校验再落备份：绝不把半截 JSON / 坏文件复制成「最近一份有效设置」
+  // Validate before writing the backup: never copy truncated JSON / a corrupt file into the
+  // "most recent valid settings"
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false
@@ -139,14 +150,15 @@ export function writeSettingsBackup(userDataDir: string): boolean {
   const temp = `${backup}.tmp`
   try {
     fs.writeFileSync(temp, raw, 'utf8')
-    // Windows 上 rename 会替换已有目标；同目录 rename 是原子的，不会留下半截备份
+    // On Windows, rename replaces an existing target; a same-directory rename is atomic and never
+    // leaves a partial backup
     fs.renameSync(temp, backup)
     return true
   } catch {
     try {
       fs.rmSync(temp, { force: true })
     } catch {
-      // 忽略清理失败
+      // Ignore cleanup failures
     }
     return false
   }

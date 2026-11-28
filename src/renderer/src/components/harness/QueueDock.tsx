@@ -13,9 +13,9 @@ import type { QueuedMessageView } from '../../../../shared/harness/types'
 
 interface QueueDockProps {
   queue: QueuedMessageView[]
-  /** 本话题正在生成中：只有生成中才允许「立即插话」 */
+  /** This topic is generating: steering is only allowed while generating */
   running: boolean
-  /** 刚并入当前回合的插话正文（瞬时反馈；插话不落库、不进对话流） */
+  /** Steer text just merged into the current turn (transient feedback; steers are not persisted) */
   steeredNotice: string | null
   colorBorderSecondary: string
   colorText: string
@@ -28,19 +28,23 @@ interface QueueDockProps {
 }
 
 /**
- * 生成中的插话队列（输入框正上方）。
+ * Steering queue while generating (directly above the input box).
  *
- * 主进程是队列的单一真源，这里只渲染镜像 + 派发动作：
- * - 删除：丢掉这条排队消息；
- * - 编辑：就地改写正文（回车保存、Esc 取消）；
- * - 立即插话：把这条**纯注入**正在运行的回合（下一个工具节点边界模型就能读到）。
- *   插话不落库、不在对话流里生成气泡、也不切分助手消息；命中后由 steeredNotice
- *   给一句短反馈说明它被并进去了，该行随即从队列消失。
+ * The main process is the single source of truth for the queue; this only renders a mirror and
+ * dispatches actions:
+ * - Delete: drop this queued message;
+ * - Edit: rewrite the text in place (Enter saves, Esc cancels);
+ * - Steer now: inject this entry **purely** into the running turn (the model can read it at the
+ *   next tool-node boundary).
+ *   A steer is not persisted, produces no bubble in the conversation stream, and does not split
+ *   the assistant message; when it lands, steeredNotice gives a short feedback saying it was
+ *   merged in, and the row disappears from the queue.
  *
- * 本轮没等到注入边界的条目会被放回队列并标 held（模型已不再调用工具、没有边界可用），
- * 显示为「将随下一次发送带出」，避免用户写的内容悄悄丢失。
+ * Entries that did not reach an injection boundary this turn go back into the queue and are
+ * marked held (the model no longer calls tools, so no boundary is available), shown as "will be
+ * sent with the next send", so nothing the user wrote is silently lost.
  *
- * 队列与反馈都为空时不渲染任何东西。
+ * Nothing renders when both the queue and the feedback are empty.
  */
 const QueueDock: React.FC<QueueDockProps> = ({
   queue,
@@ -61,19 +65,22 @@ const QueueDock: React.FC<QueueDockProps> = ({
   const [draft, setDraft] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  // 队列里那一条被消费/删除后自动退出编辑态（避免编辑框挂在消失的行上）
+  // Leave edit mode automatically once that queue entry is consumed or deleted (so the editor
+  // does not hang on a row that disappeared)
   useEffect(() => {
     if (editingId && !queue.some((item) => item.id === editingId)) setEditingId(null)
   }, [editingId, queue])
 
-  // 本轮没等到注入边界的条目（模型已不再调用工具 → 没有边界可用）：留在队列里，
-  // 随下一次发送带出，避免用户写的内容悄悄丢失
+  // Entries that did not reach an injection boundary this turn (the model no longer calls tools,
+  // so no boundary is available): keep them in the queue so they go out with the next send,
+  // instead of silently losing what the user wrote
   const heldCount = useMemo(() => queue.filter((item) => item.held).length, [queue])
   const count = queue.length
   const title = useMemo(() => t('harness.queue.count', { count }), [count, t])
 
-  // 插话命中（steeredNotice）只是一句短反馈，不产生对话流内容：
-  // 用角落轻提示而非弹窗，避免打断；队列为空时它也不该把队列条重新撑出来
+  // A steer hit (steeredNotice) is only a short feedback and adds nothing to the conversation
+  // stream: use a corner toast instead of a modal to avoid interrupting; when the queue is empty
+  // it must not bring the queue bar back
   useEffect(() => {
     if (steeredNotice) {
       message.success({ content: t('harness.queue.steered'), duration: 2 })
@@ -204,7 +211,8 @@ const QueueDock: React.FC<QueueDockProps> = ({
                     <Button
                       type="text"
                       size="small"
-                      // 只有正在生成时才能「插进去」：空闲时这条会自然作为新一轮发出
+                      // Steering is only possible while generating: when idle this entry goes out
+                      // naturally as a new turn
                       disabled={!running}
                       icon={<RiArrowUpLine size={13} />}
                       onClick={() => void onSteer(item.id)}

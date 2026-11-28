@@ -10,43 +10,46 @@ import { safeSend } from '../safe-send'
 import { mainMessages } from '../i18n'
 import { ThemeMode, TraySettings } from '../types/settings'
 
-// 系统托盘：品牌视觉图标（吉祥物圆角徽章，1x/2x 双表示；菜单头部同一张图内嵌在 tray-menu.html）。
-// 左键单击显示主窗口；右键弹出「自绘菜单窗口」（src/main/resource/tray-menu.html，
-// 编辑部风格、随应用主题明暗——原生 Menu 无法定制样式，故用独立无边框窗口实现）。
-// 托盘与菜单窗口引用必须保存在模块级变量中，否则会被 GC 回收导致图标消失。
+// System tray: brand icon (mascot rounded badge, 1x/2x representations; the same image is
+// embedded in the menu header of tray-menu.html).
+// Left click shows the main window; right click opens the custom menu window
+// (src/main/resource/tray-menu.html, editorial style, follows the app theme light/dark — the
+// native Menu cannot be styled, hence a separate frameless window).
+// Tray and menu window references must be kept in module-level variables, otherwise they are
+// garbage-collected and the icon disappears.
 
 let tray: Tray | null = null
 let menuWindow: BrowserWindow | null = null
 let menuReadyPromise: Promise<BrowserWindow> | null = null
-let menuOpening = false // 弹出过程中（等待菜单页加载）防重入
-let lastMenuHideAt = 0 // 上次隐藏时间，用于抑制 blur→right-click 竞态下的重放动画
-let menuFlip: 'up' | 'down' = 'up' // 最近一次弹出方向（开关刷新数据时保持动画方向）
+let menuOpening = false // re-entrancy guard while opening (waiting for the menu page to load)
+let lastMenuHideAt = 0 // last hide time; suppresses animation replay in the blur→right-click race
+let menuFlip: 'up' | 'down' = 'up' // most recent popup direction (kept when data is refreshed)
 
-// 菜单体尺寸；窗口 = 菜单体 + 2×MENU_PAD（四周留出 CSS 阴影区，避免阴影被窗口裁剪）
+// Menu body size; window = menu body + 2×MENU_PAD (padding for the CSS shadow so it is not clipped)
 const MENU_W = 280
 const MENU_H = 202
 const MENU_PAD = 16
-const MENU_GAP = 10 // 菜单与托盘图标的间距
-const MENU_ANIMATE_GAP = 300 // 隐藏后该毫秒内再次弹出时不播放入场动画（ms）
+const MENU_GAP = 10 // gap between the menu and the tray icon
+const MENU_ANIMATE_GAP = 300 // reopened within this many ms after hiding: skip the entry animation
 
 type MenuItem =
   | { type: 'separator' }
   | { type: 'action'; id: string; label: string; danger?: boolean; icon?: 'chevron' | 'power' }
   | { type: 'checkbox'; id: string; label: string; checked: boolean }
 
-/** 关闭窗口时是否最小化到系统托盘（默认开启） */
+/** Whether closing the window minimizes to the system tray (enabled by default) */
 export function isCloseToTrayEnabled(): boolean {
   const settings = settingsStore.get('tray') as TraySettings | undefined
   return settings?.closeToTray ?? true
 }
 
-/** 更新托盘设置（持久化 + 即时同步托盘状态） */
+/** Update the tray setting (persist + sync tray state immediately) */
 export function setCloseToTray(enabled: boolean): void {
   settingsStore.set('tray', { closeToTray: enabled })
   syncTrayState()
 }
 
-/** 显示并聚焦主窗口（从托盘恢复） */
+/** Show and focus the main window (restore from tray) */
 export function showMainWindow(): void {
   const win = getMainWindow()
   if (!win || win.isDestroyed()) return
@@ -55,7 +58,7 @@ export function showMainWindow(): void {
   win.focus()
 }
 
-/** 隐藏主窗口到托盘 */
+/** Hide the main window to the tray */
 export function hideMainWindow(): void {
   const win = getMainWindow()
   if (!win || win.isDestroyed() || !win.isVisible()) return
@@ -71,9 +74,9 @@ function toggleMainWindow(): void {
   }
 }
 
-/* ---------------- 自绘菜单窗口 ---------------- */
+/* ---------------- Custom menu window ---------------- */
 
-/** 构建菜单数据（每次弹出前重建，保证文案与勾选态实时；文案随界面语言） */
+/** Build the menu data (rebuilt before every popup so labels and check state stay fresh; localized) */
 function buildMenuItems(): MenuItem[] {
   const win = getMainWindow()
   const visible = !!win && !win.isDestroyed() && win.isVisible()
@@ -97,14 +100,14 @@ function buildMenuItems(): MenuItem[] {
   ]
 }
 
-/** 菜单主题跟随应用主题设置（auto 时跟随系统） */
+/** Menu theme follows the app theme setting (auto follows the system) */
 function getMenuTheme(): 'light' | 'dark' {
   const theme = settingsStore.get('theme') as ThemeMode | undefined
   if (theme === 'light' || theme === 'dark') return theme
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
 }
 
-/** 懒创建菜单窗口（常驻隐藏，首次右键时加载） */
+/** Lazily create the menu window (kept hidden; loaded on the first right click) */
 function getMenuWindow(): Promise<BrowserWindow> {
   if (menuWindow && !menuWindow.isDestroyed() && menuReadyPromise) {
     return menuReadyPromise
@@ -122,7 +125,8 @@ function getMenuWindow(): Promise<BrowserWindow> {
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    // 透明窗口上禁用原生阴影（Windows 会渲染出白/灰边），视觉阴影由 CSS box-shadow 提供
+    // Disable the native shadow on the transparent window (Windows renders white/gray edges);
+    // the visual shadow comes from CSS box-shadow
     hasShadow: false,
     show: false,
     webPreferences: {
@@ -143,8 +147,9 @@ function getMenuWindow(): Promise<BrowserWindow> {
     })
     win.webContents.once('did-fail-load', (_event, code, desc) => {
       logger.error(`[Tray] Failed to load tray menu (${code}): ${desc}`)
-      // 复位并销毁窗口，允许下次右键重建重试（修复：此前只 reject，窗口仍存活，
-      // getMenuWindow 短路返回同一个已 reject 的 promise，托盘菜单本会话永久失效）
+      // Reset and destroy the window so the next right click can rebuild and retry (previously it
+      // only rejected while the window stayed alive, so getMenuWindow short-circuited on the same
+      // rejected promise and the tray menu was dead for the rest of the session)
       const failed = menuWindow
       menuWindow = null
       menuReadyPromise = null
@@ -163,13 +168,13 @@ function getMenuWindow(): Promise<BrowserWindow> {
   return menuReadyPromise
 }
 
-/** 将菜单窗口定位到托盘图标旁（默认向上弹出，空间不足时向下），返回弹出方向 */
+/** Position the menu window next to the tray icon (up by default, down when space is short); returns the direction */
 function positionMenuWindow(): 'up' | 'down' {
   if (!tray || !menuWindow || menuWindow.isDestroyed()) return 'up'
   const trayBounds = tray.getBounds()
   const display = screen.getDisplayMatching(trayBounds)
   const wa = display.workArea
-  // 菜单体（不含阴影区）定位：以托盘图标水平中心为基准
+  // Position the menu body (excluding the shadow padding) around the tray icon's horizontal center
   const bodyX = Math.round(trayBounds.x + trayBounds.width / 2 - MENU_W / 2)
   const bodyY = Math.round(trayBounds.y - MENU_H - MENU_GAP)
   let flip: 'up' | 'down' = 'up'
@@ -178,7 +183,7 @@ function positionMenuWindow(): 'up' | 'down' {
     bodyYFinal = Math.round(trayBounds.y + trayBounds.height + MENU_GAP)
     flip = 'down'
   }
-  // 夹紧到显示器工作区内（含阴影留白）
+  // Clamp into the display work area (including the shadow padding)
   const winW = MENU_W + MENU_PAD * 2
   const winH = MENU_H + MENU_PAD * 2
   const x = Math.round(Math.min(Math.max(bodyX - MENU_PAD, wa.x), wa.x + wa.width - winW))
@@ -188,13 +193,14 @@ function positionMenuWindow(): 'up' | 'down' {
   return flip
 }
 
-/** 向菜单窗口发送最新数据（弹出前 / 开关状态变化时共用）
- *  force=true：窗口尚未 show（弹出流程中先发数据再显示，避免空白帧），跳过可见性检查 */
+/** Send the latest data to the menu window (shared by popup-prep and toggle changes)
+ *  force=true: the window is not shown yet (data is sent before showing to avoid a blank frame),
+ *  skip the visibility check */
 function sendMenuData(force = false): void {
   if (!menuWindow || menuWindow.isDestroyed()) return
   if (!force && !menuWindow.isVisible()) return
-  // 统一走 safeSend（修复：裸 webContents.send 在帧失效窗口期不抛异常、无法拦截，
-  // 且违反项目「主进程推送统一走 safeSend」约定）
+  // Always go through safeSend (a bare webContents.send does not throw while the frame is invalid
+  // and cannot be intercepted, and violates the main-process push convention)
   safeSend(menuWindow.webContents, 'tray-menu-data', {
     items: buildMenuItems(),
     subtitle: mainMessages().tray.subtitle,
@@ -204,10 +210,10 @@ function sendMenuData(force = false): void {
   })
 }
 
-/** 在托盘图标旁弹出自绘菜单 */
+/** Pop up the custom menu next to the tray icon */
 export async function showTrayMenu(): Promise<void> {
   if (!tray || !isTrayAvailable()) return
-  // 已可见 / 正在弹出中：直接忽略，避免重复右键反复 hide→show 造成闪屏
+  // Already visible / currently opening: ignore, so repeated right clicks do not flicker
   if (menuOpening) return
   if (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) return
   menuOpening = true
@@ -215,12 +221,12 @@ export async function showTrayMenu(): Promise<void> {
     const win = await getMenuWindow()
     if (win.isDestroyed()) return
     positionMenuWindow()
-    // 先发数据再 show：窗口首次显示即带完整内容，不出现空白帧
+    // Send data before show: the window appears with full content, never a blank frame
     sendMenuData(true)
     win.show()
     win.focus()
-    // 刚关闭又立刻弹出（点击托盘图标时的 blur→right-click 竞态）不重放动画，避免闪屏；
-    // 正常间隔弹出才播放入场动画
+    // Reopening right after closing (the blur→right-click race when clicking the tray icon) skips
+    // the animation to avoid flicker; only a popup at a normal interval plays the entry animation
     if (Date.now() - lastMenuHideAt > MENU_ANIMATE_GAP) {
       safeSend(win.webContents, 'tray-menu-open')
     }
@@ -231,7 +237,7 @@ export async function showTrayMenu(): Promise<void> {
   }
 }
 
-/** 隐藏自绘菜单（窗口保留复用） */
+/** Hide the custom menu (the window is kept for reuse) */
 export function hideTrayMenu(): void {
   if (menuWindow && !menuWindow.isDestroyed() && menuWindow.isVisible()) {
     menuWindow.hide()
@@ -239,16 +245,16 @@ export function hideTrayMenu(): void {
   }
 }
 
-/** 处理菜单项点击（菜单窗口经 IPC 回传 id） */
+/** Handle a menu item click (the menu window sends the id back over IPC) */
 function handleMenuClick(id: string): void {
   switch (id) {
     case 'toggle-window':
-      // 操作项：执行后关闭菜单
+      // Action item: close the menu after executing
       hideTrayMenu()
       toggleMainWindow()
       break
     case 'toggle-tray':
-      // 开关项：切换后保持菜单打开，并实时刷新勾选状态
+      // Checkbox item: keep the menu open after toggling and refresh the check state
       setCloseToTray(!isCloseToTrayEnabled())
       sendMenuData()
       break
@@ -262,14 +268,14 @@ function handleMenuClick(id: string): void {
   }
 }
 
-/* ---------------- 托盘 ---------------- */
+/* ---------------- Tray ---------------- */
 
-/** 创建系统托盘（app ready 后调用，失败时置空并记录日志） */
+/** Create the system tray (called after app ready; nulls out and logs on failure) */
 export function createTray(): void {
   if (tray) return
   try {
     const image = nativeImage.createEmpty()
-    // 多分辨率表示：Windows 任务栏按 DPI 自动选用 1x(16) / 2x(32)
+    // Multiple resolutions: the Windows taskbar picks 1x(16) / 2x(32) automatically based on DPI
     image.addRepresentation({
       scaleFactor: 1,
       width: 16,
@@ -299,12 +305,12 @@ export function createTray(): void {
   }
 }
 
-/** 托盘是否可用（创建失败时关闭窗口应直接退出而非隐藏，避免窗口无处找回） */
+/** Whether the tray is available (if creation failed, closing the window must quit instead of hiding) */
 export function isTrayAvailable(): boolean {
   return tray !== null
 }
 
-/** 同步托盘状态（设置变化 / 窗口显隐时由外部调用；菜单数据在每次弹出时重建，天然保持最新） */
+/** Sync tray state (called by others on setting changes / window show-hide; menu data is rebuilt per popup) */
 export function syncTrayState(): void {
   if (!tray) return
   tray.setToolTip(mainMessages().tray.tooltip)

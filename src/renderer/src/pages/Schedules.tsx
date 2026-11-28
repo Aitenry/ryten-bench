@@ -1,9 +1,9 @@
 ﻿/**
- * 定时任务独立页（侧边栏「插件仓库」下方）——取代原先藏在设置里的「定时任务」页。
+ * Standalone scheduled-tasks page (below "Plugin repository" in the sidebar) — replaces the old "Scheduled tasks" page hidden in settings.
  *
- * 版式对齐设计稿：页头（标题/说明/刷新/新建）→ 分段筛选 + 搜索 → 汇总行 →
- * 卡片网格（操作图标全部在右上角 `⋯` 之前）。数据来自主进程数据库（新表
- * `scheduled_tasks` / `scheduled_task_runs`），与模型工具 `schedule_*` 共用同一存储。
+ * Layout follows the mockup: page header (title/description/refresh/new) → segmented filter + search → summary row →
+ * card grid (all action icons before the `⋯` in the top-right corner). Data comes from the main-process database (tables
+ * `scheduled_tasks` / `scheduled_task_runs`) and shares the same storage with the `schedule_*` model tools.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Empty, Input, Segmented, Spin, theme } from 'antd'
@@ -39,7 +39,7 @@ const Schedules: React.FC = () => {
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      // 任务可以指向任意模式/工作区的会话，标题映射要覆盖全部工作区（含对话模式）
+      // Tasks may point at sessions in any mode/workspace, so the title map must cover every workspace (including chat mode)
       const [scheduleRows, allWorkspaces, chatResult] = await Promise.all([
         harnessApi.harness.listSchedules(),
         harnessApi.harness.getAllWorkspaces().catch(() => []),
@@ -80,7 +80,7 @@ const Schedules: React.FC = () => {
     [topicTitles]
   )
 
-  /** 筛选 + 搜索，并让启用中的任务按下次触发排前 */
+  /** Filter + search, with enabled tasks sorted first by next run */
   const visibleTasks = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return tasks

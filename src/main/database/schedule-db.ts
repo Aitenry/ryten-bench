@@ -1,9 +1,12 @@
 /**
- * 定时任务的数据库存储实现（系统装配层注入到 `scheduleStore` 门面）。
+ * Database-backed storage for scheduled tasks (wired into the `scheduleStore` facade by the system
+ * assembly layer).
  *
- * - CRUD / 执行记录都走 `database/mapper/schedule.ts`；
- * - 旧版 `userData/schedules/schedules.json` 在这里做一次性导入（导入成功后改名保留备份）；
- * - 任务数量上限与 id 生成也在这层（业务层不关心存储细节）。
+ * - CRUD and run records both go through `database/mapper/schedule.ts`;
+ * - Legacy `userData/schedules/schedules.json` is imported here once (renamed afterwards to keep a
+ *   backup);
+ * - The task count limit and id generation also live in this layer (the business layer does not
+ *   care about storage details).
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -34,7 +37,7 @@ import type {
   ScheduledTaskPatch
 } from '../runtime/harness/schedule-types'
 
-/** 数据库存储实现 */
+/** Database-backed store implementation */
 export class DbScheduleStore implements ScheduleStore {
   async list(): Promise<ScheduledTask[]> {
     return listScheduledTasks()
@@ -90,10 +93,11 @@ export class DbScheduleStore implements ScheduleStore {
 }
 
 /**
- * 旧版 JSON 任务导入（一次性）。
+ * One-time import of legacy JSON tasks.
  *
- * 文件不存在 → skipped；解析失败 → 保留文件不动并返回错误信息（下次启动还会尝试，
- * 用户也可以手工修好 JSON）；导入成功后把文件改名为 `schedules.json.migrated` 保留备份。
+ * File missing → skipped; parse failure → leave the file untouched and return the error (it is
+ * retried on the next start, and the user can also fix the JSON by hand); after a successful import
+ * the file is renamed to `schedules.json.migrated` to keep a backup.
  */
 export async function migrateLegacySchedules(dir: string): Promise<{
   imported: number

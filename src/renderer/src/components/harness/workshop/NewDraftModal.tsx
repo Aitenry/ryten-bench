@@ -5,10 +5,11 @@ import { useTranslation } from '@renderer/i18n'
 import { harnessApi } from '../../../api/harness'
 
 /**
- * 与主进程 `workshop/paths.ts` 的 `assertDraftId` 保持同一口径：
- * 只允许小写 kebab（不能有连续的 `-`、不能以 `-` 结尾）、最长 40、宿主保留 id 与
- * Windows 设备名不允许。以前前端只查 `/^[a-z][a-z0-9-]*$/`，`foo-` / 41 个字符
- * 都能点「创建」，然后在主进程才被拒——用户看到的是一次莫名其妙的失败。
+ * Matches the rule of `assertDraftId` in the main process `workshop/paths.ts`:
+ * lowercase kebab only (no consecutive `-`, must not end with `-`), at most 40 characters, and
+ * host-reserved ids plus Windows device names are not allowed. The frontend used to check only
+ * `/^[a-z][a-z0-9-]*$/`, so `foo-` or a 41-character name could click "Create" and was only
+ * rejected in the main process — the user just saw an inexplicable failure.
  */
 const DRAFT_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const DRAFT_ID_MAX = 40
@@ -28,21 +29,23 @@ function isValidDraftId(value: string): boolean {
 }
 
 /**
- * 「新建草稿」弹窗（侧栏的 ＋ 与设置页的「新建草稿」共用同一个）。
+ * The "New draft" modal (shared by the sidebar's + and the settings page's "New draft").
  *
- * 两处入口共用它，是为了让「点一下就开始」这条路径**只有一次跳转**：
- * 侧栏插件模式里点 ＋ 直接弹这个框（没配插件存放路径时先弹文件夹选择，见侧栏的
- * `handleNewDraft`）。弹窗里**只问 id 与展示名**——选择存放路径的动作不在这里
- * （用户口径 2026-09-27「新建插件里面不要弄一个选择插件目录」）：
- * 选文件夹的入口只有两个，都是各页面自己的入口——设置 → 插件工坊的「插件存放路径」
- * 那一行，和侧栏右上角的 ＋。
+ * Both entries share it so that the "click once and start" path needs **only one navigation**:
+ * clicking + in the sidebar plugin mode opens this dialog directly (when no plugin storage path is
+ * configured, a folder picker opens first; see `handleNewDraft` in the sidebar). The dialog
+ * **only asks for id and display name** — choosing the storage path is not here (user requirement
+ * 2026-09-27: "don't put a plugin directory picker in new plugin"): there are only two places to
+ * pick a folder, each on its own page — the "Plugin storage path" row under Settings → Plugin
+ * Workshop, and the + at the top right of the sidebar.
  *
- * 模板也**不提供选择**：生成的一律是含全部内容的 `full` 骨架，用不上的部分交给助手删。
+ * Templates are **not selectable** either: generated drafts are always a `full` skeleton with all
+ * contents; the assistant deletes whatever is not needed.
  */
 const NewDraftModal: React.FC<{
   open: boolean
   onClose: () => void
-  /** 建成之后（面板刷新、侧栏重列插件各自决定怎么接） */
+  /** After creation (panel refresh and sidebar plugin relist each decide how to hook it up) */
   onCreated?: (id: string) => void
 }> = ({ open, onClose, onCreated }) => {
   const { token } = theme.useToken()
@@ -53,7 +56,8 @@ const NewDraftModal: React.FC<{
   const [creating, setCreating] = useState(false)
   const [configured, setConfigured] = useState(true)
 
-  // 打开时确认「插件存放路径」已配置（正常路径下已由调用方保证；没配就禁用「新建」并说明）
+  // On open, verify the plugin storage path is configured (normally guaranteed by the caller;
+  // if missing, disable "Create" and explain)
   useEffect(() => {
     if (!open) return
     void harnessApi.workshop
@@ -62,7 +66,7 @@ const NewDraftModal: React.FC<{
       .catch(() => setConfigured(false))
   }, [open])
 
-  /** id 规则与主进程一致：小写 kebab（含长度上限 / 保留名） */
+  /** Id rules match the main process: lowercase kebab (including the length cap / reserved names) */
   const validId = isValidDraftId(id)
   const ready = validId && configured
 

@@ -45,7 +45,7 @@ const GraphView: React.FC<GraphViewProps> = ({
   const [isGraphLoading, setIsGraphLoading] = useState(false)
   const [docFilter, setDocFilter] = useState<number[]>(initialDocFilter ?? [])
 
-  // 直接复用主进程 mapper 的行类型，不再手抄一份
+  // Reuse the main-process mapper's row type instead of hand-copying it
   const [previewDoc, setPreviewDoc] = useState<DocWithContent | null>(null)
   const [isDocPreviewOpen, setIsDocPreviewOpen] = useState(false)
 
@@ -54,7 +54,8 @@ const GraphView: React.FC<GraphViewProps> = ({
     try {
       const data = await notesApi.graph.getData(wikiId, undefined, docIds)
       setGraphData(data)
-      // 修复：筛选/重建后旧选中实体可能已不在图内,详情面板残留过期实体
+      // Fix: after filtering/rebuilding, the previously selected entity may no longer be in the graph,
+      // leaving a stale entity in the detail panel
       setSelectedEntity((prev) =>
         prev && data.entities.some((e) => e.id === prev.id) ? prev : null
       )
@@ -102,7 +103,8 @@ const GraphView: React.FC<GraphViewProps> = ({
   const graphChartData = useMemo((): GraphChartData | null => {
     if (!graphData) return null
 
-    // 搜索/类型过滤（修复：搜索框与类型筛选状态此前无人消费,输入任何文字都无反应）
+    // Search/type filtering (fix: the search box and type filter state were previously unused, so
+    // typing any text had no effect)
     const query = searchQuery.trim().toLowerCase()
     const filteredEntities =
       query || typeFilter
@@ -223,8 +225,9 @@ const GraphView: React.FC<GraphViewProps> = ({
 
         startBuild(selectedWiki.id, selectedWiki.title)
 
-        // 迁移说明：主进程的 graph-build-start 由 ipcMain.on 改为 ctx.registerIpc（invoke），
-        // 失败走 promise rejection；同时 notes 插件停用时该通道无处理器，这里必须捕获。
+        // Migration note: the main process's graph-build-start changed from ipcMain.on to ctx.registerIpc (invoke),
+        // so failures surface as promise rejections; the channel also has no handler when the notes plugin is
+        // disabled, so this must be caught.
         try {
           await notesApi.graph.buildGraph(selectedWiki.id, { force: true })
           viewMessage(messageKey, 'success', t('graph.build.started'), 2)
@@ -262,7 +265,7 @@ const GraphView: React.FC<GraphViewProps> = ({
   }
 
   const handleDocClick = async (docId: number): Promise<void> => {
-    // 宿主提供「打开文档编辑器」回调时，点击来源文档直接跳到编辑器（图谱↔文档双向联动）
+    // When the host provides an "open document editor" callback, clicking a source doc jumps straight to the editor (two-way graph ↔ doc linkage)
     if (onOpenDocInEditor) {
       onOpenDocInEditor(docId)
       return

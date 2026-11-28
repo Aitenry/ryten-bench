@@ -1,46 +1,51 @@
 #!/usr/bin/env node
 /**
- * 正式版版本号解析器（GitHub Actions 里跑，本机也能直接跑）。
+ * Stable release version resolver (runs in GitHub Actions, and directly on a local machine).
  *
- * 用户口径（2026-10）：
- * - 从 0.1.0 开始发**真实版本**，之后按 0.1.1 / 0.2.0 / 1.0.0 这样递增；
- *   不再有 `0.1.0-alpha.<提交数>.<重试数>` 那种拿提交数量拼出来的假号。
- * - 开发分支**按版本命名**（0.1.0、0.2.0 …），所以发布 tag 一律带 `v` 前缀（`v0.1.0`）：
- *   分支与 tag 同名时 git 会把裸名优先解析成 tag，在 main 上 `git merge 0.2.0`
- *   就会静默合不到东西。带 v 之后两者永不歧义。
+ * Policy (2026-10):
+ * - **Real versions** start at 0.1.0 and increase as 0.1.1 / 0.2.0 / 1.0.0;
+ *   no more fake `0.1.0-alpha.<commit-count>.<retry>` numbers assembled from a commit count.
+ * - Development branches are **named after versions** (0.1.0, 0.2.0 …), so release tags always
+ *   carry a `v` prefix (`v0.1.0`): when a branch and a tag share a name, git resolves the bare
+ *   name to the tag first, and `git merge 0.2.0` on main silently merges nothing. With the `v`
+ *   prefix the two are never ambiguous.
  *
- * 规则：
- * - 第一个正式版 = `package.json` 的版本（0.1.0）——历史 alpha tag 不参与比较；
- * - 之后每次推 main，看**上一个正式 tag 之后**的提交信息决定 bump：
- *     · `BREAKING CHANGE:` / `BREAKING-CHANGE:`（正文）或 `<type>!:`（标题）→ major
- *       （0.x 也直接进 1.0.0，用户就是这么要求的）
+ * Rules:
+ * - The first stable release = the `package.json` version (0.1.0) — historical alpha tags do not
+ *   participate in comparisons;
+ * - After that, every push to main inspects the commits **after the previous stable tag** to decide
+ *   the bump:
+ *     · `BREAKING CHANGE:` / `BREAKING-CHANGE:` (body) or `<type>!:` (subject) → major
+ *       (0.x also jumps straight to 1.0.0, as required)
  *     · `feat` → minor
- *     · 其余（fix / perf / chore / refactor / docs …）→ patch
- *   - 提交信息里写 `[release:major]` / `[release:minor]` / `[release:patch]` 可强制指定；
- * - `chore(release): …` 是发版后工作流把 package.json 回写的提交，**不参与** bump 计算
- *   （否则每次发版都会给自己再算一次 patch）；
- * - `package.json` 的版本比最后一个正式 tag 还新 = 有人在手动定版本（比如把 0.2.x 定到 1.0.0），
- *   直接按它发，不再自动 bump；
- * - 算出来的版本已经有同名 tag（工作流重跑）→ `should_release=false`，不重复发版。
+ *     · anything else (fix / perf / chore / refactor / docs …) → patch
+ *   - `[release:major]` / `[release:minor]` / `[release:patch]` in the commit message forces it;
+ * - `chore(release): …` is the commit the release workflow writes back to package.json, and it does
+ *   **not** participate in bump calculation (otherwise every release would compute another patch
+ *   for itself);
+ * - a `package.json` version newer than the last stable tag means someone is setting it manually
+ *   (e.g. 0.2.x → 1.0.0): release it as-is, without automatic bump;
+ * - a computed version that already has a tag of the same name (workflow rerun) →
+ *   `should_release=false`, no duplicate release.
  *
- * 输出（有 `GITHUB_OUTPUT` 就写进去，否则只打印）：
+ * Output (written to `GITHUB_OUTPUT` when present, otherwise only printed):
  *   version / tag / previous_tag / bump / should_release / sha
  */
 
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
 
-/** 正式版本 tag：`1.2.3`，也容忍有人手打 `v1.2.3`（统一输出不带 v） */
+/** Stable release tag: `1.2.3`, also tolerates a hand-written `v1.2.3` (output is always without the v) */
 const STABLE_TAG = /^v?(\d+)\.(\d+)\.(\d+)$/
-/** 发版后回写 package.json 的提交，不算用户改动 */
+/** Commit that writes package.json back after a release; not counted as a user change */
 const RELEASE_STAMP = /^chore\(release\)/i
-/** 提交信息里的强制指定 */
+/** Forced bump in the commit message */
 const FORCE_BUMP = /\[release:(major|minor|patch)\]/i
-/** 标题里的破坏性标记：`feat(api)!: …` */
+/** Breaking marker in the subject: `feat(api)!: …` */
 const BREAKING_SUBJECT = /^[a-z]+(?:\([^)]*\))?!:/i
-/** 正文里的破坏性标记（conventional commits 的 footer） */
+/** Breaking marker in the body (conventional commits footer) */
 const BREAKING_BODY = /^BREAKING[ -]CHANGE:/im
-/** 标题里的 feat */
+/** feat in the subject */
 const FEAT_SUBJECT = /^feat(?:\([^)]*\))?!?:/i
 
 const RANK = { none: 0, patch: 1, minor: 2, major: 3 }
@@ -56,7 +61,7 @@ function parseVersion(raw) {
   return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
-/** 语义化比较：a > b 返回正数 */
+/** Semantic comparison: returns a positive number when a > b */
 function compare(a, b) {
   for (let i = 0; i < 3; i += 1) {
     if (a[i] !== b[i]) return a[i] - b[i]
@@ -75,7 +80,7 @@ function bump(parts, type) {
   return [major, minor, patch + 1]
 }
 
-/** 从提交信息里判定这次该 bump 到哪一档 */
+/** Determine which bump level the commits call for */
 function detectBump(commits) {
   let result = 'none'
   const raise = (type) => {
@@ -83,7 +88,7 @@ function detectBump(commits) {
   }
 
   for (const commit of commits) {
-    // 工作流自己回写的版本提交不算改动
+    // Version commits written back by the workflow do not count as changes
     if (RELEASE_STAMP.test(commit.subject)) continue
 
     const forced = FORCE_BUMP.exec(`${commit.subject}\n${commit.body}`)
@@ -123,8 +128,8 @@ function main() {
     .sort((a, b) => compare(b.parts, a.parts))
 
   const latest = stable[0] ?? null
-  // 去 BOM：Windows 下手写的 package.json 可能带 BOM，JSON.parse 会直接炸在这里，
-  // 而解析失败意味着「发不出包」，没必要让一个 BOM 决定发布成败
+  // Strip the BOM: a hand-written package.json on Windows may carry one and JSON.parse throws
+  // right here, while a parse failure means "no release" — a BOM should not decide that
   const pkg = JSON.parse(readFileSync('package.json', 'utf8').replace(/^\uFEFF/, ''))
   const pkgVersion = pkg.version
   const pkgParts = parseVersion(pkgVersion)
@@ -134,11 +139,11 @@ function main() {
   let kind
 
   if (!latest) {
-    // 首个正式版：package.json 说了算（0.1.0）
+    // First stable release: package.json has the final say (0.1.0)
     version = format(pkgParts)
     kind = 'initial'
   } else if (compare(pkgParts, latest.parts) > 0) {
-    // 手动定的版本比最后一个 tag 新：按它发，不再叠加自动 bump
+    // Manually set version is newer than the last tag: release it as-is, without stacking an automatic bump
     version = format(pkgParts)
     kind = 'manual'
   } else {

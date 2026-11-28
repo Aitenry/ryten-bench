@@ -1,11 +1,12 @@
 /**
- * AWS Bedrock Converse 实现（`/model/<modelId>/converse-stream`，AWS event-stream 流式）。
+ * AWS Bedrock Converse implementation (`/model/<modelId>/converse-stream`, AWS event-stream streaming).
  *
- * 只实现项目需要的 Converse API（文本 / 图片 / 工具调用 / 推理内容）：
- * - 鉴权两种：**Bedrock API Key**（Bearer，配置里的 apiKey 或 bedrockBearerToken）与
- *   **SigV4**（静态 AK/SK：settings.credentials 或 AWS 环境变量）；
- * - 流式响应是 AWS event-stream 二进制帧（不是 SSE），本文件内含最小解码器；
- * - 工具声明走 `toolConfig.tools[].toolSpec`，参数 schema 用 JSON Schema。
+ * Only the Converse API capabilities this project needs are implemented (text / images / tool
+ * calls / reasoning content):
+ * - Two auth modes: **Bedrock API Key** (Bearer, `apiKey` or `bedrockBearerToken` in the config)
+ *   and **SigV4** (static AK/SK: settings.credentials or AWS environment variables);
+ * - Streaming responses are AWS event-stream binary frames (not SSE); a minimal decoder is included;
+ * - Tool declarations use `toolConfig.tools[].toolSpec`, with JSON Schema as the parameter schema.
  */
 import { createHash, createHmac } from 'node:crypto'
 import { AIMessage, BaseMessage, contentToBlocks, contentToText, parseDataUrl } from '../messages'
@@ -29,15 +30,15 @@ import { jsonSchemaOf, StructuredToolInterface } from '../tools'
 export interface BedrockFields {
   model?: string
   region?: string
-  /** 静态凭据（SigV4） */
+  /** Static credentials (SigV4) */
   credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
-  /** Bedrock API Key / Secret（旧实现字段名） */
+  /** Bedrock API Key / Secret (legacy field names) */
   bedrockApiKey?: string
   bedrockApiSecret?: string
   bedrockApiSessionToken?: string
-  /** Bedrock API Key（Bearer） */
+  /** Bedrock API Key (Bearer) */
   bedrockBearerToken?: string
-  /** 项目设置里的 API Key：对 Bedrock 按 Bearer Token 使用 */
+  /** API Key from the project settings: used as a Bearer token for Bedrock */
   apiKey?: string
   endpointHost?: string
   maxTokens?: number
@@ -50,7 +51,7 @@ export interface BedrockFields {
   [key: string]: unknown
 }
 
-/** 图片格式集合（Converse 只接受这几种） */
+/** Image format set (Converse only accepts these) */
 const IMAGE_FORMATS = new Set(['png', 'jpeg', 'gif', 'webp'])
 
 function imageFormatFromMime(mime: string): string {
@@ -61,7 +62,7 @@ function imageFormatFromMime(mime: string): string {
   return 'jpeg'
 }
 
-/** 工具调用 id → 工具名（toolResult 不需要 name，但保留索引以便扩展） */
+/** Tool call id → tool name (toolResult does not need the name, but the index is kept for extensions) */
 function buildToolNameIndex(messages: BaseMessage[]): Map<string, string> {
   const index = new Map<string, string>()
   for (const message of messages) {
@@ -73,7 +74,7 @@ function buildToolNameIndex(messages: BaseMessage[]): Map<string, string> {
   return index
 }
 
-/** 消息数组 → Converse `messages` + `system` */
+/** Message array → Converse `messages` + `system` */
 export function toBedrockMessages(messages: BaseMessage[]): {
   system: Array<Record<string, unknown>>
   messages: Array<Record<string, unknown>>
@@ -139,7 +140,8 @@ export function toBedrockMessages(messages: BaseMessage[]): {
       case 'tool': {
         const toolMessage = message as BaseMessage & { tool_call_id?: string; status?: string }
         const callId = toolMessage.tool_call_id ?? ''
-        // toolResult 里带上工具名不是协议要求，但便于同批多工具时排查
+        // Including the tool name in toolResult is not required by the protocol, but helps
+        // diagnostics when several tools run in the same batch
         void toolNames.get(callId)
         push('user', [
           {
@@ -163,7 +165,7 @@ export function toBedrockMessages(messages: BaseMessage[]): {
   }
 }
 
-/** 工具声明 → Converse toolConfig */
+/** Tool declaration → Converse toolConfig */
 function toBedrockTools(tools: StructuredToolInterface[]): Array<Record<string, unknown>> {
   return tools.map((tool) => ({
     toolSpec: {
@@ -175,7 +177,7 @@ function toBedrockTools(tools: StructuredToolInterface[]): Array<Record<string, 
 }
 
 // ============================================================================
-// SigV4 签名
+// SigV4 signing
 // ============================================================================
 
 function sha256Hex(input: string | Buffer): string {
@@ -192,7 +194,7 @@ interface StaticCredentials {
   sessionToken?: string
 }
 
-/** 对请求做 SigV4 签名，返回需要附加的请求头 */
+/** Sign the request with SigV4 and return the headers that must be attached */
 export function signSigV4(options: {
   method: string
   url: string
@@ -218,7 +220,7 @@ export function signSigV4(options: {
   if (options.credentials.sessionToken) {
     rawHeaders['x-amz-security-token'] = options.credentials.sessionToken
   }
-  // 规范化：SigV4 的 canonical headers 必须全小写、值去首尾空白
+  // Normalization: SigV4 canonical headers must be all lowercase with trimmed values
   const normalizedHeaders: Record<string, string> = {}
   for (const [name, value] of Object.entries(rawHeaders)) {
     normalizedHeaders[name.toLowerCase()] = String(value).trim()
@@ -262,12 +264,12 @@ export function signSigV4(options: {
 }
 
 // ============================================================================
-// AWS event-stream 解码
+// AWS event-stream decoding
 // ============================================================================
 
 /**
- * 解析 AWS event-stream 响应帧。
- * 帧结构：total_length(4) | headers_length(4) | prelude_crc(4) | headers | payload | message_crc(4)
+ * Parse AWS event-stream response frames.
+ * Frame layout: total_length(4) | headers_length(4) | prelude_crc(4) | headers | payload | message_crc(4)
  */
 async function* parseAwsEventStream(
   response: Response,
@@ -298,7 +300,7 @@ async function* parseAwsEventStream(
           try {
             yield JSON.parse(payloadText) as Record<string, unknown>
           } catch {
-            // 非 JSON 帧（如空 payload）：忽略
+            // Non-JSON frame (e.g. empty payload): ignore
           }
         }
       }
@@ -308,12 +310,15 @@ async function* parseAwsEventStream(
     try {
       await reader.cancel()
     } catch {
-      // 已关闭：忽略
+      // Already closed: ignore
     }
   }
 }
 
-/** 异常帧（服务端把错误也放在事件流里）→ 错误对象（带 status 以参与重试分类） */
+/**
+ * Exception frame (the server also places errors in the event stream) → error object
+ * (with status so it participates in retry classification).
+ */
 function errorFromEvent(payload: Record<string, unknown>): Error | null {
   const keys = Object.keys(payload)
   const exceptionKey = keys.find((key) => key.endsWith('Exception'))
@@ -336,7 +341,7 @@ function errorFromEvent(payload: Record<string, unknown>): Error | null {
   return error
 }
 
-/** Converse usage → 统一 usage_metadata（含 Bedrock 的提示缓存字段） */
+/** Converse usage → unified usage_metadata (including the Bedrock prompt cache fields) */
 function toBedrockUsage(usage: Record<string, unknown>): Record<string, unknown> {
   const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined
   const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : undefined
@@ -375,7 +380,7 @@ export class ChatBedrockConverse extends BaseChatModel {
   private readonly additionalModelRequestFields?: Record<string, unknown>
   private readonly timeoutMs?: number
   private readonly modelKwargs?: Record<string, unknown>
-  /** 是否使用流式请求（extra_config 可显式关闭，或流式失败时自动降级） */
+  /** Whether to use streaming (extra_config can disable it explicitly; auto-degrades on failure) */
   private readonly streaming: boolean
 
   constructor(fields: BedrockFields) {
@@ -430,7 +435,7 @@ export class ChatBedrockConverse extends BaseChatModel {
     return body
   }
 
-  /** 处理一个 Converse 流式事件 */
+  /** Handle one Converse stream event */
   private handleEvent(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector,
@@ -481,13 +486,13 @@ export class ChatBedrockConverse extends BaseChatModel {
     if (payload.messageStop) {
       const stop = payload.messageStop as Record<string, unknown>
       collector.metadata({ finish_reason: stop.stopReason })
-      // 注意不能在这里结束：Converse 流的 usage 在 messageStop **之后**的 metadata 帧里
+      // Do not finish here: Converse usage arrives in the metadata frame **after** messageStop
       return false
     }
     return false
   }
 
-  /** 非流式 Converse 响应（兼容不支持流式的模型 / 网关） */
+  /** Non-streaming Converse response (compatible with models / gateways that do not support streaming) */
   private handleFullResponse(
     payload: Record<string, unknown>,
     collector: ModelStreamCollector
@@ -523,7 +528,7 @@ export class ChatBedrockConverse extends BaseChatModel {
     return `${this.endpointHost}/model/${encodeURIComponent(this.model)}/${method}`
   }
 
-  /** 生成请求头（Bearer 或 SigV4；流式/非流式只影响 accept） */
+  /** Build request headers (Bearer or SigV4; streaming/non-streaming only affects accept) */
   private buildHeaders(url: string, body: string, streaming: boolean): Record<string, string> {
     const baseHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -548,7 +553,7 @@ export class ChatBedrockConverse extends BaseChatModel {
     )
   }
 
-  /** 非流式兜底：Converse `/converse` 返回标准 JSON（部分网关/模型只支持非流式） */
+  /** Non-streaming fallback: Converse `/converse` returns standard JSON (some gateways/models only support non-streaming) */
   private async requestNonStreaming(
     messages: BaseMessage[],
     tools: StructuredToolInterface[],
@@ -650,7 +655,7 @@ export class ChatBedrockConverse extends BaseChatModel {
   }
 }
 
-/** 宽容解析 JSON 响应体（非流式兜底/网关忽略 stream 时；失败返回 undefined） */
+/** Leniently parse a JSON response body (non-streaming fallback / gateway ignoring stream; undefined on failure) */
 function tryParseBedrockJson(text: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(text) as unknown
@@ -663,7 +668,7 @@ function tryParseBedrockJson(text: string): Record<string, unknown> | undefined 
   return undefined
 }
 
-/** 解析静态凭据（显式字段 → Bedrock 专用环境变量 → 标准 AWS 环境变量） */
+/** Resolve static credentials (explicit fields → Bedrock-specific env vars → standard AWS env vars) */
 function resolveStaticCredentials(fields: BedrockFields): StaticCredentials | undefined {
   if (fields.credentials?.accessKeyId && fields.credentials.secretAccessKey) {
     return fields.credentials

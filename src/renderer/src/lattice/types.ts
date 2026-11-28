@@ -1,19 +1,23 @@
 /**
- * Lattice 插件中心：渲染层类型。
+ * Lattice plugin center: renderer-side types.
  *
- * **DTO 的真源是 `src/main/lattice/types.ts`**（main / preload / renderer 三端共享类型，
- * 契约见 `lattice/.dev/ryten-lattice-contract.md` §2 与 `ryten-lattice-contract-v2.md` §2）；
- * 这里只做类型 re-export，保证渲染层与主进程不会各写一套类型漂移（type-only 导入在构建时被
- * 完全擦除，不会把主进程代码打进渲染包）。
+ * **The source of truth for the DTOs is `src/main/lattice/types.ts`** (types shared by main /
+ * preload / renderer); this file only re-exports types so the renderer and the main process do
+ * not drift into two separate definitions (type-only imports are fully erased at build time, so
+ * no main-process code ends up in the renderer bundle).
  *
- * v2（源码包 / 重新发布 / 下载资产 / 导入本地插件目录）的 DTO 已由主进程任务合入
- * `src/main/lattice/types.ts`，渲染层直接复用；`lattice/source.ts` 只保留**运行时能力探测**
- * （旧主进程 / 旧 preload 上这些方法可能还是 undefined，UI 按能力禁用入口）。
+ * The v2 DTOs (source package / republish / asset download / import local plugin directory) have
+ * landed in `src/main/lattice/types.ts`, so the renderer reuses them directly;
+ * `lattice/source.ts` keeps only the **runtime capability detection** (on an older main process /
+ * preload these methods may still be undefined, and the UI disables entries based on capabilities).
  *
- * 本文件额外提供：
- * - `LatticeApi`：直接取 preload 官方桥类型，preload 改签名时这里立刻编译失败；
- * - `LatticeV2Methods` / `LatticeV2CapabilityKey`：v2 方法的 optional 形状，只用于运行时能力探测；
- * - `EMPTY_LATTICE_STATUS` / `EMPTY_HUB_LIST` / `emptySyncResult()`：主进程通道缺失时的安全兜底值。
+ * This file additionally provides:
+ * - `LatticeApi`: takes the official preload bridge type directly, so a preload signature change
+ *   fails compilation here immediately;
+ * - `LatticeV2Methods` / `LatticeV2CapabilityKey`: the optional shape of the v2 methods, used only
+ *   for runtime capability detection;
+ * - `EMPTY_LATTICE_STATUS` / `EMPTY_HUB_LIST` / `emptySyncResult()`: safe fallback values when the
+ *   main-process channel is missing.
  */
 import type {
   HubDetail,
@@ -78,71 +82,76 @@ export type {
 } from '../../../main/lattice/types'
 
 /**
- * `window.api.lattice` 的桥形状：**直接取 preload 的官方类型**（`Window['api']['lattice']`，
- * 由 `src/preload/index.d.ts` 声明，DTO 真源是 `src/main/lattice/types.ts`）。
+ * Shape of the `window.api.lattice` bridge: **the official preload type is used directly**
+ * (`Window['api']['lattice']`, declared by `src/preload/index.d.ts`, with the DTOs sourced from
+ * `src/main/lattice/types.ts`).
  *
- * 这样渲染层不需要手写一份桥接口：preload 改签名（例如 `sourcePath(pluginId)`）
- * 时这里会立刻编译失败，而不是运行期才暴露。`getLatticeBridge()` 负责运行时探测桥是否存在
- * （主进程未注册通道 / 旧版 preload 环境下返回 null，UI 安全降级）。
+ * This way the renderer does not hand-write a bridge interface: a preload signature change (for
+ * example `sourcePath(pluginId)`) fails compilation here immediately instead of surfacing at
+ * runtime. `getLatticeBridge()` handles runtime bridge detection (null when the main process has
+ * not registered the channel / an older preload is running, and the UI degrades safely).
  */
 export type LatticeApi = Window['api']['lattice']
 
-/** v1 桥 + v2 增量（v2 方法在主进程类型里已是 required；运行时能力探测仍按 optional 处理） */
+/** v1 bridge + v2 additions (the v2 methods are required in the main-process types; runtime capability detection still treats them as optional) */
 export type LatticeBridgeV2 = LatticeApi
 
 // ---------------------------------------------------------------------------
-// 契约 v2 的页面别名：主进程 / preload 类型就绪后直接复用，避免两套 DTO 漂移
+// Page aliases for the v2 API: reuse the main-process / preload types once they land, avoiding
+// two DTO sets drifting apart
 // ---------------------------------------------------------------------------
 
-/** 目录项（含 v2 `has_source`） */
+/** Catalog entry (including the v2 `has_source` field) */
 export type HubEntryV2 = HubEntry
-/** 版本对象（含 v2 源码包元数据） */
+/** Version object (including v2 source package metadata) */
 export type HubVersionV2 = HubVersion
-/** 详情（readme + 版本清单 + 我的安装记录） */
+/** Details (readme + version list + my install records) */
 export type HubDetailV2 = HubDetail
-/** 目录分页结果 */
+/** Catalog page result */
 export type HubListResultV2 = HubListResult
-/** 安装结果（v2 多了 sourcePath / sourceManaged / sourceError，源码失败不影响安装） */
+/** Install result (v2 adds sourcePath / sourceManaged / sourceError; a source failure does not affect the install) */
 export type LatticeInstallResultV2 = LatticeInstallResult
-/** 下载资产类型（安装包 / 源码包） */
+/** Asset kind to download (package / source archive) */
 export type LatticeDownloadKind = LatticeDownloadAssetKind
-/** 下载资产结果 */
+/** Asset download result */
 export type LatticeDownloadResult = LatticeDownloadAssetResult
-/** 本机安装目录（`lattice:local-source-path`） */
+/** Local install directory (`lattice:local-source-path`) */
 export type LatticeLocalSourceResult = LatticeLocalSourcePathResult
 
 /**
- * 契约 v2 的桥增量方法（**optional 形状，只用于运行时能力探测**）。
+ * Incremental bridge methods for the v2 API (**optional shape, used only for runtime capability
+ * detection**).
  *
- * 主进程类型就绪后这些方法在 `window.api.lattice` 上已经是 required；但**运行中的旧主进程 /
- * 旧 preload** 上仍然没有它们。`detectLatticeV2Capabilities()` 逐方法 `typeof === 'function'`，
- * 页面按结果禁用入口并提示，而不是运行期 `not a function`。
+ * Once the main-process types land these methods are required on `window.api.lattice`; a
+ * **running older main process / preload** still lacks them. `detectLatticeV2Capabilities()`
+ * checks `typeof === 'function'` per method, and pages disable entries with a hint based on the
+ * result instead of hitting a runtime `not a function`.
  */
 export interface LatticeV2Methods {
-  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  /** Publish a locally installed plugin directly (package + source, no directory picker) */
   publishInstalled?: (pluginId: string) => Promise<LatticeUploadResult>
-  /** 本机源码目录（path/version/managed） */
+  /** Local source directory (path/version/managed) */
   sourcePath?: (pluginId: string) => Promise<LatticeSourcePathResult>
-  /** 本机已安装插件包目录（userData/plugins/<id>） */
+  /** Local installed plugin package directory (userData/plugins/<id>) */
   localSource?: (pluginId: string) => Promise<LatticeLocalSourceResult>
-  /** 打开源码：优先插件会话，失败回退文件管理器 */
+  /** Open source: prefer a plugin conversation, falling back to the file manager */
   openSource?: (pluginId: string) => Promise<LatticeOpenSourceResult>
-  /** 读本机源码目录重新打包（安装包 + 源码）并发布新版本 */
+  /** Read the local source directory, repackage (package + source), and publish a new version */
   republish?: (input: LatticeRepublishInput) => Promise<LatticeRepublishResult>
-  /** 下载某个版本的安装包 / 源码包（主进程弹保存框） */
+  /** Download a version's package / source archive (the main process shows a save dialog) */
   downloadAsset?: (
     pluginId: string,
     version: string,
     kind: LatticeDownloadKind
   ) => Promise<LatticeDownloadResult>
-  /** 弹目录选择框，把目录下所有 plugin.json 插件批量发布到插件中心 */
+  /** Show a directory picker and publish every plugin.json plugin under it to the plugin center in bulk */
   importLocalDir?: () => Promise<LatticeImportLocalDirResult>
 }
 
-/** v2 能力键（`LatticeV2Capabilities` 的键集合） */
+/** v2 capability keys (the key set of `LatticeV2Capabilities`) */
 export type LatticeV2CapabilityKey = keyof LatticeV2Methods
 
-/** 主进程未注册 lattice 通道时的安全兜底状态（不是错误：UI 会退化成「插件中心未就绪」） */
+/** Safe fallback status when the main process has not registered the lattice channel (not an error: the UI degrades to "plugin center not ready") */
 export const EMPTY_LATTICE_STATUS: LatticeStatus = {
   configured: false,
   baseUrl: '',
@@ -156,7 +165,7 @@ export const EMPTY_HUB_LIST: HubListResultV2 = {
   page_size: 0
 }
 
-/** 同步失败/不可用时的兜底结果（字段齐全，UI 先看 error 再展示计数） */
+/** Fallback result for a failed/unavailable sync (all fields present; the UI checks error before showing counts) */
 export function emptySyncResult(error?: string): LatticeSyncResult {
   return { at: 0, pushed: 0, pulled: 0, conflicts: 0, error }
 }

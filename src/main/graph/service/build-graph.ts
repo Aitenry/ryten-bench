@@ -112,11 +112,11 @@ export async function buildGraph(
     })
   }
 
-  // 1. 创建/重置构建任务
+  // 1. Create or reset the build job
   const jobId = await upsertBuildJob(wikiId, config as Record<string, unknown>)
 
   try {
-    // 2. 如果是强制重建，清空已有图谱数据
+    // 2. If forcing a rebuild, clear existing graph data
     if (config?.force) {
       sendProgress('cleanup', gp.messages.cleaningUp)
       await deleteRelationsByWikiId(wikiId)
@@ -125,7 +125,7 @@ export async function buildGraph(
       sendProgress('cleanup', gp.messages.cleanupDone)
     }
 
-    // 3. 快速收集所有文档
+    // 3. Collect all documents quickly
     currentPhaseIndex = PHASE_ORDER.indexOf('collect')
     phaseProgress = 0
     sendProgress('collect', gp.messages.collectingWikiDocs)
@@ -146,7 +146,7 @@ export async function buildGraph(
 
     await updateBuildJob(jobId, { status: 'running', total_notes: totalDocs })
 
-    // ========== Phase 1: 分块 + 统一抽取（实体+关系） ==========
+    // ========== Phase 1: Chunking + unified extraction (entities + relations) ==========
     currentPhaseIndex = PHASE_ORDER.indexOf('extract')
     phaseProgress = 0
     sendProgress('extract', gp.messages.preparingChunks, {
@@ -270,7 +270,7 @@ export async function buildGraph(
       await updateBuildJob(jobId, { processed_notes: processedDocs })
     }
 
-    // ========== Phase 2: Gleaning 二次抽取 ==========
+    // ========== Phase 2: Gleaning second-pass extraction ==========
     const enableGleaning = config?.enableGleaning !== false
     if (enableGleaning && allChunks.length > 0) {
       currentPhaseIndex = PHASE_ORDER.indexOf('gleaning')
@@ -347,7 +347,7 @@ export async function buildGraph(
       }
     }
 
-    // ========== Phase 3: 实体消歧合并 ==========
+    // ========== Phase 3: Entity deduplication merge ==========
     currentPhaseIndex = PHASE_ORDER.indexOf('merge_entities')
     phaseProgress = 0
     sendProgress('merge_entities', gp.messages.merging, {
@@ -377,9 +377,11 @@ export async function buildGraph(
       }
     )
 
-    // 合并结果落库（修复：此前合并只在内存——DB 里旧名行原样保留、新规范名没有 id，
-    // 导致消歧合并白跑，且置信度更新/关系保存对新规范名静默失败）：
-    // 规范名行 upsert（来源取并集），被合并掉的旧名行删除前把引用它的关系重指向规范行
+    // Persist merge results (fix: previously merging only happened in memory — old-name rows in
+    // the DB were kept as-is and new canonical names had no id, so deduplication was wasted and
+    // confidence updates / relation saves silently failed for new canonical names):
+    // Upsert canonical-name rows (union of sources); before deleting merged-away old-name rows,
+    // repoint relations referencing them to the canonical rows
     entityNameToId = await persistEntityMerges(
       wikiId,
       mergedEntities.map((e) => ({
@@ -393,7 +395,7 @@ export async function buildGraph(
       renameMap
     )
 
-    // ========== Phase 4: 跨块关系补全 ==========
+    // ========== Phase 4: Cross-chunk relation completion ==========
     const allEntityNames = mergedEntities.map((e) => e.name)
     const entityDescMap = new Map(
       mergedEntities.map((e) => [
@@ -510,7 +512,7 @@ export async function buildGraph(
       }
     }
 
-    // ========== Phase 5: 混合置信度计算 ==========
+    // ========== Phase 5: Hybrid confidence computation ==========
     currentPhaseIndex = PHASE_ORDER.indexOf('adjust_confidence')
     phaseProgress = 0
     sendProgress('adjust_confidence', gp.messages.adjustingConfidence, {
@@ -533,7 +535,7 @@ export async function buildGraph(
       relationCount: allExtractedRelations.length
     })
 
-    // ========== Phase 6: 更新实体置信度 ==========
+    // ========== Phase 6: Update entity confidence ==========
     currentPhaseIndex = PHASE_ORDER.indexOf('update_confidence')
     phaseProgress = 0
     sendProgress('update_confidence', gp.messages.updatingConfidence, {
@@ -554,7 +556,7 @@ export async function buildGraph(
       relationCount: allExtractedRelations.length
     })
 
-    // ========== Phase 7: 保存跨块关系 ==========
+    // ========== Phase 7: Save cross-chunk relations ==========
     currentPhaseIndex = PHASE_ORDER.indexOf('save_relations')
     phaseProgress = 0
     sendProgress('save_relations', gp.messages.savingRelations, {
@@ -565,7 +567,8 @@ export async function buildGraph(
 
     const relationSet = new Map<string, (typeof allExtractedRelations)[0]>()
     for (const rel of allExtractedRelations) {
-      // 端点可能是被合并掉的旧名：先经 renameMap 换算到规范名再取 id，避免关系被静默丢弃
+      // Endpoints may be merged-away old names: map them to canonical names via renameMap before
+      // looking up ids, so relations are not silently dropped
       const sourceId = entityNameToId.get(renameMap.get(rel.source) ?? rel.source)
       const targetId = entityNameToId.get(renameMap.get(rel.target) ?? rel.target)
       if (!sourceId || !targetId || sourceId === targetId) continue
@@ -600,7 +603,7 @@ export async function buildGraph(
       }
     )
 
-    // ========== 完成 ==========
+    // ========== Done ==========
     const allDocIds = docEntries.map((e) => e.docId)
     await updateBuildJob(jobId, {
       status: 'completed',

@@ -1,22 +1,15 @@
 import { RiToolsLine } from '@remixicon/react'
+import { ${vars.pascal}Locales } from '../locales'
 import type { PluginRenderContext } from './context'
+import Settings from './Settings'
 
 /**
- * 工具型插件同样需要渲染层入口（插件包契约要求 renderer.mjs 存在）。
- * 这里只注册一页设置说明，告诉用户工具在哪里启用。
+ * Renderer entry for ${vars.title} (**assembly only**).
+ *
+ * Tool plugins also need a renderer entry (the plugin package contract requires renderer.mjs to
+ * exist): register one read-only settings page telling the user what the tool is called and where to
+ * enable it. The tool contribution itself lives in the main process (harness.tool in main/index.ts).
  */
-function ToolSettings(): React.JSX.Element {
-  return (
-    <div className="flex max-w-[560px] flex-col gap-2">
-      <div className="text-[13px] font-medium">${vars.title}</div>
-      <div className="text-[12px] opacity-70">
-        本插件给助手贡献了工具 <code>${vars.toolName}</code>：在「设置 → 智能体 → 工具」里勾选后，
-        助手的下一轮对话就能调用它。停用本插件时该工具会立即从可用清单里消失。
-      </div>
-    </div>
-  )
-}
-
 const plugin = {
   install(ctx: PluginRenderContext): void {
     ctx.use('settingsSection').register({
@@ -25,12 +18,10 @@ const plugin = {
       icon: <RiToolsLine size={16} />,
       group: 'assistant',
       order: 95,
-      Component: ToolSettings
+      Component: Settings
     })
-    ctx.use('i18n').addResources('translation', {
-      'zh-CN': { '${vars.id}': { settings: { title: ${vars.titleJson} } } },
-      'en-US': { '${vars.id}': { settings: { title: ${vars.titleJson} } } }
-    })
+    // The first argument is the **namespace** (the host UI always uses 'translation'), the second is "language -> entry tree"
+    ctx.use('i18n').addResources('translation', ${vars.pascal}Locales)
   }
 }
 

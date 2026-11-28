@@ -1,10 +1,11 @@
 /**
- * MCP 资源工具：`list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`。
+ * MCP resource tools: `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`.
  *
- * 对照 DSH 的 `@deepseek-ai/dsh-mcp-resources`：MCP 服务器除了工具，还可能暴露 **resources**
- * （可读取的文档/数据）与 **resource templates**（参数化 URI）。工具本身只做参数校验、
- * 服务器状态检查与本地化，数据访问通过注入的 {@link McpResourceOps}（运行期由 mcp.ts 提供），
- * 因此离线测试可以完全替换数据源。
+ * Besides tools, an MCP server may expose **resources** (readable documents/data) and
+ * **resource templates** (parameterized URIs). The tools themselves only handle argument
+ * validation, server state checks and localization; data access goes through the injected
+ * {@link McpResourceOps} (supplied at runtime by mcp.ts), so offline tests can replace the data
+ * source entirely.
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -21,13 +22,14 @@ import {
   type McpToolTexts
 } from './mcp-resources-core'
 
-/** 资源工具的数据访问依赖（运行期由 mcp.ts 实现；测试可注入假实现） */
+/** Data-access dependencies of the resource tools (implemented at runtime by mcp.ts; tests can inject fakes) */
 export interface McpResourceOps {
-  /** 当前已连接的服务器名（配置名） */
+  /** Currently connected server names (config names) */
   servers: () => string[]
   /**
-   * 已连接且**声明了 resources 能力**的服务器名。
-   * 缺省视为「全都支持」（兼容旧注入/离线测试）；运行期由 mcp.ts 提供真实清单。
+   * Names of connected servers that **declare the resources capability**.
+   * Absent is treated as "all supported" (compatible with older injections/offline tests); at
+   * runtime mcp.ts supplies the real list.
    */
   resourceCapableServers?: () => string[]
   listResources: (
@@ -42,14 +44,16 @@ export interface McpResourceOps {
 }
 
 /**
- * 构造三个 MCP 资源工具。
+ * Build the three MCP resource tools.
  *
- * 未连接任何服务器 / 服务器名写错时直接返回可操作提示，不进入网络调用；服务器返回的
- * 内容按「文本 + 可选图片」投影——图片走与 read_image 相同的工具图像通道。
+ * When no server is connected or the server name is wrong, an actionable hint is returned without
+ * a network call; content returned by the server is projected as "text + optional images" — images
+ * use the same tool image channel as read_image.
  *
- * `allowedServers` 是**本轮启用的服务器**：资源工具只允许读这几台（勾了 A 不能顺手读 B）。
- * 缺省不限制（离线测试/旧调用）；运行期由 `builders.ts` 传「勾选 ∩ 声明了 resources」的清单，
- * 一台都没有时干脆不构造这三个工具。
+ * `allowedServers` is the **set of servers enabled this turn**: the resource tools may only read
+ * those (selecting A must not allow reading B). Absent means unrestricted (offline tests/legacy
+ * calls); at runtime `builders.ts` passes the intersection of "selected" and "declares resources",
+ * and when none remain the three tools are simply not built.
  */
 export function buildMcpResourceTools(
   ops: McpResourceOps,
@@ -58,7 +62,7 @@ export function buildMcpResourceTools(
 ): StructuredToolInterface[] {
   const allowed = allowedServers ? new Set(allowedServers) : null
 
-  /** 服务器名校验：返回 null 表示可用，否则是给模型看的提示文案 */
+  /** Server name validation: returns null when usable, otherwise a hint text shown to the model */
   const serverError = (server: string): string | null => {
     let connected: string[] = []
     try {

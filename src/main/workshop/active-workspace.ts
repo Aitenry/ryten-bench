@@ -5,24 +5,30 @@ import { APP_EVENT_WORKSPACE_CHANGED } from '../plugins/app-hooks'
 import type { HarnessSettings } from '../types/settings'
 
 /**
- * 删除插件草稿后的**机器级设置复位**（活动工作区 / 插件模式记住的内容）。
+ * **Machine-level settings reset** after a plugin draft is deleted (active workspace /
+ * content remembered by plugin mode).
  *
- * 为什么单独成文件：`workshop/workspace.ts` 只依赖数据库与路径，离线测试可以直接
- * 用它验证「插件工作区行」；这一层需要 electron 的设置存储与事件总线，只有主进程的
- * IPC / AI 工具会调，不该让纯逻辑模块跟着 import electron-store。
+ * Why a separate file: `workshop/workspace.ts` depends only on the database and paths, so
+ * offline tests can use it directly to verify "plugin workspace rows"; this layer needs the
+ * electron settings store and the event bus, is only called by main-process IPC / AI tools,
+ * and should not force pure logic modules to import electron-store.
  */
 
 /**
- * 草稿源码目录被删除后，如果它正是**当前活动工作区**，把活动工作区复位。
+ * After a draft source directory is deleted, reset the active workspace if it is the
+ * **currently active one**.
  *
- * 为什么必须做：插件工作区行与会话要保留（删源码不等于删对话），但 `harness.workspacePath`
- * 还指着已删除的目录时，AI 的文件工具、资源管理器、文件监听都会对着不存在的路径报 ENOENT，
- * 用户看到的是「删了插件后对话页一堆报错 / 新建会话没反应」。
+ * Why this is required: the plugin workspace row and its sessions must be kept (deleting
+ * source is not deleting conversations), but while `harness.workspacePath` still points at
+ * the deleted directory, the AI file tools, the file explorer, and the file watcher all
+ * report ENOENT for a nonexistent path, so the user sees "a pile of errors on the chat page
+ * after deleting a plugin / new sessions do nothing".
  *
- * 只清 `workspacePath` / `activeWorkspaceId`（与「删掉最后一个用户工作区」同一套复位），
- * 工作区行与其下会话原样保留；重建同名草稿后它们会重新可用。
+ * Only `workspacePath` / `activeWorkspaceId` are cleared (the same reset as "deleting the
+ * last user workspace"); the workspace row and its sessions are preserved and become usable
+ * again once a draft with the same name is rebuilt.
  *
- * @returns 是否真的复位了
+ * @returns Whether a reset actually happened
  */
 export function clearActiveWorkspaceIfRemoved(dir: string): boolean {
   try {
@@ -45,10 +51,12 @@ export function clearActiveWorkspaceIfRemoved(dir: string): boolean {
 }
 
 /**
- * 草稿删除后，清掉「插件模式上次看的那条内容」里对它的引用（无论它是不是当前活动工作区）。
+ * After a draft is deleted, clear its reference from "the content plugin mode last viewed"
+ * (regardless of whether it is the active workspace).
  *
- * 不做的话：用户在工作模式删掉某插件源码，之后再切到插件模式，侧栏仍按记忆里的
- * `pluginId` 去打开一个已不存在的插件（一条错误提示），而不是回落到第一份可用插件。
+ * Otherwise: after the user deletes a plugin's source in work mode and later switches to
+ * plugin mode, the sidebar still tries to open the remembered `pluginId` of a plugin that no
+ * longer exists (one error notice) instead of falling back to the first available plugin.
  */
 export function clearRememberedPluginContent(pluginId: string): void {
   try {
@@ -56,6 +64,6 @@ export function clearRememberedPluginContent(pluginId: string): void {
     if (!harness?.pluginContent || harness.pluginContent.pluginId !== pluginId) return
     settingsStore.set('harness', { ...harness, pluginContent: null })
   } catch {
-    // 设置读写失败不影响删除本身
+    // A settings read/write failure does not affect the deletion itself
   }
 }

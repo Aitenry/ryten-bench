@@ -2,60 +2,65 @@ import { app } from 'electron'
 import logger from 'electron-log'
 
 /**
- * 渲染进程内存采样（OOM 可观测性）。
+ * Renderer process memory sampling (OOM observability).
  *
- * 背景（2026-09-17 排查 reason=oom / exitCode=-536870904）：崩溃时主进程只留一行
- * `[Window] 渲染进程退出 reason=oom exitCode=-536870904`，没有任何内存数字——只能靠
- * 「历史消息多 + 工具输出大」推断根因，无法确认是哪一段流量把水位推上去的。
+ * Background (2026-09-17 investigation of reason=oom / exitCode=-536870904): on crash the main
+ * process only leaves a single line such as
+ * `[Window] renderer process exited reason=oom exitCode=-536870904`, with no memory numbers at
+ * all — the root cause could only be inferred from "many history messages + large tool outputs",
+ * and it was impossible to confirm which traffic pushed the watermark up.
  *
- * 数据源用 `app.getAppMetrics()`（Electron 官方、同步、按进程给 workingSetSize /
- * peakWorkingSetSize / privateBytes），只统计 type='Tab' 的渲染进程。
+ * The data source is `app.getAppMetrics()` (official Electron, synchronous, per-process
+ * workingSetSize / peakWorkingSetSize / privateBytes); only renderer processes with type='Tab' are
+ * counted.
  *
- * 行为：
- * - 流式期间每 {@link RENDERER_MEM_SAMPLE_MS} 采一次，常规日志节流到每
- *   {@link RENDERER_MEM_LOG_EVERY_S} 秒一条，便于在日志里看曲线；
- * - 工作集超过 {@link RENDERER_MEM_WARN_MB} 时每次都记并标 ⚠，便于直接 grep；
- * - 渲染进程崩溃/被杀时由主窗口的 render-process-gone 调用 {@link dumpRendererMemory}，
- *   输出**最后一份采样 + 最近趋势（含增速）**——崩溃后进程已消失，只能靠缓存。
+ * Behavior:
+ * - During streaming, sample every {@link RENDERER_MEM_SAMPLE_MS}; regular logs are throttled to one
+ *   line every {@link RENDERER_MEM_LOG_EVERY_S} seconds so curves are visible in the log;
+ * - When the working set exceeds {@link RENDERER_MEM_WARN_MB}, log every sample and tag it with ⚠ so
+ *   it can be grepped directly;
+ * - When the renderer process crashes / is killed, the main window's render-process-gone calls
+ *   {@link dumpRendererMemory}, which prints **the last sample + recent trend (including growth
+ *   rate)** — after the crash the process is gone, so only cached values remain.
  *
- * 只读内存指标，不改变任何业务行为。
+ * Read-only memory metrics; no business behavior is changed.
  */
 
-/** 采样间隔（毫秒） */
+/** Sampling interval (ms) */
 const RENDERER_MEM_SAMPLE_MS = 5_000
-/** 常规日志节流（秒） */
+/** Regular log throttle (seconds) */
 const RENDERER_MEM_LOG_EVERY_S = 20
-/** 工作集告警阈值（MiB）：超过则每次采样都记一条 */
+/** Working set warning threshold (MiB): log every sample above it */
 const RENDERER_MEM_WARN_MB = 1500
-/** 崩溃时认为「采样仍然新鲜」的窗口（毫秒） */
+/** Window (ms) within which a sample still counts as fresh at crash time */
 const RENDERER_MEM_STALE_MS = 15_000
-/** 趋势窗口：保留最近这么多个采样点用于算增速 */
+/** Trend window: keep this many recent samples for growth-rate calculation */
 const RENDERER_MEM_TREND_POINTS = 12
 
 interface MemorySnapshot {
   at: number
-  /** 渲染进程工作集合计（KiB） */
+  /** Total renderer working set (KiB) */
   workingSetKb: number
-  /** 渲染进程私有内存合计（KiB，win32 才有；含 JS 堆与 DOM 内容，OOM 主指标） */
+  /** Total renderer private memory (KiB, win32 only; includes the JS heap and DOM content, the main OOM indicator) */
   privateKb: number
-  /** 渲染进程历史峰值工作集合计（KiB） */
+  /** Total historical peak working set of renderer processes (KiB) */
   peakKb: number
-  /** 渲染进程个数 */
+  /** Number of renderer processes */
   count: number
-  /** 上下文标签（如 `topic=205`） */
+  /** Context label (e.g. `topic=205`) */
   label?: string
 }
 
 const trend: MemorySnapshot[] = []
 let timer: ReturnType<typeof setInterval> | null = null
-/** 采样会话引用计数：目标自动轮与用户轮可能并发，最后一个结束才停表 */
+/** Sampling session ref count: the target auto-turn and the user turn may overlap; stop the timer only when the last one ends */
 let activeSessions = 0
 let firstSampleLogged = false
 let lastLogAt = 0
 
 const mib = (kb: number): string => (kb / 1024).toFixed(1)
 
-/** 采集当前渲染进程内存（同步；非渲染进程类型一律忽略） */
+/** Collect current renderer memory (synchronous; non-renderer process types are ignored) */
 function collect(label?: string): MemorySnapshot | null {
   let metrics: Electron.ProcessMetric[]
   try {
@@ -77,7 +82,7 @@ function collect(label?: string): MemorySnapshot | null {
   return { at: Date.now(), workingSetKb, privateKb, peakKb, count: renderers.length, label }
 }
 
-/** 组装一行日志：工作集 / 私有内存 / 峰值 / 进程数 / 上下文 */
+/** Assemble one log line: working set / private memory / peak / process count / context */
 function formatSnapshot(snap: MemorySnapshot): string {
   const label = snap.label ? ` (${snap.label})` : ''
   const procs = snap.count > 1 ? ` procs=${snap.count}` : ''
@@ -88,7 +93,7 @@ function formatSnapshot(snap: MemorySnapshot): string {
   )
 }
 
-/** 趋势摘要：首尾差值与平均增速（每 10s），用于判断「缓涨」还是「陡增」 */
+/** Trend summary: delta between first and last plus average growth per 10s, to tell "slow creep" from "steep rise" */
 function formatTrend(): string {
   if (trend.length < 2) return ''
   const first = trend[0]
@@ -115,19 +120,19 @@ function sample(label?: string): void {
   logger.info(`[Memory] Renderer ${formatSnapshot(snap)}${formatTrend()}${warn}`)
 }
 
-/** 开始采样（引用计数，可并发调用） */
+/** Start sampling (ref counted, safe to call concurrently) */
 export function startRendererMemorySampling(label?: string): void {
   activeSessions += 1
   if (timer) return
   firstSampleLogged = false
   lastLogAt = 0
   trend.length = 0
-  // 立即采一次：拿到「本轮开始时的基线」，方便对比本轮涨了多少
+  // Sample immediately: capture the baseline at the start of this turn so growth can be compared
   sample(label)
   timer = setInterval(() => sample(label), RENDERER_MEM_SAMPLE_MS)
 }
 
-/** 结束采样（引用计数归零才真正停表） */
+/** Stop sampling (the timer really stops only when the ref count reaches zero) */
 export function stopRendererMemorySampling(): void {
   activeSessions = Math.max(0, activeSessions - 1)
   if (activeSessions > 0) return
@@ -138,8 +143,9 @@ export function stopRendererMemorySampling(): void {
 }
 
 /**
- * 崩溃时落一份内存快照 + 崩溃原因。
- * 渲染进程已经没了，这里只能用最后一次成功采样（通常距今不超过一个采样间隔）。
+ * Dump a memory snapshot + crash reason at crash time.
+ * The renderer process is already gone, so only the last successful sample can be used (usually no
+ * more than one sampling interval old).
  */
 export function dumpRendererMemory(reason: string, exitCode: number): void {
   const head = `[Memory] Renderer process exited reason=${reason} exitCode=${exitCode}`

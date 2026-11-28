@@ -15,21 +15,24 @@ import SearchSettings from '@renderer/components/harness/settings/SearchSettings
 import GraphSettings from '@renderer/components/notes/settings/GraphSettings'
 
 /**
- * 设置页注册表（AI 助手 / 资料库）。
+ * Settings page registry (AI assistant / knowledge base).
  *
- * - `assistant` 组（智能体 / 技能 / 记忆 / MCP）渲染在「更多内容」独立页面（pages/More.tsx）；
- * - `general` 组（图谱）留在设置弹窗（SettingsModal.tsx）的常规分组里。
+ * - The `assistant` group (agents / skills / memory / MCP) renders on the separate "More" page
+ *   (pages/More.tsx);
+ * - The `general` group (graph) stays in the regular group of the settings modal
+ *   (SettingsModal.tsx).
  *
- * 这些页面随应用一起编译进来，不经过插件注册表：没有 pluginId、没有启用态、
- * 也不会因为“停用某个插件”而消失。第三方插件的设置页在插件仓库里，不在这里。
+ * These pages are compiled into the app and do not go through the plugin registry: no pluginId, no
+ * enabled state, and they do not disappear because "some plugin is disabled". Third-party plugin
+ * settings pages live in the plugin repository, not here.
  */
 export interface SystemSettingsSection {
   tabKey: string
   labelKey: string
-  /** 页头描述词条（「更多内容」独立页面的 hero 用；弹窗里由页面自己的 SettingsPageHeader 渲染） */
+  /** Page-header description key (used by the "More" page hero; in the modal the page's own SettingsPageHeader renders it) */
   descriptionKey?: string
   icon: React.ReactNode
-  /** 导航分组（`assistant` = 助手相关；`general` = 应用通用） */
+  /** Nav group (`assistant` = assistant-related; `general` = app-generic) */
   group: 'assistant' | 'general'
   order: number
   Component: React.ComponentType

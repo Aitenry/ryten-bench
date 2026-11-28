@@ -1,8 +1,8 @@
 import { pgTable, serial, text, timestamp, integer, index, foreignKey } from 'drizzle-orm/pg-core'
-// 迁移说明：core 的 images 表（知识库封面共用）用相对路径 import（drizzle-kit 不解析 paths）
+// Migration note: the core `images` table (shared by knowledge base covers) is imported with a relative path (drizzle-kit does not resolve paths)
 import { images } from '../common'
 
-/** 知识库表（全局数据，不按工作区隔离） */
+/** Knowledge base table (global data, not isolated per workspace) */
 export const wiki = pgTable(
   'wiki',
   {
@@ -28,7 +28,10 @@ export const wiki = pgTable(
   ]
 )
 
-/** 知识库目录表：parent_id 自引用形成树，删除知识库时级联删除 */
+/**
+ * Knowledge base directory table: parent_id self-references to form a tree; deleting a knowledge
+ * base cascades the delete
+ */
 export const wiki_directories = pgTable(
   'wiki_directories',
   {

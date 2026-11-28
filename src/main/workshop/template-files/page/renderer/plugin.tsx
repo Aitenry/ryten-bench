@@ -3,14 +3,16 @@ import type { PluginRenderContext } from './context'
 import Page from './Page'
 
 /**
- * 渲染层入口：宿主装载本插件时调用 install(ctx)。
+ * Renderer entry: the host calls install(ctx) when it loads this plugin.
  *
- * 注册的都是**可逆装配**：插件停用时宿主会把这些注册项一并摘除
- * （菜单消失、路由卸载、词条移除），不需要自己写反注册。
+ * Every registration is a **reversible assembly**: the host removes all of them when the
+ * plugin is disabled (menu disappears, route unmounts, strings removed), so no manual
+ * unregistering is needed.
  *
- * 注意 icon 用的 `${vars.menuIcon}`：名字必须是 `@remixicon/react` 里真实存在的导出
- * （写错 = 运行期 undefined → JSX 抛「Element type is invalid」白屏），
- * 并且与 `plugin.json` 的 `menu.icon` 保持同一枚（清单图标只影响首帧）。
+ * Note the icon uses `${vars.menuIcon}`: the name must be a real export from
+ * `@remixicon/react` (a typo yields undefined at runtime → JSX throws
+ * "Element type is invalid" and the page goes blank), and it must be the same icon as
+ * `plugin.json`'s `menu.icon` (the manifest icon only affects the first frame).
  */
 const plugin = {
   install(ctx: PluginRenderContext): void {
@@ -19,7 +21,7 @@ const plugin = {
       load: () => import('./Page')
     })
     ctx.use('menu').register({
-      // 菜单键必须与路由路径一致：点击菜单是 navigate('/' + key)
+      // The menu key must match the route path: clicking a menu item navigates to '/' + key
       key: '${vars.id}',
       labelKey: '${vars.id}.menu.title',
       icon: <${vars.menuIcon} size={16} />,

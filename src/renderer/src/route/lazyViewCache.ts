@@ -3,22 +3,24 @@ import type { ComponentType, LazyExoticComponent } from 'react'
 import type { LazyLoader } from '@renderer/plugin-host/types'
 
 /**
- * 懒路由视图缓存：**同一个 load 工厂永远对应同一个 React.lazy 实例**。
+ * Lazy route view cache: **the same load factory always maps to the same React.lazy instance**.
  *
- * 为什么必须稳定（2026-09-26 线上复现 + CDP 采样定位）：
- * 目标路由的 chunk 还没就绪时，这次导航的渲染会抛出 lazy 的 promise 而挂起；React 在并发
- * 渲染（react-router v7 的导航默认走 startTransition）里会把这次**未提交**的渲染整棵丢弃
- * （unwind），等 ping 之后从根重试。重试等同于**重新挂载**路由视图组件——所以任何基于
- * `useMemo`/组件内状态的缓存都会失效：
+ * Why it must be stable (reproduced in production on 2026-09-26 and pinpointed with CDP
+ * sampling): while the target route's chunk is not ready, rendering that navigation throws the
+ * lazy promise and suspends; under concurrent rendering (react-router v7 navigations default to
+ * startTransition) React discards the whole **uncommitted** render (unwind) and retries from the
+ * root after the ping. A retry amounts to **remounting** the route view component, so any cache
+ * based on `useMemo` or component state is useless:
  *
- *   useMemo(() => lazy(route.load), [route])   // ❌ 每轮重试都新建 lazy + 新 promise
- *   lazyViewFor(route.load)                    // ✅ 跨重试拿到同一个 lazy（payload 已 resolved）
+ *   useMemo(() => lazy(route.load), [route])   // ❌ creates a new lazy + promise on every retry
+ *   lazyViewFor(route.load)                    // ✅ same lazy across retries (payload resolved)
  *
- * 前者每次都抛出一个全新的 promise，Suspense 永远等不到「已 resolved 的 payload」，
- * 于是 ping → 重试 → 再挂起 无限循环：表现为点击菜单后 URL（hash）与侧栏高亮都变了，
- * 中间视图却一直停在上一页，渲染进程 100% CPU 空转（采样栈恒为
- * lazyInitializer → resolveLazy → renderRootConcurrent）；必须点一次非懒路由
- * （首页，直接提交）再点目标页才生效。
+ * The former throws a brand-new promise each time, so Suspense can never see an already-resolved
+ * payload, resulting in an endless ping → retry → suspend loop: after clicking a menu item the
+ * URL (hash) and sidebar highlight change, but the middle view stays on the previous page and
+ * the renderer spins at 100% CPU (the sampled stack is always
+ * lazyInitializer → resolveLazy → renderRootConcurrent); you have to click a non-lazy route
+ * (the home page, which commits directly) and then click the target page before it works.
  */
 
 const cache = new WeakMap<object, LazyExoticComponent<ComponentType>>()

@@ -1,7 +1,8 @@
 /**
- * 全局活动工作区上下文（供 AI 工具层与 IPC 层共用）。
- * 由主进程启动时注入 provider；聊天工具运行在主进程内，
- * 通过此模块读取当前活动工作区，与 IPC 层保持一致的数据隔离。
+ * Global active-workspace context (shared by the AI tool layer and the IPC layer).
+ * The provider is injected by the main process at startup; chat tools run inside the main process and
+ * read the current active workspace through this module, keeping data isolation consistent with the
+ * IPC layer.
  */
 let provider: () => number = () => 0
 

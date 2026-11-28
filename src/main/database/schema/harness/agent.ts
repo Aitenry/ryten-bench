@@ -11,7 +11,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { workspace } from '../workspace'
 
-/** 子代理（助手）配置表：按工作区隔离，同一工作区内 name 唯一 */
+/** Subagent (assistant) config table: isolated per workspace; name is unique within a workspace */
 export const agent_config = pgTable(
   'agent_config',
   {
@@ -25,7 +25,7 @@ export const agent_config = pgTable(
     model: text(),
     tools: text(),
     enable: boolean().default(true),
-    /** 配置版本：每次更新 +1（DSH agent preset revision 的轻量对应物；会话快照可追溯） */
+    /** Config revision: incremented on every update (a lightweight counterpart of agent preset revisions; keeps session snapshots traceable) */
     revision: integer().notNull().default(0),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
     updated_at: timestamp({ mode: 'string' }).defaultNow()

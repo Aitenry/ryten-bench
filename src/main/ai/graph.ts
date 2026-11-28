@@ -1,25 +1,28 @@
 /**
- * 自研图执行引擎（替代 `@langchain/langgraph`）。
+ * Self-contained graph execution engine.
  *
- * 项目里只用到「单状态 + 条件边」的极简子集：
- *   START → model → (有工具调用 ? tools : END) → model …
- * 因此这里只实现：
- * - `Annotation` / `Annotation.Root`：声明状态通道（可带 reducer / 默认值）；
- * - `StateGraph`：addNode / addEdge / addConditionalEdges / compile；
- * - 编译产物：`invoke`（返回最终状态）与 `stream`（`streamMode: ['messages']`
- *   ——把节点内模型调用产生的增量块按 `[mode, [chunk, metadata]]` 推出来）；
- * - `GraphRecursionError`：步数超限时抛出（上层据此优雅收尾，而不是把整轮判失败）。
+ * The project only needs a minimal subset: "single state + conditional edges":
+ *   START → model → (has tool calls ? tools : END) → model …
+ * So only the following are implemented:
+ * - `Annotation` / `Annotation.Root`: declare state channels (optionally with a reducer / default);
+ * - `StateGraph`: addNode / addEdge / addConditionalEdges / compile;
+ * - the compiled artifact: `invoke` (returns the final state) and `stream` (`streamMode: ['messages']`
+ *   — emits incremental chunks produced by model calls inside nodes as `[mode, [chunk, metadata]]`);
+ * - `GraphRecursionError`: thrown when the step limit is exceeded (the upper layer wraps up
+ *   gracefully instead of failing the whole turn).
  *
- * 与框架版的一处刻意差异：子图（task 工具里跑的代理图）的增量块**不会**冒泡到主图流——
- * 子代理自己把块转成 `sub_*` 记录；主图因此不需要「按 checkpoint ns 过滤子图」的补丁。
+ * One deliberate difference from a full framework implementation: incremental chunks from
+ * subgraphs (agent graphs run by the task tool) do **not** bubble up to the main graph stream —
+ * the sub-agent turns the chunks into `sub_*` records itself; the main graph therefore doesn't need
+ * a "filter subgraphs by checkpoint ns" patch.
  */
 
-/** 图起点标记 */
+/** Graph entry marker */
 export const START = '__start__'
-/** 图终点标记 */
+/** Graph end marker */
 export const END = '__end__'
 
-/** 递归步数超限（名字保持旧实现，上层有 `instanceof` 与 `name` 双重判断） */
+/** Recursion step limit exceeded (the name is kept for compatibility; the upper layer checks both `instanceof` and `name`) */
 export class GraphRecursionError extends Error {
   constructor(message = 'Recursion limit reached') {
     super(message)
@@ -27,27 +30,27 @@ export class GraphRecursionError extends Error {
   }
 }
 
-/** 整体覆盖某通道（保留旧类型名，供上层类型签名使用） */
+/** Overwrite an entire channel (the type name is kept for upper-layer type signatures) */
 export interface OverwriteValue<T> {
   readonly __overwrite: T
 }
 
-/** 状态通道声明 */
+/** State channel declaration */
 export interface AnnotationDefinition<T> {
-  /** 同一通道多次写入时的合并方式（缺省为覆盖）；用方法签名以保持参数双变（便于推导状态类型） */
+  /** How multiple writes to the same channel are merged (overwrite by default); declared as a method signature to keep the parameter bivariant (for state type inference) */
   reducer?(left: T, right: T): T
-  /** 初始值工厂（输入未提供该字段时使用） */
+  /** Initial value factory (used when the input doesn't provide the field) */
   default?(): T
 }
 
-/** 创建通道声明（`Annotation<T>({...})`） */
+/** Create a channel declaration (`Annotation<T>({...})`) */
 function createAnnotation<T>(options?: AnnotationDefinition<T>): AnnotationDefinition<T> {
   return options ?? {}
 }
 
 type AnnotationMap = Record<string, AnnotationDefinition<unknown>>
 
-/** `Annotation.Root(...)` 的返回值：通道表（同时携带状态类型） */
+/** Return value of `Annotation.Root(...)`: the channel table (also carrying the state type) */
 export interface AnnotationRoot<S> {
   readonly channels: { readonly [K in keyof S]: AnnotationDefinition<S[K]> }
 }
@@ -57,8 +60,8 @@ type StateFromAnnotations<M extends AnnotationMap> = {
 }
 
 /**
- * 状态声明入口。
- * 用法：`const AgentState = Annotation.Root({ messages: Annotation<BaseMessage[]>({...}) })`
+ * State declaration entry point.
+ * Usage: `const AgentState = Annotation.Root({ messages: Annotation<BaseMessage[]>({...}) })`
  */
 export const Annotation = Object.assign(createAnnotation, {
   Root<M extends AnnotationMap>(map: M): AnnotationRoot<StateFromAnnotations<M>> {
@@ -66,53 +69,53 @@ export const Annotation = Object.assign(createAnnotation, {
   }
 })
 
-/** 视为不变的状态对象（节点返回值按通道 reducer 合并） */
+/** State object treated as immutable (node return values are merged per channel reducer) */
 type StateUpdate<S> = Partial<S> | void
 
-/** 节点函数 */
+/** Node function */
 export type GraphNodeFn<S> = (
   state: S,
   config: GraphNodeConfig
 ) => StateUpdate<S> | Promise<StateUpdate<S>>
 
-/** 条件边路由：返回下一个节点名或 END */
+/** Conditional edge routing: returns the next node name or END */
 export type GraphRouter<S> = (state: S) => string
 
-/** 节点执行配置（同时作为模型调用的透传配置） */
+/** Node execution config (also passed through as the model call config) */
 export type GraphNodeConfig = {
   signal?: AbortSignal
   configurable: Record<string, unknown>
-  /** 模型增量块出口（由 graph.stream 注入；invoke 时不提供） */
+  /** Model chunk outlet (injected by graph.stream; not provided for invoke) */
   onModelChunk?: (chunk: unknown) => void
-  /** 当前图执行标识（日志 / 排查用） */
+  /** Current graph execution id (for logging / troubleshooting) */
   runId?: string
   [key: string]: unknown
 }
 
-/** 兼容旧类型名（agent.ts 的节点签名使用） */
+/** Compatible with the old type name (used by the node signatures in agent.ts) */
 export type LangGraphRunnableConfig = GraphNodeConfig
 
-/** 图执行选项 */
+/** Graph execution options */
 export interface GraphRunOptions {
-  /** 最大节点执行步数（缺省 25） */
+  /** Maximum node execution steps (default 25) */
   recursionLimit?: number
   signal?: AbortSignal
-  /** 透传给节点 / 工具的运行期配置（topicId、turnSource 等） */
+  /** Runtime config passed through to nodes / tools (topicId, turnSource, etc.) */
   configurable?: Record<string, unknown>
 }
 
-/** 流式选项：只支持 messages 模式（项目唯一用到的模式） */
+/** Streaming options: only messages mode is supported (the only mode the project uses) */
 export interface GraphStreamOptions extends GraphRunOptions {
   streamMode?: 'messages' | Array<'messages'>
 }
 
-/** 编译后的图 */
+/** Compiled graph */
 export interface CompiledStateGraph<
   State = Record<string, unknown>,
   Update = Partial<State>,
   Nodes extends string = string
 > {
-  /** 节点名联合类型（类型层标记，运行期不存在） */
+  /** Union type of node names (type-level marker; doesn't exist at runtime) */
   readonly __nodes?: Nodes
   invoke(input: Update, options?: GraphRunOptions): Promise<State>
   stream(
@@ -121,10 +124,10 @@ export interface CompiledStateGraph<
   ): AsyncIterable<[string, [unknown, Record<string, unknown>]]>
 }
 
-/** 一条流式事件：`[mode, [chunk, metadata]]`（与旧实现同形） */
+/** One streaming event: `[mode, [chunk, metadata]]` */
 export type GraphStreamEvent = [string, [unknown, Record<string, unknown>]]
 
-/** 简易异步队列：后台执行图、前台消费事件 */
+/** Simple async queue: run the graph in the background and consume events in the foreground */
 class AsyncEventQueue<T> implements AsyncIterable<T> {
   private items: T[] = []
   private waiters: Array<() => void> = []
@@ -158,14 +161,14 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   }
 }
 
-/** 取消错误（保持 name=AbortError，上层静默收尾） */
+/** Cancellation error (keeps name=AbortError so the upper layer can finish silently) */
 function abortError(): Error {
   const error = new Error('Graph execution aborted')
   error.name = 'AbortError'
   return error
 }
 
-/** 图定义 */
+/** Graph definition */
 export class StateGraph<S extends Record<string, unknown>> {
   private readonly channels: { readonly [K in keyof S]: AnnotationDefinition<S[K]> }
   private readonly nodes = new Map<string, GraphNodeFn<S>>()
@@ -177,14 +180,14 @@ export class StateGraph<S extends Record<string, unknown>> {
     this.channels = annotation.channels
   }
 
-  /** 注册节点 */
+  /** Register a node */
   addNode<K extends string>(name: K, fn: GraphNodeFn<S>): this {
     if (this.nodes.has(name)) throw new Error(`Node "${name}" is already registered`)
     this.nodes.set(name, fn)
     return this
   }
 
-  /** 注册固定边（from 可为 START） */
+  /** Register a fixed edge (from can be START) */
   addEdge(from: string, to: string): this {
     if (from === START) {
       this.startNode = to
@@ -194,13 +197,13 @@ export class StateGraph<S extends Record<string, unknown>> {
     return this
   }
 
-  /** 注册条件边（路由函数返回下个节点名或 END） */
+  /** Register a conditional edge (the router returns the next node name or END) */
   addConditionalEdges(from: string, router: GraphRouter<S>): this {
     this.conditionalEdges.set(from, router)
     return this
   }
 
-  /** 编译：校验图结构后返回可执行图 */
+  /** Compile: validate the graph structure and return an executable graph */
   compile(): CompiledStateGraph<S, Partial<S>, string> {
     const startNode = this.startNode
     if (!startNode) throw new Error('Graph has no entry point: call addEdge(START, "<node>") first')
@@ -227,7 +230,7 @@ export class StateGraph<S extends Record<string, unknown>> {
   }
 }
 
-/** 编译产物实现 */
+/** Compiled artifact implementation */
 class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateGraph<
   S,
   Partial<S>,
@@ -241,7 +244,7 @@ class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateG
     private readonly startNode: string
   ) {}
 
-  /** 按通道默认值 + 输入初始化状态 */
+  /** Initialize state from channel defaults + input */
   private initialize(input: Partial<S>): S {
     const state = {} as S
     for (const key of Object.keys(this.channels) as Array<keyof S>) {
@@ -256,7 +259,7 @@ class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateG
     return state
   }
 
-  /** 合并节点返回值（有 reducer 走 reducer，否则覆盖；undefined 跳过） */
+  /** Merge node return values (use the reducer when present, otherwise overwrite; skip undefined) */
   private applyUpdate(state: S, update: StateUpdate<S>): void {
     if (!update) return
     for (const key of Object.keys(update) as Array<keyof S>) {
@@ -275,7 +278,7 @@ class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateG
     }
   }
 
-  /** 计算下一个节点（不存在则返回 END） */
+  /** Compute the next node (return END when there is none) */
   private nextNode(current: string, state: S): string {
     const fixed = this.edges.get(current)
     if (fixed) return fixed
@@ -284,7 +287,7 @@ class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateG
     return END
   }
 
-  /** 单步执行 + 递归上限守卫 */
+  /** Run one step + guard the recursion limit */
   private async runStep(
     nodeName: string,
     state: S,
@@ -348,7 +351,7 @@ class CompiledGraph<S extends Record<string, unknown>> implements CompiledStateG
                 chunk,
                 {
                   langgraph_node: nodeName,
-                  // 保持旧实现的命名空间形状（主图 model 节点以 "model:" 开头）
+                  // Keep the namespace shape (the main graph's model node names start with "model:")
                   langgraph_checkpoint_ns: `${nodeName}:${runId}`
                 }
               ]

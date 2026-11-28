@@ -17,32 +17,37 @@ import {
 } from './permission'
 
 /**
- * 权限档位的**持久化与接线**（electron-store 的 `permissions` 键 + 闸门接线）。
+ * **Persistence and wiring** for permission modes (the `permissions` key of electron-store plus
+ * gate wiring).
  *
- * 为什么档位不进数据库：档位是「这次会话怎么跑」的会话级开关，不是对话内容；
- * 放 electron-store 的独立顶层键（与 `mainAgent` / `mcp` 同款做法）就不必为它做
- * drizzle 迁移，删话题时残留一条小记录也无害。形状：
+ * Why modes are not in the database: the mode is a session-level switch for "how this session
+ * runs", not conversation content; keeping it in a separate top-level electron-store key (the
+ * same approach as `mainAgent` / `mcp`) avoids a drizzle migration, and a leftover small record
+ * after a topic is deleted does no harm. Shape:
  *
  * ```json
  * { "permissions": { "defaultMode": "workspace-write", "byTopic": { "12": "read-only" } } }
  * ```
  *
- * 两层（对齐 DSH）：
- * - `defaultMode`：**之后新建**的话题用哪个档位（设置页「智能体」里的默认权限模式）；
- * - `byTopic[topicId]`：当前话题的选择（输入框左下角的选择器），没有记录就用当时的默认值。
+ * Two layers:
+ * - `defaultMode`: the mode for **newly created** topics (the default permission mode in the
+ *   settings page's "Agent" section);
+ * - `byTopic[topicId]`: the current topic's choice (selector at the bottom-left of the input
+ *   box); the default at that time is used when there is no record.
  *
- * 本文件同时是闸门的**接线点**：档位来源、工作区根目录、界面语言文案都在这里注入，
- * 于是 permission-gate.ts 自己不必认识 electron / i18n（离线回归因此跑得起来）。
+ * This file is also the gate's **wiring point**: mode source, workspace root, and UI-language
+ * texts are all injected here, so permission-gate.ts itself does not need to know electron /
+ * i18n (which is why offline regression can run).
  */
 
-/** 持久化形状（脏数据一律在读取时归一，绝不抛错） */
+/** Persisted shape (dirty data is normalized on read, never throws) */
 export interface PermissionsConfig {
   defaultMode: PermissionMode
-  /** 话题 id（字符串键，electron-store 的 JSON 对象键只能是字符串）→ 档位 */
+  /** Topic id (string keys; electron-store JSON object keys can only be strings) → mode */
   byTopic: Record<string, PermissionMode>
 }
 
-/** 读取（含归一）：任何脏值都回落到缺省档位 */
+/** Reads (with normalization): any dirty value falls back to the default mode */
 export function readPermissionsConfig(): PermissionsConfig {
   const raw = settingsStore.get('permissions') as Partial<PermissionsConfig> | undefined
   const byTopic: Record<string, PermissionMode> = {}
@@ -55,14 +60,14 @@ export function readPermissionsConfig(): PermissionsConfig {
   return { defaultMode: normalizeMode(raw?.defaultMode), byTopic }
 }
 
-/** 写入（合并式：只覆盖传入的字段） */
+/** Writes (merge-style: only overwrites the provided fields) */
 function writePermissionsConfig(patch: Partial<PermissionsConfig>): PermissionsConfig {
   const next = { ...readPermissionsConfig(), ...patch }
   settingsStore.set('permissions', next)
   return next
 }
 
-/** 话题当前档位（没有话题记录 = 用默认值；新话题因此跟随「新会话默认」） */
+/** Current mode of a topic (no topic record = use the default; new topics therefore follow the "new session default") */
 export function permissionModeOf(topicId: number): PermissionMode {
   const config = readPermissionsConfig()
   if (topicId > 0) {
@@ -72,7 +77,7 @@ export function permissionModeOf(topicId: number): PermissionMode {
   return config.defaultMode
 }
 
-/** 前端要的完整状态（当前档位 + 新会话默认值） */
+/** Full state needed by the frontend (current mode + new-session default) */
 export function permissionStateFor(topicId?: number | null): {
   topicId: number
   mode: PermissionMode
@@ -87,7 +92,7 @@ export function permissionStateFor(topicId?: number | null): {
   }
 }
 
-/** 切当前话题的档位（写入话题作用域，不动新会话默认值） */
+/** Switches the current topic's mode (writes the topic scope, leaving the new-session default untouched) */
 export function setTopicPermissionMode(topicId: number, mode: PermissionMode): PermissionMode {
   if (!(topicId > 0)) return readPermissionsConfig().defaultMode
   const config = readPermissionsConfig()
@@ -96,15 +101,15 @@ export function setTopicPermissionMode(topicId: number, mode: PermissionMode): P
   return normalizeMode(mode)
 }
 
-/** 切「新会话默认」档位（设置页；不影响已有话题的选择） */
+/** Switches the "new session default" mode (settings page; does not affect existing topics) */
 export function setDefaultPermissionMode(mode: PermissionMode): PermissionMode {
   const next = writePermissionsConfig({ defaultMode: normalizeMode(mode) })
   return next.defaultMode
 }
 
-/* ────────────────────────── 文案接线 ────────────────────────── */
+/* ────────────────────────── Text wiring ────────────────────────── */
 
-/** 按原因码取本地化说明（模型看到的拦截文本与弹窗原因共用一份词条） */
+/** Looks up the localized explanation by reason code (shared by the model-visible denial text and the dialog reason) */
 function reasonText(code: DenyReason, evidence?: string): string {
   const tr = getFsToolTexts().sandbox
   switch (code) {
@@ -124,7 +129,7 @@ function reasonText(code: DenyReason, evidence?: string): string {
   }
 }
 
-/** 升权参数不合法时的说明 */
+/** Explanation when escalation parameters are invalid */
 function escalationText(error: EscalationError): string {
   const tr = getFsToolTexts().sandbox.escalation
   switch (error) {
@@ -140,7 +145,7 @@ function escalationText(error: EscalationError): string {
   }
 }
 
-/** 闸门文案（拒绝 / 原因 / 升权不可用）：标记是协议、正文跟随界面语言 */
+/** Gate texts (denial / reason / escalation unavailable): markers are protocol, the body follows the UI language */
 const GATE_TEXTS: GateTexts = {
   denial: ({ mode, reason, evidence, detail }) =>
     `${denyMarker(mode)} ${reasonText(reason, evidence)}\n${ESCALATION_HINT}${detail ? `\n(${detail})` : ''}`,
@@ -148,18 +153,19 @@ const GATE_TEXTS: GateTexts = {
   escalationUnavailable: (error) => `${ESCALATION_UNAVAILABLE} ${escalationText(error)}`
 }
 
-/** 用户拒绝 / 无人应答时展示给用户与模型的文本（ipc 层与卡片展示也会用到） */
+/** Text shown to the user and the model when the user denies or no one answers (also used by the ipc layer and card display) */
 export const PERMISSION_APPROVAL_REJECTED = APPROVAL_REJECTED
 export const PERMISSION_APPROVAL_UNAVAILABLE = APPROVAL_UNAVAILABLE
 
-/** 接线是否已完成（幂等；重复调用无副作用） */
+/** Whether wiring is complete (idempotent; repeated calls have no side effects) */
 let wired = false
 
 /**
- * 接线闸门（插件 install 时调用一次）。
+ * Wires the gate (called once when the plugin is installed).
  *
- * 工作区根目录取「设置里的当前工作区」——`execute` 的 cwd 就是它，
- * 越界判定必须与真正执行命令时的工作目录是同一个值。
+ * The workspace root comes from "the current workspace in settings" — that is the cwd of
+ * `execute`, and out-of-bounds checks must use the same value as the working directory actually
+ * used to run commands.
  */
 export function wirePermissionGate(): void {
   if (wired) return
@@ -172,5 +178,5 @@ export function wirePermissionGate(): void {
   permissionGate.setTexts(GATE_TEXTS)
 }
 
-/** 缺省档位常量再导出（设置页初始化用） */
+/** Re-exports the default mode constant (used to initialize the settings page) */
 export { DEFAULT_PERMISSION_MODE }

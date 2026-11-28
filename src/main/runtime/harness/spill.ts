@@ -7,45 +7,49 @@ import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { pruneOldestFiles } from './prune-oldest'
 
 /**
- * 工具结果溢出存储（spill）— 对应 deepseek-harness 的 spill 体系
- * （dsh-spill / dsh-spill-local / dsh-spill-policy）
+ * Tool-result spill storage (spill)
  *
- * 机制（参考 dsh-spill-policy）：
- * - 工具最终输出超过内联上限时，不再硬截断丢数据，而是把完整文本写入
- *   溢出文件，模型只拿到「有界 head/tail 预览 + 溢出文件定位符 + 检索指引」；
- * - 溢出文件放在工作区或记忆目录下，自动挂载进虚拟文件系统
- *   （/.spill/ 或 /memories/spill/），模型可用 read_file / grep 按需检索；
- * - 溢出失败是 best-effort：保存失败时保留原始结果可见（不丢内容）；
- * - 每个话题保留的溢出文件数有上限，超出时删除最旧文件（防磁盘膨胀）。
+ * Mechanism:
+ * - when a tool's final output exceeds the inline cap, it is no longer hard-truncated (losing data)
+ *   but written in full to a spill file, and the model only gets a "bounded head/tail preview +
+ *   spill file locator + retrieval hint";
+ * - spill files live under the workspace or the memory directory and are mounted into the virtual
+ *   file system (/.spill/ or /memories/spill/), so the model can search them with read_file / grep
+ *   on demand;
+ * - spilling is best-effort: when saving fails the raw result stays visible (no content lost);
+ * - the number of spill files kept per topic is capped; the oldest ones are deleted beyond it
+ *   (prevents disk bloat).
  */
 
-/** 内联输出上限（字符）：超过即溢出到文件，模型只拿到预览 + 定位符 */
+/** Inline output cap (chars): beyond it output spills to a file and the model only gets a preview + locator */
 export const MAX_INLINE_CHARS = 12_000
-/** 预览保留：头部字符数 */
+/** Head characters kept for the preview */
 const PREVIEW_HEAD_CHARS = 8_000
-/** 预览保留：尾部字符数 */
+/** Tail characters kept for the preview */
 const PREVIEW_TAIL_CHARS = 2_000
-/** 每个话题保留的溢出文件上限 */
+/** Spill file cap kept per topic */
 const MAX_FILES_PER_TOPIC = 100
 
-/** 溢出文件描述（虚拟路径供模型通过文件工具访问） */
+/** Spill file descriptor (the virtual path lets the model access it through file tools) */
 export interface SpillLocator {
-  /** 虚拟文件系统中的访问路径（如 /.spill/42/spill-<uuid>.txt） */
+  /** Access path in the virtual file system (e.g. /.spill/42/spill-<uuid>.txt) */
   virtualPath: string
 }
 
 /**
- * 话题级溢出存储。
+ * Topic-level spill store.
  *
- * 目录选择（与虚拟文件系统挂载保持一致，保证模型可读）：
- * - 配置了 AI 工作区 → <workspacePath>/.spill/<topicId>/（挂载为 /.spill/...）
- * - 否则记忆目录 → <memoryPath>/spill/<topicId>/（挂载为 /memories/spill/...）
- * - 都没有 → 溢出禁用（保持原有截断行为，best-effort）
+ * Directory selection (consistent with the virtual file system mounts so the model can read the
+ * files):
+ * - AI workspace configured -> <workspacePath>/.spill/<topicId>/ (mounted as /.spill/...)
+ * - otherwise the memory directory -> <memoryPath>/spill/<topicId>/ (mounted as
+ *   /memories/spill/...)
+ * - neither -> spill disabled (keeps the existing truncation behavior, best-effort)
  */
 export class SpillStore {
   private readonly dir?: string
   private readonly virtualPrefix?: string
-  /** 是否有一轮异步清理在跑（合并并发写入触发的重复扫描） */
+  /** Whether an async prune is running (merges duplicate scans triggered by concurrent writes) */
   private pruning = false
 
   constructor(workspacePath?: string, memoryPath?: string, topicId = 0) {
@@ -58,14 +62,15 @@ export class SpillStore {
     }
   }
 
-  /** 是否可用（未配置目录时禁用溢出） */
+  /** Whether it is usable (spill is disabled when no directory is configured) */
   get enabled(): boolean {
     return !!this.dir && !!this.virtualPrefix
   }
 
   /**
-   * 溢出策略主入口：文本超限时保存完整内容并返回「预览 + 定位符」的模型可见文本；
-   * 未超限或保存失败时原样返回（best-effort，参考 dsh-spill-policy）。
+   * Spill policy entry point: when the text is too long, save the full content and return the
+   * model-visible "preview + locator" text; otherwise (or when saving fails) return it unchanged
+   * (best-effort).
    */
   trySpill(text: string): string {
     if (!this.enabled || text.length <= MAX_INLINE_CHARS) return text
@@ -77,15 +82,17 @@ export class SpillStore {
     }
   }
 
-  /** 保存完整文本到溢出文件，返回模型可见的预览 + 检索指引 */
+  /** Save the full text to a spill file and return the model-visible preview + retrieval hint */
   private saveAndPreview(text: string): string {
-    // 返回文案跟随界面语言（会渲染在工具调用卡片上），函数体内取当前语言
+    // The output text follows the UI language (it is rendered on the tool call card), so fetch the
+    // current language inside the function
     const tr = getFsToolTexts()
     fs.mkdirSync(this.dir!, { recursive: true })
 
     const fileName = `spill-${randomUUID()}.txt`
     fs.writeFileSync(path.join(this.dir!, fileName), text, 'utf-8')
-    // 先写后剪：确保写完后目录不超过上限（先剪会残留 101 个的窗口）
+    // Write first, then prune: the directory never exceeds the cap after writing (pruning first
+    // leaves a brief window with 101 files)
     this.prune()
     const virtualPath = `${this.virtualPrefix}${fileName}`
 
@@ -96,7 +103,7 @@ export class SpillStore {
       omitted > 0
         ? `\n${mainFormat(tr.spill.middleOmitted, { omitted: omitted.toLocaleString() })}\n`
         : '\n'
-    // 检索指引（对齐 dsh-spill-policy 的 retrievalHint 语义：read 带 offset/limit + grep 检索）
+    // Retrieval hint (read with offset/limit + grep search)
     const locator = mainFormat(tr.spill.locator, {
       total: text.length.toLocaleString(),
       virtualPath
@@ -104,7 +111,7 @@ export class SpillStore {
     return `${head}${middle}${tail}\n\n${locator}`
   }
 
-  /** 删除最旧溢出文件，保证每个话题文件数不超过上限（异步，不阻塞事件循环） */
+  /** Delete the oldest spill files so each topic stays under the cap (async, never blocks the loop) */
   private prune(): void {
     if (!this.dir || this.pruning) return
     this.pruning = true
@@ -117,8 +124,8 @@ export class SpillStore {
   }
 
   /**
-   * 清理某话题的全部溢出文件（话题删除时由 IPC 层调用）。
-   * 静态方法：不依赖实例状态，直接按目录约定定位。
+   * Remove all spill files of a topic (called by the IPC layer when the topic is deleted).
+   * Static: no instance state needed, it locates directories by the same convention.
    */
   static pruneTopic(workspacePath?: string, memoryPath?: string, topicId = 0): void {
     const candidates = [

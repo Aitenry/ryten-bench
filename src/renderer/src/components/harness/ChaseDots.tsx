@@ -2,14 +2,14 @@ import React, { useLayoutEffect } from 'react'
 import { useTranslation } from '@renderer/i18n'
 
 interface ChaseDotsProps {
-  /** 图标尺寸（px），默认 16 */
+  /** Icon size in px, defaults to 16 */
   size?: number
-  /** 颜色，默认 currentColor（跟随文字颜色） */
+  /** Color, defaults to currentColor (follows the text color) */
   color?: string
   className?: string
 }
 
-/** 8 个方块在 10×10 viewBox 中的位置（x, y），按追逐顺序排列 */
+/** Positions (x, y) of the 8 squares in the 10×10 viewBox, in chase order */
 const DOT_POSITIONS: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
   [4, 0],
@@ -21,7 +21,7 @@ const DOT_POSITIONS: ReadonlyArray<readonly [number, number]> = [
   [0, 4]
 ]
 
-/** 追逐动画基础样式与关键帧（全局仅注入一次） */
+/** Base styles and keyframes for the chase animation (injected globally only once) */
 export const CHASE_DOT_CSS = `
 .ryt-chase-dot {
   fill: currentColor;
@@ -44,7 +44,7 @@ export const CHASE_DOT_CSS = `
 
 let chaseCssInjected = false
 
-/** 方块追逐加载图标：8 个方块依次闪烁，形成旋转追逐效果 */
+/** Square-chase loading icon: 8 squares blink in sequence to create a rotating chase effect */
 const ChaseDots: React.FC<ChaseDotsProps> = ({ size = 16, color = 'currentColor', className }) => {
   const { t } = useTranslation()
 

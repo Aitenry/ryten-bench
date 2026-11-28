@@ -7,23 +7,25 @@ import {
 import { getWorkspaceById } from '../../database/mapper/harness/harness'
 
 /**
- * 建话题时**落库用**的记忆作用域字符串。
+ * Memory scope string **persisted when creating a topic**.
  *
- * 取值优先级：
- * 1. 调用方显式给了合法值（`plugin:<id>` / `chat`）→ 原样用（插件 id 只有渲染层知道）；
- * 2. 没给 / 给了 null → 按**工作区种类**兜底：
- *    - `chat` 工作区 → `chat`（对话模式没有工作区，记忆也不该挂到工作区上）；
- *    - `plugin` 工作区 → `plugin:<目录名>`（目录名就是插件 id，与 listPluginWorkspaces 同口径）；
- *    - `user` / 找不到 → null（= 工作区记忆，老口径）。
+ * Value priority:
+ * 1. The caller passed a valid value (`plugin:<id>` / `chat`) → use it as-is (only the renderer knows plugin ids);
+ * 2. Not given / null → fall back by **workspace kind**:
+ *    - `chat` workspace → `chat` (chat mode has no workspace, and memory should not hang off a workspace either);
+ *    - `plugin` workspace → `plugin:<directory name>` (the directory name is the plugin id, consistent with listPluginWorkspaces);
+ *    - `user` / not found → null (= workspace memory, the legacy behavior).
  *
- * 为什么必须有这层兜底：渲染层「下一条新话题的作用域」是一个挂起值，删掉当前会话、或某条
- * 会话是从别处建出来的，它可能为空；只信渲染层就会让**对话 / 插件会话的下一条话题悄悄
- * 掉回工作区记忆**（两边记忆互相串味，且不会报错）。工作区行自己的种类是落库事实，比一个
- * 可能已被清空的渲染层变量可靠。
+ * Why this fallback is required: in the renderer, "the scope of the next new topic" is a pending value; it may
+ * be empty after deleting the current session, or when a session was created elsewhere. Trusting the renderer
+ * alone would make **the next topic of a chat / plugin session silently fall back to workspace memory**
+ * (memories bleed into each other, and no error is raised). The workspace row's own kind is a persisted fact,
+ * more reliable than a renderer variable that may already have been cleared.
  *
- * 为什么单独一个文件而不是塞进 main/memory-scope.ts：那个文件是**纯**作用域↔目录换算
- * （离线工装直接 import 它验目录口径，不依赖数据库）；这里要用 mapper 读工作区行，
- * 拖进去会让纯口径模块也带上数据库依赖。
+ * Why a separate file instead of stuffing it into main/memory-scope.ts: that file is a **pure**
+ * scope↔directory conversion (offline tooling imports it directly to verify the directory policy, without a
+ * database dependency); here we need the mapper to read the workspace row, and dragging it in would give the
+ * pure module a database dependency too.
  */
 export async function resolveTopicMemoryScope(
   workspaceId: number,
@@ -38,7 +40,7 @@ export async function resolveTopicMemoryScope(
       return pluginMemoryScope(path.basename(workspace.path))
     }
   } catch {
-    // 工作区读不出来（库未就绪 / 行已删）→ 按工作区记忆处理，别让建话题失败
+    // Workspace unreadable (database not ready / row deleted) → treat as workspace memory rather than failing topic creation
   }
   return null
 }

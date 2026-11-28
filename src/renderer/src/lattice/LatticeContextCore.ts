@@ -27,83 +27,85 @@ import type { LatticeV2Capabilities } from './source'
 import { LATTICE_BRIDGE_MISSING } from './api'
 
 /**
- * 插件中心上下文的**契约**（Provider 的消费面）。
+ * The **contract** of the plugin center context (the provider's consumer surface).
  *
- * 单独放一个文件（与 `contexts/ThemeContextCore.ts` 同一约定）有两个原因：
- * 1. `react-refresh/only-export-components` 要求「只导出组件」的文件才可热更新，
- *    上下文对象不能和 `<LatticeProvider>` 放在同一个模块里；
- * 2. 页面只依赖这个类型/上下文，而不直接依赖 Provider 实现。
+ * Kept in a separate file (same convention as `contexts/ThemeContextCore.ts`) for two reasons:
+ * 1. `react-refresh/only-export-components` only hot-reloads files that export components, so the
+ *    context object cannot live in the same module as `<LatticeProvider>`;
+ * 2. Pages depend only on this type/context, not on the provider implementation.
  *
- * 职责：Provider 持有 `window.api.lattice` 的全部状态（登录态、同步、上传进度、目录数据），
- * 并把每个 IPC 方法包一层（登录/退出/同步后自动刷新状态）。主进程通道尚未注册时
- * `available=false`，所有方法返回「不可用」的兜底结果，UI 安全降级。
+ * Responsibilities: the provider holds all `window.api.lattice` state (login, sync, upload
+ * progress, catalog data) and wraps each IPC method (refreshing status after login/logout/sync).
+ * When the main-process channel is not registered yet, `available=false` and every method returns
+ * an "unavailable" fallback result, so the UI degrades safely.
  */
 export interface LatticeContextValue {
-  /** 主进程是否暴露了 `window.api.lattice`（false = 插件中心未就绪，UI 需要降级） */
+  /** Whether the main process exposes `window.api.lattice` (false = plugin center not ready, UI must degrade) */
   available: boolean
-  /** 是否已完成首次状态读取（false 时账号区显示「连接中…」而不是闪一下未登录） */
+  /** Whether the first status read has completed (false shows "connecting…" in the account area instead of flashing logged-out) */
   ready: boolean
   status: LatticeStatus
   loggedIn: boolean
   user: LatticeUser | undefined
   role: string | undefined
   /**
-   * 账号头像（`user.avatar` 的归一化视图）：非空 = 平台头像地址（https/data:image），
-   * null = 无头像（界面回退首字母）。旧主进程没有 avatar 字段时也是 null，不报错。
+   * Account avatar (a normalized view of `user.avatar`): non-empty = platform avatar URL
+   * (https/data:image), null = no avatar (the UI falls back to the initial). An older main
+   * process without the avatar field also yields null instead of an error.
    */
   avatar: string | null
-  /** 同步动作进行中（账号区显示小 spinner） */
+  /** A sync action is in progress (the account area shows a small spinner) */
   syncing: boolean
-  /** 最近一次上传进度（上传弹窗消费；没有上传时为 null） */
+  /** Latest upload progress (consumed by the upload modal; null when nothing is uploading) */
   uploadProgress: LatticeUploadProgress | null
   clearUploadProgress: () => void
   refresh: () => Promise<LatticeStatus>
   login: (input: LatticeLoginInput) => Promise<LatticeLoginResult>
   logout: () => Promise<{ ok: boolean }>
-  /** 手动同步（direction 缺省 both；`installMissing` 缺省跟随设置项，默认开启自动补齐） */
+  /** Manual sync (direction defaults to both; `installMissing` defaults to the setting, auto-fill enabled by default) */
   sync: (
     direction?: LatticeSyncDirection,
     options?: { installMissing?: boolean }
   ) => Promise<LatticeSyncResult>
-  /** 同步详情：最近一次同步的自动补齐成功/失败明细 + 孤儿记录（失败原因可查看） */
+  /** Sync details: per-item auto-fill success/failure from the last sync + orphaned records (failure reasons are viewable) */
   syncDetails: () => Promise<LatticeSyncDetails>
-  /** 保存「缺失插件自动补齐」开关（持久化；默认开启） */
+  /** Persist the "auto-install missing plugins" toggle (default on) */
   setAutoInstallMissing: (enabled: boolean) => Promise<LatticeAutoInstallSettingResult>
   listHub: (params?: LatticeListQuery) => Promise<HubListResultV2>
   detailHub: (pluginId: string) => Promise<HubDetailV2 | null>
   installFromHub: (pluginId: string, version?: string) => Promise<LatticeInstallResultV2>
-  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  /** Publish a locally installed plugin directly (package + source, no directory picker) */
   publishInstalled: (pluginId: string) => Promise<LatticeUploadResult>
   pickAndUpload: () => Promise<LatticeUploadResult>
-  /** 选 .zip 安装包发布（目录上传的补充入口） */
+  /** Publish by picking a .zip package (an alternative entry point to directory upload) */
   pickAndUploadZip: () => Promise<LatticeUploadResult>
-  /** 选「安装包目录 + 源码目录」发布：安装包与源码是两份不同的 zip */
+  /** Publish by picking "package directory + source directory": package and source are two different zips */
   pickAndUploadWithSource: () => Promise<LatticeUploadResult>
-  /** 按显式路径发布：`source` 是安装包目录/zip；`sourcePath` 给出时源码单独上传 */
+  /** Publish from explicit paths: `source` is the package directory/zip; when `sourcePath` is given, the source uploads separately */
   uploadSource: (source: string, sourcePath?: string) => Promise<LatticeUploadResult>
 
-  // ---- 契约 v2：源码 / 重新发布 / 导入本地插件目录 ----
-  /** 当前主进程支持哪些 v2 能力（false = 旧主进程，对应入口禁用并提示） */
+  // ---- v2 API: source / republish / import local plugin directory ----
+  /** Which v2 capabilities the current main process supports (false = older main process; the matching entries are disabled with a hint) */
   capabilities: LatticeV2Capabilities
-  /** 本机已下载的源码目录（未下载 / 无源码 → path:null） */
+  /** Locally downloaded source directory (not downloaded / no source → path:null) */
   sourcePath: (pluginId: string) => Promise<LatticeSourcePathResult>
-  /** 本机安装目录（`userData/plugins/<id>`，本地安装后发布用；拿不到 → null） */
+  /** Local install directory (`userData/plugins/<id>`, used to publish a locally installed plugin; null when unavailable) */
   localSource: (pluginId: string) => Promise<string | null>
-  /** 打开源码：优先建/复用工作区与插件会话，失败回退文件管理器 */
+  /** Open source: prefer creating/reusing a workspace and plugin conversation, falling back to the file manager on failure */
   openSource: (pluginId: string) => Promise<LatticeOpenSourceResult>
-  /** 读本机源码目录，重新打包安装包 + 源码并发布新版本 */
+  /** Read the local source directory, repackage the package + source, and publish a new version */
   republish: (input: LatticeRepublishInput) => Promise<LatticeRepublishResult>
-  /** 下载某个版本的安装包 / 源码包（主进程弹保存框并落盘） */
+  /** Download a version's package / source archive (the main process shows a save dialog and writes to disk) */
   downloadAsset: (
     pluginId: string,
     version: string,
     kind: LatticeDownloadKind
   ) => Promise<LatticeDownloadResult>
-  /** 弹目录选择框，把目录下所有 plugin.json 插件批量发布到插件中心 */
+  /** Show a directory picker and publish every plugin.json plugin under it to the plugin center in bulk */
   importLocalDir: () => Promise<LatticeImportLocalDirResult>
 }
 
-/** 未挂 Provider（或 Provider 初始化前）时也能安全调用：一律走「不可用」分支 */
+/** Safe to call without a provider (or before it initializes): always takes the "unavailable" branch */
 const LATTICE_FALLBACK: LatticeContextValue = {
   available: false,
   ready: false,

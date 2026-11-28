@@ -31,40 +31,46 @@ import { resumeLatticeAfterProfileSwitch } from '../lattice/index'
 import { getMainWindow, isInitComplete } from '../windows/window-manager'
 
 /**
- * 账号数据空间的**运行中原地切换**（不再 `app.relaunch()`）。
+ * **In-place switching of the account data space at runtime** (no more `app.relaunch()`).
  *
- * 背景：`manager.ts` 的模型是「正在用的账号数据摆在 userData 根下，其它账号在
- * `profiles/<key>/` 里休眠，换号 = 两组目录对调」。最初的版本只在启动早期做对调，
- * 因此登录 / 登出 / 改基址都会重启整个应用（用户 2026-11-24 反馈：每次登出都重启太打断）。
+ * Background: `manager.ts`'s model is "the account data currently in use sits at the userData
+ * root, other accounts sleep in `profiles/<key>/`, and switching accounts = swapping the two
+ * directory sets". The first version only swapped early during startup, so logging in / out /
+ * changing the base URL restarted the whole app (user feedback 2026-11-24: restarting on every
+ * logout is too disruptive).
  *
- * 现在把同一套对调搬到运行中，顺序刻意与「一次冷启动」对齐：
+ * The same swap now happens at runtime, deliberately ordered to match "one cold start":
  *
- *   ① 悬停 —— 中止对话流、挂起云同步、停掉系统功能（AI 助手 / 资料库）、
- *             卸载第三方插件主模块、关闭 PGlite；
- *   ② 对调 —— `applyProfile()`（与启动期完全同一份逻辑，带 journal 保护）；
- *   ③ 重连 —— 新空间的 DB 连接 + 迁移 + 工作区设置对齐；
- *   ④ 复原 —— 清账号级内存缓存 → 装回系统功能 → 装回插件 → 恢复同步并 pull；
- *   ⑤ 刷新 —— 主窗口 `webContents.reload()`（渲染层重新挂载，启动页盖住这段切换）。
+ *   (1) Quiesce - abort chat streams, pause cloud sync, stop system features (AI assistant / docs
+ *       library), unload third-party plugin main modules, close PGlite;
+ *   (2) Swap - `applyProfile()` (exactly the same logic as at startup, with journal protection);
+ *   (3) Reconnect - DB connection for the new space + migrations + workspace settings alignment;
+ *   (4) Restore - clear account-level in-memory caches -> reinstall system features -> reinstall
+ *       plugins -> resume sync and pull;
+ *   (5) Refresh - main window `webContents.reload()` (the renderer remounts, and the startup page
+ *       covers this switch).
  *
- * 失败语义：**任何一步失败都回退成 `app.relaunch()`**（即旧行为）。目录对调本身有
- * journal + marker 兜底，重启后 `initAccountProfile()` 会续做/回滚，数据不会丢也不会串。
- * 只有「原地切换的所有前置条件都成立」时才走这条快路径，因此启动早期（初始化未完成、
- * 数据库还没就绪）的调用点仍然走重启，逻辑不分叉成两份。
+ * Failure semantics: **any failing step falls back to `app.relaunch()`** (the old behavior). The
+ * swap itself has journal + marker protection, so after a restart `initAccountProfile()` resumes or
+ * rolls it back, and data is neither lost nor mixed. This fast path is taken only when "all
+ * preconditions for in-place switching hold", so call sites early in startup (initialization not
+ * finished, database not ready) still restart, keeping the logic from forking into two copies.
  */
 
 let switching = false
 
-/** 是否正在原地切换（同步守卫 / 同步层用） */
+/** Whether an in-place switch is running (used by the sync guard / sync layer) */
 export function isProfileSwitchRunning(): boolean {
   return switching
 }
 
 export interface ProfileSwitchOptions {
-  /** 日志与用户可读的原因（如 `logout -> anonymous`） */
+  /** Log- and user-readable reason (e.g. `logout -> anonymous`) */
   reason: string
   /**
-   * 目标数据空间 key。省略时按**磁盘上的会话**推导（与启动期同一口径）。
-   * 登录场景由调用方直接给新账号的 key，避免「会话已写盘但推导口径不一致」的窗口。
+   * Target data space key. When omitted it is derived from the **on-disk session** (same rule as at
+   * startup). Login scenarios pass the new account's key directly, avoiding the window where "the
+   * session is already written to disk but the derivation rule is inconsistent".
    */
   targetKey?: string
 }
@@ -74,7 +80,7 @@ export interface ProfileSwitchResult {
   key: string
   from: string | null
   reason: string
-  /** 无法原地切换，已改为重启应用（调用方不需要再刷新界面） */
+  /** Could not switch in place; the app was restarted instead (the caller does not need to refresh the UI) */
   restarted?: boolean
   error?: string
 }
@@ -83,7 +89,7 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** 有上限的等待：数据库 close / 同步收尾这类「可能被正在跑的任务拖住」的步骤不能无限期阻塞切号 */
+/** Bounded wait: steps like database close / sync shutdown that "may be held up by running tasks" must not block an account switch indefinitely */
 async function withTimeout(task: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: NodeJS.Timeout | null = null
   try {
@@ -103,10 +109,12 @@ async function withTimeout(task: Promise<unknown>, ms: number): Promise<boolean>
 }
 
 /**
- * 能否原地切换：初始化已完成（启动页已进入主界面）且数据库确实连着。
+ * Whether an in-place switch is possible: initialization is complete (the startup page has moved
+ * to the main UI) and the database is actually connected.
  *
- * 不满足时不要硬来——启动早期（`initLattice()` 在 `initPluginHost()` 里就跑起来）
- * 数据库可能还没建好，此时切目录等于把启动流程的中间状态打断，直接走重启最稳。
+ * Do not force it when not satisfied - early in startup (`initLattice()` runs inside
+ * `initPluginHost()`) the database may not be built yet, and swapping directories then would
+ * interrupt the startup flow mid-way; restarting is the safest.
  */
 function canSwitchInPlace(): boolean {
   if (!isAccountProfileReady()) return false
@@ -115,9 +123,10 @@ function canSwitchInPlace(): boolean {
   return db !== null && db.isInitialized()
 }
 
-/** ① 悬停：让所有可能读写账号数据的东西停手（顺序 = 依赖的卸载顺序） */
+/** (1) Quiesce: make everything that may read/write account data stop (order = dependency unload order) */
 async function quiesceForSwitch(): Promise<void> {
-  // 正在跑的对话流会写库：先中止并等它落库（最多 5s，和退出流程同一条口径）
+  // Running chat streams write to the database: abort them first and wait for the writes to land
+  // (5s max, same rule as the exit flow)
   if (activeHarnessStreams.size > 0) {
     logger.info(
       `[Profiles] Aborting ${activeHarnessStreams.size} active assistant stream(s) before switch`
@@ -128,44 +137,48 @@ async function quiesceForSwitch(): Promise<void> {
     await withTimeout(Promise.allSettled([...activeHarnessStreams]), 5000)
   }
 
-  // 同步层：挂起防抖 push，并等正在跑的那一次同步收尾（它会在切完前写 plugin-state /
-  // lattice-sync.json）。超时仍没结束就**放弃本次对调**：正在跑的同步持有旧账号缓存，
-  // 路径却已经指向新空间，继续切会把上一个账号的数据写进新账号（串号）。
+  // Sync layer: pause the debounced push and wait for the running sync to finish (it writes
+  // plugin-state / lattice-sync.json before the swap is complete). If it still has not finished
+  // after the timeout, **abandon this swap**: a running sync holds the old account's cache while
+  // the paths already point at the new space, and continuing would write the previous account's
+  // data into the new account (account cross-talk).
   const syncSettled = await sync.pauseLatticeSync(15_000)
   if (!syncSettled) {
     throw new Error('云同步仍在进行（网络较慢），本次账号切换已取消；请等同步结束后重试')
   }
 
   /**
-   * 进行中的插件安装/卸载会写 `userData/plugins`、`plugin-state` 与 `lattice-sync.json`，
-   * 还会在收尾时 reload 插件主模块（那时数据库可能已经关了）。等它们收尾；超时就放弃
-   * 本次切换（宁可让用户重试，也不要把目录对调顶成半完成状态）。
-   * 新操作在切换开始后会被 `isProfileSwitchInProgress()` 拒绝，不会无限冒出来。
+   * An in-progress plugin install/uninstall writes `userData/plugins`, `plugin-state` and
+   * `lattice-sync.json`, and also reloads plugin main modules at the end (by then the database may
+   * already be closed). Wait for them to finish; on timeout give up this switch (better to have the
+   * user retry than to leave the directory swap half-done). New operations are rejected by
+   * `isProfileSwitchInProgress()` after the switch starts and cannot keep appearing.
    */
   const pluginsSettled = await waitForPluginOperations(15_000)
   if (!pluginsSettled) {
     throw new Error('插件安装/卸载仍在进行，本次账号切换已取消；请稍后重试')
   }
 
-  // 系统功能（AI 助手 / 资料库）：摘 IPC、停工作区监听与工坊、关 MCP 客户端
+  // System features (AI assistant / docs library): unregister IPC, stop workspace listeners and the workshop, close MCP clients
   try {
     stopSystemModules()
   } catch (err) {
     logger.warn('[Profiles] Failed to stop system modules before switch:', err)
   }
 
-  // 第三方插件主模块：它们可能在装载期就打开了 plugin-state / 数据库句柄
+  // Third-party plugin main modules: they may have opened plugin-state / database handles at load time
   try {
     unloadAllExternalMains()
   } catch (err) {
     logger.warn('[Profiles] Failed to unload plugin main modules before switch:', err)
   }
 
-  // 记忆组件是独立的 PGlite 实例（存储根在机器级目录里，不在对调清单中），
-  // 但它们的缓存按账号数据组织：换号后必须重新按新库加载
+  // Memory components are separate PGlite instances (their storage roots are in machine-level
+  // directories, not in the swap list), but their caches are organized per account: after switching
+  // they must be reloaded from the new database
   await Promise.allSettled([closeAllMnemon(), closeAllMcp()])
 
-  // 数据库最后关：前面所有持有者都停手之后，目录才能被 rename（Windows 句柄）
+  // Close the database last: only after all holders have stopped can the directory be renamed (Windows handles)
   const database = getDatabaseRef()
   if (database) {
     const closed = await withTimeout(database.close(), 5000)
@@ -174,12 +187,14 @@ async function quiesceForSwitch(): Promise<void> {
   }
 }
 
-/** ③ 重连：把根目录（现在是目标账号的数据）重新打开成数据库 */
+/** (3) Reconnect: open the root directory (now the target account's data) as the database again */
 async function reconnectDatabase(): Promise<void> {
   const database = await createDatabase()
   try {
     await runMigrations(database.getDatabase())
-    // 活动工作区存在机器级设置里、工作区行在账号库里：换号后必须重新对齐，否则会指向不存在的行
+    // The active workspace lives in machine-level settings while workspace rows live in the
+    // account database: after switching accounts it must be realigned, otherwise it points to a
+    // nonexistent row
     await applyWorkspaceSettings(database.getDatabase())
   } catch (err) {
     await database.close().catch((closeErr) => {
@@ -190,28 +205,31 @@ async function reconnectDatabase(): Promise<void> {
   setDatabaseInstance(database)
 }
 
-/** ④ 复原：装回系统功能与插件，让同步层从「新空间 + 新会话」重新起步 */
+/** (4) Restore: reinstall system features and plugins so the sync layer restarts from "new space + new session" */
 function restoreRuntimeAfterSwitch(): void {
-  // 先清掉按账号数据索引的内存缓存（topicId 是各账号库的自增 id，不清会串号）
+  // First clear the in-memory caches indexed by account data (topicId is an auto-increment id in
+  // each account's database; not clearing it causes cross-talk)
   resetHarnessAccountState()
-  // 机器级设置里记的「上次看的那条会话」同样是账号库 id：不参与新空间恢复
+  // "The last viewed conversation" recorded in machine-level settings is also an account database
+  // id: it does not participate in restoring the new space
   clearAccountScopedContentSelections()
   /**
-   * 同步缓存必须在**插件重载之前**换成新空间的：插件 `install()` 里可能立刻调
-   * `ctx.requestSync()` → `markLatticePluginDirty()`；此时若内存里还是上一个账号的
-   * cache，它会把旧账号的 revs/conflicts 整体写进新空间的 `lattice-sync.json`。
+   * The sync cache must be swapped to the new space **before the plugin reload**: a plugin's
+   * `install()` may immediately call `ctx.requestSync()` -> `markLatticePluginDirty()`; if the
+   * in-memory cache is still the previous account's at that point, it writes the old account's
+   * revs/conflicts wholesale into the new space's `lattice-sync.json`.
    */
   sync.reloadLatticeSyncCache()
-  // 与启动期同序：系统功能（AI 助手的工具表）→ 第三方插件
+  // Same order as startup: system features (AI assistant's tool table) -> third-party plugins
   startSystemModules()
   reloadAllExternalMains()
 
   sync.resumeLatticeSync()
-  // 广播新登录态并在后台 pull 一次（登出时内部直接返回）
+  // Broadcast the new login state and pull once in the background (returns immediately when logged out)
   void resumeLatticeAfterProfileSwitch()
 }
 
-/** ⑤ 刷新渲染层：给 IPC 响应留一帧，然后整页重载（启动页会盖住这段） */
+/** (5) Refresh the renderer: leave a frame for the IPC response, then reload the whole page (the startup page covers this) */
 function scheduleRendererReload(reason: string): void {
   const win = getMainWindow()
   if (!win || win.isDestroyed()) return
@@ -223,10 +241,11 @@ function scheduleRendererReload(reason: string): void {
 }
 
 /**
- * 原地切换账号数据空间（登录 / 登出 / 改基址都走这里）。
+ * Switch the account data space in place (login / logout / base URL change all go here).
  *
- * 调用方 `await` 它即可：成功时返回 `{ok:true}`（随后主窗口会自动刷新）；
- * 需要重启（初始化未完成 / 切换失败）时返回 `{restarted:true}`，应用会在几百毫秒后重启。
+ * The caller can simply `await` it: on success it returns `{ok:true}` (the main window then
+ * refreshes automatically); when a restart is needed (initialization incomplete / switch failed) it
+ * returns `{restarted:true}` and the app restarts within a few hundred milliseconds.
  */
 export async function switchAccountProfile(
   options: ProfileSwitchOptions
@@ -263,7 +282,7 @@ export async function switchAccountProfile(
   try {
     await quiesceForSwitch()
 
-    // ② 对调：与启动期同一份逻辑（marker / journal 保护都在 manager 里）
+    // (2) Swap: the same logic as at startup (marker / journal protection both live in manager)
     const result: ApplyProfileResult = applyProfile(userDataDir, desired, identity)
     logApplyResult(result, desired)
     setActiveProfileKey(desired)

@@ -5,21 +5,23 @@ import { getActiveWorkspaceId } from '../../database/workspace-context'
 import { HarnessSettings } from '../../types/settings'
 import type { MnemonComponent } from '../../runtime/harness/mnemon'
 
-// 当前记忆目录（从设置读取）
+// Current memory directory (read from settings)
 function currentMemoryPath(): string | undefined {
   const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
   return harnessSettings?.memoryPath || undefined
 }
 
 /**
- * 当前会话的 Mnemon 组件。
+ * Mnemon component for the current session.
  *
- * @param rawScope 渲染层带回来的作用域（`plugin:<插件 id>` / `chat`；空/非法 = 当前工作区）。
- *   **跟着当前会话走**：插件会话读这份插件自己的记忆（`<memoryPath>/plugin-<id>/mnemon`），
- *   「对话」模式的会话读 `<memoryPath>/chat/mnemon`（该模式没有工作区，记忆也不该挂到
- *   某个工作区上），工作会话读 `<memoryPath>/workspace-<id>/mnemon`（用户口径 2026-09-28
- *   「插件的记忆，并没有像工作里面的记忆一样显示在侧边栏」）。作用域只是字符串，
- *   路径消毒在主进程 `memoryScopeDirName` 里做，渲染层改不出 memoryPath。
+ * @param rawScope Scope passed back from the renderer (`plugin:<plugin id>` / `chat`; empty or
+ *   invalid = current workspace). **Follows the current session**: plugin sessions read that
+ *   plugin's own memory (`<memoryPath>/plugin-<id>/mnemon`), sessions in "chat" mode read
+ *   `<memoryPath>/chat/mnemon` (that mode has no workspace, so memory shouldn't hang off one),
+ *   and workspace sessions read `<memoryPath>/workspace-<id>/mnemon` (user wording 2026-09-28:
+ *   "plugin memory doesn't show in the sidebar like memory inside a workspace"). The scope is
+ *   only a string; path sanitization happens in the main process's `memoryScopeDirName`, so the
+ *   renderer cannot change memoryPath.
  */
 async function currentMnemonComponent(rawScope?: unknown): Promise<MnemonComponent | undefined> {
   const { getMnemonComponent } = await import('../../services/harness/mnemon-singleton')
@@ -27,20 +29,22 @@ async function currentMnemonComponent(rawScope?: unknown): Promise<MnemonCompone
 }
 
 /**
- * Mnemon 记忆管理 IPC（三层记忆：热记忆 / 长期空间 / 档案）。
+ * Mnemon memory management IPC (three layers: hot memory / long-term spaces / archive).
  *
- * 通道名一律 `harness:<原扁平名>`；记忆组件按「记忆目录 + 会话作用域」隔离——
- * 每个通道末尾都可以带一个作用域参数（不传 = 当前工作区，老调用方行为不变），
- * 未配置记忆目录时各通道返回 configured:false / 空结果，不抛错。
+ * Channel names are always `harness:<original flat name>`; the memory component is isolated by
+ * "memory directory + session scope" — every channel can take a scope argument at the end
+ * (omitted = current workspace, so older callers keep their behavior), and when no memory
+ * directory is configured each channel returns configured:false / an empty result instead of
+ * throwing.
  */
 export function mnemonIpcHandlers(): IpcHandlerMap {
   const handlers: IpcHandlerMap = {}
-  /** 收通道：本插件的命名空间前缀只在这里出现 */
+  /** Channel receiver: the plugin's namespace prefix appears only here */
   const handle = (channel: string, handler: (...args: never[]) => unknown): void => {
     handlers[`harness:${channel}`] = handler
   }
 
-  // 记忆系统总览快照
+  // Memory system overview snapshot
   handle('mnemon-snapshot', async (scope?: string | null) => {
     const component = await currentMnemonComponent(scope)
     if (!component) {
@@ -54,7 +58,7 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
     return { configured: true, runtime, bodies, documents }
   })
 
-  // 热记忆增删改（add / replace / remove）
+  // Hot memory add/replace/remove (add / replace / remove)
   handle(
     'mnemon-runtime-mutate',
     async (
@@ -70,8 +74,8 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
       const component = await currentMnemonComponent(scope)
       if (!component)
         return { success: false, message: mainMessages().error.memoryDirNotConfigured }
-      // 参数守卫（修复：request 为 undefined 时 `request.action` 直接 TypeError，
-      // 且该 handler 无 try/catch，异常会挂起调用方）
+      // Argument guard (fix: when request is undefined, `request.action` throws a TypeError
+      // directly, and this handler has no try/catch, so the exception hangs the caller)
       if (
         !request ||
         typeof request !== 'object' ||
@@ -90,14 +94,14 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  // 长期记忆空间目录
+  // Long-term memory space directory
   handle('mnemon-bodies', async (scope?: string | null) => {
     const component = await currentMnemonComponent(scope)
     if (!component) return { items: [], total: 0, activeCount: 0, directory: '', generatedAt: '' }
     return await component.service.bodies()
   })
 
-  // 创建记忆空间
+  // Create a memory space
   handle(
     'mnemon-body-create',
     async (request: { name: string; description: string }, scope?: string | null) => {
@@ -113,7 +117,7 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  // 更新记忆空间（名称/描述/激活）
+  // Update a memory space (name/description/activation)
   handle(
     'mnemon-body-update',
     async (
@@ -133,7 +137,7 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
     }
   )
 
-  // 记忆空间内容浏览
+  // Browse memory space contents
   handle('mnemon-body-list', async (memoryBodyIds?: string[], scope?: string | null) => {
     const component = await currentMnemonComponent(scope)
     if (!component) return []
@@ -144,7 +148,7 @@ export function mnemonIpcHandlers(): IpcHandlerMap {
     }
   })
 
-  // 档案快照
+  // Archive snapshot
   handle('mnemon-document-snapshot', async (scope?: string | null) => {
     const component = await currentMnemonComponent(scope)
     if (!component) return null

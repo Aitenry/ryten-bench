@@ -1,40 +1,63 @@
 import type { TodoItem, TodoStore } from './todo'
 
 /**
- * 对话计划清单（write_todos）的收尾收敛 —— 「本轮结束后不再有『进行中』」的兜底。
+ * Close-out convergence for the conversation todo list (write_todos) — the fallback for
+ * "no item stays in progress once this turn ends".
  *
- * 为什么需要它：清单是模型自己写的，而收尾书写并不可靠。2026-09-18 实例：六项工作全部
- * 做完、回答也交付了，最后一次 write_todos 仍留一项 in_progress，卡片于是永远停在
- * 「5/6 已完成 · 1 进行中」；目标自动续跑下更明显——末轮把目标标成完成，清单里那一项
- * 却再没有人去收（用户 2026-09-23：「明明任务已经完成了，页面还是显示有最后一个任务没完成」）。
+ * Why it is needed: the list is written by the model itself, and its final write is unreliable.
+ * Instance from 2026-09-18: all six items were finished and the answer was delivered, yet the
+ * last write_todos still left one item in_progress, so the card was stuck forever at
+ * "5/6 completed · 1 in progress"; it is even more visible under goal auto-continuation — the
+ * final round marks the goal complete, but nobody closes out that remaining item (user,
+ * 2026-09-23: "the task is clearly done, but the page still shows one last task unfinished").
  *
- * 判断依据只有一条：**本轮结束后还会不会有下一轮去接手这份清单**。
- *   - 会（目标 active + armed，驱动器马上派发下一轮）→ 不动，清单交给模型继续维护；
- *   - 不会（用户轮结束、目标完成/阻塞/被 disarm、以及被停止或报错后留下的那轮）→ 就地收尾。
+ * There is only one criterion: **will another round take over this list after the current turn**.
+ *   - Yes (goal active + armed, the driver is about to dispatch the next round) → leave it alone,
+ *     the list is left to the model to keep maintaining;
+ *   - No (user turn ended, goal completed/blocked/disarmed, or the round left behind by a stop or
+ *     an error) → close it out in place.
  *
- * 「本轮被停止 / 流失败」同样收尾：那时什么都没在跑，留着转圈的「进行中」是假状态，
- * 应用重开后前端还会从 store 里把它读回来。收尾只动这一个进程内缓存（不落库），
- * 模型的计划能力不受影响（下一次 write_todos 本来就是整份覆盖）。
+ * "The turn was stopped / the stream failed" also closes out: nothing is running then, and a
+ * lingering spinner showing "in progress" is a fake state that the frontend would read back from
+ * the store after the app restarts. Close-out only touches this in-process cache (nothing is
+ * persisted), so the model's planning ability is unaffected (the next write_todos overwrites the
+ * whole list anyway).
  */
 
-/** 判断收尾所需的外部事实（全部由调用方注入：本模块不碰 DB / 目标存储 / 提问服务） */
+/**
+ * External facts needed for the decision (all injected by the caller: this module touches no DB,
+ * goal storage or question service)
+ */
 export interface CloseOutSources {
-  /** 本轮是否被目标自动续跑驱动器接管（source === 'goal-round'） */
+  /**
+   * Whether this turn was taken over by the goal auto-continuation driver (source === 'goal-round')
+   */
   isGoalRound: boolean
-  /** 该话题的目标是否还会自动续跑下一轮（active + 已武装，且未达轮次上限） */
+  /**
+   * Whether the topic's goal will still auto-continue another round (active + armed, under the
+   * round cap)
+   */
   goalWillContinue: () => Promise<boolean>
-  /** 该话题是否正挂着待回答的提问（模型在等用户，任务确实还在中途） */
+  /**
+   * Whether the topic has a question waiting for an answer (the model is waiting for the user, so
+   * the task is genuinely still mid-flight)
+   */
   hasPendingQuestion: () => boolean
 }
 
-/** 收尾决策结果：收不收、以及不收的原因（原因进日志，便于排查「为什么卡片没收」） */
+/**
+ * Close-out decision: whether to close out, and if not, why (the reason goes to the log so it is
+ * easy to trace why the card was not closed)
+ */
 export type CloseOutDecision =
   { close: true } | { close: false; reason: 'pending-question' | 'goal-continues' }
 
 /**
- * 收尾决策（纯逻辑 + 两个异步查询，无副作用；工装 test/verify-todo-closeout.mjs 直接跑真代码）。
+ * Close-out decision (pure logic + two async queries, no side effects; the fixture
+ * test/verify-todo-closeout.mjs runs the real code directly).
  *
- * 提问优先判定：模型挂着提问时，无论第几轮都不收尾——它正在等用户回答，任务确实没干完。
+ * Pending question takes priority: while the model has a question open, no close-out happens on any
+ * round — it is waiting for the user's answer, so the task is genuinely unfinished.
  */
 export async function decideCloseOutOnTurnEnd(sources: CloseOutSources): Promise<CloseOutDecision> {
   if (sources.hasPendingQuestion()) return { close: false, reason: 'pending-question' }
@@ -44,21 +67,22 @@ export async function decideCloseOutOnTurnEnd(sources: CloseOutSources): Promise
   return { close: true }
 }
 
-/** 收尾结果：收敛后的完成计数（未写入时返回 null） */
+/** Close-out result: completion counts after convergence (null when nothing was written) */
 export interface CloseOutResult {
-  /** 本次被结掉的「进行中」项数 */
+  /** Number of "in progress" items closed by this run */
   closed: number
-  /** 收敛后清单里已完成项数 */
+  /** Number of completed items in the list after convergence */
   completed: number
-  /** 清单总项数 */
+  /** Total number of items in the list */
   total: number
 }
 
 /**
- * 把仍停在 in_progress 的项结为 completed（没有进行中项时返回 null，不产生多余的广播）。
+ * Close items still in in_progress as completed (returns null when there are none, so no extra
+ * broadcast is produced).
  *
- * 写入走 store.set，因此照常触发 onChange → harness-todos-updated 广播，
- * 前端输入框上方的任务卡片随之从「1 进行中」变为「全部完成」。
+ * Writes go through store.set, so onChange fires as usual → the harness-todos-updated broadcast,
+ * and the task card above the composer switches from "1 in progress" to "all done".
  */
 export function closeOutInProgress(store: TodoStore, topicId: number): CloseOutResult | null {
   const todos = store.get(topicId)

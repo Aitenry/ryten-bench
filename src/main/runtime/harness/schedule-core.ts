@@ -1,17 +1,19 @@
 /**
- * 定时任务（schedule）的纯时间计算与校验（无 electron / fs 依赖，可离线测试）。
+ * Pure time math and validation for scheduled tasks (no electron / fs dependency,
+ * offline-testable).
  *
- * 对照 DSH 的 `@deepseek-ai/dsh-tool-schedule`：DSH 用 RFC 5545 rrule 表达重复；
- * 本项目先落地三种覆盖绝大多数场景的**显式子集**，schema 更小、模型更不容易写错：
+ * Repetition is expressed with an explicit small subset that covers most cases, so the schema
+ * stays small and the model is less likely to get it wrong:
  *
- * - `once`  —— 指定时刻执行一次（ISO 8601，本地或带时区）；
- * - `every` —— 每 N 分钟（5 分钟起，上限 7 天）；
- * - `daily` —— 每天固定本地时间（HH:MM）。
+ * - `once`: run once at a given instant (ISO 8601, local or with a time zone);
+ * - `every`: every N minutes (from 5 minutes up to 7 days);
+ * - `daily`: every day at a fixed local time (HH:MM).
  *
- * 存储里的时间统一是 ISO 字符串（UTC），展示层再按本地时区格式化。
+ * Stored times are always ISO strings (UTC); the display layer formats them in the local time
+ * zone.
  */
 
-/** 重复规则（子集） */
+/** Repeat rule (subset) */
 export type ScheduleWhen =
   | { kind: 'once'; at: string }
   | { kind: 'every'; minutes: number }
@@ -32,10 +34,10 @@ export type ScheduleValidationResult =
 export const MIN_EVERY_MINUTES = 5
 export const MAX_EVERY_MINUTES = 7 * 24 * 60
 
-/** `once.at` 至少要比现在晚这么多毫秒，避免「创建完立刻过期」 */
+/** `once.at` must be at least this many ms ahead, so it cannot expire right after creation */
 const MIN_LEAD_MS = 30_000
 
-/** 解析 `HH:MM`，非法返回 null */
+/** Parse `HH:MM`; returns null when invalid */
 export function parseDailyTime(time: string): { hours: number; minutes: number } | null {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec((time ?? '').trim())
   if (!match) return null
@@ -43,7 +45,7 @@ export function parseDailyTime(time: string): { hours: number; minutes: number }
 }
 
 /**
- * 从 `from` 之后计算下一次触发时间（严格晚于 from；没有下一次返回 null）。
+ * Compute the next trigger time after `from` (strictly later; null when there is none).
  */
 export function computeNextRun(when: ScheduleWhen, from: Date): Date | null {
   if (when.kind === 'once') {
@@ -63,7 +65,7 @@ export function computeNextRun(when: ScheduleWhen, from: Date): Date | null {
   return next
 }
 
-/** 校验并给出首次触发时间（创建/编辑时用） */
+/** Validate and return the first trigger time (used on create/edit) */
 export function validateScheduleWhen(
   when: ScheduleWhen | null | undefined,
   now = new Date()
@@ -97,14 +99,14 @@ export function validateScheduleWhen(
   return { ok: false, reason: 'unknown-kind' }
 }
 
-/** 供列表/详情展示的一句话描述（规则本身是数据，不本地化） */
+/** One-line description for list/detail views (the rule itself is data, not localized) */
 export function describeScheduleWhen(when: ScheduleWhen): string {
   if (when.kind === 'once') return `once at ${when.at}`
   if (when.kind === 'every') return `every ${when.minutes} min`
   return `daily at ${when.time}`
 }
 
-/** 调度器挑选到期任务所需的最小字段 */
+/** Minimal fields the scheduler needs to pick due tasks */
 export interface ScheduleTaskLike {
   id: string
   enabled: boolean
@@ -112,9 +114,11 @@ export interface ScheduleTaskLike {
 }
 
 /**
- * 选出**到期**的任务 id：按 nextRunAt 升序，跳过停用/无排期/正在执行的，最多 `limit` 个。
+ * Pick the ids of **due** tasks: ascending by nextRunAt, skipping disabled/unscheduled/running
+ * ones, at most `limit`.
  *
- * 抽成纯函数是为了让「哪些任务该跑」可离线验证；runner 只负责逐个执行与记账。
+ * It is a pure function so "which tasks should run" can be verified offline; the runner only
+ * executes them one by one and keeps the books.
  */
 export function selectDueTaskIds(
   tasks: ScheduleTaskLike[],
@@ -136,11 +140,12 @@ export function selectDueTaskIds(
 }
 
 /**
- * 一次执行后的下一次触发时间（ISO）。
+ * Next trigger time (ISO) after one execution.
  *
- * - 一次性任务永远返回 null（执行完即结束）；
- * - 重复任务从 `now` 重新计算——应用关着错过的多次触发**不补跑**（旧提醒通常已无意义，
- *   补跑还会瞬间连开多轮）。
+ * - One-off tasks always return null (they end once executed);
+ * - Repeating tasks are recomputed from `now` — triggers missed while the app was closed are
+ *   **not caught up** (old reminders are usually meaningless, and catching up would start several
+ *   rounds at once).
  */
 export function nextRunAfterRun(when: ScheduleWhen, now: Date): string | null {
   if (when.kind === 'once') return null

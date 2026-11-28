@@ -1,11 +1,12 @@
 /**
- * ${vars.title} 的跨进程契约（主进程 mapper 与渲染层组件共用）。
+ * Cross-process contract for ${vars.title} (shared by the main-process mapper and the renderer
+ * components).
  *
- * 规矩：**不 import drizzle / electron / node**——渲染层也要 import 它，
- * 带上任何一端的东西都会把那一端打进另一端的产物。
+ * Rule: **do not import drizzle / electron / node** - the renderer imports this as well, and
+ * pulling in anything from one side bundles that side into the other side's output.
  */
 
-/** 一条记录（表 ${vars.itemsToolName} 的一行） */
+/** One record (a row of the ${vars.itemsToolName} table) */
 export interface ${vars.pascal}Item {
   id: number
   title: string
@@ -15,19 +16,28 @@ export interface ${vars.pascal}Item {
   updatedAt: string | null
 }
 
-/** 新建/修改的入参（id 与时间戳由数据库管） */
+/** Create/update input (id and timestamps are managed by the database) */
 export interface ${vars.pascal}ItemInput {
   title: string
   note?: string
 }
 
-/** 设置页里的开关（与应用数据分开存：它是配置，不是记录） */
+/**
+ * Configuration from the settings page (stored separately from application data: it is
+ * configuration, not a record).
+ *
+ * Both fields must **actually be read** (on the page: `hideDone` filters the list, `note` shows in
+ * the overview panel) - do not leave settings that are only persisted and never consumed; users
+ * will toggle them first.
+ */
 export interface ${vars.pascal}Settings {
-  enabled: boolean
+  /** Hide completed records in the list (display only, data is not deleted) */
+  hideDone: boolean
+  /** Note for the overview panel on the right of the page (empty string = hidden) */
   note: string
 }
 
-/** 页面一次拉全的量（记录 + 设置） */
+/** Everything the page loads in one go (records + settings) */
 export interface ${vars.pascal}State {
   items: ${vars.pascal}Item[]
   settings: ${vars.pascal}Settings

@@ -1,41 +1,48 @@
 /**
- * 本轮「最终答复」边界的**唯一真源**（协议层）。
+ * The **single source of truth** for the "final answer" boundary of a turn (protocol layer).
  *
- * 为什么单独一个模块：这段逻辑过去长在渲染端（AssistantMessage 里按
- * `segIndex === lastSegIndex && !message.loading` 反向扫块），是**启发式**——
- * 它靠渲染端自己的 loading 状态猜「这一轮结束了没有」，而 loading 的翻转要等
- * `harness-stream-done`。目标自动续跑时驱动器是 `while (await driveOnce())`
- * （见 goal-driver.ts），上一轮的 done 与下一轮的 goalRound 几乎同 tick 落地，
- * 于是「等 loading 翻 false 再摘」在续跑里几乎等于「等整条目标跑完」，
- * 最后一轮的思考与答复就一直留在任务段里。
+ * Why a separate module: this logic used to live in the renderer (AssistantMessage scanned
+ * blocks backwards using `segIndex === lastSegIndex && !message.loading`), which was
+ * **heuristic** — it guessed "is this turn over?" from the renderer's own loading state, and
+ * loading only flips after `harness-stream-done`. During goal auto-continuation the driver is
+ * `while (await driveOnce())` (see goal-driver.ts), so the previous turn's done and the next
+ * turn's goalRound land almost in the same tick; waiting for loading to flip false then
+ * effectively means waiting for the whole goal to finish, and the last round's reasoning and
+ * answer stay inside the task segment.
  *
- * 现在改由主进程在**收到内容的那一刻**给出结论：
- *   - 生产者给每段正文/推理 chunk 打 `answer: true`（该轮尚未出现工具/子代理活动）；
- *   - 一旦出现工具或子代理活动，后续内容一律打 `answer: false`（撤回之前的标记，
- *     说明前面那段只是探索途中的话，不是这一轮交付给用户的答复）；
- *   - 真实边界 `answerFrom` 由本模块从累积块推出，随 done 事件下发，
- *     渲染端只读不猜。
+ * Now the main process decides at the moment content arrives:
+ *   - The producer tags every answer/reasoning chunk with `answer: true` (no tool/subagent
+ *     activity in this turn yet);
+ *   - Once tool or subagent activity appears, all subsequent content is tagged
+ *     `answer: false` (retracting the earlier mark: what came before was only exploration, not
+ *     the answer delivered to the user this turn);
+ *   - The real boundary `answerFrom` is derived by this module from the accumulated blocks and
+ *     sent with the done event; the renderer only reads it, never guesses.
  *
- * 「最终答复」的定义（与渲染端的块序一致，两者都按到达顺序 append）：
- *   从块数组末尾往前，连续的 reasoning / text 块 —— 至少含一个 text 块才算成立。
- * 工具卡打断回溯（被工具隔开的思考与末尾答复不连续），所以边界只会落在
- * 「最后一段非工具内容」的起点上。
+ * Definition of the "final answer" (consistent with the renderer's block order — both append
+ * in arrival order):
+ *   From the end of the block array, consecutive reasoning / text blocks — valid only if it
+ *   contains at least one text block.
+ *   Tool cards break the backtrack (reasoning separated by tools is not contiguous with the
+ *   trailing answer), so the boundary only lands at the start of the last non-tool stretch.
  */
 
-/** 参与「答复尾巴」的最少形态（主进程累积块与渲染端合并块的公共子集） */
+/** Minimal shape participating in the "answer tail" (common subset of main-process accumulated blocks and renderer merged blocks) */
 export interface AnswerBlockLike {
   type: string
 }
 
 /**
- * 从块数组尾部数出「最终答复」包含的块数（0 = 本轮没有答复）。
+ * Count the blocks in the "final answer" from the tail of the block array (0 = no answer this
+ * turn).
  *
- * 这是**线上口径**：主进程累积块与渲染端合并块的块序一致（两边都按到达顺序
- * append），但块数可能不同（渲染端合并相邻 reasoning、还有只在渲染端存在的
- * 过渡块），所以过线的是**数量**而不是下标——渲染端从自己数组的末尾往前数同样
- * 多块即可，不必假设两边下标对齐。
+ * This is the **wire contract**: the main process's accumulated blocks and the renderer's merged
+ * blocks have the same order (both append in arrival order), but their counts may differ (the
+ * renderer merges adjacent reasoning and has transition blocks that exist only there), so what
+ * crosses the wire is the **count**, not indices — the renderer counts the same number of blocks
+ * backwards from the end of its own array and need not assume index alignment.
  *
- * @param blocks 本轮累积块（主进程 acc.blocks / 渲染端合并块均可）
+ * @param blocks Accumulated blocks for this turn (main-process acc.blocks / renderer merged blocks)
  */
 export function answerTrailingCount(blocks: readonly AnswerBlockLike[]): number {
   let cut = blocks.length
@@ -53,30 +60,32 @@ export function answerTrailingCount(blocks: readonly AnswerBlockLike[]): number 
     }
     break
   }
-  // 整段以思考结尾（本轮被中止等）时不成立：没有交付给用户的答复，
-  // 交给折叠统一收着，别把「没有答复的消息」搬到折叠外（旧实现同款判据）
+  // If the stretch ends with reasoning (turn aborted, etc.) it does not count: nothing was
+  // delivered to the user, so leave it in the collapsed section and do not move a message with
+  // no answer outside the fold.
   return sawText ? blocks.length - cut : 0
 }
 
 /**
- * 本轮终局标记（随 `harness-stream-done` 下发）。
+ * End-of-turn markers (sent with `harness-stream-done`).
  *
- * 这些事实主进程在收尾时已经全部拿到（见 ipc/harness.ts 的收尾判定），
- * 以前只写进日志，前端拿不到——于是渲染端只能靠 loading 猜。
+ * The main process already has all these facts when finalizing (see the finalization check in
+ * ipc/harness.ts); they used to go only to the log, so the frontend could not see them and the
+ * renderer had to guess from loading.
  */
 export interface TurnFinal {
-  /** 本次流是否自然跑完（false = 用户停止 / 渲染帧失效中止；错误另有 stream-error 事件） */
+  /** Whether this stream finished naturally (false = user stop / render-frame invalidation abort; errors are reported separately via stream-error) */
   settled: boolean
-  /** 本轮是否目标自动续跑轮 */
+  /** Whether this turn is a goal auto-continuation round */
   goalRound: boolean
-  /** 目标轮次号（非目标轮为 undefined） */
+  /** Goal round number (undefined for non-goal turns) */
   round?: number
-  /** 轮次结束时目标是否已完成 */
+  /** Whether the goal was already complete when the turn ended */
   goalClosed?: boolean
-  /** 是否还会自动续跑下一轮（false = UI 可以确定「这就是最后一轮」） */
+  /** Whether another round will be auto-dispatched (false = the UI can be sure this is the last round) */
   goalWillContinue?: boolean
-  /** 最终答复在**主进程累积块**里的起始下标（null = 本轮没有答复） */
+  /** Start index of the final answer in the **main-process accumulated blocks** (null = no answer this turn) */
   answerFrom: number | null
-  /** 最终答复包含的块数（渲染端据此从自己数组末尾往前数；线上口径见 answerTrailingCount） */
+  /** Number of blocks in the final answer (the renderer counts backwards from the end of its own array; see answerTrailingCount for the wire contract) */
   answerBlocks: number
 }

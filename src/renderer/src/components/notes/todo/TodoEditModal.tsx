@@ -5,7 +5,7 @@ import dayjs from 'dayjs'
 import { useTranslation } from '@renderer/i18n'
 import type { TodoItem } from '../../../types/notes'
 
-/* 模块级普通函数：不调 hook，译文函数由调用方以参数传入 */
+/* Module-level plain function: calls no hooks; the caller passes the translator in */
 const getStatusOptions = (
   t: TFunction,
   currentStatus: number
@@ -100,7 +100,8 @@ const TodoEditModal: React.FC<TodoEditModalProps> = ({
         priority: values.priority,
         category: values.category || null
       })
-      // 修复：成功后表单不重置,下次新建预填上次内容（旧 priority/category 一并写入新待办）
+      // Reset the form after success, otherwise the next creation pre-fills the previous
+      // values (and the stale priority/category land in the new todo)
       addForm.resetFields()
     } catch {
       // Validation failed

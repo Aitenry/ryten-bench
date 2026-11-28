@@ -1,11 +1,11 @@
 /**
- * DeepSeek 搜索适配器。
+ * DeepSeek search adapter.
  *
- * 接口（官方文档 `POST https://api.deepseek.com/v1/tools/search`，Bearer 鉴权）：
- * - 请求：`{ query, count, need_content, ori_question? }`；
- * - 响应：`results[].{ rerank_score, title, url, snippet, summary, content, site_name, date, authority }`。
+ * API (`POST https://api.deepseek.com/v1/tools/search`, Bearer auth):
+ * - request: `{ query, count, need_content, ori_question? }`;
+ * - response: `results[].{ rerank_score, title, url, snippet, summary, content, site_name, date, authority }`.
  *
- * 响应映射在 `mappers.ts`（纯函数，可离线测试）。
+ * Response mapping lives in `mappers.ts` (pure functions, testable offline).
  */
 import { postJson } from './http'
 import { mapDeepSeekResponse } from './mappers'

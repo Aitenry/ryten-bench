@@ -2,32 +2,34 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { EditorView } from '@codemirror/view'
 
 /**
- * 编辑器内置滚动条（悬浮覆盖式，VS Code 观感）。
+ * Built-in editor scrollbars (floating overlay, VS Code look and feel).
  *
- * 为什么不用原生滚动条：原生滚动条会**占掉编辑器 10px 宽度**，看起来是「编辑器外面另有一条
- * 滚动条槽」，而不是文件自己的滚动条（用户两轮反馈「滚动条并没有在编辑器内部」）。
- * 这里把原生滚动条隐藏（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`），
- * 在编辑器内容区上**悬浮绘制**一条细滑块：文字可以一直排到编辑器右边缘、滑块压在内容之上，
- * 与 VS Code 一致。
+ * Why not native scrollbars: native scrollbars **eat 10px of the editor width**, so it looks
+ * like a separate scrollbar gutter sits outside the editor instead of the file's own scrollbar
+ * (two rounds of user feedback: "the scrollbar is not inside the editor").
+ * Here the native scrollbars are hidden (`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`)
+ * and a thin thumb is **drawn as an overlay** on the editor content area: text can run all the
+ * way to the editor's right edge and the thumb overlays the content, consistent with VS Code.
  *
- * 行为对齐 VS Code：
- * - 内容不溢出时完全不出现；
- * - 平时淡出，鼠标在编辑器内或滚动时淡入（拖动中常显）；
- * - 滑块可拖（按比例映射到 scrollTop/scrollLeft），点击轨道翻页；
- * - 滚轮/键盘/触控板滚动仍然由 CodeMirror 的原生滚动容器处理，这里只负责「画」和「拖」。
+ * Behavior follows VS Code:
+ * - Not shown at all when the content does not overflow;
+ * - Faded out normally, fades in when the mouse is inside the editor or while scrolling (stays visible while dragging);
+ * - The thumb is draggable (mapped proportionally to scrollTop/scrollLeft); clicking the track pages;
+ * - Wheel/keyboard/trackpad scrolling is still handled by CodeMirror's native scroll container;
+ *   this component only draws and drags.
  */
 
-/** 滑块最小长度（px）：内容很长时也要抓得住 */
+/** Minimum thumb length (px): stays grabbable even for very long content */
 const MIN_THUMB = 28
-/** 滑块比轨道细（两侧各留 2px），观感更轻 */
+/** The thumb is thinner than the track (2px inset on each side) for a lighter look */
 const THUMB_INSET = 2
-/** 滚动后滑块保持可见的时间 */
+/** How long the thumb stays visible after scrolling */
 const HOLD_MS = 900
 
 interface ThumbRect {
-  /** 沿轴方向的起点（px，相对轨道） */
+  /** Start offset along the axis (px, relative to the track) */
   offset: number
-  /** 沿轴方向的长度（px） */
+  /** Length along the axis (px) */
   size: number
 }
 
@@ -42,9 +44,9 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
   const [visible, setVisible] = useState(false)
   const [dragging, setDragging] = useState(false)
   const holdTimer = useRef<number | null>(null)
-  /** 上一次算出来的滑块几何：用于跳过无变化的重渲染 */
+  /** Last computed thumb geometry: skips re-renders when nothing changed */
   const lastRects = useRef<{ v: ThumbRect | null; h: ThumbRect | null }>({ v: null, h: null })
-  /** 拖拽时用到的几何快照（避免拖动过程中反复重算导致抖动） */
+  /** Geometry snapshot used while dragging (avoids recalculating every move and jittering) */
   const dragRef = useRef<{
     axis: 'v' | 'h'
     startPos: number
@@ -52,7 +54,7 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
     ratio: number
   } | null>(null)
 
-  /** 从真实滚动容器读出几何，换算成两条滑块的位置 */
+  /** Read geometry from the real scroll container and map it to the two thumbs */
   const sync = useCallback(() => {
     const el = view?.scrollDOM
     if (!el) return
@@ -75,7 +77,7 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
       nextH = { offset, size }
     }
 
-    // 值没变就不 setState：滚动时每帧都会调 sync，无脑重渲染纯属浪费
+    // Skip setState when values are unchanged: sync runs every frame while scrolling and blind re-rendering is pure waste
     const same = (a: ThumbRect | null, b: ThumbRect | null): boolean =>
       a === b ||
       (a !== null &&
@@ -89,7 +91,7 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
     setHThumb(nextH)
   }, [view])
 
-  /** 滚动时短暂显示滑块 */
+  /** Briefly show the thumb while scrolling */
   const flash = useCallback(() => {
     setVisible(true)
     if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
@@ -108,7 +110,7 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
       flash()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
-    // 内容尺寸变化（打字、折叠、换语言）与容器尺寸变化都要重算
+    // Recompute on both content size changes (typing, folding, language switch) and container resizes
     const ro = new ResizeObserver(() => sync())
     ro.observe(el)
     if (view) ro.observe(view.contentDOM)
@@ -161,7 +163,7 @@ const EditorScrollbars: React.FC<EditorScrollbarsProps> = ({ view, dark }) => {
     [view]
   )
 
-  /** 点轨道翻页（VS Code 同款：点击处翻一屏） */
+  /** Click the track to page (the click position pages by one screen) */
   const onTrackPointerDown = useCallback(
     (axis: 'v' | 'h') => (e: React.PointerEvent) => {
       const el = view?.scrollDOM

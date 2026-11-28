@@ -1,52 +1,55 @@
 import { getMainLanguage } from './index'
 
 /**
- * 目标（goal）/ 后台任务（jobs）/ 子代理（task、send_message、interrupt_agent、list_agents）/
- * 工作流（workflow）/ 工具护栏的返回文案。
+ * Result texts for goals / background jobs (jobs) / subagents (task, send_message,
+ * interrupt_agent, list_agents) / workflows (workflow) / tool guards.
  *
- * **会渲染在聊天的工具调用卡片、目标条与任务条上**（模型读到的也是同一份文本），
- * 因此必须跟随界面语言。
+ * **These render on the chat tool call cards, the goal bar and the job bar** (the model reads the
+ * same text), so they must follow the UI language.
  *
- * 与 `tool-results.ts`（mnemon 工具组）、`tool-results-fs.ts`（文件/溢出/提问）、
- * `tool-results-docs.ts`（知识库/文档）、`tool-results-todos.ts`（待办）的分工：
- * 这边是运行时工具、子代理与目标驱动器。
+ * Split of responsibilities with `tool-results.ts` (mnemon tool group), `tool-results-fs.ts`
+ * (files/overflow/questions), `tool-results-docs.ts` (knowledge bases/documents) and
+ * `tool-results-todos.ts` (to-dos): this file covers runtime tools, subagents and the goal driver.
  *
- * 中文是源语言，`enUSAgentToolTexts` 用 `typeof zhCNAgentToolTexts` 约束，
- * 缺键/多键都是编译期错误。插值统一用 `{{name}}` + `mainFormat`。
+ * Chinese is the source language; `enUSAgentToolTexts` is constrained by
+ * `typeof zhCNAgentToolTexts`, so missing or extra keys are compile-time errors. Interpolation
+ * always uses `{{name}}` + `mainFormat`.
  *
- * 注意：错误串的**前缀标识符**（`META_INVALID:` / `AGENT_CAP:` / `UNSUPPORTED_OPTION:` /
- * `UNSUPPORTED_SCHEMA:` / `WORKFLOW_TIMEOUT:` / `SCRIPT_PARSE:` / `CANCELLED`）与任务状态行
- * `[status: ...]` 是程序判断用的协议标记，留在代码里原样拼接，不放进词条；
- * `GOAL_STALE_REVISION` 位于句中，作为 `{{marker}}` 由调用方传入，两种语言都原样输出。
+ * Note: the **prefix identifiers** of error strings (`META_INVALID:` / `AGENT_CAP:` /
+ * `UNSUPPORTED_OPTION:` / `UNSUPPORTED_SCHEMA:` / `WORKFLOW_TIMEOUT:` / `SCRIPT_PARSE:` /
+ * `CANCELLED`) and the task status line `[status: ...]` are protocol markers the code checks;
+ * they stay in code and are concatenated as-is, not put into the message entries.
+ * `GOAL_STALE_REVISION` sits mid-sentence and is passed in as `{{marker}}` by the caller; both
+ * languages output it verbatim.
  */
 export const zhCNAgentToolTexts = {
-  /** 工具执行器（agent.ts）：工具抛错时写进工具卡片的返回 */
+  /** Tool executor (agent.ts): the result written to the tool card when a tool throws */
   agent: {
     toolFailed: '工具执行失败: {{message}}',
     toolTimeout:
       '工具 "{{name}}" 执行超时（{{ms}} 毫秒），宿主已停止等待本次结果。请缩小范围重试，或直接根据已有信息继续。'
   },
 
-  /** 技能工具（skills.ts）：按需加载技能全文 */
+  /** Skill tool (skills.ts): loads a skill's full text on demand */
   skill: {
     notFound: '没有名为 "{{name}}" 的技能。可用技能：{{names}}',
     header: '## 技能: {{name}}（{{id}}）'
   },
 
-  /** 目标存储与目标工具（goal.ts）：工具返回、抛错与 authority 拒绝 */
+  /** Goal store and goal tools (goal.ts): tool results, thrown errors and authority rejections */
   goal: {
-    /** create_goal 仅限人类直接请求 */
+    /** create_goal only accepts a direct human request */
     createRequiresHumanRequest:
       'create_goal 需要人类直接请求（当前为自动续跑轮，无权创建新目标）。',
     createFailed: '创建目标失败: {{message}}',
     readFailed: '读取目标失败: {{message}}',
     updateFailed: '更新目标失败: {{message}}',
-    /** 工具层与 GoalStore.assertCurrent 共用 */
+    /** Shared by the tool layer and GoalStore.assertCurrent */
     noGoal: '当前话题没有目标。请先用 create_goal 创建。',
-    /** CAS 乐观并发失败（{{marker}} 由调用方传 'GOAL_STALE_REVISION'，原样输出） */
+    /** Optimistic-concurrency CAS failure (the caller passes 'GOAL_STALE_REVISION' as {{marker}}, output verbatim) */
     staleRevision:
       '目标已变更（{{marker}}）：当前 revision={{current}}，你携带的是 {{provided}}。请先 get_goal 获取最新状态。',
-    /** create：单目标语义，已有未完成目标时拒绝 */
+    /** create: single-goal semantics; rejected while an unfinished goal exists */
     alreadyInProgress:
       '当前已有进行中的目标（phase={{phase}}）。请先完成/阻塞该目标，或对现有目标使用 update_goal。',
     cannotPause: '当前 phase={{phase}}，不能暂停。',
@@ -54,35 +57,35 @@ export const zhCNAgentToolTexts = {
     cannotResumeRoundLimit: '已达轮次上限（{{limit}}），不能恢复。',
     alreadyComplete: '目标已完成。',
     cannotBlock: '当前 phase={{phase}}，不能标记阻塞。',
-    /** 模型未给 blocked_reason 时的兜底原因 */
+    /** Fallback reason when the model gives no blocked_reason */
     defaultBlockedReason: '（未提供原因）',
     unknownAction: '未知 action: {{action}}',
-    /** authority：edit/pause/resume 要求人类直接请求 */
+    /** authority: edit/pause/resume require a direct human request */
     requiresHumanRequest:
       '{{action}} 需要人类直接请求（自动续跑轮无权执行该操作；如确需调整，请在用户消息中说明）。',
-    /** authority：complete/blocked 既不来自人类也不精确命中当前目标轮 */
+    /** authority: complete/blocked comes neither from a human nor from exactly the current goal round */
     notAuthorized:
       '{{action}} 无权执行：既非人类直接请求，也非当前目标轮（goal/revision/round 不匹配）。',
-    /** authority：自主轮 blocked 的最小轮数门槛 */
+    /** authority: minimum round count before blocking in an autonomous round */
     blockedMinRounds:
       '自动标记 blocked 至少需要已进行 {{minRounds}} 轮（当前 {{rounds}} 轮）。若确已无法推进，请在最终回答中向用户说明，由用户决定暂停或调整目标。',
-    /** 自主轮 complete 后注入的收尾指引（wrapup） */
+    /** Wrap-up guidance injected after an autonomous round marks the goal complete (wrapup) */
     wrapupComplete: '目标已标记完成。请在最终回答中给出简短收尾：完成成果、关键证据与后续建议。',
-    /** 自主轮 blocked 后注入的收尾指引（wrapup） */
+    /** Wrap-up guidance injected after an autonomous round marks the goal blocked (wrapup) */
     wrapupBlocked: '目标已标记阻塞（{{code}}）。请在最终回答中向用户说明阻塞原因与可行的下一步。'
   },
 
-  /** 目标轮次驱动器（goal-driver.ts）：写入 blockedReason.message，显示在目标条上 */
+  /** Goal round driver (goal-driver.ts): writes blockedReason.message, shown on the goal bar */
   goalDriver: {
     roundLimitReached: '已达轮次上限（{{rounds}} 轮），自动停止'
   },
 
-  /** 计划模式（plan-mode.ts）：exit_plan_mode 的返回与评审入口 */
+  /** Plan mode (plan-mode.ts): exit_plan_mode results and the review entry point */
   plan: {
-    /** 工具不在计划模式下被调用（正常流程不会出现；防模型自行猜测调用） */
+    /** The tool is called outside plan mode (should not happen in the normal flow; guards against the model guessing the call) */
     notActive: '当前未处于计划模式，exit_plan_mode 不可用。',
     emptyPlan: '计划内容为空：请把完整计划（Markdown，以标题开头）放进 plan 参数。',
-    /** 计划评审弹窗的小标题 */
+    /** Small title of the plan review dialog */
     reviewHeader: '计划评审',
     approved: '用户已批准计划。计划模式已关闭，现在开始按该计划执行。',
     approvedWithFeedback:
@@ -94,63 +97,63 @@ export const zhCNAgentToolTexts = {
       '没有收到有效的评审结果，计划模式保持不变。请再次调用 exit_plan_mode，或请用户直接在输入框反馈。'
   },
 
-  /** 后台任务（jobs.ts）：job_output 的返回文本与任务终态说明 */
+  /** Background jobs (jobs.ts): job_output result text and terminal-state descriptions */
   jobs: {
     notFoundInTopic: '任务 {{id}} 不存在或不属于当前话题。',
     notFound: '任务 {{id}} 不存在。',
-    /** 终态任务无输出时的替代文本（{{status}} 为 running/stopping/completed/killed/failed） */
+    /** Replacement text when a terminal job has no output ({{status}} is running/stopping/completed/killed/failed) */
     terminalNoOutput: '（任务已{{status}}）',
     noNewOutput: '（任务 {{id}} 暂无新输出）',
-    /** job_kill 未给 reason 时写入快照 detail 的默认原因 */
+    /** Default reason written to the snapshot detail when job_kill gives no reason */
     userKillReason: '（用户请求终止）',
-    /** 话题删除时传给运行者的取消原因 */
+    /** Cancellation reason passed to the runner when the topic is deleted */
     topicDeletedReason: '话题已删除'
   },
 
-  /** task 工具与子代理执行（subagent.ts） */
+  /** The task tool and subagent execution (subagent.ts) */
   subagent: {
     notFound: '子智能体 "{{type}}" 不存在。可用子智能体：{{names}}',
-    /** 一个子智能体都没配置时的清单占位 */
+    /** List placeholder when no subagent is configured */
     noneAvailable: '（无）',
-    /** background=true 的启动回执（含 job_output/send_message/interrupt_agent/list_agents 用法） */
+    /** Start receipt for background=true (includes job_output/send_message/interrupt_agent/list_agents usage) */
     backgroundStarted:
       '已启动后台子智能体会话（subagent_id={{id}}）：{{label}}。会话在后台继续执行，用 job_output(job_id="{{id}}", wait=true) 读取当前轮输出；send_message(subagent_id="{{id}}", message=...) 让它继续下一轮工作；interrupt_agent(agent_id="{{id}}") 中断当前轮；list_agents 查看全部会话状态。',
     failed: '子智能体执行失败: {{message}}',
-    /** 工具调用轮次耗尽但已有部分输出 */
+    /** Tool call rounds exhausted but some output was produced */
     roundLimitNote: '\n（子智能体已达到工具调用轮次上限，自动停止）',
-    /** 工具调用轮次耗尽且没有任何输出 */
+    /** Tool call rounds exhausted with no output at all */
     roundLimitIncomplete: '（子智能体已达到工具调用轮次上限，未能完成任务）',
-    /** 子代理跑完但没产出文本（subagent.ts 与 subagent-sessions.ts 共用） */
+    /** Subagent finished without producing text (shared by subagent.ts and subagent-sessions.ts) */
     noTextOutput: '（子智能体无文本输出）'
   },
 
-  /** 续接会话控制工具与子代理会话运行（subagent-sessions.ts） */
-  /** 子代理作者化工具（agent_create）：主智能体委派构建子代理配置 */
+  /** Session-continuation control tools and subagent session runs (subagent-sessions.ts) */
+  /** Subagent authoring tool (agent_create): the main agent delegates building a subagent config */
   agentAuthoring: {
     created:
       '已创建子代理「{{name}}」（id={{id}}）：它会出现在设置 → 智能体的列表中，并已注册为可复用子代理。现在可以直接调用 task(subagent_type="{{name}}", prompt=...) 派发任务。',
     failed: '创建子代理失败：{{message}}'
   },
   subagentSessions: {
-    /** 会话/任务显示名：`<子代理名>：<任务首 40 字>` */
+    /** Session/task display name: `<subagent name>: <first 40 chars of the task>` */
     sessionLabel: '{{name}}：{{task}}',
     notFound: '子代理会话 {{id}} 不存在或不属于当前话题。',
     deletedWithTopic: '子代理会话 {{id}} 已随话题删除。',
-    /** 追加进任务输出的工具调用行 */
+    /** Tool call line appended to the task output */
     toolCallLine: '[工具] {{name}}（参数：{{input}}）',
-    /** 本轮被 interrupt_agent / job_kill 中断 */
+    /** This turn was interrupted by interrupt_agent / job_kill */
     interrupted: '（本轮已被中断）',
-    /** 本轮运行失败（{{message}} 为错误文本或轮次上限说明） */
+    /** This turn failed ({{message}} is the error text or the round-limit note) */
     runFailed: '（运行失败：{{message}}）',
-    /** 轮次上限时的失败说明 */
+    /** Failure note when the round limit is hit */
     roundLimitReached: '子智能体达到工具调用轮次上限',
     sendFailed: '发送失败: {{message}}',
-    /** 重启后恢复的 inactive 会话：冷恢复失败时明确拒绝续聊 */
+    /** An inactive session restored after a restart: explicitly refuses continuation when cold resume fails */
     inactiveCannotResume:
       '子代理会话 {{id}} 是重启后恢复的历史记录，但本次冷恢复失败（模型或配置不可用）；请重新派发一个后台任务。'
   },
 
-  /** 工作流工具（workflow.ts）：错误串里的话术（前缀标识符由代码拼接） */
+  /** Workflow tool (workflow.ts): phrasing in error strings (prefix identifiers are concatenated in code) */
   workflow: {
     metaMustBeObject: 'meta 必须是对象',
     metaNameRequired: 'meta.name 必须是非空字符串',
@@ -160,7 +163,7 @@ export const zhCNAgentToolTexts = {
     emptyPrompt: 'agent() 需要非空的字符串 prompt',
     unsupportedSchema:
       '{{path}}.{{key}}（仅支持 type/properties/required/additionalProperties/items/enum/const/oneOf）',
-    /** 墙钟硬上限触发（30 分钟与 WORKFLOW_HARD_TIMEOUT_MS 对应） */
+    /** Wall-clock hard limit triggered (30 minutes, matching WORKFLOW_HARD_TIMEOUT_MS) */
     timeout: '脚本执行超过 30 分钟，已强制停止'
   }
 }

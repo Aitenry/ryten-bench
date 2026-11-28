@@ -5,12 +5,14 @@ import { PLUGIN_PURGE } from '@host/main/plugins/contributions'
 import type { MainPluginContext } from './context'
 
 /**
- * 主进程入口：install(ctx) 必须**可逆**——注册的东西都挂在 ctx 上，
- * 插件停用/卸载时由宿主一次性回滚（effect 是 LIFO）。
+ * Main-process entry: install(ctx) must be **reversible** - everything registered hangs off
+ * ctx, and the host rolls it all back at once when the plugin is disabled or uninstalled
+ * (effects run LIFO).
  *
- * 数据落在 userData/plugin-state/${vars.id}.json（不写工作区：那是用户的项目目录），
- * 并用 PLUGIN_PURGE 贡献声明「卸载时勾了删数据要清掉什么」——
- * 宿主的卸载确认框会把 label 原文显示给用户看。
+ * Data lives in userData/plugin-state/${vars.id}.json (not in the workspace, which is the
+ * user's project directory), and the PLUGIN_PURGE contribution declares what gets removed when
+ * "delete data" is checked during uninstall - the host's uninstall confirmation shows the label
+ * text to the user verbatim.
  */
 let stateFile = ''
 
@@ -25,7 +27,7 @@ function readState(): { value: string } {
 }
 
 export function install(ctx: MainPluginContext): void {
-  // effect：登记「怎么初始化」与「怎么撤销」。写文件要建目录，因此放在 effect 里。
+  // effect: registers how to initialize and how to undo. Writing the file needs the directory, so it lives in the effect.
   ctx.effect(() => {
     const dir = path.join(app.getPath('userData'), 'plugin-state')
     fs.mkdirSync(dir, { recursive: true })
@@ -47,7 +49,7 @@ export function install(ctx: MainPluginContext): void {
     }
   })
 
-  // 卸载时「同时删除该插件的数据」被勾上才会跑到这里（插件当时仍是装载状态）
+  // Only reached when "also delete this plugin's data" is checked during uninstall (the plugin is still loaded at that point)
   ctx.contribute(PLUGIN_PURGE, {
     label: '保存的内容（plugin-state/${vars.id}.json）',
     run: () => {

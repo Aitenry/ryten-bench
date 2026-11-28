@@ -3,32 +3,36 @@ import { startHarness, stopHarness } from './harness'
 import { startNotes, stopNotes } from './notes'
 
 /**
- * 系统级功能的装配入口（AI 助手 / 资料库）。
+ * Assembly entry point for the system-level features (AI assistant / library).
  *
- * 这两块**不是插件**：随应用启动、随应用退出，没有安装/启用/停用这一层。
- * 它们的主进程代码就在 `src/main` 里（`system/` 只负责装配顺序），
- * 通道是普通的 `harness:*` / `notes:*`，不经过插件宿主。
+ * These two are **not plugins**: they start and stop with the app, with no install/enable/disable
+ * layer. Their main-process code lives in `src/main` (`system/` only orders the assembly), and
+ * their channels are ordinary `harness:*` / `notes:*` channels that do not go through the plugin
+ * host.
  */
 const SYSTEM_MODULE_IDS = ['harness', 'notes'] as const
 
-/** 系统级功能占用的 id：第三方插件扫描与插件面板必须跳过，避免同名顶掉 */
+/**
+ * IDs owned by system-level features: third-party plugin scans and the plugin panel must skip
+ * them, so a plugin with the same name cannot take them over.
+ */
 export const SYSTEM_MODULE_IDS_SET: ReadonlySet<string> = new Set(SYSTEM_MODULE_IDS)
 
 let started = false
 
-/** 启动系统级功能（必须在 preload 通道查询与窗口创建之前执行） */
+/** Start the system-level features (must run before preload channel queries and window creation) */
 export function startSystemModules(): void {
   if (started) return
   started = true
 
-  // harness 先装：notes 的 AI 工具注册进 harness 的工具注册表
+  // Install harness first: notes registers its AI tools into the harness tool registry
   startHarness()
   startNotes()
 
   logger.info('[System] AI assistant / library started as system features')
 }
 
-/** 退出装配（应用退出时调用；顺序与启动相反） */
+/** Tear down the assembly (called on app quit; reverse of the startup order) */
 export function stopSystemModules(): void {
   if (!started) return
   started = false

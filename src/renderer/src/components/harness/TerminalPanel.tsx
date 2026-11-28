@@ -8,16 +8,19 @@ import { harnessApi, type PtySessionView } from '../../api/harness'
 import TerminalEmulator from './TerminalEmulator'
 
 /**
- * 右侧「终端」面板（用户侧**真**终端）。
+ * Right-hand "Terminal" panel (a **real** terminal for the user).
  *
- * 渲染/输入：xterm.js；进程壳：主进程 node-pty（真 TTY）。打开面板且没有会话时默认
- * 自动新建一个；关闭页签才杀进程，收起面板不会终止终端（重开可回放缓冲继续用）。
+ * Rendering/input: xterm.js; process shell: main-process node-pty (a real TTY). Opening the panel
+ * with no session creates one automatically by default; a process is killed only when its tab is
+ * closed — collapsing the panel does not terminate the terminal (reopening replays the buffer and
+ * you can keep using it).
  *
- * 与模型侧 `terminal_*` 工具的行模式会话是两套实现：那套供模型调用，这套供人使用。
+ * This is a separate implementation from the model-side `terminal_*` line-mode sessions: that one
+ * is for the model to call, this one is for humans.
  */
 
 interface TerminalPanelProps {
-  /** 当前话题；null 也允许用（会话归属 0，cwd 落到用户主目录） */
+  /** Current topic; null is allowed (session belongs to 0, cwd falls back to the user's home directory) */
   topicId: number | null
   isDarkMode: boolean
   colorBgContainer: string
@@ -66,7 +69,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const activeIdRef = useRef<string | null>(null)
   activeIdRef.current = activeId
-  /** 自动新建只尝试一次（手动关掉最后一个会话后不反复重建；重开面板会复位） */
+  /** Auto-create is attempted only once (no rebuild after the user closes the last session by hand; reset when the panel is reopened) */
   const autoOpenedRef = useRef(false)
 
   const loadSessions = useCallback(async (): Promise<PtySessionView[]> => {
@@ -94,7 +97,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     try {
       const result = await harnessApi.ptyTerminal.open({
         topicId: topicId ?? 0,
-        // 初始尺寸给个常见值，挂载后 FitAddon 会立刻 resize
+        // Give a common initial size; FitAddon resizes immediately after mounting
         cols: 100,
         rows: 30
       })
@@ -124,7 +127,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     [loadSessions]
   )
 
-  // 话题切换 / 首次挂载：重新拉列表（自动新建标记复位）
+  // Topic switch / first mount: refetch the list (auto-create flag reset)
   useEffect(() => {
     setSessions([])
     setActiveId(null)
@@ -134,15 +137,15 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     void loadSessions().finally(() => setLoading(false))
   }, [loadSessions])
 
-  // 打开面板且没有会话 → 默认自动新建一个真终端（只发生在首次加载完成时；
-  // 之后用户手动关掉最后一个会话不再自动重建）
+  // Panel opened with no sessions → auto-create a real terminal by default (only after the first
+  // load completes; manually closing the last session later does not rebuild it)
   useEffect(() => {
     if (loading || autoOpenedRef.current) return
     autoOpenedRef.current = true
     if (sessions.length === 0 && !error) void openSession()
   }, [error, loading, openSession, sessions.length])
 
-  // 会话列表变化（模型/其他窗口新建、进程退出、关闭）时刷新页签
+  // Refresh tabs when the session list changes (created by the model/other windows, process exit, close)
   useEffect(() => {
     const unsubscribe = harnessApi.ptyTerminal.onSessionsChanged(() => {
       void loadSessions()
@@ -150,15 +153,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
     return unsubscribe
   }, [loadSessions])
 
-  // alive 数量同步给顶栏角标
+  // Sync the alive count to the top-bar badge
   useEffect(() => {
     onRunningCountChange?.(sessions.filter((session) => session.alive).length)
   }, [onRunningCountChange, sessions])
 
   /**
-   * 没有终端就不保留空面板（用户 2026-11-27 口径）：
-   * 创建失败，或用户关掉最后一个会话 → 自动收起整个终端侧栏。
-   * 初次打开且没有会话时由上面的自动新建负责，不在这里关。
+   * No empty panel without terminals (user, 2026-11-27):
+   * creation failed, or the user closed the last session → automatically collapse the whole
+   * terminal sidebar. On first open with no sessions the auto-create above handles it; it is not
+   * closed here.
    */
   const hadSessionsRef = useRef(false)
   useEffect(() => {
@@ -176,7 +180,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
       style={{ background: colorBgContainer, borderRadius: token.borderRadiusLG }}
       data-terminal-panel="1"
     >
-      {/* 标题栏：与工作区面板同款浅灰条 */}
+      {/* Header bar: same light gray strip as the workspace panel */}
       <div
         className="flex items-center"
         style={{
@@ -215,7 +219,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         <span style={{ flex: 1 }} />
       </div>
 
-      {/* 会话页签 */}
+      {/* Session tabs */}
       <div
         className="flex items-stretch overflow-hidden"
         style={{
@@ -277,7 +281,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({
         })}
       </div>
 
-      {/* 终端主体：xterm.js + node-pty（没有会话时面板会被自动关闭，不再显示空态/新建入口） */}
+      {/* Terminal body: xterm.js + node-pty (with no sessions the panel closes automatically, so no empty state / new-session entry is shown) */}
       {loading ? (
         <div style={{ padding: 14, fontSize: 12, color: colorTextTertiary }}>
           {t('harness.terminalPanel.loading')}

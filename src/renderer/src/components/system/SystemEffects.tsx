@@ -4,13 +4,15 @@ import { publishDocChanged, type DocChangedPayload } from '@renderer/events/doc-
 import { handleProbeRequest } from '@renderer/workshop/probe'
 
 /**
- * 系统功能之间的两条进程内桥（挂载一次，随应用生命周期）：
+ * Two in-process bridges between system features (mounted once for the app lifetime):
  *
- * - AI 助手的主进程写文档 → `notes` 编辑器的 `doc:changed` 订阅表；
- * - 插件工坊对插件渲染模块的实时装载探针。
+ * - Documents written by the AI assistant's main process → the `notes` editor's `doc:changed`
+ *   subscriber table;
+ * - The plugin workshop's live-loading probe for plugin renderer modules.
  *
- * 两者都是随应用编译进来的功能，直接调用公开的模块 API 即可——不再经插件的
- * 事件总线绕一圈，也没有“哪个插件订阅了哪个通道”的间接层。
+ * Both are features compiled into the app itself, so they call the public module APIs directly —
+ * no detour through the plugin event bus and no "which plugin subscribed to which channel"
+ * indirection.
  */
 const SystemEffects: FC = () => {
   useEffect(() => {

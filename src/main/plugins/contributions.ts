@@ -1,32 +1,36 @@
 /**
- * 主进程插件**多值贡献点**注册表（core 侧，插件之间经宿主交换而不互相 import）。
+ * Main-process plugin **multi-value contribution point** registry (core side; plugins exchange
+ * through the host instead of importing each other).
  *
- * 语义：
- * - **多值**：同一个 key 可以由多个插件分别贡献（例如 `harness.tool` 由
- *   planner / notes / music 各贡献自己的工具），同一个插件也可以贡献多项；
- * - **拉取（pull）**：注册表不通知、不派发。消费方（例如 harness 组装工具集时）
- *   在**需要的那一刻**调 `listContributions(key)` 取当前全部贡献，
- *   **顺序无关**——谁的 install 先跑都能拿到全部；
- * - **随插件停用移除**：贡献以 pluginId 记账，插件停用时宿主调
- *   `removeContributions(pluginId)` 一次性清掉自己的全部贡献；
- *   下一次拉取就看不到它了（消费方无需感知「插件没了」这件事）；
- * - **按插件装载顺序保存**：值是数组，同 key 内保持贡献先后（消费方若要稳定输出
- *   应自己按 name 排序，不要依赖装载顺序）。
+ * Semantics:
+ * - **multi-value**: the same key may be contributed by several plugins (e.g. `harness.tool` is
+ *   contributed by planner / notes / music with their own tools), and one plugin may contribute
+ *   several entries;
+ * - **pull**: the registry neither notifies nor dispatches. Consumers (e.g. harness assembling a
+ *   tool set) call `listContributions(key)` **at the moment they need it** to get everything
+ *   currently contributed, **order-independently** — it works no matter whose install ran first;
+ * - **removed with the plugin**: contributions are tracked by pluginId; when a plugin is disabled
+ *   the host calls `removeContributions(pluginId)` and clears all of its contributions at once; the
+ *   next pull no longer sees them (consumers need not be aware that "the plugin is gone");
+ * - **stored in plugin load order**: values are arrays and entries within a key keep contribution
+ *   order (consumers needing stable output should sort by name themselves rather than rely on load
+ *   order).
  *
- * 与渲染层 `plugin-host` 的插槽是同一套思路（多值、可回滚），只是主进程侧
- * 目前只有「贡献 → 宿主消费」这一种关系，因此不做单值 provide/use。
+ * This follows the same idea as the renderer `plugin-host` slots (multi-value, reversible), except
+ * that the main-process side currently only has the "contribute → host consumes" relationship, so
+ * there is no single-value provide/use.
  */
 
-/** 一条已挂载的贡献：谁的、值是什么 */
+/** One mounted contribution: whose it is and what the value is */
 interface ContributionEntry {
   pluginId: string
   value: unknown
 }
 
-/** key → 按装载顺序排列的贡献列表 */
+/** key → contribution list in load order */
 const registry = new Map<string, ContributionEntry[]>()
 
-/** 挂载一条贡献（同一插件同一 key 可多次调用，各自入列） */
+/** Mounts a contribution (the same plugin may call this several times for the same key; each is appended) */
 export function addContribution(pluginId: string, key: string, value: unknown): void {
   const list = registry.get(key)
   if (list) list.push({ pluginId, value })
@@ -34,8 +38,8 @@ export function addContribution(pluginId: string, key: string, value: unknown): 
 }
 
 /**
- * 摘除某插件的**全部**贡献（停用/卸载时调用；幂等）。
- * 空 key 的列表一并删掉，避免注册表里留下无人消费的空槽。
+ * Removes **all** contributions of one plugin (called on disable/uninstall; idempotent).
+ * Lists that become empty are deleted too, so the registry keeps no unconsumed empty slots.
  */
 export function removeContributions(pluginId: string): void {
   for (const [key, list] of [...registry]) {
@@ -46,47 +50,55 @@ export function removeContributions(pluginId: string): void {
 }
 
 /**
- * 读取某贡献点的全部贡献（拉取语义：调用时的快照，之后插件启停不会改写已取出的数组）。
- * 未注册的 key 返回空数组，**不抛错**——「没人贡献」是正常状态。
+ * Reads all contributions for a contribution point (pull semantics: a snapshot at call time;
+ * later plugin enable/disable does not rewrite the array already handed out).
+ * Unknown keys return an empty array and **never throw** — "nobody contributes" is a normal state.
  */
 export function listContributions<T>(key: string): T[] {
   return (registry.get(key) ?? []).map((entry) => entry.value as T)
 }
 
-/** 当前注册表里的贡献点 key（仅供日志/诊断，不含值） */
+/** Contribution point keys currently in the registry (for logging/diagnostics only; values excluded) */
 export function contributionKeys(): string[] {
   return [...registry.keys()]
 }
 
 /**
- * 贡献点键：**插件自清数据**（`plugin.purge`）。
+ * Contribution point key: **plugin self-purge** (`plugin.purge`).
  *
- * 用途：卸载插件时，用户勾了「同时删除该插件的全部数据」才真正卸载它的数据，此时宿主
- * 调这里的贡献，让**插件自己**删自己的数据——表在 core 的 schema 里、行在同一个 PGlite 库里，
- * 但「哪些表 / 哪些托管目录属于我」只有插件自己知道，core 不该硬编码任何插件表名。
+ * Purpose: when uninstalling a plugin, its data is only really removed if the user checked "also
+ * delete all data of this plugin"; the host then calls this contribution so the **plugin itself**
+ * deletes its data — the tables live in core's schema and the rows in the same PGlite database, but
+ * only the plugin knows which tables / managed directories belong to it, and core should not
+ * hard-code any plugin table name.
  *
- * 契约（与 `app-hooks.ts` 的钩子同构，只是单值语义更贴切——一个插件只有一份清理逻辑）：
- * - 插件在 `install(ctx)` 里 `ctx.contribute(PLUGIN_PURGE, { run, label })`；
- * - 宿主在**插件仍处于装载状态**时调用 `run()`（要读自己的 mapper / 托管目录），
- *   因此 `run` 可以放心 import 自己插件的模块（不会拿到已 dispose 的上下文）；
- * - `run` 只删**数据**：不删表结构（迁移不动，避免出现「卸载后迁移对不上」的库），
- *   也不碰用户自己的原始文件（例如 music 只删应用托管的歌单目录，不删用户音乐）；
- * - `label` 会经 `PluginListEntry.purgeLabel` 显示在卸载确认框的勾选项里（「包含：……」），
- *   所以要写成用户看得懂的短语。
+ * Contract (isomorphic to the hooks in `app-hooks.ts`, except the single-value semantics fit better
+ * — a plugin has exactly one cleanup routine):
+ * - the plugin does `ctx.contribute(PLUGIN_PURGE, { run, label })` in `install(ctx)`;
+ * - the host calls `run()` while the plugin is **still loaded** (it needs to read its own mappers /
+ *   managed directories), so `run` may safely import its own plugin modules (it never gets a
+ *   disposed context);
+ * - `run` deletes **data only**: not the table structure (migrations are untouched, so a database
+ *   whose migrations no longer line up after uninstall cannot appear), and it does not touch the
+ *   user's own original files (e.g. music only deletes the app-managed playlist directory, not the
+ *   user's music);
+ * - `label` is shown in the uninstall confirmation checkbox via `PluginListEntry.purgeLabel`
+ *   ("including: …"), so it must be a phrase users understand.
  */
 export const PLUGIN_PURGE = 'plugin.purge'
 
-/** `plugin.purge` 贡献的值：`label` 只用于日志/确认框，`run` 是插件自己的清数据动作 */
+/** Value of a `plugin.purge` contribution: `label` is only for logs/confirmation dialogs, `run` is the plugin's own cleanup action */
 export interface PluginPurgeContribution {
   run: () => void | Promise<void>
   label: string
 }
 
 /**
- * 取某插件的清数据动作（未贡献返回 null）。
+ * Gets a plugin's cleanup action (null when not contributed).
  *
- * 用**末项**：同一插件重复贡献时后写的生效；不同插件之间互不影响
- * （贡献注册表按 pluginId 记账，停用时只摘自己的）。
+ * Uses the **last** entry: a repeated contribution from the same plugin takes effect, while different
+ * plugins do not affect each other (the registry tracks contributions by pluginId, so disabling only
+ * removes its own).
  */
 export function pluginPurge(id: string): PluginPurgeContribution | null {
   const all = (registry.get(PLUGIN_PURGE) ?? []).filter((entry) => entry.pluginId === id)
@@ -96,78 +108,93 @@ export function pluginPurge(id: string): PluginPurgeContribution | null {
 }
 
 /**
- * 贡献点键：**云同步快照**（`plugin.sync.snapshot`）。
+ * Contribution point key: **cloud sync snapshot** (`plugin.sync.snapshot`).
  *
- * 背景：`lattice/sync` 原先只同步 `userData/plugin-state/<id>.json`，而按宿主约定
- * （见 WORKSHOP「应用数据进表、设置进 JSON」）业务数据在插件自己的表里——于是云端只有设置。
- * 这个贡献点让插件自己决定「同步什么」：
+ * Background: `lattice/sync` used to sync only `userData/plugin-state/<id>.json`, while per the host
+ * convention (app data in tables, settings in JSON) business data lives in the plugin's own tables —
+ * so the cloud only got settings. This contribution point lets each plugin decide **what to sync**:
  *
- * 契约：
- * - 插件在 `install(ctx)` 里 `ctx.contribute(PLUGIN_SYNC_SNAPSHOT, { export, import })`；
- * - `export()` 返回**可 JSON 序列化**的对象（平台上限 256KiB，宿主超限时整份跳过、不截断），
- *   内容由插件自己定义：设置 + 业务表的合并快照都行；
- * - `import(data)` 必须是**替换语义、幂等**：重复应用同一份快照不得产生重复行
- *   （宿主在 pull / 冲突选「用云端」时可能多次调用）；抛错即视为失败，宿主不会前移 `data_rev`；
- * - 贡献存在时，宿主**不再**读写 `plugin-state/<id>.json` 作为同步载荷（那个文件只是设置，
- *   拿它当快照会把云端数据覆盖成设置）；插件未装载（停用）时云端数据只保留、不落盘，
- *  待插件重新启用后再应用（`requestSync` 会触发一次同步）；
- * - `label` 只用于日志/排障。
+ * Contract:
+ * - the plugin does `ctx.contribute(PLUGIN_SYNC_SNAPSHOT, { export, import })` in `install(ctx)`;
+ * - `export()` returns a **JSON-serializable** object (the platform limit is 256KiB; the host skips
+ *   the whole snapshot when over the limit instead of truncating it), with content defined by the
+ *   plugin: settings, a combined snapshot of settings + business tables, anything;
+ * - `import(data)` must be **replace semantics and idempotent**: applying the same snapshot twice
+ *   must not produce duplicate rows (the host may call it several times on pull / when "use cloud" is
+ *   chosen for a conflict); throwing counts as failure and the host does not advance `data_rev`;
+ * - while the contribution exists the host **no longer** reads/writes `plugin-state/<id>.json` as the
+ *   sync payload (that file is settings only; using it as a snapshot would overwrite cloud data with
+ *   settings); when the plugin is not loaded (disabled) cloud data is kept but not written to disk,
+ *   and is applied once the plugin is enabled again (`requestSync` triggers a sync);
+ * - `label` is only for logs/troubleshooting.
  */
 export const PLUGIN_SYNC_SNAPSHOT = 'plugin.sync.snapshot'
 
-/** `plugin.sync.snapshot` 贡献的值 */
+/** Value of a `plugin.sync.snapshot` contribution */
 export interface PluginSyncSnapshotContribution {
-  /** 导出当前可同步数据（设置 + 业务表），宿主序列化后上传 */
+  /** Exports the currently syncable data (settings + business tables); the host serializes and uploads it */
   export: () => unknown | Promise<unknown>
-  /** 应用云端快照（**替换 + 幂等**；未实现时宿主拒绝把快照写进 plugin-state） */
+  /** Applies a cloud snapshot (**replace + idempotent**; when not implemented the host refuses to write the snapshot into plugin-state) */
   import?: (data: unknown) => void | Promise<void>
   /**
-   * 合并：把云端快照并入本机（不覆盖本机独有数据，按插件的自然键去重）。
+   * Merge: merges the cloud snapshot into local data (without overwriting local-only data, deduping
+   * by the plugin's natural keys).
    *
-   * 返回摘要文本供界面提示；宿主合并成功后会把「合并后的本机快照」推回云端（带
-   * `data_rev`、不 force），所以插件只需要保证本地是「两边并集」，不必自己调网络。
+   * Returns a summary text for UI hints; after a successful merge the host pushes "the merged local
+   * snapshot" back to the cloud (with `data_rev`, without force), so the plugin only has to make
+   * local data the union of both sides and need not call the network itself.
    *
-   * **新契约（2026-11-25 起）**：宿主只在插件同时声明 `mergeBase: true` 时才会调用它，
-   * 并把 `opts.base`（上次成功同步时的云端快照）传进来。插件必须按「三方合并」实现：
-   * 本机相对 base 删掉的行不得再从云端拉回、本机改过的行不得重复追加；旧的无条件并集
-   * 会把用户删掉/改过的数据回填（用户报障：「删了、改了，后面还给我推送」）。
+   * **New contract (since 2026-11-25)**: the host calls it only when the plugin also declares
+   * `mergeBase: true`, passing `opts.base` (the cloud snapshot from the last successful sync). The
+   * plugin must implement a three-way merge: rows deleted locally relative to the base must not be
+   * pulled back from the cloud, and rows edited locally must not be appended twice; the old
+   * unconditional union brought back data the user had deleted/edited (user report: "I deleted/
+   * edited it and it still got pushed back to me").
    */
   merge?: (
     data: unknown,
     opts?: { base?: unknown }
   ) => void | Promise<{ summary?: string; rows?: number }>
   /**
-   * 声明 `merge()` 已升级为**基于 merge base 的三方合并**。
+   * Declares that `merge()` is upgraded to **merge-base three-way merging**.
    *
-   * 不声明（旧版插件）时宿主只做快进（push / pull）与显式冲突选择，不会调用 `merge()`，
-   * 也不会显示「合并两边」——宁可少一个功能，也不静默把已删除的数据并回来。
+   * Without the declaration (older plugins) the host only does fast-forward (push / pull) and
+   * explicit conflict selection, never calls `merge()`, and never shows "merge both" — better to lose
+   * one feature than to silently merge deleted data back.
    *
-   * 实现 checklist（2026-11-25 数据事故沉淀，详见工坊模板 WORKSHOP.md 5b）：
-   * - 用 `opts.base` 算出本机相对上次同步**删掉/改走的行**，远端旧行不再加回；
-   * - id 对得上时按 id 判断编辑：本机没改→接受云端，两边都改→本机优先（不要追加第二条）；
-   * - 设置里的集合（成员/规则/模板）也要按 base 过滤，否则删除会被并集带回；
-   * - 导入/合并前把悬空的 accountId/categoryId/merchantId/refundOfId 置空，不要拒绝整份快照；
-   * - 纯函数 merge(local, remote, base)，幂等、忽略 exportedAt 等易变字段。
+   * Implementation checklist (distilled from the 2026-11-25 data incident):
+   * - use `opts.base` to work out the rows **deleted/changed away** locally since the last sync, and
+   *   do not add stale remote rows back;
+   * - when ids match, decide edits by id: unchanged locally → accept the cloud; changed on both
+   *   sides → local wins (do not append a second copy);
+   * - collections in settings (members/rules/templates) must also be filtered by the base, otherwise
+   *   deletions come back through the union;
+   * - before importing/merging, null out dangling accountId/categoryId/merchantId/refundOfId rather
+   *   than rejecting the whole snapshot;
+   * - a pure function merge(local, remote, base), idempotent, ignoring volatile fields like
+   *   exportedAt.
    */
   mergeBase?: boolean
   /**
-   * 本机是否已有业务数据（可选；宿主用它判断「还没推过快照、本机又有数据」时
-   * 不能直接拿云端覆盖，必须先记冲突让用户选择/合并）。
+   * Whether local business data already exists (optional; the host uses it to decide that when "the
+   * snapshot has never been pushed and local has data" it must not overwrite with the cloud directly,
+   * but record a conflict for the user to choose/merge first).
    */
   hasData?: () => boolean | Promise<boolean>
   /**
-   * 统计一份快照里有多少条业务数据（可选；用于同步结果/界面展示「拉取/推送了多少条」）。
-   * 返回数字，插件自己决定怎么算（例如十张表行数之和）。
+   * Counts business data rows in a snapshot (optional; used in sync results/UI to show "how many rows
+   * pulled/pushed"). Returns a number; the plugin decides how to count (e.g. the sum of row counts of
+   * ten tables).
    */
   count?: (data: unknown) => number | Promise<number>
-  /** 说明文字，仅用于日志/排障 */
+  /** Description text, for logs/troubleshooting only */
   label?: string
 }
 
 /**
- * 取某插件的同步快照贡献（未贡献 / 插件未装载时返回 null）。
+ * Gets a plugin's sync snapshot contribution (null when not contributed / plugin not loaded).
  *
- * 与 `pluginPurge` 一样的「末项生效」规则；`export` 必需，`import` 可选。
+ * Same "last entry wins" rule as `pluginPurge`; `export` is required, `import` optional.
  */
 export function pluginSyncSnapshot(id: string): PluginSyncSnapshotContribution | null {
   const all = (registry.get(PLUGIN_SYNC_SNAPSHOT) ?? []).filter((entry) => entry.pluginId === id)

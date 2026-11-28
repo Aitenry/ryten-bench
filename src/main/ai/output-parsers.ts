@@ -1,23 +1,24 @@
 /**
- * 自研结构化输出解析器（替代 `@langchain/core/output_parsers` 的 StructuredOutputParser）。
+ * In-house structured output parser.
  *
- * 项目里的用法只有一种：`StructuredOutputParser.fromZodSchema(schema).parse(text)`——
- * 模型输出一段（可能带 markdown 围栏的）JSON，先抽取 JSON，再用 zod 校验。
- * 校验失败抛错，调用方（graph/service/llm-invoke）会退回 json-llm-repair 修复路径。
+ * There is only one usage in the project: `StructuredOutputParser.fromZodSchema(schema).parse(text)` —
+ * the model outputs a JSON snippet (possibly wrapped in markdown fences); the JSON is extracted first
+ * and then validated with zod. Validation failures throw, and the callers (graph/service/llm-invoke)
+ * fall back to the json-llm-repair path.
  */
 import type { z } from 'zod'
 import { schemaToJsonSchema } from './tools'
 
-/** 从模型输出里抽出第一个完整 JSON 值（对象或数组） */
+/** Extract the first complete JSON value (object or array) from the model output */
 export function extractJson(text: string): unknown {
   const raw = text.trim()
   if (!raw) throw new Error('Cannot parse structured output: empty content')
 
-  // 1) 整段就是 JSON
+  // 1) The whole input is JSON
   const direct = tryParse(raw)
   if (direct.ok) return direct.value
 
-  // 2) 去掉 markdown 围栏后再试
+  // 2) Retry after stripping the markdown fences
   const fenced = /```(?:json|JSON)?\s*\n?([\s\S]*?)```/g
   for (const match of raw.matchAll(fenced)) {
     const candidate = match[1].trim()
@@ -25,7 +26,7 @@ export function extractJson(text: string): unknown {
     if (parsed.ok) return parsed.value
   }
 
-  // 3) 扫描第一个平衡的 {...} / [...]
+  // 3) Scan for the first balanced {...} / [...]
   const extracted = extractBalancedJson(raw)
   if (extracted !== undefined) {
     const parsed = tryParse(extracted)
@@ -43,7 +44,7 @@ function tryParse(text: string): { ok: true; value: unknown } | { ok: false } {
   }
 }
 
-/** 从任意文本里截出第一个括号平衡的 JSON 片段（正确处理字符串与转义） */
+/** Extract the first brace-balanced JSON fragment from arbitrary text (handles strings and escapes) */
 function extractBalancedJson(text: string): string | undefined {
   const start = text.search(/[[{]/)
   if (start < 0) return undefined
@@ -77,7 +78,7 @@ function extractBalancedJson(text: string): string | undefined {
   return undefined
 }
 
-/** zod 校验失败时的可读信息 */
+/** Readable information for a zod validation failure */
 function formatZodError(error: unknown): string {
   const issues = (error as { issues?: Array<{ path?: Array<string | number>; message?: string }> })
     ?.issues
@@ -90,10 +91,10 @@ function formatZodError(error: unknown): string {
 }
 
 /**
- * 结构化输出解析器。
+ * Structured output parser.
  *
- * `Schema` 只作为类型参数使用（不同模块可能传 zod v3 / v4 的 schema 类型），
- * 运行期按「有 safeParse 就当 zod schema」处理。
+ * `Schema` is used only as a type parameter (different modules may pass zod v3 / v4 schema types);
+ * at runtime, anything that has `safeParse` is treated as a zod schema.
  */
 export class StructuredOutputParser<Schema = unknown> {
   readonly schema: Schema
@@ -106,7 +107,7 @@ export class StructuredOutputParser<Schema = unknown> {
     return new StructuredOutputParser(schema)
   }
 
-  /** 解析并校验（校验失败抛错） */
+  /** Parse and validate (throws on validation failure) */
   parse(text: string): unknown {
     const json = extractJson(text)
     const schema = this.schema as unknown as {
@@ -124,12 +125,12 @@ export class StructuredOutputParser<Schema = unknown> {
     return json
   }
 
-  /** 给模型看的格式说明（提示词需要时可用） */
+  /** Format instructions for the model (available when the prompt needs them) */
   getFormatInstructions(): string {
     const schema = schemaToJsonSchema(this.schema)
     return `Respond with a single JSON value that validates against this JSON Schema. Output only the JSON, without any prose or markdown fences:\n${JSON.stringify(schema)}`
   }
 }
 
-/** 兼容类型导出：调用方常写 `StructuredOutputParser<z.ZodTypeAny>` */
+/** Compatibility type export: callers often write `StructuredOutputParser<z.ZodTypeAny>` */
 export type { z }

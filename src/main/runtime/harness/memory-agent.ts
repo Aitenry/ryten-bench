@@ -5,28 +5,33 @@ import { subagentSessions } from './subagent-sessions'
 import { getMnemonComponent } from '../../services/harness/mnemon-singleton'
 
 /**
- * 记忆整理后台子代理 —— 消息操作栏「存入记忆」的真正执行者。
+ * Background memory-curation subagent — the actual executor of "save to memory" in the message action
+ * bar.
  *
- * 为什么不直接写：热记忆是「给未来每一轮对话看的长期事实」，一条助手回复动辄几千字，
- * 直接截断塞进 MEMORY 只会把热记忆撑满、还塞进一堆一次性进度。正确做法是让一个
- * 专门的子代理读这一轮问答，判断哪些是**可复用的事实**（用户偏好、项目决策、环境坑、
- * 失败教训），再决定落到哪一层（热记忆 / 项目文档 / 长期记忆空间）并自己去写。
+ * Why not write directly: hot memory holds "long-term facts for every future turn", and a single
+ * assistant reply is often thousands of words; truncating that into MEMORY would only fill up hot
+ * memory with a pile of one-off progress. The right approach is a dedicated subagent that reads this
+ * turn's Q&A, decides which parts are **reusable facts** (user preferences, project decisions,
+ * environment pitfalls, failure lessons), then decides which layer to store them in (hot memory /
+ * project documents / long-term memory space) and writes them itself.
  *
- * 复用现有后台子代理体系（subagentSessions）的好处：
- * - 顶部栏合并后的「协作」入口自动出现子代理项，点开可看实时会话，无需新 UI；
- * - 同时注册为同名后台任务（job_output/job_kill 可管）；
- * - 话题删除时由 clearTopic 一并清理。
+ * Benefits of reusing the existing background subagent system (subagentSessions):
+ * - The merged "collaboration" entry in the top bar automatically shows the subagent item; clicking it
+ *   shows the live session, with no new UI needed;
+ * - It is also registered as a background job of the same name (manageable via job_output/job_kill);
+ * - It is cleaned up by clearTopic when the topic is deleted.
  *
- * 工具集刻意只给 mnemon_*（不给文件/业务工具）：这个代理的职责边界就是记忆本身。
+ * The tool set deliberately contains only mnemon_* (no filesystem/business tools): this agent's scope
+ * is memory itself.
  */
 
-/** 子代理标识（顶部栏显示名走 i18n 模板，这里用稳定的 ASCII 名） */
+/** Subagent identifier (the top-bar display name goes through an i18n template; a stable ASCII name is used here) */
 export const MEMORY_AGENT_NAME = 'memory-curator'
 
-/** 单次整理读取的回答上限：超长回答只取前 N 字符，避免把整份文件塞进提示词 */
+/** Cap on the answer length read per curation: overly long answers are truncated to the first N characters to avoid stuffing a whole file into the prompt */
 const MAX_SOURCE_CHARS = 20_000
 
-/** 系统提示词（提示词固定英文，与项目其余提示词一致） */
+/** System prompt (prompts are always English, consistent with the rest of the project) */
 export const MEMORY_AGENT_PROMPT = `You are the memory curator: a background subagent that runs when the user marks one assistant reply as worth remembering.
 
 Your job is to decide what from that exchange deserves long-term memory and to store it yourself with the Mnemon tools. Never just report what should be stored — actually store it.
@@ -49,25 +54,26 @@ How to store:
 Finish with 1-3 lines: what you stored and where.`
 
 export interface StartMemoryAgentParams {
-  /** 归属话题（顶部栏按话题列后台代理） */
+  /** Owning topic (the top bar lists background agents by topic) */
   topicId: number
-  /** 助手回复正文（要整理的材料） */
+  /** Assistant reply body (the material to curate) */
   answer: string
-  /** 该轮的用户提问（拿不到时只整理回答） */
+  /** The user question of that turn (only the answer is curated when unavailable) */
   question?: string
-  /** 当前工作区（记忆按工作区隔离） */
+  /** Current workspace (memory is isolated per workspace) */
   workspaceId: number
   /**
-   * 这条会话的记忆作用域**字符串**（`plugin:<id>` / `chat`；空 = 工作区）。
-   * 见 main/memory-scope.ts 与 shared/memory-scope.ts：插件会话落进那份插件自己的目录，
-   * 「对话」模式落进 `<memoryPath>/chat/`，与工作记忆零交叉。
+   * The memory scope **string** for this session (`plugin:<id>` / `chat`; empty = workspace).
+   * main/memory-scope.ts and shared/memory-scope.ts define this: a plugin session lands in that
+   * plugin's own directory, "chat" mode lands in `<memoryPath>/chat/`, with zero crossover with
+   * working memory.
    */
   memoryScope?: string | null
-  /** 记忆存储根；未配置时记忆系统整体不可用 */
+  /** Memory storage root; the memory system is entirely unavailable when not configured */
   memoryPath?: string
-  /** 供应商 ID，缺省用默认供应商 */
+  /** Provider ID; the default provider is used when omitted */
   providerId?: number
-  /** 模型级「工具调用轮数」上限 */
+  /** Model-level "tool call rounds" limit */
   maxToolRounds?: number
 }
 
@@ -76,11 +82,12 @@ export type StartMemoryAgentResult =
   | { ok: false; reason: 'memory-disabled' | 'no-model' | 'model-failed'; message?: string }
 
 /**
- * 解析供应商 ID：显式传入 > 设置里的默认供应商 > 已启用里的第一个。
+ * Resolve the provider ID: explicit argument > default provider in settings > first enabled one.
  *
- * `ProviderService.createModel()` 刻意不再回退默认供应商（要求显式传 ID，聊天轮次由前端
- * 传当前所选模型）。按钮这条路径没有「当前所选」可言，所以在这里自己补一条回退链，
- * 否则 providerId 为 undefined 时必定抛「目标模型不存在」。
+ * `ProviderService.createModel()` deliberately no longer falls back to the default provider (it
+ * requires an explicit ID; chat turns pass the currently selected model from the frontend). This
+ * button path has no "current selection" at all, so a fallback chain is added here; otherwise a
+ * providerId of undefined would always throw "target model does not exist".
  */
 async function resolveProviderId(explicit?: number): Promise<number | undefined> {
   if (explicit != null) return explicit
@@ -91,7 +98,7 @@ async function resolveProviderId(explicit?: number): Promise<number | undefined>
   return enabled[0]?.id
 }
 
-/** 组装交给子代理的任务消息（材料 + 明确的收尾要求） */
+/** Assemble the task message handed to the subagent (material + explicit wrap-up requirement) */
 export function buildTaskMessage(answer: string, question?: string): string {
   const trimmedAnswer = answer.trim()
   const body =
@@ -113,10 +120,11 @@ export function buildTaskMessage(answer: string, question?: string): string {
 }
 
 /**
- * 起一个记忆整理子代理（立即返回，不等待它跑完）。
+ * Start a memory-curation subagent (returns immediately, without waiting for it to finish).
  *
- * 模型与护栏和主轮次同源：供应商由调用方决定（缺省=默认供应商），
- * 「工具调用轮数」取该模型的设置并夹在 MIN_TOOL_CALLS..MAX_TOOL_CALLS 之间。
+ * Model and guards share the same source as the main turn: the provider is decided by the caller
+ * (defaulting to the default provider), and "tool call rounds" comes from that model's settings,
+ * clamped between MIN_TOOL_CALLS..MAX_TOOL_CALLS.
  */
 export async function startMemoryAgent(
   params: StartMemoryAgentParams
@@ -124,7 +132,8 @@ export async function startMemoryAgent(
   const mnemon = getMnemonComponent(params.memoryPath, params.workspaceId, params.memoryScope)
   if (!mnemon) return { ok: false, reason: 'memory-disabled' }
 
-  // 惰性导入：与 runtime.ts 的 resolveSubAgentModel 同款做法，模块本身不绑死供应商层
+  // Lazy import: same approach as resolveSubAgentModel in runtime.ts; the module itself is not tied to
+  // the provider layer
   const { getProviderService } = await import('../../provider/service')
   const providerService = getProviderService()
 
@@ -141,8 +150,9 @@ export async function startMemoryAgent(
   try {
     model = await providerService.createModel(providerId)
   } catch (err) {
-    // 指定的供应商可能已被禁用/删除（例如用的是那条回复当时的模型）：回退到默认供应商，
-    // 别让按钮就此死掉；回退也失败才报错。
+    // The specified provider may have been disabled/deleted (e.g. it was the model used by that
+    // reply): fall back to the default provider instead of letting the button die; only error if the
+    // fallback also fails.
     const fallbackId = await resolveProviderId(undefined).catch(() => undefined)
     if (fallbackId != null && fallbackId !== providerId) {
       logger.warn(
@@ -152,19 +162,20 @@ export async function startMemoryAgent(
         model = await providerService.createModel(fallbackId)
         if (model) usedProviderId = fallbackId
       } catch {
-        /* 落到下面的失败返回 */
+        /* falls through to the failure return below */
       }
     }
     if (!model) return { ok: false, reason: 'model-failed', message: (err as Error)?.message }
   }
 
-  // spawn 时模型描述符：会话持久化后，冷恢复仍回到这条记忆整理任务使用的模型
+  // Model descriptor at spawn time: after the session is persisted, a cold resume still returns to
+  // the model this memory-curation task used
   let modelDescriptor: SubAgentMainModelDescriptor | undefined
   try {
     const providerConfig = await providerService.getConfig(usedProviderId)
     modelDescriptor = { providerId: providerConfig.id, model: providerConfig.model }
   } catch {
-    /* 描述符只影响冷恢复精度，取不到时回退默认供应商即可 */
+    /* The descriptor only affects cold-resume fidelity; falling back to the default provider is fine when it is unavailable */
   }
 
   const maxToolCalls = Math.max(MIN_TOOL_CALLS, Math.floor(params.maxToolRounds ?? MAX_TOOL_CALLS))
@@ -181,13 +192,15 @@ export async function startMemoryAgent(
     {
       mainModel: model,
       mainModelDescriptor: modelDescriptor,
-      // 不解析 'provider:model'：记忆整理跟着当前默认模型走，不额外挑模型
+      // Do not parse 'provider:model': memory curation follows the current default model, without
+      // picking a model separately
       resolveModel: async () => undefined,
-      // 只给记忆工具：这个代理不碰文件系统与业务数据
+      // Memory tools only: this agent does not touch the filesystem or business data
       buildTools: () => mnemon.tools,
       recursionLimit: maxToolCalls * 2 + 20,
       maxToolCalls,
-      // 记忆路由规则（热记忆/档案/空间的用法）与主代理同源，避免它把事实写错层
+      // Memory routing rules (when to use hot memory/documents/spaces) share the same source as the
+      // main agent, preventing it from writing facts to the wrong layer
       extendSystemPrompt: () => `${MEMORY_AGENT_PROMPT}${mnemon.promptSections.join('')}`
     }
   )

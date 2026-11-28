@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { harnessApi } from '../api/harness'
 
 /**
- * 全局 PTY 终端运行数（侧栏「开始」角标 + 开始页终端卡片）。
+ * Global count of running PTY terminals (the "Start" badge in the sidebar + the terminal card on the
+ * start page).
  *
- * 主进程是唯一真源：挂载时拉一次，之后订阅会话变化事件，另加 5s 兜底轮询
- * （事件在窗口重建/插件重载后可能漏一次）。
+ * The main process is the single source of truth: fetch once on mount, then subscribe to session
+ * change events, plus a 5s fallback poll (an event may be missed after a window rebuild / plugin
+ * reload).
  */
 export function usePtyTerminalStats(): number {
   const [alive, setAlive] = useState(0)
@@ -18,7 +20,7 @@ export function usePtyTerminalStats(): number {
           if (!disposed && result.ok) setAlive(result.alive)
         })
         .catch(() => {
-          // 助手插件停用时通道不存在：保持 0，不报错
+          // When the assistant plugin is disabled the channel doesn't exist: stay at 0 without erroring
         })
     }
     refresh()

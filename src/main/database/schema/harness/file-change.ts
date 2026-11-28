@@ -13,75 +13,84 @@ import { workspace } from '../workspace'
 import { harness_topic } from './harness'
 
 /**
- * 文件改动类型：
- * - create  新增文件（before 不存在，撤销 = 删除该文件）
- * - modify  内容修改
- * - delete  文件被删除（after 不存在）
+ * File change kinds:
+ * - create  new file (no before state; undo = delete the file)
+ * - modify  content changed
+ * - delete  file removed (no after state)
  */
 export type FileChangeKind = 'create' | 'modify' | 'delete'
 
 /**
- * 文件改动审查状态：
- * - pending   待用户审查（界面显示徽标 + 打开文件时默认进差异视图）
- * - kept      用户已确认保留
- * - reverted  用户已撤销（文件已回到改动前的内容）
- * - obsolete  因更早的改动被撤销而失效（不再可单独回溯）
+ * File change review status:
+ * - pending   awaiting user review (shows a badge in the UI; opening the file goes to the diff view
+ *             by default)
+ * - kept      user confirmed the change
+ * - reverted  user reverted it (the file is back to its pre-change content)
+ * - obsolete  invalidated because an earlier change was reverted (no longer individually traceable)
  */
 export type FileChangeStatus = 'pending' | 'kept' | 'reverted' | 'obsolete'
 
 /**
- * 改动来源：
- * - write_file / edit_file  模型通过内置文件工具写入（有精确的前后快照）
- * - execute                 模型执行命令期间被文件监听捕获（无快照，只能提示）
- * - external                工作区外部的改动（用户在别的编辑器里保存、git 切换分支等）
- * - review                  用户在差异视图里逐处取舍后落盘（审查结果本身也是一次改动）
+ * Change sources:
+ * - write_file / edit_file  written by the model through built-in file tools (exact before/after
+ *                           snapshots)
+ * - execute                 captured by the file watcher while the model ran a command (no
+ *                           snapshot, notice only)
+ * - external                changes from outside the workspace (user saving in another editor, git
+ *                           branch switch, etc.)
+ * - review                  written after the user picked changes one by one in the diff view (the
+ *                           review result is itself a change)
  */
 export type FileChangeSource = 'write_file' | 'edit_file' | 'execute' | 'external' | 'review'
 
 /**
- * 文件改动记录表：模型（或外部程序）每改一次文件落一行，供「可追溯 / 可回溯」使用。
+ * File change record table: one row per file modification by the model (or an external program),
+ * used for traceability and rollback.
  *
- * 设计取舍：
- * - **正文快照放磁盘**（userData/file-history/<workspaceId>/…），库里只存元信息与统计：
- *   一次 write_file 可能写入几十 KB，长期驻留 PGlite 会明显抬高库体积；
- * - `has_before` 标记是否有可回溯的快照；为 false 时只能提示「文件被改过」，不能撤销；
- * - topic_id 外键 onDelete set null：删会话不该抹掉「这个文件当时被谁改的」这笔记账；
- * - workspace_id 外键级联：删工作区时连同它的改动历史一起清理。
+ * Design tradeoffs:
+ * - **Content snapshots live on disk** (userData/file-history/<workspaceId>/…); the database only
+ *   keeps metadata and statistics: a single write_file can write tens of KB, and keeping that in
+ *   PGlite permanently would noticeably grow the database;
+ * - `has_before` marks whether a rollback snapshot exists; when false we can only report that the
+ *   file was changed, not revert it;
+ * - topic_id foreign key onDelete set null: deleting a session should not erase the record of who
+ *   changed this file at the time;
+ * - workspace_id foreign key cascades: deleting a workspace clears its change history too.
  */
 export const file_change = pgTable(
   'file_change',
   {
     id: serial().primaryKey().notNull(),
-    /** 所属工作区 */
+    /** Owning workspace */
     workspace_id: integer().notNull(),
-    /** 文件绝对路径 */
+    /** Absolute file path */
     path: text().notNull(),
-    /** 工作区相对路径（展示用，统一正斜杠） */
+    /** Workspace-relative path (for display; always forward slashes) */
     rel_path: text().notNull(),
-    /** 改动类型 */
+    /** Change kind */
     kind: text().$type<FileChangeKind>().default('modify').notNull(),
-    /** 改动来源 */
+    /** Change source */
     source: text().$type<FileChangeSource>().notNull(),
-    /** 会话 id（外部改动为 null；会话被删除后置空） */
+    /** Session id (null for external changes; cleared when the session is deleted) */
     topic_id: integer(),
-    /** 工具调用 id（可回连聊天里的那张工具卡片） */
+    /** Tool call id (links back to the tool card in the chat) */
     call_id: text(),
-    /** 审查状态 */
+    /** Review status */
     status: text().$type<FileChangeStatus>().default('pending').notNull(),
-    /** 是否有可回溯的前置快照 */
+    /** Whether a before snapshot exists for rollback */
     has_before: integer().default(0).notNull(),
-    /** 是否有改动后快照（重建差异视图用） */
+    /** Whether an after snapshot exists (used to rebuild the diff view) */
     has_after: integer().default(0).notNull(),
-    /** 差异统计：新增行数 / 删除行数 */
+    /** Diff statistics: lines added / lines removed */
     added: integer().default(0).notNull(),
     removed: integer().default(0).notNull(),
-    /** 改动前后字节数 */
+    /** Byte sizes before and after the change */
     before_bytes: integer().default(0).notNull(),
     after_bytes: integer().default(0).notNull(),
-    /** 模型给出的改动理由（可选，取自工具入参/会话上下文，当前留空） */
+    /** Change rationale given by the model (optional; from tool input/session context, currently left empty) */
     note: text(),
     created_at: timestamp({ mode: 'string' }).defaultNow(),
-    /** 用户审查（保留/撤销）时间 */
+    /** Time of user review (keep/revert) */
     reviewed_at: timestamp({ mode: 'string' })
   },
   (table) => [

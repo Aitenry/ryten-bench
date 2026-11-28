@@ -1,8 +1,8 @@
 /**
- * 宿主给插件渲染层的上下文（最小契约；完整说明见 WORKSHOP.md）。
+ * Context the host provides to the plugin renderer (minimal contract).
  *
- * 草稿目录里没有宿主的类型声明，这份 interface 就是「能调什么」的本地真源：
- * 挂载点由 ctx.use(键) 取得，effect 登记的可逆效果会在插件停用时 LIFO 回滚。
+ * The draft directory has no host type declarations, so this interface is the local source of truth for "what can be called":
+ * mount points are obtained via ctx.use(key), and reversible effects registered with effect are rolled back LIFO when the plugin is deactivated.
  */
 export interface PluginRenderContext {
   use(key: 'route'): {
@@ -23,10 +23,10 @@ export interface PluginRenderContext {
   }
   use(key: 'appProvider'): { register(provider: { Provider: unknown; order?: number }): void }
   /**
-   * 词条注册。第一个参数是 **i18next 命名空间**（宿主界面一律用 'translation'），
-   * 第二个参数是「语言 → 词条树」；写成 addResources('zh-CN', …) 会把 'zh-CN' 当命名空间，
-   * 菜单里就会显示原始键名（x.menu.title）——宿主 API 定义见
-   * src/renderer/src/plugin-host/host.ts 的 addResources。
+   * Locale registration. The first argument is the **i18next namespace** (host UI always uses 'translation'),
+   * the second is "language → locale tree"; calling addResources('zh-CN', …) treats 'zh-CN' as the namespace,
+   * so menus show raw key names (x.menu.title) — see addResources in
+   * src/renderer/src/plugin-host/host.ts for the host API definition.
    */
   use(key: 'i18n'): {
     addResources(namespace: 'translation', resources: Record<string, Record<string, unknown>>): void
@@ -38,6 +38,6 @@ export interface PluginRenderContext {
   effect(register: () => void | (() => void)): void
 }
 
-/** 主进程通道的调用桥（preload 暴露的通用桥，通道名必须是 plugin:<id>:<name>） */
+/** Invocation bridge for main-process channels (the generic bridge exposed by preload; channel names must be plugin:<id>:<name>) */
 export const invoke = (channel: string, ...args: unknown[]): Promise<unknown> =>
   window.api.plugin.invoke(channel, ...args)

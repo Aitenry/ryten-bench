@@ -8,12 +8,13 @@ import {
   foreignKey,
   unique
 } from 'drizzle-orm/pg-core'
-// 迁移说明：core 的 images 表（文档配图共用）用**相对路径** import——drizzle-kit 不解析
-// tsconfig paths；notes 自己的表由 core 的 database/schema/index.ts 反向 re-export 汇总。
+// Migration note: the core `images` table (shared by document images) is imported with a
+// **relative path** because drizzle-kit does not resolve tsconfig paths; the notes' own tables are
+// aggregated by core's database/schema/index.ts via reverse re-export.
 import { images } from '../common'
 import { wiki_directories } from './wiki'
 
-/** 文档表（全局数据，不按工作区隔离） */
+/** Documents table (global data, not isolated per workspace) */
 export const documents = pgTable(
   'documents',
   {
@@ -37,7 +38,10 @@ export const documents = pgTable(
   ]
 )
 
-/** 文档正文表：与 documents 一对一（doc_id 唯一），正文里的配图以 image_id 外键指向 images */
+/**
+ * Document content table: one-to-one with documents (doc_id is unique); images in the content
+ * reference images via the image_id foreign key
+ */
 export const documents_content = pgTable(
   'documents_content',
   {
@@ -64,7 +68,10 @@ export const documents_content = pgTable(
   ]
 )
 
-/** 目录-文档关联表：把全局文档挂到知识库目录下（同一目录同一文档只能挂一次） */
+/**
+ * Directory-document link table: attaches global documents under knowledge base directories
+ * (a document can be attached to the same directory only once)
+ */
 export const directory_documents = pgTable(
   'directory_documents',
   {

@@ -1,23 +1,27 @@
 /**
- * 「插件工坊」弹窗的跨路由打开请求。
+ * Cross-route open request for the "Plugin Workshop" modal.
  *
- * 背景：插件工坊 UI 从设置弹窗搬到了插件仓库页（`PluginRepository` 里的 `Modal` +
- * `WorkshopSettings embedded`），而侧栏（`HarnessSidebar`）在 Harness 路由下、跟插件仓库
- * 不是同一棵子树——侧栏点插件行要「导航到 /plugins 并打开工坊、展开这份插件」，
- * 只能靠一个跨路由的待处理请求（与 `settings-modal-state.ts` 同一套模块级快照思路）。
+ * Background: the plugin workshop UI moved from the settings modal to the plugin repository page
+ * (`Modal` + `WorkshopSettings embedded` inside `PluginRepository`), while the sidebar
+ * (`HarnessSidebar`) lives under the Harness route — a different subtree from the plugin
+ * repository — so clicking a plugin row in the sidebar has to "navigate to /plugins, open the
+ * workshop and expand this plugin", which only works through a cross-route pending request (the
+ * same module-level snapshot approach as `settings-modal-state.ts`).
  *
- * 为什么不用 CustomEvent：事件在导航前派发，目标页还没挂载 → 监听不到（旧实现就是这样
- * 丢了事件，用户只看到设置弹窗或空白页）。这里把请求暂存，目标页挂载后 `take()` 取走。
+ * Why not CustomEvent: the event fires before navigation, so the target page is not mounted yet
+ * and never hears it (the old implementation lost events this way; users only saw the settings
+ * modal or a blank page). Here the request is stashed and taken by the target page via `take()`
+ * once mounted.
  */
 export interface WorkshopModalRequest {
-  /** 要展开详情的草稿 id；undefined = 只打开工坊列表 */
+  /** Draft id to expand; undefined = only open the workshop list */
   draftId?: string
 }
 
 let pending: WorkshopModalRequest | null = null
 const listeners = new Set<() => void>()
 
-/** 请求打开插件工坊（通常紧接着 navigate('/plugins')） */
+/** Request opening the plugin workshop (usually immediately followed by navigate('/plugins')) */
 export function requestWorkshopModal(draftId?: string): void {
   pending = { draftId }
   for (const listener of [...listeners]) {
@@ -29,14 +33,14 @@ export function requestWorkshopModal(draftId?: string): void {
   }
 }
 
-/** 取走待处理请求（取走后清空，避免再次进入页面时重复弹窗） */
+/** Take the pending request (cleared after taking, so re-entering the page doesn't reopen the modal) */
 export function takeWorkshopModalRequest(): WorkshopModalRequest | null {
   const request = pending
   pending = null
   return request
 }
 
-/** 订阅「有新的打开请求」（插件仓库页在已挂载时也能即时响应） */
+/** Subscribe to "a new open request arrived" (so the plugin repository page can react while mounted) */
 export function subscribeWorkshopModalRequest(onChange: () => void): () => void {
   listeners.add(onChange)
   return () => {

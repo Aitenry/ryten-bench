@@ -36,41 +36,49 @@ import { workshopToolBuilders, workshopToolInfos } from './workshop'
 import { latticeToolBuilders, latticeToolInfos } from './lattice'
 
 // ============================================================================
-// Tool Registry — 本地工具 + 插件贡献（harness 只提供注册表/消费点）
+// Tool Registry — local tools + plugin contributions (harness only provides the
+// registry/consumption point)
 // ============================================================================
 
 type ToolFactory = () => StructuredToolInterface
 
 /**
- * harness **本地**工具：与某个插件的数据无关，因此留在 harness。
- * - `get_weather`：数据源 `src/main/weather.ts` 属 core；
- * - `get_time`：纯本地时间；
- * - `plugin_draft` / `plugin_build` / `plugin_verify` / `plugin_publish`：**插件工坊**
- *   （见 `main/workshop/**`）——「和助手对话把插件做出来」这条链路是 harness 自己的能力，
- *   不是别的插件贡献的工具，所以走这张本地表而不是 `harness.tool` 贡献点；
- * - `plugin_release`：**插件中心**发版（见 `main/lattice/**`）。与 `plugin_publish`
- *   （装进本机应用）相对，它是「把版本发出去给别的用户装」。
+ * harness **local** tools: unrelated to any plugin's data, so they stay in harness.
+ * - `get_weather`: its data source `src/main/weather.ts` belongs to core;
+ * - `get_time`: pure local time;
+ * - `plugin_draft` / `plugin_build` / `plugin_verify` / `plugin_publish`: the **plugin workshop**
+ *   (see `main/workshop/**`) — the "build a plugin by chatting with the assistant" path is
+ *   harness's own capability, not a tool contributed by another plugin, hence this local table
+ *   instead of the `harness.tool` contribution point;
+ * - `plugin_release`: **plugin center** release (see `main/lattice/**`). The counterpart of
+ *   `plugin_publish` (install into the local app) — it sends a version out for other users to
+ *   install.
  *
- * 但这 5 个是**模式工具**：注册在这里（`buildTools` 要按名字建实例、同名插件贡献照旧被本地挡住），
- * 却**不出现在设置页的可选清单里**——它们由插件模式自动挂载，见 `shared/mcp.ts` 的
- * `PLUGIN_MODE_TOOL_NAMES` 与下面 `listAvailableTools` 的过滤。其中 `plugin_release`
- * 还要看插件中心登录态（`LATTICE_MODE_TOOL_NAMES`，未登录时连名字都不追加）。
+ * However these 5 are **mode tools**: registered here (`buildTools` must build instances by name,
+ * and a same-named plugin contribution is still shadowed by the local one), yet they **do not
+ * appear in the settings page's selectable list** — plugin mode attaches them automatically; see
+ * `PLUGIN_MODE_TOOL_NAMES` in `shared/mcp.ts` and the filtering in `listAvailableTools` below.
+ * `plugin_release` additionally depends on the plugin center sign-in state
+ * (`LATTICE_MODE_TOOL_NAMES`; when signed out even the name is not appended).
  *
- * planner / notes / music 的工具**不在这里**：它们的实现已搬进各自插件
- * （插件源码的 `main/tools.ts`），由插件 `install(ctx)` 经
- * `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)` 注册，这里在组装时拉取。
- * 其中 notes 的四个资料域已归一成 `manage_materials`（内置注册，见 system/notes.ts）。
+ * planner / notes / music tools are **not here**: their implementations have moved into their
+ * respective plugins (in the plugin source `main/tools.ts`), registered by the plugin's
+ * `install(ctx)` via `ctx.contribute(HARNESS_TOOL_CONTRIBUTION, …)`, and pulled in here during
+ * assembly. The four data domains of notes have been consolidated into `manage_materials`
+ * (built-in registration, see system/notes.ts).
  */
 export const toolBuilders: Record<string, ToolFactory> = {
   get_weather: buildGetWeatherTool,
   get_time: buildGetTimeTool,
-  // 联网：抓取 + 搜索（无密钥；见 tools/harness/web.ts）。两个工具在**选择列表**里合并成
-  // 一项 `web-tools`（见 WEB_TOOL_GROUP），运行时由 expandSelectionToolNames 展开；注册名不变。
+  // Web: fetch + search (no key; see tools/harness/web.ts). The two tools are merged into one
+  // **selection list** entry `web-tools` (see WEB_TOOL_GROUP) and expanded by
+  // expandSelectionToolNames at runtime; the registered names stay unchanged.
   web_fetch: () => buildWebFetchTool(),
   web_search: () => buildWebSearchTool(),
-  // 交付物声明（read 只读校验 + 卡片展示；不写文件）
+  // Deliverable declaration (read-only validation via read + card display; writes no files)
   present: () => buildPresentTool(),
-  // 定时任务（4 个）：到点由主进程无头起一轮（见 runtime/harness/schedule-runner.ts）
+  // Scheduled tasks (4): when due, the main process starts a headless round (see
+  // runtime/harness/schedule-runner.ts)
   ...Object.fromEntries(
     buildScheduleTools().map((instance) => [instance.name, () => instance])
   ),
@@ -79,13 +87,14 @@ export const toolBuilders: Record<string, ToolFactory> = {
 }
 
 // ============================================================================
-// Tool Info — 前端下拉列表
-// 注意：这里的 label/description 只是**兜底**，真正下发前会由
-// ipc/misc.ts 按当前界面语言用 mainMessages().tools 覆盖（未收录的名字才用这里的值）。
-// 它们与各工具给模型看的 description 是两回事，改这里不影响模型行为。
+// Tool Info — front-end dropdown list
+// Note: the label/description here are only a **fallback**; before being sent they are
+// overridden by ipc/misc.ts using mainMessages().tools for the current UI language (only names
+// not covered there use these values). They are separate from each tool's model-facing
+// description; changing them does not affect model behavior.
 // ============================================================================
 
-/** 本地工具的展示元数据（插件工具的元数据随贡献一起带上，见 tool-contract.ts） */
+/** Display metadata for local tools (plugin tool metadata comes along with the contribution; see tool-contract.ts) */
 const localToolInfos: ToolInfo[] = [
   {
     name: 'get_weather',
@@ -150,32 +159,36 @@ const localToolInfos: ToolInfo[] = [
     icon: 'RiCalendar2Line',
     color: '#722ed1'
   },
-  // 插件工坊（4 个）+ 插件中心发版（1 个）：label/description 只是兜底，下发前由 main/i18n 按界面语言覆盖
+  // Plugin workshop (4) + plugin center release (1): label/description are fallbacks only;
+  // main/i18n overrides them by UI language before they are sent
   ...workshopToolInfos,
   ...latticeToolInfos
 ]
 
 // ============================================================================
-// MCP 工具（外部 MCP 服务器提供的工具）
+// MCP tools (tools provided by external MCP servers)
 // ============================================================================
 
 /**
- * MCP 工具提供者：由 `runtime/mcp.ts` 在插件 install 时注入（`setMcpToolProvider`）。
+ * MCP tool provider: injected by `runtime/mcp.ts` when the plugin is installed
+ * (`setMcpToolProvider`).
  *
- * 为什么用注入而不是直接 import：MCP 管理器要读 electron-store、要起子进程，直接 import
- * 会让工具注册表带上仅主进程可用的依赖，离线回归（node 直接加载本模块）就跑不起来。
- * 未注入时（插件未装载/被停用）退化为「没有 MCP 工具」，与「一台服务器都没配」同一条路径。
+ * Why injection instead of a direct import: the MCP manager reads electron-store and spawns
+ * subprocesses; importing it directly would drag main-process-only dependencies into the tool
+ * registry and break the offline regression run (node loading this module directly). When not
+ * injected (plugin not loaded / disabled) it degrades to "no MCP tools", the same path as "no
+ * server configured".
  */
 let mcpToolProvider: (() => { tools: StructuredToolInterface[]; infos: ToolInfo[] }) | null = null
 
-/** 注入/撤销 MCP 工具提供者（插件 install 的可逆装配里调用） */
+/** Inject/revoke the MCP tool provider (called from the plugin install's reversible assembly) */
 export function setMcpToolProvider(
   provider?: () => { tools: StructuredToolInterface[]; infos: ToolInfo[] }
 ): void {
   mcpToolProvider = provider ?? null
 }
 
-/** 当前就绪的 MCP 工具（未注入或未连上时为空） */
+/** Currently ready MCP tools (empty when not injected or not connected) */
 function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[] } {
   if (!mcpToolProvider) return { tools: [], infos: [] }
   try {
@@ -187,17 +200,18 @@ function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[
 }
 
 /**
- * MCP 资源工具的数据访问依赖：由 `system/harness.ts` 在装配时注入（与 MCP 工具提供者
- * 同一套理由——不在工具注册表里直接 import MCP 管理器，否则离线回归会拖进 SDK/子进程）。
+ * Data access dependencies for the MCP resource tools: injected by `system/harness.ts` during
+ * assembly (same reasoning as the MCP tool provider — do not import the MCP manager directly in
+ * the tool registry, or the offline regression run drags in the SDK/subprocesses).
  */
 let mcpResourceOps: McpResourceOps | null = null
 
-/** 注入/撤销 MCP 资源数据源（插件装配与退出时调用；未注入时这三个工具不存在） */
+/** Inject/revoke the MCP resource data source (called on plugin assembly and shutdown; when not injected these three tools do not exist) */
 export function setMcpResourceOps(ops?: McpResourceOps): void {
   mcpResourceOps = ops ?? null
 }
 
-/** 资源工具的展示元数据（名称固定，与数据源无关） */
+/** Display metadata for the resource tools (fixed names, independent of the data source) */
 const MCP_RESOURCE_TOOL_INFOS: ToolInfo[] = [
   {
     name: 'list_mcp_resources',
@@ -222,7 +236,7 @@ const MCP_RESOURCE_TOOL_INFOS: ToolInfo[] = [
   }
 ]
 
-/** 「定时任务」分组选择项：列表里只显示这一项，运行前展开成 4 个工具 */
+/** "Scheduled tasks" group selection entry: only this entry shows in the list; it expands into 4 tools before running */
 const SCHEDULE_GROUP_INFO: ToolInfo = {
   name: SCHEDULE_TOOL_GROUP,
   label: 'Schedules',
@@ -232,7 +246,7 @@ const SCHEDULE_GROUP_INFO: ToolInfo = {
   source: 'system'
 }
 
-/** 「网页抓取与搜索」分组选择项：列表里只显示这一项，运行前展开成 web_fetch + web_search */
+/** "Web fetch & search" group selection entry: only this entry shows in the list; it expands into web_fetch + web_search before running */
 const WEB_GROUP_INFO: ToolInfo = {
   name: WEB_TOOL_GROUP,
   label: 'Web fetch & search',
@@ -242,23 +256,25 @@ const WEB_GROUP_INFO: ToolInfo = {
   source: 'system'
 }
 
-/** 已注入 MCP 数据源时的三个资源工具（每次现建，保证用最新连接） */
+/** The three resource tools when an MCP data source is injected (built fresh each time to use the latest connection) */
 /**
- * 内置功能的工具（资料整理 1 个）：随应用编译进来，不经插件注册表。
+ * Tools of built-in features (1: material organization): compiled into the app, not going through
+ * the plugin registry.
  *
- * 第三方插件仍走 `harness.tool` 贡献点（`listContributions`），两者在 `toolSources()`
- * 合并成同一份清单——对模型与设置页来说没有区别，只是来源不同。
+ * Third-party plugins still go through the `harness.tool` contribution point
+ * (`listContributions`); `toolSources()` merges both into one list — indistinguishable to the
+ * model and the settings page, only the source differs.
  */
 const builtinTools: PluginToolContribution[] = []
 
-/** 注册内置工具（幂等；由 `src/main/system/notes.ts` 在启动时调用） */
+/** Register built-in tools (idempotent; called at startup by `src/main/system/notes.ts`) */
 export function registerBuiltinHarnessTools(tools: PluginToolContribution[]): void {
   for (const tool of tools) {
     if (!builtinTools.includes(tool)) builtinTools.push(tool)
   }
 }
 
-/** 注销内置工具（退出/测试收尾；未注册过则忽略） */
+/** Unregister built-in tools (shutdown/test cleanup; ignored when never registered) */
 export function unregisterBuiltinHarnessTools(tools: PluginToolContribution[]): void {
   for (const tool of tools) {
     const index = builtinTools.indexOf(tool)
@@ -266,19 +282,23 @@ export function unregisterBuiltinHarnessTools(tools: PluginToolContribution[]): 
   }
 }
 
-/** 每次取工具集时现拉的三路来源（本地工具常量 + 内置/插件贡献 + MCP 快照） */
+/** The three sources pulled fresh on each tool-set build (local tool constants + built-in/plugin contributions + MCP snapshot) */
 function toolSources(): {
   local: ToolSource<StructuredToolInterface>[]
   contributed: ToolSource<StructuredToolInterface>[]
   mcp: ToolSource<StructuredToolInterface>[]
 } {
   /**
-   * 来源标注（设置页/输入框的工具清单里名称右边的「系统 / 插件」小标签）：
-   * - 本地工具表与 `registerBuiltinHarnessTools` 注册的内置功能 → `system`（随应用编译）；
-   * - 第三方插件经 `harness.tool` 贡献点注册的工具 → `plugin`（停用插件即消失）；
-   * - MCP 服务器暴露的工具 → `mcp`（外部进程，既不是系统也不是插件）。
+   * Source tagging (the small "system / plugin" label right of each name in the tool list of the
+   * settings page / input box):
+   * - the local tool table and built-in features registered by `registerBuiltinHarnessTools` →
+   *   `system` (compiled with the app);
+   * - tools registered by third-party plugins via the `harness.tool` contribution point →
+   *   `plugin` (gone as soon as the plugin is disabled);
+   * - tools exposed by MCP servers → `mcp` (external process, neither system nor plugin).
    *
-   * 插件贡献的 info 是插件自己给的元数据，这里**复制一份再补字段**，不改插件对象。
+   * The info of a plugin contribution is metadata supplied by the plugin itself; here it is
+   * **copied and extended**, never mutated.
    */
   const contributed: ToolSource<StructuredToolInterface>[] = [
     ...builtinTools.map((item) => ({
@@ -303,8 +323,9 @@ function toolSources(): {
         info: { ...localToolInfos.find((i) => i.name === name)!, source: 'system' as const },
         build
       }))
-      // MCP 资源三件套**不在这里**：它们按「本轮勾选 ∩ 声明了 resources 能力」现建，
-      // 见 buildTools / buildSubAgentTools（静态注册表没法知道这一轮勾了哪几台）。
+      // The three MCP resource tools are **not here**: they are built per round from "what is
+      // selected this round ∩ what declares the resources capability", see buildTools /
+      // buildSubAgentTools (a static registry cannot know which servers are selected this round).
     ],
     contributed,
     mcp: mcpSources
@@ -312,28 +333,38 @@ function toolSources(): {
 }
 
 /**
- * 合并后的工具表：本地工具 + 各插件贡献 + 已连接的 MCP 工具（规则见 tools/registry.ts）。
+ * Merged tool table: local tools + plugin contributions + connected MCP tools (rules in
+ * tools/registry.ts).
  *
- * **每次调用都重新拉取贡献**——这正是「插件启停即时生效」的落点：插件停用后贡献被宿主摘除，
- * 下一次组装（下一轮对话/子代理）就看不到它的工具。未装载任何插件时贡献为空数组，
- * 工具集退化为本地两个工具，**不抛错**。MCP 同理：服务器断开或停用时其工具即刻消失。
+ * **Contributions are pulled again on every call** — this is what makes "plugin enable/disable
+ * takes effect immediately": once a plugin is disabled its contribution is removed by the host,
+ * and the next assembly (next conversation turn/subagent) does not see its tools. With no plugin
+ * loaded the contributions are an empty array and the tool set degrades to the two local tools
+ * **without throwing**. Same for MCP: when a server disconnects or is disabled its tools vanish
+ * immediately.
  */
 function resolveToolBuilders(): Record<string, ToolFactory> {
   return mergeToolSources({ ...toolSources(), onWarn: (message) => logger.warn(message) }).builders
 }
 
 /**
- * 工具清单（设置 → 智能体页的工具下拉用）：本地工具 + 各插件贡献 + MCP 工具，同名的本地优先。
- * 每次调用即时拉取，因此插件启停与 MCP 连接状态都会立刻反映在这份清单里。
- * 排序与去重规则与 `resolveToolBuilders` 同源（同一个 `mergeToolSources`），不会漂移。
+ * Tool list (used by the tool dropdown in Settings → Agents): local tools + plugin contributions
+ * + MCP tools, with the local one winning on name collisions. Pulled fresh on every call, so
+ * plugin enable/disable and MCP connection state are reflected immediately.
+ * Ordering and dedup rules share one source with `resolveToolBuilders` (the same
+ * `mergeToolSources`), so they cannot drift apart.
  *
- * **只返回用户可勾选的真实工具**：模式工具（工坊 4 个 + 发布版本 1 个）由插件模式自动挂载；MCP 工具
- * （`mcp__…`）/ 分组项（`mcp@…`）/ 旧标记（`mcp`）由输入框下方的 MCP 选择器管理、运行时自动并入。
- * 过滤在主进程完成，渲染层拿到什么就展示什么，不再二次过滤。
+ * **Only real, user-selectable tools are returned**: mode tools (4 workshop tools + 1 release
+ * tool) are attached by plugin mode automatically; MCP tools (`mcp__…`) / group entries
+ * (`mcp@…`) / the legacy marker (`mcp`) are managed by the MCP selector below the input box and
+ * merged in at runtime. Filtering happens in the main process; the renderer displays exactly what
+ * it receives and does not filter again.
  *
- * **MCP 不再单独列一项**（用户口径 2026-11-27：「这个 MCP 服务器不就是一个统一的内容吗」）：
- * 那个「全选」项和 MCP 选择器覆盖的是同一批工具，两套入口只会让人不知道勾哪边。现在 MCP 的
- * 唯一入口是输入框下方的 MCP 选择器；分组标记 `mcp` 只作为**历史配置兼容**保留展开逻辑。
+ * **MCP is no longer a separate entry** (user's wording, 2026-11-27: "isn't this MCP server just
+ * one unified thing?"): that "select all" entry and the MCP selector cover the same set of tools,
+ * and two entry points only make it unclear which side to check. The MCP selector below the input
+ * box is now the single entry point; the group marker `mcp` keeps its expansion logic only for
+ * **legacy config compatibility**.
  */
 export function listAvailableTools(): ToolInfo[] {
   const infos = mergeToolSources({ ...toolSources(), onWarn: (message) => logger.warn(message) }).infos
@@ -346,9 +377,10 @@ export function listAvailableTools(): ToolInfo[] {
   for (const info of infos) {
     if (!isSelectableMainAgentTool(info.name) || hidden.has(info.name)) continue
     /**
-     * 网页抓取 / 网页搜索合并成一项（用户口径 2026-11-27「这两个合成一个注册，像定时任务一样」）：
-     * 在第一处的位置放分组项、第二处直接丢掉，清单顺序因此仍落在本地工具那一档
-     * （天气、时间、网页、交付文件…），而不是被推到插件工具后面。
+     * Web fetch / web search are merged into one entry (user's wording, 2026-11-27: "merge these
+     * two into one registration, like the scheduled tasks"): the group entry is placed at the
+     * position of the first and dropped at the second, so the list order still falls in the local
+     * tool tier (weather, time, web, deliverables…) instead of being pushed behind plugin tools.
      */
     if ((WEB_TOOL_NAMES as readonly string[]).includes(info.name)) {
       if (!webGroupPlaced) {
@@ -357,14 +389,16 @@ export function listAvailableTools(): ToolInfo[] {
       }
       continue
     }
-    // 分组项由这里补，历史配置/插件里若混进同名项也不重复出现
+    // Group entries are added here; a same-named entry mixed into legacy config/plugins never
+    // appears twice
     if (isScheduleToolGroup(info.name) || isMcpToolGroup(info.name) || isWebToolGroup(info.name)) {
       continue
     }
     out.push(info)
   }
-  // 分组项由这里补：定时任务恒有；网页分组正常一定在循环里落位（两个工具恒在本地工具表），
-  // 这里只是「表被改动」时的兜底。
+  // Group entries are added here: scheduled tasks always exist; the web group normally lands in
+  // the loop (both tools are always in the local tool table), so this is only a fallback in case
+  // the table is changed.
   if (!webGroupPlaced) out.push(WEB_GROUP_INFO)
   out.push(SCHEDULE_GROUP_INFO)
   return out
@@ -374,7 +408,7 @@ export function listAvailableTools(): ToolInfo[] {
 // Build Tools
 // ============================================================================
 
-/** 已连接、且声明了 resources 能力的服务器（旧注入没提供能力清单时退化为「全都支持」） */
+/** Connected servers that declare the resources capability (degrades to "all supported" when the legacy injection provides no capability list) */
 function resourceCapableServers(): string[] {
   if (!mcpResourceOps) return []
   try {
@@ -384,7 +418,7 @@ function resourceCapableServers(): string[] {
   }
 }
 
-/** 本轮勾选的 MCP 服务器名（配置名）：把 `mcp@<命名空间>` 与历史 `mcp` 标记翻成服务器名 */
+/** MCP server names (config names) selected this round: translates `mcp@<namespace>` and the legacy `mcp` marker into server names */
 function selectedMcpServerNames(toolNames: string[]): string[] {
   if (!mcpResourceOps) return []
   let connected: string[] = []
@@ -409,18 +443,21 @@ function selectedMcpServerNames(toolNames: string[]): string[] {
 }
 
 /**
- * 本轮资源工具可用的服务器 = **勾选的 ∩ 声明了 resources 能力的**。
+ * Servers usable by this round's resource tools = **selected ∩ declaring the resources
+ * capability**.
  *
- * 两条要求缺一不可（用户口径 2026-11-27）：
- *  - 没声明 resources 的服务器不挂（调用只会得到空清单，白占上下文）；
- *  - 没勾的服务器不给读（勾了 A 不能顺手把 B 的资源也读了）。
+ * Both conditions are required (user's wording, 2026-11-27):
+ *  - servers that do not declare resources are not attached (calling them would only return an
+ *    empty list, wasting context);
+ *  - servers that are not selected are not readable (selecting A must not also read B's
+ *    resources).
  */
 function resourceScopedServers(toolNames: string[]): string[] {
   const capable = resourceCapableServers()
   return selectedMcpServerNames(toolNames).filter((server) => capable.includes(server))
 }
 
-/** 本轮要挂的资源工具实例；没有可用的服务器时一个都不建 */
+/** Resource tool instances to attach this round; none are built when no server is usable */
 function buildScopedResourceTools(toolNames: string[]): StructuredToolInterface[] {
   if (!mcpResourceOps) return []
   const allowed = resourceScopedServers(toolNames)
@@ -434,21 +471,25 @@ function buildScopedResourceTools(toolNames: string[]): StructuredToolInterface[
 }
 
 /**
- * 展开选择列表里的分组项 → 真实工具名（去重）：
- * - `schedule-tasks` → 4 个 `schedule_*` 工具；
- * - `web-tools` → `web_fetch` + `web_search`；
- * - `mcp@<服务器>` → 那台服务器的工具；该服务器声明了 resources 时再加 3 个资源工具；
- * - `mcp` → 当前已连接 MCP 服务器的全部工具（**仅历史配置兼容**，清单里已不再提供这一项）；
- * - 其余原样保留。
+ * Expand group entries in the selection list → real tool names (deduplicated):
+ * - `schedule-tasks` → the 4 `schedule_*` tools;
+ * - `web-tools` → `web_fetch` + `web_search`;
+ * - `mcp@<server>` → that server's tools; plus 3 resource tools when the server declares
+ *   resources;
+ * - `mcp` → all tools of currently connected MCP servers (**legacy config compatibility only**;
+ *   the list no longer offers this entry);
+ * - everything else is kept as is.
  *
- * 列表里用户勾的是「一项」，运行时挂的是它代表的全部工具（与资料整理合并同一个思路）。
+ * The user checks one entry in the list; at runtime all tools it represents are attached (the
+ * same idea as the material organization merge).
  */
 export function expandSelectionToolNames(
   toolNames: string[],
   mcpToolNames?: string[]
 ): string[] {
   const allMcp = mcpToolNames ?? currentMcpTools().infos.map((info) => info.name)
-  // 资源三件套按「本轮勾选 ∩ 声明了 resources」决定带不带（见 resourceScopedServers）
+  // Whether the three resource tools are included depends on "selected this round ∩ declares
+  // resources" (see resourceScopedServers)
   const resourceNames =
     resourceScopedServers(toolNames).length > 0
       ? MCP_RESOURCE_TOOL_INFOS.map((info) => info.name)
@@ -488,7 +529,7 @@ export function buildTools(toolNames: string[]): StructuredToolInterface[] {
     .map((name) => (name in registry ? registry[name]() : resources.get(name)!))
 }
 
-/** 为智能体构建实际的工具实例（分组项同样先展开） */
+/** Build the actual tool instances for an agent (group entries are expanded first too) */
 export function buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
   const registry = resolveToolBuilders()
   const toolNames = subAgent.tools ?? []

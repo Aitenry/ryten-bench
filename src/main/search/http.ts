@@ -1,7 +1,9 @@
 /**
- * 搜索适配器共用的 HTTP 小工具：超时、状态码分类、JSON 解析、错误归一化。
+ * Shared HTTP helpers for search adapters: timeouts, status-code classification, JSON parsing,
+ * error normalization.
  *
- * 约定：**不抛异常**，所有失败都返回结构化 code，由 registry/工具层翻译成界面文案。
+ * Convention: **never throw**; every failure returns a structured code that the registry/tool
+ * layer translates into UI copy.
  */
 import type { SearchErrorCode } from './types'
 import { SEARCH_TIMEOUT_MS } from './types'
@@ -10,7 +12,7 @@ export type HttpResult =
   | { ok: true; status: number; text: string; json: unknown }
   | { ok: false; code: SearchErrorCode; message: string; status?: number }
 
-/** 按响应状态码归类 */
+/** Classify by response status code */
 function codeForStatus(status: number): SearchErrorCode {
   if (status === 401 || status === 403) return 'unauthorized'
   if (status === 429) return 'rate-limited'
@@ -18,11 +20,12 @@ function codeForStatus(status: number): SearchErrorCode {
 }
 
 /**
- * 发一个 JSON POST（`apiKey` 以 Bearer 头发送；也可以把 key 放 body，由调用方决定）。
+ * Send a JSON POST (`apiKey` goes in the Bearer header; callers may instead put the key in the
+ * body).
  *
- * - 10s 超时；
- * - 响应文本上限 2MB；
- * - 非 2xx → 按状态码归类；2xx 但 JSON 解析失败 → invalid-response。
+ * - 10s timeout;
+ * - response text capped at 2MB;
+ * - non-2xx → classified by status code; 2xx with unparsable JSON → invalid-response.
  */
 export async function postJson(
   url: string,

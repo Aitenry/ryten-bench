@@ -18,52 +18,59 @@ import {
 import { changeStats, looksBinary } from './line-diff'
 
 /**
- * 文件改动史（「模型改了什么、能不能回溯」的唯一入口）。
+ * File change history (the single entry point for "what did the model change, can it be
+ * traced and rolled back").
  *
- * 为什么要有它：模型对工作区的每一次落盘在此之前都是**不可见的**——磁盘内容变了，
- * 编辑器里的页签还是旧的，用户既看不到 diff，也没法把某次改动退回去。
+ * Why it exists: before this, every write the model made to the workspace was **invisible** —
+ * the disk content changed, the editor tab still showed the old text, and the user could see
+ * neither a diff nor a way to revert a change.
  *
- * 三条硬约束（来自用户原话「每一次修改的内容都要有 diff，可追溯、可回溯」）：
- * 1. **可追溯**：每次改动落一行 DB（谁改的、哪个工具、哪个会话、什么时候、+N −M），
- *    正文快照另存磁盘，库里只留元信息与统计；
- * 2. **可回溯**：撤销 = 把改动前的快照写回磁盘；撤销某次改动会一并作废它之后的改动
- *    （「回到那次改动之前」的语义，不做三方合并）；
- * 3. **不打扰**：内容没变不记录；二进制/超大文件只记元信息（`has_before=false`），
- *    界面上如实显示「无法回溯」，不假装能撤销。
+ * Three hard constraints (from the user's own words: "every change must have a diff, it must
+ * be traceable and revertible"):
+ * 1. **Traceable**: every change writes one DB row (who, which tool, which session, when,
+ *    +N −M); the text snapshots are stored on disk and only metadata and stats stay in the DB;
+ * 2. **Revertible**: undo = write the pre-change snapshot back to disk; reverting a change
+ *    also invalidates the changes after it (semantics of "go back to before that change",
+ *    no three-way merge);
+ * 3. **Unobtrusive**: no record when the content is unchanged; binary/oversized files record
+ *    metadata only (`has_before=false`) and the UI honestly shows "cannot revert" instead of
+ *    pretending.
  *
- * 快照落在 userData 而不是工作区：工作区挂载为虚拟 '/'，写进去会污染用户项目，
- * 也会出现在模型自己的 ls/glob 结果里（与 tool-output-store 同一考虑）。
+ * Snapshots live in userData rather than the workspace: the workspace is mounted as a virtual
+ * '/', writing there would pollute the user's project and would also show up in the model's own
+ * ls/glob results (the same consideration as tool-output-store).
  */
 
-/** 单侧快照的字符上限：超过就只记元信息 */
+/** Per-side snapshot character limit: beyond this only metadata is recorded */
 const MAX_SNAPSHOT_CHARS = 1_200_000
-/** 快照文件总数上限（超出按修改时间淘汰最旧的，并把对应行的 has_* 置 0） */
+/** Total snapshot file limit (oldest by mtime are evicted, and their rows get has_* set to 0) */
 const MAX_SNAPSHOT_FILES = 3000
-/** 判定「这次磁盘变化是刚记过的工具写入」的时间窗（毫秒） */
+/** Time window (ms) for deciding "this disk change is a tool write just recorded" */
 const RECENT_WRITE_WINDOW_MS = 4000
 
 /**
- * 主进程 → 渲染层的事件通道（只有发送方，没有 ipcMain 处理器）。
+ * Main process → renderer event channels (send-only, no ipcMain handlers).
  *
- * 通道名一律 `harness:<原扁平名>`（改动审查属「AI 助手」）；渲染层经 preload 的
- * 系统桥订阅，不需要再登记白名单。
+ * Channel names are always `harness:<original flat name>` (change review belongs to the "AI
+ * assistant"); the renderer subscribes through the preload system bridge, so no whitelist
+ * registration is needed.
  */
 export const WORKSPACE_CHANGE_RECORDED = 'harness:workspace-change-recorded'
 export const WORKSPACE_CHANGES_UPDATED = 'harness:workspace-changes-updated'
 
 let historyRoot = ''
 
-/** 配置快照根目录（插件 install 时调用；传空串 = 停用快照，全部功能降级为「无快照」） */
+/** Configure the snapshot root directory (called on plugin install; empty string = snapshots disabled, all features fall back to "no snapshot") */
 export function configureFileHistory(dir: string): void {
   historyRoot = dir
 }
 
-/** 渲染进程消费的改动视图（preload 直接复用这个类型） */
+/** Change view consumed by the renderer (preload reuses this type directly) */
 export interface FileChangeView {
   id: number
-  /** 绝对路径（页签键、资源管理器高亮都用它） */
+  /** Absolute path (used as the tab key and for explorer highlighting) */
   path: string
-  /** 工作区相对路径（展示 + 归属判断） */
+  /** Workspace-relative path (for display + ownership checks) */
   relPath: string
   kind: FileChangeRow['kind']
   source: FileChangeRow['source']
@@ -77,60 +84,64 @@ export interface FileChangeView {
   hasBefore: boolean
   hasAfter: boolean
   /**
-   * 这次改动**有没有可比对的正文**（差异视图能不能画出东西）。
+   * Whether this change has **comparable content** (i.e. the diff view can render something).
    *
-   * 用户 2026-09-23 报的「有些文件明明没有改变，页面却显示改变，打开之后没有任何 diff」
-   * 就是这一类：命令执行期间被文件监听捕获的记录**没有前置快照**（`has_before=false`），
-   * 于是它在资源管理器里带着待审查徽标，点开却只有一句「无法回溯」——看起来就是
-   * 「说改了、却没有任何差异」。这种记录降级为**只记账、不进待审查入口**。
+   * This is the class of bug the user reported on 2026-09-23: "some files clearly did not
+   * change, yet the page says they changed and opening them shows no diff" — records captured
+   * by the file watcher during command execution have **no preceding snapshot**
+   * (`has_before=false`), so they carry a pending-review badge in the explorer but open to
+   * just "cannot revert" — appearing to say "it changed" while showing no diff. Such records
+   * are downgraded to **bookkeeping only, excluded from the review queue**.
    */
   reviewable: boolean
   createdAt: string | null
   reviewedAt: string | null
 }
 
-/** 改动前后正文（不存在的一侧为 null：新增前的文件、删除后的文件） */
+/** Content before and after a change (the missing side is null: file before creation, file after deletion) */
 export interface FileChangeContent {
   before: string | null
   after: string | null
 }
 
-/** 记录一次改动的入参 */
+/** Input for recording one change */
 export interface RecordFileChangeInput {
   workspaceId: number
-  /** 工作区根目录（用于算相对路径） */
+  /** Workspace root directory (used to compute the relative path) */
   workspaceRoot: string
-  /** 文件绝对路径 */
+  /** Absolute file path */
   realPath: string
-  /** 改动前正文；null 表示改动前该文件不存在 */
+  /** Content before the change; null means the file did not exist before */
   before: string | null
-  /** 改动后正文；null 表示改动后该文件不存在（被删除） */
+  /** Content after the change; null means the file no longer exists (deleted) */
   after: string | null
   /**
-   * 改动类型。缺省按前后是否存在推断；
-   * 文件监听捕获的变化拿不到前置快照，必须显式给 kind，否则「修改」会被误判成「新建」。
+   * Change kind. Inferred from existence before/after when omitted; changes captured by the
+   * file watcher have no preceding snapshot and must pass kind explicitly, otherwise a
+   * "modify" would be misjudged as a "create".
    */
   kind?: FileChangeRow['kind']
   source: FileChangeRow['source']
-  /** 初始审查状态；缺省 pending（模型的改动默认等用户审查） */
+  /** Initial review status; defaults to pending (model changes wait for user review by default) */
   status?: FileChangeRow['status']
   topicId?: number | null
   callId?: string | null
   note?: string | null
   /**
-   * 已经算好的差异规模（可选）。
+   * Precomputed diff size (optional).
    *
-   * 工具写入路径（fs-backend）手上正好有改动前后正文，并且**卡片也要用同一份数字**，
-   * 于是它算一次后传进来，这里不再重算；不传的调用方（文件监听、审查落盘）按
-   * `changeStats` 现算，口径完全一致。
+   * The tool write path (fs-backend) already has the before/after content in hand, and **the
+   * card needs the same numbers**, so it computes once and passes them in and they are not
+   * recomputed here; callers that do not pass them (file watcher, review save) compute via
+   * `changeStats`, with exactly the same definition.
    */
   stats?: { added: number; removed: number }
 }
 
-/** 最近由工具写入过的文件（路径 → 时间戳），供文件监听去重，避免同一次写入记两遍 */
+/** Recently tool-written files (path → timestamp); lets the file watcher dedupe so one write is not recorded twice */
 const recentlyWritten = new Map<string, number>()
 
-/** 标记「这个路径刚被工具写过」（recordFileChange 内部自动调用） */
+/** Mark "this path was just written by a tool" (called automatically inside recordFileChange) */
 export function markPathWritten(realPath: string): void {
   recentlyWritten.set(realPath, Date.now())
   if (recentlyWritten.size > 500) {
@@ -141,7 +152,7 @@ export function markPathWritten(realPath: string): void {
   }
 }
 
-/** 该路径是否刚被工具写过（文件监听据此跳过，避免重复记录 / 重复刷新） */
+/** Whether this path was just written by a tool (the file watcher skips it to avoid duplicate records / refreshes) */
 export function isRecentlyWritten(realPath: string): boolean {
   const ts = recentlyWritten.get(realPath)
   if (ts === undefined) return false
@@ -153,14 +164,18 @@ export function isRecentlyWritten(realPath: string): boolean {
 }
 
 /**
- * 这次改动能不能在差异视图里画出东西（= 值不值得进「待审查」）。
+ * Whether this change can render something in the diff view (= whether it deserves the
+ * "pending review" queue).
  *
- * 判定口径（宁可少提示，也不要提示一个点开什么都没有的徽标）：
- * - 有改动前快照 → 能画（write_file / edit_file / review 的常规情形）；
- * - 没有改动前快照，但**是新建**（before 本来就不存在）→ 能画（整份内容都是新增）；
- * - 删除 → 有 after 也能画；
- * - 其余（命令执行期间被监听捕获、快照被清理、二进制/超大文件没存快照）→ **不能画**：
- *   这类记录仍然入库可追溯，但不再污染待审查入口，也不再让资源管理器显示虚假徽标。
+ * Criterion (prefer fewer prompts over a badge that opens to nothing):
+ * - Has a before snapshot → renderable (the normal write_file / edit_file / review case);
+ * - No before snapshot but the file **was created** (before never existed) → renderable
+ *   (the whole content is an addition);
+ * - Deletion → renderable when there is after content;
+ * - Everything else (captured by the watcher during command execution, snapshot pruned,
+ *   binary/oversized file had no snapshot) → **not renderable**: such records are still
+ *   stored for traceability, but no longer pollute the review queue or show a fake badge in
+ *   the explorer.
  */
 function isReviewable(row: FileChangeRow): boolean {
   if (row.has_before === 1 && row.has_after === 1) return true
@@ -169,7 +184,7 @@ function isReviewable(row: FileChangeRow): boolean {
   return false
 }
 
-/** row → 视图 */
+/** row → view */
 export function toFileChangeView(row: FileChangeRow): FileChangeView {
   return {
     id: row.id,
@@ -192,7 +207,7 @@ export function toFileChangeView(row: FileChangeRow): FileChangeView {
   }
 }
 
-/** 广播给所有窗口（渲染进程据此刷新页签内容、差异视图与资源管理器徽标） */
+/** Broadcast to all windows (renderers refresh tab content, diff views and explorer badges from it) */
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) safeSend(win.webContents, channel, payload)
@@ -203,7 +218,7 @@ function snapshotFile(id: number): string {
   return path.join(historyRoot, `${id}.json`)
 }
 
-/** 写快照；返回是否真的写成功（未配置目录 / 写失败都算没写） */
+/** Write a snapshot; returns whether it actually succeeded (unconfigured directory / write failure both count as not written) */
 async function writeSnapshot(id: number, content: FileChangeContent): Promise<boolean> {
   if (!historyRoot) return false
   try {
@@ -216,7 +231,7 @@ async function writeSnapshot(id: number, content: FileChangeContent): Promise<bo
   }
 }
 
-/** 快照总量控制：超出上限时按修改时间淘汰最旧的，并把对应行标记为「快照已清理」 */
+/** Snapshot total size control: beyond the limit, evict the oldest by mtime and mark their rows as "snapshot pruned" */
 async function pruneSnapshots(): Promise<void> {
   if (!historyRoot) return
   try {
@@ -247,7 +262,7 @@ async function pruneSnapshots(): Promise<void> {
   }
 }
 
-/** 把快照已被清理的改动记录标记为「没有可回溯快照」 */
+/** Mark change records whose snapshots were pruned as "no revertible snapshot" */
 async function clearSnapshotFlags(ids: number[]): Promise<void> {
   if (ids.length === 0) return
   try {
@@ -262,18 +277,18 @@ async function clearSnapshotFlags(ids: number[]): Promise<void> {
   }
 }
 
-/** 相对工作区根的 POSIX 风格路径 */
+/** POSIX-style path relative to the workspace root */
 function toRelPath(workspaceRoot: string, realPath: string): string {
   const rel = path.relative(workspaceRoot, realPath)
   return rel.split(path.sep).join('/')
 }
 
 /**
- * 记录一次文件改动。
+ * Record one file change.
  *
- * - 内容未变（before === after）直接返回 null，不产生噪音记录；
- * - 二进制 / 超大文件只记元信息（has_before / has_after 置 false）；
- * - 记录成功后向渲染进程广播 `workspace-change-recorded`。
+ * - Unchanged content (before === after) returns null immediately, producing no noise record;
+ * - Binary / oversized files record metadata only (has_before / has_after set to false);
+ * - On success, broadcast `workspace-change-recorded` to the renderer.
  */
 export async function recordFileChange(
   input: RecordFileChangeInput
@@ -289,7 +304,7 @@ export async function recordFileChange(
   const afterText = after ?? ''
   const beforeBytes = Buffer.byteLength(beforeText, 'utf-8')
   const afterBytes = Buffer.byteLength(afterText, 'utf-8')
-  // 口径唯一：新建/删除/修改三种语义都在 changeStats 里（调用方已算过就直接用）
+  // Single source of truth: create/delete/modify semantics all live in changeStats (reuse it when the caller already computed)
   const stats = input.stats ?? changeStats(before, after)
 
   const snapshotable = (text: string | null): boolean =>
@@ -349,17 +364,20 @@ export async function recordFileChange(
 }
 
 /**
- * 某工作区待审查的改动（正序：最早的在最前，整文件回滚以它为准）。
+ * Pending-review changes of one workspace (ascending: earliest first, which is the reference
+ * for whole-file rollback).
  *
- * **只返回能画出差异的**（见 isReviewable）：命令执行期间被监听捕获、或快照缺失的记录
- * 仍然躺在库里可追溯，但不进这个列表——否则用户会看到「说改了、点开没有 diff」。
+ * **Only changes that can render a diff are returned** (see isReviewable): records captured by
+ * the watcher during command execution or missing snapshots are still stored for traceability
+ * but are excluded from this list — otherwise the user would see "it says changed, but opening
+ * it shows no diff".
  */
 export async function listWorkspacePendingChanges(workspaceId: number): Promise<FileChangeView[]> {
   const rows = await listPendingChanges(workspaceId)
   return rows.map(toFileChangeView).filter((view) => view.reviewable)
 }
 
-/** 单个文件的改动历史（倒序） */
+/** Change history of a single file (newest first) */
 export async function listFileChangeHistory(
   filePath: string,
   limit = 60
@@ -368,7 +386,7 @@ export async function listFileChangeHistory(
   return rows.map(toFileChangeView)
 }
 
-/** 读取某次改动的前后正文（供差异视图） */
+/** Read the before/after content of one change (for the diff view) */
 export async function readFileChangeContent(id: number): Promise<FileChangeContent | null> {
   const row = await getFileChange(id)
   if (!row) return null
@@ -381,7 +399,7 @@ export async function readFileChangeContent(id: number): Promise<FileChangeConte
   }
 }
 
-/** 审查：保留（不改磁盘，只把待审查标记清掉） */
+/** Review: keep (no disk change, only clear the pending-review flag) */
 export async function keepFileChanges(ids: number[]): Promise<number> {
   const count = await markChangesStatus(ids, 'kept')
   if (count > 0) broadcast(WORKSPACE_CHANGES_UPDATED, { ids, status: 'kept' })
@@ -389,11 +407,12 @@ export async function keepFileChanges(ids: number[]): Promise<number> {
 }
 
 /**
- * 审查：撤销某次改动（回到它之前的内容）。
+ * Review: revert one change (back to the content before it).
  *
- * - 该次之后的同文件待审查改动一并失效（`obsolete`）；
- * - `create` 类改动撤销 = 删除文件；其余 = 把 before 写回磁盘；
- * - 返回撤销后的文件内容（null = 文件已不存在），渲染进程据此刷新页签。
+ * - Later pending-review changes to the same file are invalidated too (`obsolete`);
+ * - Reverting a `create` change = delete the file; otherwise = write `before` back to disk;
+ * - Returns the file content after reverting (null = the file no longer exists), which the
+ *   renderer uses to refresh the tab.
  */
 export async function revertFileChange(
   id: number
@@ -431,7 +450,7 @@ export async function revertFileChange(
   return { path: row.path, content: row.kind === 'create' ? null : (content.before ?? '') }
 }
 
-/** 记录一次「审查结果落盘」（用户在差异视图里取舍后保存，本身也是一次模型相关的改动） */
+/** Record a "review result write" (the user's choices in the diff view, which is itself a model-related change) */
 export async function recordReviewWrite(input: {
   workspaceId: number
   workspaceRoot: string

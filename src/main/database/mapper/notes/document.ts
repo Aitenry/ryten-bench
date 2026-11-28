@@ -20,10 +20,10 @@ import { saveImage } from './image'
 
 type DocumentsTableRow = typeof documents.$inferSelect
 
-/** 文档基础行（字段由 schema 推导） */
+/** Base document row (fields inferred from the schema) */
 export type DocRow = DocumentsTableRow
 
-/** 文档列表项：文档行 + 正文封面 + 字数（派生自 documents_content） */
+/** Document list item: document row + body cover + word count (derived from documents_content) */
 export type DocListItem = Pick<
   DocumentsTableRow,
   'id' | 'title' | 'summary' | 'tags' | 'created_at' | 'updated_at'
@@ -42,7 +42,7 @@ export interface PaginatedResult<T> {
   total: number
 }
 
-/** 列表/搜索共用投影：正文封面 + 字数（LENGTH 对 NULL 返回 NULL，由调用方兜底为 0） */
+/** Shared projection for list/search: body cover + word count (LENGTH returns NULL for NULL; callers fall back to 0) */
 const docListColumns = {
   id: documents.id,
   title: documents.title,
@@ -54,7 +54,7 @@ const docListColumns = {
   word_count: sql<number | null>`LENGTH(${documents_content.content})`
 }
 
-/** 把 word_count 兜底为 0（与原实现 `row.word_count || 0` 一致），并保留行上的其它列 */
+/** Fall back word_count to 0 (consistent with the original `row.word_count || 0`) and keep the row's other columns */
 function normalizeListItem<T extends { word_count: number | null }>(
   row: T
 ): Omit<T, 'word_count'> & { word_count: number } {
@@ -62,10 +62,12 @@ function normalizeListItem<T extends { word_count: number | null }>(
 }
 
 /**
- * 「排除已归档到知识库的文档」条件。
- * 原实现用 `LEFT JOIN directory_documents dd ... WHERE dd.doc_id IS NULL`（excludeWikiId > 0 时
- * 额外在 ON 上挂 wd.wiki_id = $1，实测对结果无影响），语义等价于「该文档不属于任何目录」，
- * 这里改用 NOT EXISTS —— 结果完全一致，且不再需要把 JOIN 拼进 SQL。
+ * "Exclude documents already archived into a knowledge base" condition.
+ * The original implementation used `LEFT JOIN directory_documents dd ... WHERE dd.doc_id IS NULL`
+ * (when excludeWikiId > 0 it additionally hung wd.wiki_id = $1 on the ON clause, which had no
+ * observable effect on the result); the semantics are "the document does not belong to any
+ * directory". This version uses NOT EXISTS instead — identical results, and the JOIN no longer
+ * has to be spliced into the SQL.
  */
 function notInAnyDirectory(db: Orm): SQL {
   return notExists(
@@ -134,7 +136,7 @@ async function getAllDocs(
   })
 }
 
-/** 按 ID 批量取标题（图谱来源文档展示用：只查 title，不加载正文） */
+/** Batch-fetch titles by ID (for displaying graph source documents: only title, no body) */
 async function getDocTitlesByIds(ids: number[]): Promise<Map<number, string>> {
   if (ids.length === 0) return new Map()
   return withOrm('getDocTitlesByIds', async (db) => {
@@ -242,7 +244,7 @@ async function updateDoc(
       return false
     }
 
-    // 与原实现一致：只要有任意字段更新就刷新 documents.updated_at
+    // Consistent with the original implementation: any field update refreshes documents.updated_at
     docPatch.updated_at = sql`now()`
 
     let hasChanges = false
@@ -290,8 +292,8 @@ async function updateDoc(
 }
 
 /**
- * 从 graph_entities / graph_relations 的 source_note_ids（JSON 数组字符串）里摘除某个文档 ID。
- * 保留原 SQL：jsonb_array_elements + jsonb_agg 这套写法无法用查询构造器表达。
+ * Remove a document ID from graph_entities / graph_relations source_note_ids (JSON array strings).
+ * Keeps the raw SQL: jsonb_array_elements + jsonb_agg cannot be expressed with the query builder.
  */
 function stripSourceNoteId(table: 'graph_entities' | 'graph_relations', docId: number): SQL {
   return sql`
@@ -308,13 +310,13 @@ function stripSourceNoteId(table: 'graph_entities' | 'graph_relations', docId: n
   `
 }
 
-/** source_note_ids 变空的实体/关系已经没有任何来源文档，直接删除 */
+/** Entities/relations whose source_note_ids became empty have no source documents left; delete them outright */
 const DELETE_EMPTY_GRAPH_ROWS: SQL[] = [
   sql`DELETE FROM graph_entities WHERE source_note_ids = '[]' OR source_note_ids IS NULL OR source_note_ids = ''`,
   sql`DELETE FROM graph_relations WHERE source_note_ids = '[]' OR source_note_ids IS NULL OR source_note_ids = ''`
 ]
 
-/** 在事务内对一批文档做图谱引用清理（单删与按时间段删共用） */
+/** Clean up graph references for a batch of documents inside a transaction (shared by single and time-range deletion) */
 async function cleanGraphRefs(tx: Orm, docIds: number[]): Promise<void> {
   for (const docId of docIds) {
     await tx.execute(stripSourceNoteId('graph_entities', docId))
@@ -328,17 +330,18 @@ async function cleanGraphRefs(tx: Orm, docIds: number[]): Promise<void> {
 async function deleteDoc(id: number): Promise<boolean> {
   return withOrm('deleteDoc', async (db) => {
     await db.transaction(async (tx) => {
-      // 1. 删除文档内容
+      // 1. Delete the document content
       await tx.delete(documents_content).where(eq(documents_content.doc_id, id))
 
-      // 2. 删除文档本身
+      // 2. Delete the document itself
       const deleted = await tx
         .delete(documents)
         .where(eq(documents.id, id))
         .returning({ id: documents.id })
       const changes = deleted.length
 
-      // 3. 清理图谱实体/关系里对该文档的引用（source_note_ids 变空则删除整行）
+      // 3. Remove references to this document from graph entities/relations (delete the row when
+      // source_note_ids becomes empty)
       await cleanGraphRefs(tx, [id])
 
       if (changes > 0) {
@@ -352,7 +355,7 @@ async function deleteDoc(id: number): Promise<boolean> {
   })
 }
 
-/** 查询某个时间范围内创建的文档 ID（供 IPC 层在删除前清理关联节点位置） */
+/** Query document IDs created in a time range (so the IPC layer can clean up related node positions before deletion) */
 async function getDocIdsByTimeRange(startTime: string, endTime: string): Promise<number[]> {
   return withOrm('getDocIdsByTimeRange', async (db) => {
     const rows = await db
@@ -381,8 +384,9 @@ async function deleteDocsByTimeRange(startTime: string, endTime: string): Promis
         .returning({ id: documents.id })
       deleted = result.length
 
-      // 与单删路径（deleteDoc）一致的图谱清理（修复：此前两条 DELETE 各自提交且完全
-      // 绕过图谱引用清理，实体/关系保留悬空引用；现在整体事务 + 逐 doc 摘除来源）
+      // Graph cleanup consistent with the single-delete path (deleteDoc) (fix: previously the two
+      // DELETEs committed separately and bypassed graph reference cleanup entirely, leaving
+      // dangling references on entities/relations; now it is one transaction with per-doc removal)
       await cleanGraphRefs(tx, ids)
     })
     logger.info(`Deleted ${deleted} docs in time range [${startTime}, ${endTime}]`)

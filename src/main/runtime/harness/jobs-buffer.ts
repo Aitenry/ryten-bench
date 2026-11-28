@@ -1,32 +1,36 @@
 /**
- * 后台任务输出缓冲的**纯逻辑**（零 import，可被 node 直接加载做离线回归）。
+ * **Pure logic** for the background job output buffer (zero imports, loadable directly by node for
+ * offline regression).
  *
- * 为什么单独一个文件：运行中任务的输出帧必须有上限（长跑 dev server 每秒大量输出帧，
- * 否则主进程内存无界增长），而裁剪最旧帧时必须同步回退 `job_output` 的消费游标——
- * 这两条一起很容易在后续改动里漂移，必须能离线断言。jobs.ts 只负责把它接到注册表上。
+ * Why a separate file: a running job's output frames must be bounded (a long-running dev server
+ * emits many frames per second, otherwise main-process memory grows without bound), and pruning the
+ * oldest frames must roll the `job_output` consumer cursor back by the same amount — these two are
+ * easy to let drift apart in later changes, so they must be assertable offline. jobs.ts only wires
+ * it to the registry.
  */
 
-/** 输出缓冲状态（jobs.ts 的 JobRecord 结构上满足它） */
+/** Output buffer state (jobs.ts's JobRecord structurally satisfies it) */
 export interface FramedOutputState {
-  /** 输出帧（每帧是一段文本；按 frameSeparator 连接） */
+  /** Output frames (each frame is a chunk of text; joined by frameSeparator) */
   outputFrames: string[]
-  /** job_output 已读取到的帧位置 */
+  /** Frame position already read by job_output */
   cursor: number
-  /** 已缓存的字符总数（O(1) 判断是否需要裁剪） */
+  /** Total number of buffered characters (O(1) check for whether pruning is needed) */
   bufferedChars: number
 }
 
-/** 缓冲上限 */
+/** Buffer caps */
 export interface FrameCapLimits {
   maxChars: number
   maxFrames: number
 }
 
 /**
- * 追加一帧并裁剪到上限：超出时从头部丢弃最旧帧，同时把游标回退同样的帧数
- * （保证「已读」与「未读」的相对位置不因裁剪而错位）。
+ * Append a frame and prune to the caps: on overflow drop the oldest frames from the head and roll
+ * the cursor back by the same number of frames (so the relative position of "already read" vs
+ * "unread" does not shift because of pruning).
  *
- * @returns 实际丢弃的帧数（0 表示未裁剪）
+ * @returns Number of frames actually dropped (0 means nothing was pruned)
  */
 export function appendFrameWithinCap(
   state: FramedOutputState,

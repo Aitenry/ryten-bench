@@ -51,9 +51,9 @@ import { useMemoryScope } from '../../utils/harness/memory-scope'
 import { resolveTopicRunStatus } from '../../hooks/harness/useTopicRunStatus'
 
 interface HarnessSidebarProps {
-  /** 当前工作区的会话列表（实时 + 分页，由 useHarness 维护） */
+  /** Conversation list for the current workspace (live + paged, maintained by useHarness) */
   topics: HarnessTopicRow[]
-  /** 上面这批 topics 属于哪个工作区（null = 尚未加载过） */
+  /** Which workspace the topics above belong to (null = not loaded yet) */
   topicsWorkspaceId: number | null
   currentTopicId: number | null
   colorBgContainer: string
@@ -62,26 +62,26 @@ interface HarnessSidebarProps {
   colorTextSecondary: string
   colorTextTertiary: string
   colorFillAlter: string
-  /** 黄色呼吸点（等待用户确认）的颜色 */
+  /** Color of the yellow breathing dot (waiting for user confirmation) */
   colorWarning: string
-  /** 绿色呼吸点（刚完成、还没点开）的颜色 */
+  /** Color of the green breathing dot (just finished, not opened yet) */
   colorSuccess: string
   loadingTopicIds: Set<number>
-  /** 正挂着提问 / 审批、等用户确认的会话（行首黄点） */
+  /** Conversations with a pending question / approval, waiting for the user (yellow dot at row start) */
   awaitingTopicIds: Set<number>
-  /** 刚自然跑完、且当时不在对话窗口里的会话（行首绿点，点开即消失） */
+  /** Conversations that just finished on their own while the chat view was not open (green dot at row start, cleared on open) */
   completedTopicIds: Set<number>
-  /** 分页 */
+  /** Pagination */
   hasMoreTopics: boolean
   isLoadingMoreTopics: boolean
-  /** 整表刷新中（区别于滚动分页） */
+  /** Whole-list refresh in progress (as opposed to scroll pagination) */
   isRefreshingTopics: boolean
   /**
-   * 打开一条会话。**会完成把内容放上屏幕这件事**（命中缓存则同步，否则等第一页消息读完），
-   * 所以返回 Promise：调用方要先 `await` 它、再切路由，见下面 `onOpenHarness` 的说明。
+   * Open a conversation. **Completes putting its content on screen** (synchronous on cache hit, otherwise waits for the first page of messages),
+   * hence it returns a Promise: callers must `await` it first, then switch routes; see `onOpenHarness` below.
    *
-   * 第二个参数是「打开后要定位到的那条对话行」：会话检索点正文命中时传，hooks 会按需
-   * 继续翻页直到把目标消息读进列表（首屏 20 条之外的命中也能滚到位）。
+   * The second argument is "the chat row to locate after opening": passed when a message-text search hit occurs; hooks
+   * keep paging as needed until the target message is read into the list (hits beyond the first 20 rows still scroll into view).
    */
   onSelectTopic: (
     topic: HarnessTopicRow,
@@ -89,41 +89,41 @@ interface HarnessSidebarProps {
   ) => void | Promise<void>
   onDeleteTopic: (topicId: number, e?: React.MouseEvent) => Promise<void>
   onLoadMoreTopics: () => void
-  /** 整表刷新当前活动工作区的会话（置顶/重命名/归档/分叉后让列表与标题立刻跟上） */
+  /** Refresh all conversations of the active workspace (keeps list and title in sync after pin/rename/archive/fork) */
   onRefreshTopics: () => Promise<void>
-  /** 在当前工作区新建会话 */
+  /** Create a conversation in the current workspace */
   onNewHarness: () => void
   /**
-   * 「用户刚刚操作了对话内容」→ 外壳把主内容区带回对话页（`/harness`）。
+   * "The user just acted on conversation content" -> the shell brings the main content area back to the chat page (`/harness`).
    *
-   * 侧栏在外壳里**常驻**：人可能正停在资料库 / 插件仓库 / 更多（智能体…）。点一条会话、
-   * 点「＋ 新建会话」之后，内容在对话页里，路由必须跟过去；否则界面看起来「没反应」
-   * （用户口径 2026-11-21「打开其他界面……然后点击新建会话，都没有反应，页面不会回到
-   * 新建会话这个页面」）。
+   * The sidebar is **always mounted** inside the shell: the user may be on Notes / the plugin repository / More (agents...). After clicking a conversation or
+   * "+ New conversation", the content is on the chat page, so the route must follow; otherwise the UI looks "unresponsive"
+   * (user wording 2026-11-21: "open another view... then click new conversation, nothing happens, the page does not go back to
+   * the new-conversation page").
    *
-   * **调用时机：内容先就位，路由后跟过去**。`/harness` 一挂载就会画 Provider 里当前那份
-   * 会话，若先切路由、再等 IPC 把新内容准备好，中间那几帧画的还是**上一条**会话——用户看到
-   * 的就是「闪一下旧会话」。用户口径 2026-11-25「切换到插件仓库，然后选择新增会话，页面会
-   * 闪屏，从历史会话内容切到新会话内容，而不是一开始就是新会话内容」。因此本组件里所有
-   * 「用户点击 → 换会话内容」的入口都不在开头调它，而是等 `onNewHarness` / `onSelectTopic`
-   * 把内容换好之后、在同一个同步段/同一个 await 链末尾再调（空闲时路由更新立即生效，
-   * 人感觉不到等待，也不会再闪）。
+   * **Call timing: content first, route after**. As soon as `/harness` mounts it renders the current conversation from the Provider;
+   * if the route switches first and the IPC preparing the new content is still pending, those frames still paint the **previous** conversation — what the user sees
+   * is "the old conversation flashing". User wording 2026-11-25: "switch to the plugin repository, then select new conversation, the page
+   * flashes from the history conversation content to the new conversation content instead of starting on the new conversation content". Therefore every
+   * "user click -> swap conversation content" entry in this component does not call it at the start, but after `onNewHarness` / `onSelectTopic`
+   * has swapped the content, at the end of the same synchronous block / the same await chain (when idle the route update takes effect immediately and
+   * the wait is imperceptible, and no flash occurs).
    *
-   * **只由用户动作调用**：启动恢复（restoreLastContent）走的是同一批回调，但恢复不该把
-   * 从登录页 / 深链进来的人拽回对话页——那正是此前那个路由守卫要防的事，所以这里
-   * 用「显式点击才通知」替代「非对话页一律不导航」。
+   * **Only called from user actions**: startup restore (restoreLastContent) goes through the same callbacks, but restore must not drag people
+   * coming from the login page / a deep link back to the chat page — that is exactly what the old route guard was preventing, so here
+   * "notify only on explicit click" replaces "never navigate when not on the chat page".
    */
   onOpenHarness: () => void
   /**
-   * 会话检索命中「正文」时，把目标对话行 id 交给页面的消息区（打开会话后滚动并高亮）。
-   * null = 清空待定位目标（点标题命中 / 关掉搜索时用）。
+   * When conversation search hits "message text", hand the target chat row id to the page's message area (scroll and highlight after opening).
+   * null = clear the pending target (used when a title hit is clicked / search is closed).
    */
   onSetPendingJumpDialogue?: (dialogueId: number | null) => void
-  /** 系统外壳模式：使用深色侧栏与参考图里的浅色胶囊滑块 */
+  /** System-shell mode: dark sidebar with the light capsule thumb from the mockup */
   shellMode?: boolean
 }
 
-/** Mnemon 记忆概览快照 */
+/** Mnemon memory overview snapshot */
 interface MnemonSidebarSnapshot {
   configured: boolean
   runtime?: {
@@ -140,52 +140,52 @@ interface MnemonSidebarSnapshot {
   }
 }
 
-/** 会话分页大小（与 useHarnessHandlers 的 TOPICS_PAGE_SIZE 保持一致） */
+/** Conversation page size (kept consistent with TOPICS_PAGE_SIZE in useHarnessHandlers) */
 const TOPICS_PAGE_SIZE = 20
 
-/** 滑块位移的缓动：末端轻微回弹，切换有手感但不夸张 */
+/** Thumb easing: slight overshoot at the end; switching feels tactile without being exaggerated */
 const MODE_THUMB_EASE = 'cubic-bezier(0.32, 1.35, 0.5, 1)'
 
 /**
- * 侧栏模式：`work`（工作区 → 会话）/ `chat`（对话，没有工作区概念）/ `plugin`（插件）。
+ * Sidebar mode: `work` (workspaces -> conversations) / `chat` (conversations, no workspace concept) / `plugin` (plugins).
  *
- * 这个开关表达的是**此刻面板在看哪一类内容**，因此**跟着内容走**：选工作区会话 → 工作；
- * 进「对话」那一侧 → 对话；点开插件 / 进工坊页 → 插件（见下面的 `WORKSHOP_FOCUS_EVENT`
- * 与 onSelectTopic）。
+ * This switch expresses **which kind of content the panel is looking at right now**, so it **follows the content**: selecting a workspace conversation -> work;
+ * entering the "chat" side -> chat; opening a plugin / entering the workshop page -> plugin (see `WORKSHOP_FOCUS_EVENT`
+ * and onSelectTopic below).
  *
- * 同时它和各侧「当前那一条内容」一起**落盘**，下次进来照着恢复
- * （用户口径 2026-09-28「要记住工作模式和插件模式，选中的会话，下次进来可以记住」）。
- * 这覆盖了 2026-09-27 的「一进来默认不能选中插件这个栏」——那条口径的前提是内容恢复不了，
- * 现在各侧内容一起记，开关跟着恢复出来的内容走，不会出现「侧栏列着插件、内容是工作会话」。
+ * At the same time it is **persisted** together with each side's "current content" and restored next time
+ * (user wording 2026-09-28: "remember work mode and plugin mode, the selected conversation, so it can be remembered next time").
+ * This supersedes the 2026-09-27 wording "the plugin tab must not be selected on startup" — that wording assumed content could not be restored;
+ * now each side's content is remembered together, and the switch follows the restored content, so "sidebar lists plugins while content is a work conversation" cannot happen.
  *
- * 历史：`work` 早先叫 `'chat'`（那时还没有「对话」模式），盘上可能留着旧值——
- * 恢复时按 `'work'` 归一（见 restoreLastContent），不另写数据迁移。
+ * History: `work` used to be called `'chat'` (before "chat" mode existed); old values may remain on disk —
+ * normalize them to `'work'` on restore (see restoreLastContent) rather than writing a data migration.
  */
 type SidebarMode = 'work' | 'chat' | 'plugin'
 
-/** 工作模式「当前那一条内容」 */
+/** Work mode "current content" */
 type WorkContent = { workspaceId: number; topicId: number | null }
-/** 「对话」模式「当前那一条内容」 */
+/** "Chat" mode "current content" */
 type ChatContent = { workspaceId: number; topicId: number | null }
-/** 插件模式「当前那一条内容」（含是哪份插件） */
+/** Plugin mode "current content" (including which plugin) */
 type PluginContent = { pluginId: string; workspaceId: number; topicId: number | null }
 
-/** 工坊页/插件详情被打开时派发：侧栏据此把开关切到「插件」 */
+/** Dispatched when the workshop page / plugin detail opens: the sidebar switches the toggle to "plugin" */
 const WORKSHOP_FOCUS_EVENT = 'harness-workshop-focus'
 
 /**
- * 模式开关的三档（顺序即视觉顺序：**对话 / 工作 / 插件**——用户口径 2026-09-29「对话模式要放在最前面」）。
+ * Three positions of the mode switch (order is the visual order: **chat / work / plugin** — user wording 2026-09-29: "chat mode should come first").
  *
- * 数组顺序同时是滑块位移的下标来源，因此它**就是**视觉顺序，别在别处另排一遍。
+ * The array order is also the index source for the thumb offset, so it **is** the visual order; do not order it again elsewhere.
  */
 const SIDEBAR_MODES: SidebarMode[] = ['chat', 'work', 'plugin']
 
 /**
- * 三档各自的图标（12px，跟文字同色）：
- * 对话 = 气泡、工作 = 公文包、插件 = 拼图。
+ * Icons for the three positions (12px, same color as the text):
+ * chat = speech bubble, work = briefcase, plugin = puzzle piece.
  *
- * 放在档位前面而不是只留文字：三档都是两字词，纯文字时一眼只能靠位置分辨；
- * 加了图形后「聊 / 干 / 插件」的语义先于文字被认出来，切档时滑块移动也有了落点。
+ * Placed before the label rather than leaving text only: all three labels are two-character words, and text alone can only be told apart by position;
+ * with shapes, the meaning of "chat / work / plugin" is recognized before reading, and the thumb has a landing point when switching.
  */
 const SIDEBAR_MODE_ICONS: Record<SidebarMode, React.ReactNode> = {
   chat: <RiChat3Line size={12} />,
@@ -194,17 +194,17 @@ const SIDEBAR_MODE_ICONS: Record<SidebarMode, React.ReactNode> = {
 }
 
 /**
- * 侧栏模式开关（胶囊 + 滑块，三档：对话 / 工作 / 插件）。
+ * Sidebar mode switch (capsule + thumb, three positions: chat / work / plugin).
  *
- * 为什么不用「三个按钮各自换背景色」：那样切换是**瞬间跳变**，眼睛得重新找位置；
- * 滑块滑过去时「现在在哪一档」是位置本身在说，来回切也不会有几个亮块打架。
+ * Why not "three buttons each changing their background color": that switches by **instant jump**, and the eye has to re-locate;
+ * with a sliding thumb, "which position am I on" is said by the position itself, and switching back and forth has no competing highlights.
  *
- * 三档之后**不能再写死单档宽度**（原来两档各 44px）：文案长度不一（两字 / 两字 / 两字，
- * 但英文是 Chat / Work / Plugins），写死要么夹掉英文、要么给中文留出多余的空白。
- * 因此滑块按**实测**的目标档按钮位置定位（`scrollWidth`/`offsetLeft`），
- * 窗口缩放导致的换行/字号变化由 ResizeObserver 兜住，滑块的过渡照旧。
+ * After three positions, **no fixed per-position width** (two positions used 44px each): label lengths differ (two chars / two chars / two chars,
+ * but in English Chat / Work / Plugins), so a fixed width either clips the English or leaves extra whitespace for Chinese.
+ * Therefore the thumb is positioned from the **measured** target button geometry (`scrollWidth`/`offsetLeft`),
+ * and ResizeObserver covers wrapping / font-size changes from window resizing; the thumb transition is unchanged.
  *
- * 颜色全部走 antd token（跟随主题）。
+ * All colors go through antd tokens (theme-aware).
  */
 const SidebarModeSwitch: React.FC<{
   mode: SidebarMode
@@ -219,18 +219,18 @@ const SidebarModeSwitch: React.FC<{
   const listRef = useRef<HTMLDivElement>(null)
   const [thumbBox, setThumbBox] = useState({ left: 0, width: 0 })
   /**
-   * 滑块过渡只在**用户点开关**时播放。
+   * The thumb transition plays only when the **user clicks the switch**.
    *
-   * 启动恢复（记住的模式）、跟随内容（点会话、工坊页打开）同样会改 mode，但那是「状态跟着
-   * 内容走」，不是一次切换动作；此时滑块滑过去会让刚回来的人以为被谁点了一下（用户口径
-   * 2026-11-23「记住选中哪个模式的时候，就没有必要有切换动画了，只有主动点击切换其他模式
-   * 才出现动画」）。
+   * Startup restore (the remembered mode) and following the content (clicking a conversation, opening the workshop page) also change mode, but that is "state follows
+   * content", not a switching action; sliding the thumb then would make a returning user think someone clicked it (user wording
+   * 2026-11-23: "when the selected mode is remembered there is no need for a switching animation; only actively clicking another mode
+   * should show the animation").
    */
   const [animateThumb, setAnimateThumb] = useState(false)
-  /** 用户点的是哪一档；只有紧接着的 mode 变化正好是它，才算一次可见的切换 */
+  /** Which position the user clicked; only a following mode change that equals it counts as a visible switch */
   const clickTargetRef = useRef<SidebarMode | null>(null)
 
-  /** 按当前档的按钮实测位置（含内边距），滑块据此贴合 */
+  /** Measured geometry of the current position's button (including padding), used to align the thumb */
   const measure = useCallback((): void => {
     const list = listRef.current
     if (!list) return
@@ -246,7 +246,7 @@ const SidebarModeSwitch: React.FC<{
   }, [mode])
 
   useLayoutEffect(() => {
-    // 非点击造成的改档（恢复 / 跟随内容）直接落位，不播放滑动；点同一档不算切换，不会到这
+    // Mode changes not caused by clicks (restore / following content) land directly without sliding; clicking the same position is not a switch and never reaches here
     setAnimateThumb(clickTargetRef.current === mode)
     clickTargetRef.current = null
     measure()
@@ -264,8 +264,8 @@ const SidebarModeSwitch: React.FC<{
       className="relative flex items-center select-none"
       style={{ padding: 2, height: 24, borderRadius: 7, background: track }}
     >
-      {/* 滑块：绝对定位 + transform（不动布局、不重排文字），切换时滑到另一档。
-          过渡只在点击时打开（见 animateThumb），播完由 onTransitionEnd 关掉。 */}
+      {/* Thumb: absolutely positioned + transform (no layout shift, no text reflow); it slides to the other position on switch.
+          The transition is enabled only on click (see animateThumb) and turned off by onTransitionEnd when it finishes. */}
       <span
         aria-hidden
         style={{
@@ -316,7 +316,7 @@ const SidebarModeSwitch: React.FC<{
             transition: animateThumb ? 'color 180ms ease' : 'none'
           }}
         >
-          {/* 图标与文字同色：选中态/未选中态由按钮的 color 一起带过去，不用另配一套 */}
+          {/* Icon shares the text color: the selected/unselected state travels with the button's color, so no separate palette is needed */}
           {SIDEBAR_MODE_ICONS[item]}
           {t(`harness.sidebar.mode.${item}` as never)}
         </button>
@@ -326,14 +326,14 @@ const SidebarModeSwitch: React.FC<{
 }
 
 /**
- * 合并两份会话行（按 id 去重，**同一条以 incoming 为准**，顺序按 base）。
+ * Merge two conversation-row lists (dedupe by id, **incoming wins for the same row**, order from base).
  *
- * 「对话」模式的列表有两个来源：`topics` 属性（活动工作区那一份，只有第一页）与侧栏自己
- * 滚出来的分页结果。两边都可能先到，直接覆盖就会来回丢页，因此统一走这个合并。
+ * The "chat" mode list has two sources: the `topics` prop (the active workspace's list, first page only) and the sidebar's own
+ * paged results. Either may arrive first, and plain overwrite would keep losing pages, so both go through this merge.
  *
- * 重复 id 必须取 incoming 那份：那是刚从库里读出来的最新行（置顶 / 归档 / 改名之后
- * 就靠它把新状态带进来）。早先「保留先出现的那份」会让对话模式里置顶、归档、改名
- * 全部不生效——列表还是旧对象。
+ * For duplicate ids the incoming row must win: it is the freshest row just read from the DB (pin / archive / rename
+ * rely on it to bring the new state in). The earlier "keep the row seen first" behavior made pin, archive and rename
+ * all ineffective in chat mode — the list still held the old objects.
  */
 function mergeTopicRows(base: HarnessTopicRow[], incoming: HarnessTopicRow[]): HarnessTopicRow[] {
   if (incoming.length === 0) return base
@@ -348,8 +348,8 @@ function mergeTopicRows(base: HarnessTopicRow[], incoming: HarnessTopicRow[]): H
   return merged
 }
 
-/** 会话相对时间：刚刚 / 12分钟 / 3小时 / 1天 / 09月10日（值为 null 时不着色显示）
- *  非组件函数：译文由调用方传入 t */
+/** Relative conversation time: just now / 12 minutes / 3 hours / 1 day / Sep 10 (rendered muted when the value is null)
+ *  Non-component function: the caller passes the translation function t */
 function formatRelativeTime(t: TFunction, value: string | null): string {
   if (!value) return ''
   const then = new Date(value).getTime()
@@ -407,12 +407,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const { t } = useTranslation()
   const navigate = useNavigate()
   /**
-   * 平台（preload 透出的 `process.platform`，不在渲染层猜 navigator）：
-   * 文件管理器的叫法（访达 / 资源管理器 / 文件管理器）与快捷键修饰键（⌘/⌥ vs Ctrl/Alt）都跟着它走。
+   * Platform (`process.platform` exposed by preload; do not guess navigator in the renderer):
+   * the file manager's name (Finder / Explorer / File Manager) and the shortcut modifiers (⌘/⌥ vs Ctrl/Alt) both follow it.
    */
   const platform = window.api.platform
   const isMacPlatform = platform === 'darwin'
-  /** 工作区行「在文件夹中显示」的平台文案 */
+  /** Platform-specific label for the workspace row's "show in folder" action */
   const revealWorkspaceLabel = t(
     isMacPlatform
       ? 'harness.sidebar.workspaceRevealInFinder'
@@ -423,112 +423,112 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  /* ── 模式（工作 / 对话 / 插件）与插件 ── */
-  /** 初始「工作」：恢复上次那一侧在挂载后由 restoreLastContent 覆盖（见下面的启动恢复） */
+  /* ── Mode (work / chat / plugin) and plugins ── */
+  /** Initial "work": restoreLastContent overrides it after mount when restoring the previous side (see startup restore below) */
   const [mode, setMode] = useState<SidebarMode>('work')
 
-  // 原生窗口标题：对话页内按模式更新成「对话模式 / 工作模式 / 插件模式 - RytenBench」
+  // Native window title: inside the chat page it is updated per mode to "Chat mode / Work mode / Plugin mode - RytenBench"
   useEffect(() => {
     const key = mode === 'chat' ? 'chatMode' : mode === 'plugin' ? 'pluginMode' : 'workMode'
     setWindowTitleSource('harness', t(`shell.windowTitle.${key}` as never))
   }, [mode, t])
   const [drafts, setDrafts] = useState<WorkshopDraftSummary[]>([])
   const [draftsLoading, setDraftsLoading] = useState(false)
-  /** 「新建草稿」弹窗（与设置页共用组件；建完直接进下面的列表，不跳别处） */
+  /** "New draft" modal (shared with the settings page; after creation it lands in the list below, no navigation) */
   const [newDraftOpen, setNewDraftOpen] = useState(false)
-  /** 用户配置的插件存放路径（空 = 还没配置：列表位置显示灰字 + 「选择插件存放路径」按钮，右上角 ＋ 同样可配） */
+  /** User-configured plugin storage path (empty = not configured yet: the list area shows gray text + a "Choose plugin storage path" button, and the top-right + can configure it too) */
   const [pluginsPath, setPluginsPath] = useState('')
-  /** 插件工作区清单（插件 id → 它的工作区行；主进程按 kind 判定，见 workshop/workspace.ts） */
+  /** Plugin workspace index (plugin id -> its workspace row; the main process decides by kind, see workshop/workspace.ts) */
   const [pluginWorkspaces, setPluginWorkspaces] = useState<
     { draftId: string; workspaceId: number; path: string }[]
   >([])
   /**
-   * 「对话」模式的工作区（应用自己按系统初始化的目录，见 main/chat/workspace.ts）：
-   * - `ids`：这一类的全部工作区 id（侧栏据此把它们从「工作」列表里滤掉）；
-   * - `rootWorkspaceId`：根目录那一行（还没有任何会话时活动工作区就是它）。
+   * The "chat" mode workspace (a directory the app initializes itself, see main/chat/workspace.ts):
+   * - `ids`: all workspace ids of this kind (the sidebar uses them to filter these rows out of the "work" list);
+   * - `rootWorkspaceId`: the root directory row (the active workspace when there are no conversations yet).
    *
-   * 与插件工作区同一套做法：路径怎么算只有主进程知道，渲染层只拿 id 判断种类。
+   * Same approach as plugin workspaces: only the main process knows how paths are computed; the renderer only gets an id to judge the kind.
    */
   const [chatWorkspaces, setChatWorkspaces] = useState<{
     ids: number[]
     rootWorkspaceId: number | null
   }>({ ids: [], rootWorkspaceId: null })
-  /* 重命名插件弹窗（与工作区重命名同一套交互：一行输入 + 保存） */
+  /* Rename plugin modal (same interaction as workspace rename: one input line + save) */
   const [draftRenameTarget, setDraftRenameTarget] = useState<WorkshopDraftSummary | null>(null)
   const [draftRenameName, setDraftRenameName] = useState('')
   const [draftRenameSaving, setDraftRenameSaving] = useState(false)
 
   /**
-   * 各模式「当前那一条内容」：切模式时切回去（用户口径 2026-09-28「切换工作模式或者
-   * 插件模式下，就默认切换到当前模式下的默认选中项的内容」），**并且落盘**——
-   * 下次进应用照着它恢复（同一天「要记住工作模式和插件模式，选中的会话，下次进来可以记住」）。
+   * Each mode's "current content": switching modes switches back to it (user wording 2026-09-28: "when switching to work mode or
+   * plugin mode, default to the content of the currently selected item in that mode"), **and persists it** —
+   * next launch restores it (same-day wording "remember work mode and plugin mode, the selected conversation, so it can be remembered next time").
    *
-   * 记的是「话题 id + 它所在的工作区」（话题可能还没建 = null，那就是这个工作区里的空白会话）；
-   * 切回去时按 id 重新读一次话题行——标题可能被改过，不能拿旧快照渲染。
-   * 用 ref 而不是 state：它只影响「下次切模式切到哪」，不参与渲染；写盘统一走下面的
-   * rememberWork / rememberChat / rememberPlugin（都只在这里写，避免「改了 ref 忘了存」）。
+   * It stores "topic id + the workspace it lives in" (the topic may not exist yet = null, meaning the blank conversation of this workspace);
+   * when switching back the topic row is re-read by id — the title may have changed, so do not render an old snapshot.
+   * Uses a ref instead of state: it only affects "where the next mode switch goes", does not participate in rendering; writes go through
+   * rememberWork / rememberChat / rememberPlugin below (all writes happen only there, avoiding "changed the ref but forgot to persist").
    */
   const workContentRef = useRef<WorkContent | null>(null)
   const chatContentRef = useRef<ChatContent | null>(null)
   const pluginContentRef = useRef<PluginContent | null>(null)
   /**
-   * 插件行点击的请求序号：连点插件 A、B 时只让**最后一次**落地。
+   * Request sequence number for plugin row clicks: clicking plugins A then B in quick succession lets only the **last one** land.
    *
-   * `handlePluginSession` 中间有 ensureWorkspace → 写设置 → 刷新清单等多个 await；
-   * 两个调用交错完成时，活动工作区可能停在 B 而记住的插件/记忆作用域是 A（下一条消息
-   * 就带错 `plugin:<id>` 记忆）。与话题刷新用同一个「最后请求胜出」模式。
+   * `handlePluginSession` contains several awaits (ensureWorkspace -> write settings -> refresh index);
+   * if two calls complete interleaved, the active workspace may be B while the remembered plugin / memory scope is A (the next message
+   * would carry the wrong `plugin:<id>` memory). Same "last request wins" pattern as the topic refresh.
    */
   const pluginSessionSeqRef = useRef(0)
 
   /**
-   * 「屏幕上这条会话是不是还在生成」（ref 版）。
+   * "Is the conversation on screen still generating" (ref version).
    *
-   * 新建会话的各个入口（工作区 ＋ / 插件行 ＋ / 选文件夹 / 对话模式的 ＋）都是 useCallback，
-   * 直接闭包 props 会拿到旧值，用 ref 让它们在点击那一刻读到最新状态。
+   * The new-conversation entry points (workspace + / plugin row + / choose folder / chat mode +) are all useCallback;
+   * closing over props directly would capture stale values, so a ref lets them read the latest state at click time.
    *
-   * 只用来决定「要不要提示一句」，**不拦新建**：新建会把当前对话窗口清成空白，被换下屏幕的
-   * 若恰是正在生成的那一条，人容易以为那一轮丢了（后台仍在推、落库也正常，点回侧栏那一条
-   * 就能接着看）。用户口径 2026-11-25「为什么要阻止我新建会话，以前是可以的」：生成中照样
-   * 能新建，只把「那一轮还在后台继续」说清楚即可。
+   * Only used to decide "whether to show a hint", **never to block creation**: creating clears the current chat view to blank, and if the
+   * swapped-out conversation happened to be the one generating, people easily think that turn was lost (it still streams in the background and is persisted normally; clicking that
+   * row back in the sidebar continues watching it). User wording 2026-11-25: "why do you prevent me from creating a conversation, it worked before": creating stays possible
+   * while generating; just make clear that "that turn continues in the background".
    */
   const currentTopicRunningRef = useRef(false)
   useEffect(() => {
     currentTopicRunningRef.current = currentTopicId != null && loadingTopicIds.has(currentTopicId)
   }, [currentTopicId, loadingTopicIds])
 
-  /** 新建时换走了正在生成的会话 → 一句提示（不拦，只说明后台还在继续） */
+  /** Creating swapped out a generating conversation -> show one hint (no block, only explains the background continues) */
   const viewReplacedRunningTopic = useCallback((): void => {
     viewMessage('new-session-running', 'info', t('harness.sidebar.newSessionRunning'), 4)
   }, [viewMessage, t])
 
   /**
-   * 本次会话里**已经删掉**的话题 id。
+   * Topic ids **already deleted** in this session.
    *
-   * 用途只有一个：拦住「记住各侧当前那一条内容」那个 effect 的**迟到调用**。删除是异步的
-   * （删库 → 刷新列表），effect 可能在 `handleNewHarness` 把 `currentTopicId` 清空之前先以
-   * **旧的 currentTopicId** 跑一次，把我们刚写下的「对话侧现在是空白会话」又覆盖回那条已删
-   * 话题（实测调用顺序 `[1,1,null,1]`，最后那次来自 passive effect）。话题 id 自增不复用，
-   * 所以记住删过的 id 是安全的；集合只在本次挂载生命周期内增长（数量 = 本次删掉的会话数）。
+   * Only one purpose: stop a **late call** of the effect that "remembers each side's current content". Deletion is asynchronous
+   * (delete DB -> refresh list), and the effect may run once with the **old currentTopicId** before `handleNewHarness` clears
+   * `currentTopicId`, overwriting "the chat side is now a blank conversation" that we just wrote back to the deleted
+   * topic (observed call order `[1,1,null,1]`, the last one from a passive effect). Topic ids auto-increment and are never reused,
+   * so remembering deleted ids is safe; the set only grows for the lifetime of this mount (size = number of conversations deleted this session).
    */
   const deletedTopicIdsRef = useRef<Set<number>>(new Set())
-  /** 工作模式最后待过的用户工作区（切回工作模式时优先回到它） */
+  /** Last user workspace visited in work mode (switching back to work mode prefers returning to it) */
   const lastWorkWorkspaceIdRef = useRef<number | null>(null)
 
   /**
-   * 启动恢复跑完了没有。**恢复完成之前一律不写设置**：否则挂载时那个初始的「工作」
-   * 会把记住的「插件」冲掉（写盘和读盘在同一个键上，抢跑就是互相覆盖）。
+   * Whether startup restore has finished. **Never write settings before restore completes**: otherwise the initial "work"
+   * at mount would overwrite the remembered "plugin" (writes and reads share the same keys; racing means overwriting each other).
    */
   const hydratedRef = useRef(false)
 
   /**
-   * 三份清单（工作区 / 草稿 + 插件工作区 / 对话工作区）各读完一次没有：
-   * 启动恢复必须等它们都到位——缺任何一份，「这条还在不在」都会误判。
+   * Whether each of the three lists (workspaces / drafts + plugin workspaces / chat workspaces) has been read once:
+   * startup restore must wait for all of them — missing any one makes "is this row still there" misjudge.
    */
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false)
   const [draftsLoaded, setDraftsLoaded] = useState(false)
   const [chatWorkspacesLoaded, setChatWorkspacesLoaded] = useState(false)
 
-  /** 把模式 / 各侧内容写回设置（都走这一个口子；低频动作，不需要防抖） */
+  /** Write the mode / each side's content back to settings (single entry point; low-frequency, no debounce needed) */
   const persistSelection = useCallback(
     (patch: {
       activeMode?: SidebarMode
@@ -546,7 +546,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     []
   )
 
-  /** 记下工作模式当前那一条内容（内存 + 落盘） */
+  /** Remember work mode's current content (memory + persisted) */
   const rememberWork = useCallback(
     (next: WorkContent | null): void => {
       workContentRef.current = next
@@ -555,7 +555,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [persistSelection]
   )
 
-  /** 记下「对话」模式当前那一条内容（内存 + 落盘） */
+  /** Remember "chat" mode's current content (memory + persisted) */
   const rememberChat = useCallback(
     (next: ChatContent | null): void => {
       chatContentRef.current = next
@@ -564,7 +564,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [persistSelection]
   )
 
-  /** 记下插件模式当前那一条内容（内存 + 落盘） */
+  /** Remember plugin mode's current content (memory + persisted) */
   const rememberPlugin = useCallback(
     (next: PluginContent | null): void => {
       pluginContentRef.current = next
@@ -574,10 +574,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 拉「对话」模式的工作区清单（那一类工作区的 id + 根目录那一行）。
+   * Fetch the "chat" mode workspace list (ids of that kind of workspace + the root directory row).
    *
-   * 单独一个函数、单独一个 loaded 标志：启动恢复必须等它读完——缺了它，
-   * 「活动工作区是对话目录」会被当成用户工作区，恢复出来的内容就切错侧了。
+   * A separate function and a separate loaded flag: startup restore must wait for it — without it,
+   * "the active workspace is the chat directory" would be treated as a user workspace, and restore would switch to the wrong side.
    */
   const loadChatWorkspaces = useCallback(async (): Promise<void> => {
     try {
@@ -585,17 +585,17 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       if (chat.ok && chat.data) setChatWorkspaces(chat.data)
       else setChatWorkspaces({ ids: [], rootWorkspaceId: null })
     } catch {
-      // 对话域没接线：保持空清单（那些行会漏进「工作」列表，但不会崩）
+      // Chat domain not wired: keep an empty list (those rows leak into the "work" list, but nothing crashes)
       setChatWorkspaces({ ids: [], rootWorkspaceId: null })
     }
   }, [])
 
   /**
-   * 拉工作区清单（含活动工作区 id）。
+   * Fetch the workspace list (including the active workspace id).
    *
-   * 放在 `loadDrafts` 之前：工坊变更（构建/安装/改插件存放路径）会同时改变插件工作区行，
-   * 侧栏必须连工作区一起刷新——否则 `workspaces` 里还留着旧路径，点开旧会话会把活动
-   * 工作区写回已被移走的目录（用户 2026-11-25 的插件存放路径迁移现场）。
+   * Placed before `loadDrafts`: workshop changes (build/install/changed plugin storage path) also change plugin workspace rows,
+   * and the sidebar must refresh workspaces together with them — otherwise `workspaces` still holds old paths, and opening an old conversation would write the active
+   * workspace back to a directory that has been moved away (user's 2026-11-25 plugin storage path migration case).
    */
   const loadWorkspaces = useCallback(async (): Promise<{
     list: WorkspaceRow[]
@@ -617,14 +617,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [])
 
   /**
-   * 草稿/插件工作区清单的请求序号：并发刷新时只采用**最后一次**的结果。
+   * Request sequence number for the draft / plugin workspace index: only the **last** result is used when refreshing concurrently.
    *
-   * 场景：构建/安装触发的 `workshop-changed` 刷新还没回来，用户又删了草稿；删除后的
-   * 刷新先到、旧响应后到，已删的行会「复活」一下，点它只会得到目录不存在的错误。
+   * Scenario: the `workshop-changed` refresh triggered by a build/install has not returned and the user deletes a draft; the post-delete
+   * refresh arrives first and the stale response second, so the deleted row "revives" briefly, and clicking it only yields a directory-not-found error.
    */
   const draftsLoadSeqRef = useRef(0)
 
-  /** 拉插件草稿清单 + 插件工作区清单（工作列表靠后者滤掉插件目录行） */
+  /** Fetch the plugin draft list + plugin workspace index (the work list uses the latter to filter out plugin directory rows) */
   const loadDrafts = useCallback(async (): Promise<void> => {
     const seq = ++draftsLoadSeqRef.current
     setDraftsLoading(true)
@@ -637,7 +637,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       setDrafts(list)
     } catch {
       if (seq !== draftsLoadSeqRef.current) return
-      // 工坊没接线（AI 助手刚停用/重载）时保持空列表：面板本来就只在插件模式用
+      // Workshop not wired (just after the AI assistant was stopped/reloaded): keep an empty list; the panel is only used in plugin mode anyway
       setDrafts([])
       setPluginWorkspaces([])
     } finally {
@@ -646,19 +646,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [])
 
   useEffect(() => {
-    // 三份清单都要拉：插件模式要列表，工作列表要靠草稿目录 / 对话工作区把非用户工作区滤掉
+    // All three lists must be fetched: plugin mode needs the list, and the work list needs the draft directories / chat workspaces to filter out non-user workspaces
     void loadDrafts().finally(() => setDraftsLoaded(true))
     void loadChatWorkspaces().finally(() => setChatWorkspacesLoaded(true))
     return harnessApi.workshop.onChanged(() => {
       void loadDrafts()
-      // 插件存放路径迁移 / 插件工作区新建后，行里的 path 也必须跟着刷新
+      // After plugin storage path migration / plugin workspace creation, the path in the rows must be refreshed too
       void loadWorkspaces()
     })
   }, [loadDrafts, loadChatWorkspaces, loadWorkspaces])
 
   /**
-   * 开关跟随内容：工坊页/插件详情一被打开，就切到「插件」
-   * （详见文件头的说明——这个开关表达的是「面板此刻在看哪一类内容」）。
+   * Switch follows content: opening the workshop page / plugin detail switches to "plugin"
+   * (see the explanation at the top of the file — this switch expresses "which kind of content the panel is viewing right now").
    */
   useEffect(() => {
     const handler = (): void => setMode('plugin')
@@ -667,8 +667,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [])
 
   /**
-   * 插件行上的动作（构建 / 验收 / 安装）走与设置页同一个 hook——提示与忙碌态口径一致。
-   * 行内还能重命名与删除（对齐工作区行的「⋯ + ＋」，用户口径 2026-09-27）。
+   * Actions on a plugin row (build / accept / install) go through the same hook as the settings page — the hints and busy state stay consistent.
+   * The row also supports rename and delete (matching the workspace row's "… + +", user wording 2026-09-27).
    */
 
   const {
@@ -678,7 +678,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     publish: publishDraft
   } = useDraftActions({ onChanged: async () => await loadDrafts() })
 
-  /** 删除插件（只删它的源码目录 + 产物；已装进应用的插件不受影响，与设置页同一套文案） */
+  /** Delete a plugin (only its source directory + artifacts; plugins already installed in the app are unaffected; same wording as the settings page) */
   const handleRemoveDraft = useCallback(
     (draft: WorkshopDraftSummary): void => {
       modal.confirm({
@@ -699,13 +699,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [modal, t, viewMessage, loadDrafts]
   )
 
-  /** 打开重命名插件弹窗 */
+  /** Open the rename plugin modal */
   const openDraftRename = useCallback((draft: WorkshopDraftSummary): void => {
     setDraftRenameTarget(draft)
     setDraftRenameName(draft.title)
   }, [])
 
-  /** 保存插件名（改的是展示名：草稿 title + 清单 name；目录名/id 不动） */
+  /** Save the plugin name (changes the display name: draft title + index name; directory name/id unchanged) */
   const handleDraftRenameSave = useCallback(async (): Promise<void> => {
     const name = draftRenameName.trim()
     if (!name || !draftRenameTarget) {
@@ -729,7 +729,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [draftRenameName, draftRenameTarget, viewMessage, loadDrafts, t])
 
-  /** 插件行的「⋯」：构建 / 验收 / 安装（与设置页同一个菜单口径）+ 重命名 / 删除 */
+  /** The plugin row's "…": build / accept / install (same menu wording as the settings page) + rename / delete */
   const draftMenuFor = useCallback(
     (draft: WorkshopDraftSummary, sessionRunning = false): MenuProps['items'] => [
       { key: 'build', icon: <RiHammerLine size={14} />, label: t('workshopSettings.action.build') },
@@ -757,8 +757,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         key: 'remove',
         danger: true,
         icon: <RiDeleteBin6Line size={14} />,
-        // 该插件的会话正在生成时禁止删源码：否则正在跑的轮次会突然失去工作目录，
-        // 后续文件工具全部失败（与工作区删除的 hasRunningTopic 同一口径）
+        // Forbid deleting sources while a conversation of this plugin is generating: otherwise the running turn suddenly loses its working directory
+        // and all subsequent file tools fail (same rule as the workspace delete's hasRunningTopic)
         disabled: sessionRunning,
         label: sessionRunning
           ? t('harness.sidebar.workspaceHasRunning')
@@ -769,12 +769,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 打开工坊里某份插件的详情（插件仓库页的「插件工坊」弹窗 → 该插件抽屉）。
+   * Open a plugin's detail in the workshop (the "Plugin workshop" modal on the plugin repository page -> that plugin's drawer).
    *
-   * 工坊 UI 在 `/plugins` 路由的弹窗里，侧栏在 `/harness`：**先写跨路由请求，再导航**。
-   * 旧实现把「打开设置弹窗」和「展开抽屉」两个 CustomEvent 在导航前派发，目标页还没挂载
-   * 收不到；带 `scope:'assistant'` 时还会把用户导到 `/more/workshop`（不存在的页签）→
-   * 回落到智能体页且地址栏卡住（用户 2026-11-21 实测）。
+   * The workshop UI lives in a modal on the `/plugins` route, while the sidebar is on `/harness`: **write the cross-route request first, then navigate**.
+   * The old implementation dispatched the "open settings modal" and "expand drawer" CustomEvents before navigating, while the target page was not mounted
+   * yet so it never received them; with `scope:'assistant'` it also sent the user to `/more/workshop` (a tab that does not exist) ->
+   * falling back to the agent page with a stuck address bar (user's 2026-11-21 observation).
    */
   const openDraft = useCallback(
     (id: string): void => {
@@ -824,22 +824,22 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     ]
   )
 
-  /* ── 工作区状态 ── */
+  /* ── Workspace state ── */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null)
   const [expandedWorkspaceId, setExpandedWorkspaceId] = useState<number | null>(null)
   const [hoveredWorkspaceId, setHoveredWorkspaceId] = useState<number | null>(null)
-  /** 非当前工作区的会话缓存（展开时按需拉取；当前工作区始终用 topics 属性保证实时） */
+  /** Conversation cache for non-current workspaces (fetched on expand; the current workspace always uses the topics prop for realtime accuracy) */
   const [workspaceTopics, setWorkspaceTopics] = useState<Record<number, HarnessTopicRow[]>>({})
   const [workspaceTopicsLoading, setWorkspaceTopicsLoading] = useState<Record<number, boolean>>({})
 
   /**
-   * 「对话」模式的会话列表：**扁平一份**，就挂在根工作区（`<userData>/chat/`）下。
+   * The "chat" mode conversation list: **a single flat list**, attached to the root workspace (`<userData>/chat/`).
    *
-   * 三件事都用它，所以必须和 `workspaceTopics` 分开记：
-   * - 列表内容（活动工作区 = 对话根目录时由 `topics` 属性同步，切到别的模式时是缓存）；
-   * - 分页追加（滚动到底部再取一页，合并去重）;
-   * - 加载态（未加载过才显示骨架，避免空列表闪一下）。
+   * Three things use it, so it must be tracked separately from `workspaceTopics`:
+   * - list content (synced by the `topics` prop when the active workspace is the chat root directory; a cache when another mode is active);
+   * - paged appends (fetch the next page at the bottom, merge and dedupe);
+   * - loading state (show the skeleton only when never loaded, so an empty list does not flash).
    */
   const [chatWorkspaceTopics, setChatWorkspaceTopics] = useState<HarnessTopicRow[]>([])
   const [chatTopicsLoaded, setChatTopicsLoaded] = useState(false)
@@ -847,13 +847,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   const [chatTopicsPage, setChatTopicsPage] = useState(0)
   const [chatTopicsHasMore, setChatTopicsHasMore] = useState(false)
 
-  /* 搜索 */
+  /* Search */
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<InputRef | null>(null)
   /**
-   * 侧栏检索结果（当前工作区的「会话标题 + 消息正文」混合）：
-   * 输入 ≥2 个字符才走主进程查询；结果为空/失败都在列表区给反馈。
+   * Sidebar search results (mixed "conversation title + message body" for the current workspace):
+   * only inputs of >= 2 characters hit the main process; empty/failed results both give feedback in the list area.
    */
   const [searchResults, setSearchResults] = useState<WorkspaceSearchResult | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
@@ -862,27 +862,27 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     if (searchMode) searchInputRef.current?.focus()
   }, [searchMode])
 
-  /* 重命名弹窗 */
+  /* Rename modal */
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<WorkspaceRow | null>(null)
   const [renameName, setRenameName] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
 
-  /* 会话重命名弹窗（与工作区那个同一套交互：一行输入 + 保存） */
+  /* Conversation rename modal (same interaction as the workspace one: one input line + save) */
   const [topicRenameOpen, setTopicRenameOpen] = useState(false)
   const [topicRenameTarget, setTopicRenameTarget] = useState<HarnessTopicRow | null>(null)
   const [topicRenameName, setTopicRenameName] = useState('')
   const [topicRenameSaving, setTopicRenameSaving] = useState(false)
 
   /**
-   * 侧栏底部「已归档」分组（用户 2026-11-25）：**所有工作区**归档的会话都收在这里，
-   * 位置在「记忆」上面、默认收起；点开只读查看（输入框隐藏），不参与工作区下的会话列表。
+   * The "archived" group at the bottom of the sidebar (user 2026-11-25): conversations archived from **all workspaces** are collected here,
+   * above "memory" and collapsed by default; opening one is read-only (input hidden) and it does not join the per-workspace conversation list.
    */
   const [archivedTopics, setArchivedTopics] = useState<HarnessTopicRow[]>([])
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [archivedLoading, setArchivedLoading] = useState(false)
 
-  /** 拉一次「已归档」清单（归档 / 取消归档 / 删除 / 改名后都走它刷新） */
+  /** Fetch the "archived" list once (after archive / unarchive / delete / rename, refresh through it) */
   const loadArchivedTopics = useCallback(async (): Promise<void> => {
     setArchivedLoading(true)
     try {
@@ -897,7 +897,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     void loadArchivedTopics()
   }, [loadArchivedTopics])
 
-  /** 「在应用中打开」的候选应用（文件资源管理器永远在内，其余按本机安装情况探测） */
+  /** Candidate apps for "open in app" (the file explorer is always included; the rest are probed from local installs) */
   const [openInApps, setOpenInApps] = useState<{ id: string; label: string; icon?: string }[]>([])
   useEffect(() => {
     let alive = true
@@ -912,18 +912,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [])
 
-  // Mnemon 记忆概览状态
+  // Mnemon memory overview state
   const [memoryExpanded, setMemoryExpanded] = useState(false)
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [memorySnap, setMemorySnap] = useState<MnemonSidebarSnapshot | null>(null)
   /**
-   * 记忆跟着**当前会话**走（用户口径 2026-09-28「插件的记忆，并没有像工作里面的记忆一样
-   * 显示在侧边栏」）：插件会话 → 这份插件自己的记忆；工作会话 / 空白会话 → 当前工作区。
-   * 值由 useHarnessHandlers 在切会话时写（见 renderer/memory-scope.ts）。
+   * Memory follows the **current conversation** (user wording 2026-09-28: "the plugin's memory is not, like the memory inside work,
+   * shown in the sidebar"): a plugin conversation -> that plugin's own memory; a work conversation / blank conversation -> the current workspace.
+   * The value is written by useHarnessHandlers when switching conversations (see renderer/memory-scope.ts).
    *
-   * 标题**只写「记忆」**，不缀作用域名（用户口径 2026-09-28「不需要（记忆 · 个人记账台账）
-   * 这个内容」）：这一行本来就在会话侧，读哪一套由当前会话决定，不必再复述一遍。
-   * 设置 → 记忆页那边不一样——那一页脱离了会话上下文，仍然标出管的是哪份插件。
+   * The title says **only "Memory"**, with no scope name appended (user wording 2026-09-28: "the (Memory · personal ledger)
+   * content is not needed"): this row already lives on the conversation side, and which memory set is read is decided by the current conversation, so it need not be repeated.
+   * The Settings -> Memory page is different — that page is outside the conversation context and still shows which plugin it manages.
    */
   const memoryScope = useMemoryScope()
 
@@ -957,7 +957,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [memoryScope])
 
-  // 展开记忆面板时加载概览
+  // Load the overview when the memory panel expands
   const handleToggleMemory = useCallback(async () => {
     const next = !memoryExpanded
     setMemoryExpanded(next)
@@ -967,8 +967,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [memoryExpanded, loadMnemonSnapshot])
 
   /**
-   * 作用域一变（切到别的插件会话／回到工作会话）就重载。
-   * 展开态先清空再拉：那是**另一个目录**的记忆，留着上一个作用域的条目会看成串了记忆。
+   * Reload whenever the scope changes (switching to another plugin conversation / returning to a work conversation).
+   * Clear before fetching in the expanded state: that is **another directory's** memory, and keeping the previous scope's entries would look like mixed memories.
    */
   const scopeRef = useRef<string | null>(null)
   useEffect(() => {
@@ -980,19 +980,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [memoryScope, memoryExpanded, loadMnemonSnapshot])
 
   /**
-   * 打开「更多内容 → 记忆」页（`/more/memory`），不是设置弹窗。
+   * Open the "More -> Memory" page (`/more/memory`), not the settings modal.
    *
-   * 助手设置（智能体 / 技能 / 记忆 / MCP）在 2026-11-21 从设置弹窗搬到了「更多内容」独立
-   * 页面：旧实现发 `open-system-settings` 只带 `{ tab: 'memory' }`、不带 `scope: 'assistant'`，
-   * AppShell 便按「非助手设置」打开弹窗；而弹窗里已经没有记忆页签，`memory` 解析不到又
-   * 回落到首个页签（通用）——用户点的「管理记忆」看起来就成了不相干的设置页。
-   * 这里直接按路由跳转（与同一组件里的 `/plugins` 一致），不再绕设置弹窗那条链。
+   * Assistant settings (agents / skills / memory / MCP) moved from the settings modal to a separate "More" page on 2026-11-21:
+   * the old implementation sent `open-system-settings` with only `{ tab: 'memory' }`, without `scope: 'assistant'`,
+   * so AppShell opened the modal as "non-assistant settings"; but the modal no longer has a memory tab, `memory` could not be resolved and
+   * fell back to the first tab (General) — the "manage memory" the user clicked looked like an unrelated settings page.
+   * Here we navigate by route directly (same as `/plugins` in this component), no longer going through the settings modal chain.
    */
   const handleOpenMemoryPage = useCallback(() => {
     void navigate('/more/memory')
   }, [navigate])
 
-  // 监听记忆变更事件（对话中模型写记忆后刷新概览）
+  // Listen for memory-change events (refresh the overview after the model writes memory in a conversation)
   useEffect(() => {
     const handleRefresh = (): void => {
       if (memoryExpanded) {
@@ -1003,13 +1003,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return () => window.removeEventListener('memory-tree-refresh', handleRefresh)
   }, [memoryExpanded, loadMnemonSnapshot])
 
-  /* ── 工作区与会话 ── */
+  /* ── Workspaces and conversations ── */
 
   /**
-   * 选一个插件存放路径（空态里的「选择插件存放路径」按钮与右上角 ＋ 共用这一条路）。
+   * Choose a plugin storage path (the "Choose plugin storage path" button in the empty state shares this route with the top-right +).
    *
-   * 为什么放在 loadWorkspaces 之后：选完路径插件工坊会把已有插件搬过去（工作区行跟着变），
-   * 成功后要同时刷新草稿清单与工作区清单，两个 loader 都必须已经声明（否则依赖数组会撞 TDZ）。
+   * Why it is placed after loadWorkspaces: after the path is chosen, the plugin workshop moves existing plugins over (workspace rows change),
+   * so both the draft list and the workspace list must be refreshed afterwards, and both loaders must already be declared (otherwise the dependency array hits a TDZ).
    */
   const pickPluginsRoot = useCallback(async (): Promise<boolean> => {
     try {
@@ -1029,7 +1029,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [loadDrafts, loadWorkspaces, viewMessage])
 
-  /** ＋：没配存放路径时**先**让用户选文件夹，选好再弹新建框（弹窗里不再放选择器） */
+  /** +: when no storage path is set, **first** let the user choose a folder, then show the create dialog (no picker inside the dialog) */
   const handleNewDraft = useCallback(async (): Promise<void> => {
     if (!pluginsPath) {
       const picked = await pickPluginsRoot()
@@ -1039,15 +1039,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [pickPluginsRoot, pluginsPath])
 
   /**
-   * 会话列表**拉取失败过**的工作区。
+   * Workspaces whose conversation list **has failed to load**.
    *
-   * 只影响一件事：渲染层不能再把「从没加载成功」当成「还在加载」——否则一次失败的 IPC 就能让
-   * 那一行永远停在骨架屏（没有请求在跑，也没有数据会来）。失败时退回空态，用户收起再展开
-   * 即可重试（`handleToggleWorkspace`）。
+   * Only affects one thing: the renderer must no longer treat "never loaded successfully" as "still loading" — otherwise one failed IPC would leave
+   * that row sits on the skeleton forever (no request is running and no data will arrive). On failure it falls back to the empty state, so the user can collapse and expand again
+   * to retry (`handleToggleWorkspace`).
    */
   const topicFetchFailedRef = useRef<Set<number>>(new Set())
 
-  /** 非当前工作区的会话按需拉取；取第一页（与 useHarness 的分页口径一致，切换时列表长度不跳变） */
+  /** Fetch conversations of a non-current workspace on demand; first page only (same paging rule as useHarness, so the list length does not jump on switching) */
   const loadWorkspaceTopics = useCallback(async (workspaceId: number): Promise<void> => {
     setWorkspaceTopicsLoading((prev) => ({ ...prev, [workspaceId]: true }))
     try {
@@ -1067,11 +1067,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [])
 
   /**
-   * 这个工作区的会话列表要不要**自己去拉**。
+   * Whether this workspace's conversation list must **fetch itself**.
    *
-   * 活动工作区那一份正常情况下由 `topics` 属性提供（见下面那个 effect 与 `renderTopicList`），
-   * 所以本地已经有过缓存、或者 `topics` 正属于它时都不用再拉。反过来，两个条件都不成立时
-   * 列表就**没有任何数据来源**：没有请求在跑、也不会有数据来 —— 那正是「骨架屏一直不动」。
+   * The active workspace's list normally comes from the `topics` prop (see the effect below and `renderTopicList`),
+   * so when a local cache exists or `topics` already belongs to it, no fetch is needed. Conversely, when neither holds, the
+   * list has **no data source at all**: no request running and no data coming — that is exactly "the skeleton never moves".
    */
   const needsTopicFetch = useCallback(
     (workspaceId: number): boolean =>
@@ -1080,23 +1080,23 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [workspaceTopics, topicsWorkspaceId]
   )
 
-  /** 已经自动补拉过的工作区（失败不自动重试，免得 IPC 出问题时每一帧都发一次请求） */
+  /** Workspaces already auto-fetched once (failures are not retried automatically, so a broken IPC does not send a request every frame) */
   const autoLoadedTopicWorkspacesRef = useRef<Set<number>>(new Set())
 
   /**
-   * 「已展开、但会话列表还没加载过」→ 立刻补一次拉取。
+   * "expanded but conversation list never loaded" -> fetch immediately.
    *
-   * 为什么需要这条兜底：展开的如果是**活动工作区**，`handleToggleWorkspace` 原本会跳过请求
-   * （活动工作区的列表由 `topics` 属性负责）。这条前提一旦不成立（比如切工作区的动作发生在
-   * 对话页之外、`topics` 压根没轮到过这个工作区，或者展开态是启动恢复/点插件行直接设上的，
-   * 根本没走 toggle），列表就会永远停在加载骨架——用户 2026-11-22 截图里插件行下面那 5 行
-   * 灰条就是它。宁可多打一次本地库（几十微秒），也不能让界面挂在一个永远不结束的加载态上。
+   * Why this fallback is needed: if the expanded workspace is the **active** one, `handleToggleWorkspace` would skip the request
+   * (the active workspace's list is provided by the `topics` prop). Once that assumption fails (e.g. the workspace switch happened outside
+   * the chat page, `topics` never covered this workspace, or the expanded state was set directly by startup restore / clicking a plugin row
+   * without going through toggle), the list would stay on the loading skeleton forever — the 5 gray rows under the plugin row in the user's 2026-11-22 screenshot
+   * were exactly that. Better to hit the local DB one extra time (tens of microseconds) than let the UI hang on a loading state that never ends.
    */
   useEffect(() => {
     const workspaceId = expandedWorkspaceId
     if (workspaceId == null) return
     if (!needsTopicFetch(workspaceId)) return
-    // Provider 正在整表刷新（换工作区那一下）：等它这一趟回来，别抢着再打一次同样的查询
+    // Provider is doing a full-list refresh (workspace switch): wait for it to come back instead of racing another identical query
     if (isRefreshingTopics) return
     if (workspaceTopicsLoading[workspaceId] === true) return
     if (autoLoadedTopicWorkspacesRef.current.has(workspaceId)) return
@@ -1111,15 +1111,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   ])
 
   /**
-   * 单一数据源：列表一律渲染 workspaceTopics 缓存。
-   * useHarness 的 topics 属性只负责把它所属工作区的缓存「刷新成最新」——
-   * 切换工作区的瞬间 topics 仍属于旧工作区，绝不能直接拿来渲染新工作区（列表会闪成旧数据）。
+   * Single source of truth: the list always renders the workspaceTopics cache.
+   * The useHarness `topics` prop only refreshes the cache of the workspace it belongs to to the latest —
+   * at the instant of a workspace switch `topics` still belongs to the old workspace, so never render a new workspace from it directly (the list would flash old data).
    */
   useEffect(() => {
     if (topicsWorkspaceId == null) return
     setWorkspaceTopics((prev) => ({ ...prev, [topicsWorkspaceId]: topics }))
-    // 「对话」模式的那一份是同一个根工作区下的扁平列表：用**合并去重**而不是覆盖——
-    // 侧栏自己滚出来的第二页不能被属性这一份（只有第一页）顶掉
+    // The "chat" mode list is a flat list under the same root workspace: **merge and dedupe** rather than overwrite —
+    // the second page the sidebar paged in itself must not be clobbered by the prop (which only has the first page)
     if (topicsWorkspaceId === chatWorkspaces.rootWorkspaceId) {
       setChatWorkspaceTopics((prev) => mergeTopicRows(prev, topics))
       setChatTopicsLoaded(true)
@@ -1127,9 +1127,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [topicsWorkspaceId, topics, chatWorkspaces.rootWorkspaceId])
 
   /**
-   * 「对话」模式首次进入时把它的会话列表拉第一页（此时活动工作区可能还在别处，
-   * `topics` 属性那一份不是它）。加载态与「工作」模式的会话列表同一套口径：
-   * 只有从未加载过才显示骨架。
+   * First entry into "chat" mode fetches its conversation list's first page (the active workspace may still be elsewhere at that point,
+   * so the `topics` prop is not it). Its loading state follows the same rule as the "work" mode conversation list:
+   * show the skeleton only when never loaded.
    */
   const chatRootWorkspaceId = chatWorkspaces.rootWorkspaceId
   useEffect(() => {
@@ -1155,7 +1155,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [chatRootWorkspaceId, chatTopicsLoaded])
 
-  /** 「对话」模式的滚动分页：追加下一页并按 id 去重（属性那一份随时可能把第一页顶回来） */
+  /** "Chat" mode scroll pagination: append the next page and dedupe by id (the prop may push the first page back at any time) */
   const loadMoreChatTopics = useCallback(async (): Promise<void> => {
     const workspaceId = chatWorkspaces.rootWorkspaceId
     if (workspaceId == null || chatTopicsLoading || !chatTopicsHasMore) return
@@ -1177,7 +1177,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [chatWorkspaces.rootWorkspaceId, chatTopicsLoading, chatTopicsHasMore, chatTopicsPage])
 
-  // 首次进入：载入工作区列表并展开当前工作区
+  // First mount: load the workspace list and expand the current workspace
   useEffect(() => {
     loadWorkspaces()
       .then(({ list, activeId }) => {
@@ -1186,17 +1186,17 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       .finally(() => setWorkspacesLoaded(true))
   }, [loadWorkspaces])
 
-  // 切换工作区（含子代理等外部入口）：同步激活态、展开态与记忆概览
+  // Workspace switch (including external entries such as subagents): sync the active state, expanded state and memory overview
   useEffect(() => {
     const handleWorkspaceChanged = (e: Event): void => {
       const detail = (e as CustomEvent<{ workspaceId?: number }>).detail
       const nextId = detail?.workspaceId ?? null
       if (memoryExpanded) {
-        // 展开态：先清空旧工作区快照再重载（记忆按工作区隔离，不能残留旧内容）
+        // Expanded state: clear the old workspace snapshot before reloading (memory is isolated per workspace, no stale content)
         setMemorySnap(null)
         loadMnemonSnapshot()
       } else {
-        // 折叠态：只刷新数字，不清空，避免「记忆」这一行跟着闪一下
+        // Collapsed state: refresh the numbers only, do not clear, so the "memory" row does not flash
         loadMnemonSnapshot()
       }
       if (nextId != null) {
@@ -1204,10 +1204,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         setExpandedWorkspaceId(nextId)
       }
       loadWorkspaces().then()
-      // 对话工作区可能刚被主进程按需建出来（建话题 / 激活会话那条路不经过本侧栏）：
-      // 同步一次它的 id，工作列表才滤得掉它、对话列表才有根可挂
+      // The chat workspace may have just been created on demand by the main process (creating topics / activating conversations does not go through this sidebar):
+      // sync its id once so the work list can filter it out and the chat list has a root to attach to
       loadChatWorkspaces().then()
-      // 归档清单是跨工作区的：换工作区 / 新建会话后也顺手对齐一次
+      // The archived list is cross-workspace: realign it after workspace switch / new conversation too
       void loadArchivedTopics()
     }
     window.addEventListener('workspace-changed', handleWorkspaceChanged)
@@ -1215,11 +1215,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [memoryExpanded, loadMnemonSnapshot, loadWorkspaces, loadChatWorkspaces, loadArchivedTopics])
 
   /**
-   * 切换工作区：写设置 + 派发事件（Index 负责清空当前会话并刷新会话列表）。
+   * Switch workspace: write settings + dispatch the event (Index clears the current conversation and refreshes the conversation list).
    *
-   * 返回是否真的切成功：写设置失败时调用方必须**中止**后续的「打开这条会话」——
-   * 否则会话内容显示出来了，AI 的工作目录却还停在上一个工作区（文件工具/资源管理器
-   * 全在错的目录里），且界面没有任何提示。
+   * Returns whether the switch actually succeeded: if writing settings fails the caller must **abort** the following "open this conversation" —
+   * otherwise the conversation content appears while the AI's working directory still sits in the previous workspace (file tools / file explorer
+   * all in the wrong directory) without any indication in the UI.
    */
   const switchWorkspace = useCallback(
     async (ws: WorkspaceRow): Promise<boolean> => {
@@ -1245,12 +1245,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 打开「对话」模式里的某条会话（或该模式的空白会话）：主进程按话题 id 算目录（根目录 /
-   * `chat/<话题 id>/`）并把它写成活动工作区。
+   * Open a conversation in "chat" mode (or this mode's blank conversation): the main process computes the directory from the topic id (root directory /
+   * `chat/<topic id>/`) and writes it as the active workspace.
    *
-   * 为什么不像普通工作区那样先查本地清单再切：对话工作区是**按需创建**的，而且它的路径
-   * 只有主进程知道（按系统解析）。这条通道把「建目录 + 建工作区行 + 切活动工作区」一次做完，
-   * 渲染层只管把光标放进输入框——这也是「点开对话列表里的任意一条都能操作文件」的那条链。
+   * Why not look up the local list first and then switch like a normal workspace: chat workspaces are **created on demand**, and their paths
+   * are known only to the main process (resolved per OS). This channel does "create directory + create workspace row + switch active workspace" in one go,
+   * and the renderer only places the caret in the input box — this is also the chain behind "clicking any conversation in the chat list can work with files".
    */
   const activateChatTopic = useCallback(
     async (topicId?: number): Promise<{ workspaceId: number; dir: string } | null> => {
@@ -1265,22 +1265,22 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       const { workspaceId, dir } = result.data
       setActiveWorkspaceId(workspaceId)
       setExpandedWorkspaceId(null)
-      // 让 Index / useHarness 跟上（刷新会话列表、重读工作区路径）
+      // Let Index / useHarness catch up (refresh the conversation list, re-read the workspace path)
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId } }))
-      // 刚建出来的对话工作区要立刻进本地清单（工作列表才能马上把它滤掉、列表才有根可挂）
+      // The just-created chat workspace must enter the local list immediately (so the work list can filter it out and the list gets a root)
       await Promise.all([loadWorkspaces(), loadChatWorkspaces()])
       return { workspaceId, dir }
     },
     [loadChatWorkspaces, loadWorkspaces, viewMessage]
   )
 
-  /** 展开/收起工作区；展开时按需拉取该工作区的会话 */
+  /** Expand/collapse a workspace; when expanding, fetch its conversations on demand */
   const handleToggleWorkspace = useCallback(
     (workspaceId: number): void => {
       const next = expandedWorkspaceId === workspaceId ? null : workspaceId
       setExpandedWorkspaceId(next)
-      // 活动工作区那一份通常由 `topics` 属性提供（`needsTopicFetch` 会挡住重复请求）；
-      // 用户手动再展开一次也走这里 ⇒ 上一次失败时这里就是重试入口
+      // The active workspace's list is usually provided by the `topics` prop (`needsTopicFetch` blocks duplicate requests);
+      // manually expanding again also comes here -> when the previous attempt failed, this is the retry entry point
       if (next != null && needsTopicFetch(next)) {
         autoLoadedTopicWorkspacesRef.current.add(next)
         void loadWorkspaceTopics(next)
@@ -1290,10 +1290,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 草稿 → 它的「插件工作区」id（插件会话的工作目录 = 插件源码目录，见 main/workshop/workspace.ts）。
-   * 还没给这份插件开过会话时没有这一行（返回 null，插件行也就没有可展开的会话）。
-   * 清单由主进程给（`workshop-state.pluginWorkspaces`）：渲染层不自己拼路径，
-   * 免得两边对「什么算插件目录」有两套说法。
+   * Draft -> its "plugin workspace" id (a plugin conversation's working directory = the plugin source directory, see main/workshop/workspace.ts).
+   * When no conversation has been opened for this plugin there is no such row (returns null, so the plugin row has nothing to expand).
+   * The list comes from the main process (`workshop-state.pluginWorkspaces`): the renderer does not build paths itself,
+   * so the two sides cannot disagree on "what counts as a plugin directory".
    */
   const pluginWorkspaceIdOf = useCallback(
     (draft: WorkshopDraftSummary): number | null =>
@@ -1301,22 +1301,22 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [pluginWorkspaces]
   )
 
-  /** 插件工作区集合（工作列表要把这些行滤掉：它们只属于那份插件，不进「工作」模式） */
+  /** Plugin workspace set (the work list must filter these rows out: they belong only to that plugin and do not enter "work" mode) */
   const pluginWorkspaceIds = useMemo(
     () => new Set(pluginWorkspaces.map((item) => item.workspaceId)),
     [pluginWorkspaces]
   )
 
-  /** 「对话」模式的工作区集合（同样要从「工作」列表里滤掉） */
+  /** "Chat" mode workspace set (also filtered out of the "work" list) */
   const chatWorkspaceIds = useMemo(() => new Set(chatWorkspaces.ids), [chatWorkspaces.ids])
 
   /**
-   * 当前活动工作区是插件工作区、而它的草稿已经不在了（用户在插件模式删了源码，或在别处删了目录）：
-   * 把界面从「指向已删目录」的状态里拉回来。
+   * The active workspace is a plugin workspace but its draft is gone (the user deleted the sources in plugin mode, or deleted the directory elsewhere):
+   * pull the UI back from the "pointing at a deleted directory" state.
    *
-   * 主进程在 `workshop-remove` 里已经把 `harness.workspacePath` 清空（否则重启后文件工具
-   * 还对着一个不存在的目录）；这里同步侧栏的激活态并回到空白欢迎态。工作区行与会话本身
-   * 保留（删源码不等于删对话），重建同名草稿后它们会重新出现。
+   * The main process already cleared `harness.workspacePath` in `workshop-remove` (otherwise after restart the file tools
+   * would still target a non-existent directory); here sync the sidebar's active state and return to the blank welcome state. The workspace row and the conversations
+   * themselves are kept (deleting sources is not deleting conversations); they reappear after a draft with the same name is recreated.
    */
   useEffect(() => {
     if (!draftsLoaded || activeWorkspaceId == null) return
@@ -1325,14 +1325,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     if (drafts.some((draft) => draft.id === pluginWs.draftId)) return
     setActiveWorkspaceId(null)
     setExpandedWorkspaceId(null)
-    // 记住的「插件模式当前内容」也指向这份已删插件时一并作废：否则切回插件模式 /
-    // 重启恢复会一直去打开一个不存在的插件目录（每次一条错误提示，内容还停在别处）。
+    // Also invalidate the remembered "plugin mode current content" if it points at this deleted plugin: otherwise switching back to plugin mode /
+    // restoring on restart keeps opening a non-existent plugin directory (one error toast each time, and the content stays elsewhere).
     if (pluginContentRef.current?.pluginId === pluginWs.draftId) rememberPlugin(null)
     window.dispatchEvent(new CustomEvent('workspace-changed', { detail: {} }))
     onNewHarness()
   }, [activeWorkspaceId, drafts, draftsLoaded, onNewHarness, pluginWorkspaces, rememberPlugin])
 
-  /** 这一行是不是非用户工作区（插件 / 对话）：工作列表只列用户自己的 */
+  /** Whether this row is a non-user workspace (plugin / chat): the work list lists only the user's own */
   const isNonUserWorkspace = useCallback(
     (workspaceId: number): boolean =>
       pluginWorkspaceIds.has(workspaceId) || chatWorkspaceIds.has(workspaceId),
@@ -1340,15 +1340,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 打开某个工作区下的会话：跨工作区时先切换工作区。
+   * Open a conversation under a workspace: switch workspaces first when crossing workspaces.
    *
-   * 模式开关跟着内容走：插件工作区的会话 = 插件内容 → 停在「插件」；「对话」工作区的会话
-   * → 「对话」；普通工作区的会话 → 「工作」（用户口径 2026-09-27「要看当前是在工作的选中内容
-   * 还是插件的选中内容」）。
+   * The mode switch follows the content: a plugin workspace conversation = plugin content -> stay on "plugin"; a "chat" workspace conversation
+   * -> "chat"; a normal workspace conversation -> "work" (user wording 2026-09-27: "need to see whether the currently selected content
+   * is work or plugin").
    *
-   * 顺手把「这一侧当前那一条内容」记下来（内存 + 落盘）：这条会话就是下次进应用要恢复的那条
-   * ——不等下面那个「按 topics 记录」的 effect，因为它的前提是话题列表已经切到该工作区，
-   * 跨工作区点开时会晚上一拍。
+   * Also record "this side's current content" (memory + persisted): this conversation is the one to restore on next launch
+   * — without waiting for the "record by topics" effect below, whose precondition is that the topic list already belongs to that workspace,
+   * which lags one beat when crossing workspaces.
    */
   const handleOpenTopic = useCallback(
     async (
@@ -1368,15 +1368,15 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         rememberWork({ workspaceId, topicId: topic.id })
       }
       if (isChatSession) {
-        // 对话工作区按需创建、路径只有主进程知道：走它自己的那条通道，别只依赖本地清单
+        // Chat workspaces are created on demand and their paths are known only to the main process: use their own channel, do not rely on the local list alone
         const activated = await activateChatTopic(topic.id)
         if (!activated) return
       } else {
         const cached = workspaces.find((w) => w.id === workspaceId)
         let target = cached ?? null
         if (!target) {
-          // 本地清单还没这一行（工作区刚在别处建出来）：现取一份当兜底，
-          // 免得「点了会话却切不过去」——那正是这条链最容易静默失败的地方
+          // This row is not in the local list yet (the workspace was just created elsewhere): fetch one as a fallback,
+          // so that "clicked a conversation but could not switch" does not happen — that is the place this chain most easily fails silently
           const { list } = await loadWorkspaces()
           target = list.find((w) => w.id === workspaceId) ?? null
         }
@@ -1390,8 +1390,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         topic,
         focusDialogueId != null ? { focusDialogueId } : undefined
       )
-      // 这条会话已经画在屏幕上了，再把主内容区带回对话页（见 onOpenHarness 的说明：
-      // 顺序反过来的话，先挂载的 `/harness` 会先画上一条会话，闪一下）
+      // This conversation is already painted on screen; now bring the main content area back to the chat page (see onOpenHarness:
+      // reversing the order would let the already-mounted `/harness` paint the previous conversation first, flashing)
       onOpenHarness()
     },
     [
@@ -1411,13 +1411,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     ]
   )
 
-  /** 在指定工作区新建会话：跨工作区时先切换工作区 */
+  /** Create a conversation in the given workspace: switch workspaces first when crossing workspaces */
   const handleCreateSession = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
-      // 换下屏幕的要是正在生成的那一条，新建完提示一句「还在后台继续」（不拦，见 ref 的说明）
+      // If the swapped-out conversation is the generating one, hint after creation that "it continues in the background" (no block, see the ref explanation)
       const replacingRunningTopic = currentTopicRunningRef.current
       setExpandedWorkspaceId(ws.id)
-      // 该工作区会话尚未加载过时先补一次，避免切换瞬间出现空列表
+      // Fetch once first when the workspace's conversations have never been loaded, to avoid an empty list at the switching instant
       if (!Object.prototype.hasOwnProperty.call(workspaceTopics, ws.id)) {
         loadWorkspaceTopics(ws.id).then()
       }
@@ -1425,12 +1425,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         const switched = await switchWorkspace(ws)
         if (!switched) return
       }
-      // 新建出来的是这条工作区的空白会话：它就是工作模式「当前那一条内容」
+      // What is created is this workspace's blank conversation: it is work mode's "current content"
       rememberWork({ workspaceId: ws.id, topicId: null })
       if (mode !== 'work') setMode('work')
       if (replacingRunningTopic) viewReplacedRunningTopic()
       onNewHarness()
-      // 空白会话已经就位：再把主内容区带回对话页（否则会先闪一下上一条会话，见 onOpenHarness）
+      // The blank conversation is in place: now bring the main content area back to the chat page (otherwise the previous conversation flashes first, see onOpenHarness)
       onOpenHarness()
     },
     [
@@ -1447,19 +1447,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 「对话」模式的 ＋（以及进入这个模式）：开一条干净的空白会话。
+   * "Chat" mode's + (and entering this mode): open a clean blank conversation.
    *
-   * 与插件行「＋」同一套机制，只是工作目录换成**应用初始化的对话目录**：
-   * - 没有会话时活动工作区 = 「对话」根目录（`<userData>/chat/`）；
-   * - 打开某条会话时活动工作区 = 那条会话自己的子目录（`<userData>/chat/<话题 id>/`）。
+   * Same mechanism as the plugin row's +, only the working directory is the **app-initialized chat directory**:
+   * - with no conversation, the active workspace = the "chat" root directory (`<userData>/chat/`);
+   * - when opening a conversation, the active workspace = that conversation's own subdirectory (`<userData>/chat/<topic id>/`).
    *
-   * 两者都由主进程解析路径（见 main/chat/workspace.ts），渲染层只写设置 + 派事件。
-   * 记忆作用域带 `chat`：该模式没有工作区，记忆也不该挂到某个工作区上。
+   * Both paths are resolved by the main process (see main/chat/workspace.ts); the renderer only writes settings + dispatches events.
+   * The memory scope carries `chat`: this mode has no workspace, and memory should not hang off a workspace either.
    *
-   * @param options.topic 直接打开这条会话（切模式回来时用：那条会话还在，只是接着看）
-   * @param options.focus 是否把光标送进输入框（点 ＋ 时为 true；切模式自动进入时为 false）
-   * @param options.navigate 内容就位后是否把主内容区带回对话页（只有用户点「＋」时为 true；
-   *   切模式 / 启动恢复不导航，见 onOpenHarness 的说明）
+   * @param options.topic open this conversation directly (used when switching back into this mode: the conversation still exists, just continue reading it)
+   * @param options.focus whether to move the caret into the input box (true when clicking +; false when entering automatically via mode switch)
+   * @param options.navigate whether to bring the main content area back to the chat page once content is in place (true only when the user clicks +;
+   *   mode switches / startup restore do not navigate, see onOpenHarness)
    */
   const handleChatSession = useCallback(
     async (options?: {
@@ -1468,12 +1468,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       navigate?: boolean
     }): Promise<void> => {
       const topic = options?.topic
-      // 用户点「＋」（navigate）时，被换下屏幕的可能正是生成中的那一条：给一句提示，不拦
+      // When the user clicks + (navigate), the swapped-out conversation may be the generating one: show a hint, do not block
       const replacingRunningTopic = Boolean(options?.navigate) && currentTopicRunningRef.current
-      // 目录 + 工作区行 + 活动工作区：主进程按话题 id 决定用根目录还是会话子目录
+      // Directory + workspace row + active workspace: the main process decides by topic id whether to use the root directory or the conversation subdirectory
       const activated = await activateChatTopic(topic?.id)
       if (!activated) return
-      // 记下「对话模式当前那一条内容」：切模式回来 + 下次进应用都接着看它
+      // Record "chat mode current content": continue reading it when switching modes back + on next launch
       rememberChat({ workspaceId: activated.workspaceId, topicId: topic?.id ?? null })
       if (topic) {
         await onSelectTopic(topic)
@@ -1481,13 +1481,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         if (replacingRunningTopic) viewReplacedRunningTopic()
         onNewHarness()
       }
-      // 只聚焦、不写内容；切模式自动进入时不抢光标
+      // Focus only, do not write content; do not steal the caret when entering automatically via mode switch
       window.dispatchEvent(
         new CustomEvent('harness-focus-input', {
           detail: { scope: 'chat', focus: options?.focus !== false }
         })
       )
-      // 空白会话 / 指定会话都已经在屏幕上了，最后才切路由（否则会先闪一下上一条会话）
+      // The blank conversation / specified conversation is already on screen; switch the route last (otherwise the previous conversation flashes)
       if (options?.navigate) onOpenHarness()
     },
     [
@@ -1501,29 +1501,29 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 插件行的 ＋：针对这个插件开一个新会话（对齐工作区行的「＋ 新建会话」）。
+   * The plugin row's +: open a new conversation for this plugin (matching the workspace row's "+ New conversation").
    *
-   * **工作目录是这份插件自己的源码目录**（`<插件存放路径>/<插件 id>/`）：先让主进程取
-   * （必要时创建）它的「插件工作区」，再像切换普通工作区一样切过去——AI 工作目录、
-   * 资源管理器、文件边界、文件改动审查全都跟着它走。用户口径 2026-09-28「在插件模式下新建会话，
-   * 其工作区还是之前工作模式下选中的工作区，资源管理器也一样」＝这就是要修的那件事。
+   * **The working directory is this plugin's own source directory** (`<plugin storage path>/<plugin id>/`): first have the main process fetch
+   * (creating if needed) its "plugin workspace", then switch to it like a normal workspace — the AI working directory,
+   * file explorer, file boundaries and file-change review all follow it. User wording 2026-09-28: "creating a conversation in plugin mode,
+   * its workspace is still the workspace selected in the previous work mode, and the file explorer too" = the thing to fix.
    *
-   * **不往输入框写任何东西**（用户口径 2026-09-28「我需要的是不要显示：给插件「个人记账台账」
-   * （id: personal-ledger）这个玩意」）：新会话就是干净的空白会话，只把光标放进输入框，
-   * 要做什么由用户自己打。
+   * **Writes nothing to the input box** (user wording 2026-09-28: "what I need is to not display: plugin 'personal ledger'
+   * (id: personal-ledger) this thing"): a new conversation is a clean blank conversation; only place the caret in the input box and
+   * the user types what they want.
    *
-   * **带上插件 id**：这条会话的记忆用**这份插件自己的**（`<memoryPath>/plugin-<id>/`），
-   * 与工作记忆零交叉（用户口径 2026-09-28「插件里面的记忆应该是独立的，现在是直接使用工作里面
-   * 之前选中的记忆上下文，会导致有问题」）。id 由输入框那边在**建话题**时写进
-   * `harness_topic.memory_scope`（见 useHarnessHandlers 的 harness-focus-input 监听）。
+   * **Carries the plugin id**: this conversation's memory uses **this plugin's own** (`<memoryPath>/plugin-<id>/`),
+   * with zero overlap with work memory (user wording 2026-09-28: "the memory inside a plugin should be independent; now it directly uses the memory context selected in work
+   * before, which causes problems"). The id is written by the input side when **creating the topic** into
+   * `harness_topic.memory_scope` (see the harness-focus-input listener in useHarnessHandlers).
    *
-   * 也**刻意不切模式**（用户口径 2026-09-27「为什么我在插件里面点击新建会话，会切换到工作」）：
-   * 人还在挑插件，面板就别自己跳走，开关仍停在「插件」。
+   * Also **deliberately does not switch modes** (user wording 2026-09-27: "why does clicking new conversation inside a plugin switch to work"):
+   * the user is still picking plugins, so the panel must not jump away; the switch stays on "plugin".
    *
-   * @param options.topic 直接打开这条会话（切模式回来时用：那条会话还在，只是接着看）
-   * @param options.focus 是否把光标送进输入框（点 ＋ 时为 true；切模式自动进入时为 false——
-   *   用户只是想看插件这一侧的内容，不该顺手抢走焦点）
-   * @param options.navigate 内容就位后是否把主内容区带回对话页（只有用户点插件行时为 true）
+   * @param options.topic open this conversation directly (used when switching back into this mode: the conversation still exists, just continue reading it)
+   * @param options.focus whether to move the caret into the input box (true when clicking +; false when entering automatically via mode switch —-
+   *   the user only wants to see the plugin side's content, so do not steal focus)
+   * @param options.navigate whether to bring the main content area back to the chat page once content is in place (true only when the user clicks a plugin row)
    */
   const handlePluginSession = useCallback(
     async (
@@ -1534,10 +1534,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         navigate?: boolean
       }
     ): Promise<void> => {
-      // 换下屏幕的要是正在生成的那一条，新会话就位后提示一句「还在后台继续」（不拦）
+      // If the swapped-out conversation is the generating one, hint "it continues in the background" once the new conversation is in place (no block)
       const replacingRunningTopic = currentTopicRunningRef.current
       const requestSeq = ++pluginSessionSeqRef.current
-      // ① 插件工作区（= 插件源码目录）：没有就建，有就直接用
+      // 1. Plugin workspace (= plugin source directory): create it if absent, use it if present
       const ensured = await harnessApi.workshop.ensureWorkspace(draft.id)
       if (requestSeq !== pluginSessionSeqRef.current) return
       if (!ensured.ok || !ensured.data) {
@@ -1545,7 +1545,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         return
       }
       const target = ensured.data
-      // ② 切过去（写设置 + 派发事件：Index 据此换资源管理器根并清空当前会话）
+      // 2. Switch over (write settings + dispatch the event: Index swaps the file explorer root and clears the current conversation accordingly)
       try {
         await window.api.systemSettings.update({
           harness: {
@@ -1558,24 +1558,24 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         viewMessage('plugin-session-ws', 'error', String(err), 6)
         return
       }
-      // 期间用户又点了另一份插件：最后那次说了算，别用旧请求覆盖它
+      // The user clicked another plugin in the meantime: the last one wins; do not overwrite it with the old request
       if (requestSeq !== pluginSessionSeqRef.current) return
       setActiveWorkspaceId(target.id)
       setExpandedWorkspaceId(target.id)
       window.dispatchEvent(
         new CustomEvent('workspace-changed', { detail: { workspaceId: target.id } })
       )
-      // 刚建出来的插件工作区要立刻进本地清单（草稿行才能展开、工作列表才能滤掉它）
+      // The just-created plugin workspace must enter the local list immediately (so the draft row can expand and the work list can filter it out)
       await Promise.all([loadWorkspaces(), loadDrafts()])
       if (requestSeq !== pluginSessionSeqRef.current) return
-      // 记下「插件模式当前那一条内容」：切模式回来 + 下次进应用都接着看它
+      // Record "plugin mode current content": continue reading it when switching modes back + on next launch
       rememberPlugin({
         pluginId: draft.id,
         workspaceId: target.id,
         topicId: options?.topic?.id ?? null
       })
-      // ③ 有指定会话就直接打开它；否则开一条空白新会话 + 把「这条会话属于哪份插件」带过去
-      //    （决定用哪套记忆）；只聚焦，不写内容
+      // 3. Open the specified conversation directly if any; otherwise open a blank new conversation + carry "which plugin this conversation belongs to"
+      //    (which decides the memory set); only focus, write no content
       if (options?.topic) {
         await onSelectTopic(options.topic)
       } else {
@@ -1587,12 +1587,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           new CustomEvent('harness-focus-input', { detail: { pluginId: draft.id, focus: true } })
         )
       } else {
-        // 不抢光标，但**作用域还是要带过去**：这条空白会话属于这份插件（决定它用哪套记忆）
+        // Do not steal the caret, but **still carry the scope**: this blank conversation belongs to this plugin (which decides its memory set)
         window.dispatchEvent(
           new CustomEvent('harness-focus-input', { detail: { pluginId: draft.id, focus: false } })
         )
       }
-      // 内容（空白会话 / 指定会话）已经就位，最后才切路由——先切会让 `/harness` 先画上一条会话
+      // The content (blank conversation / specified conversation) is in place; switch the route last — switching first would let `/harness` paint the previous conversation
       if (options?.navigate) onOpenHarness()
     },
     [
@@ -1607,7 +1607,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     ]
   )
 
-  /** 选择文件夹后直接创建并激活工作区（名称取目录名，之后可重命名） */
+  /** After choosing a folder, create and activate the workspace directly (name taken from the directory name, renameable later) */
   const handleBrowseFolder = useCallback(async (): Promise<void> => {
     const replacingRunningTopic = currentTopicRunningRef.current
     try {
@@ -1628,12 +1628,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       setActiveWorkspaceId(id)
       setExpandedWorkspaceId(id)
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: id } }))
-      // 新建并激活的工作区 = 工作模式「当前那一条内容」（空白会话），新建动作本身也把人留在工作这一侧
+      // The newly created and activated workspace = work mode's "current content" (blank conversation); the creation action itself also leaves the user on the work side
       rememberWork({ workspaceId: id, topicId: null })
       if (mode !== 'work') setMode('work')
       if (replacingRunningTopic) viewReplacedRunningTopic()
       onNewHarness()
-      // 空白会话已经就位，最后把主内容区带回对话页（先切路由会先闪一下上一条会话）
+      // The blank conversation is in place; finally bring the main content area back to the chat page (switching the route first would flash the previous conversation)
       onOpenHarness()
       await loadWorkspaces()
     } catch (err) {
@@ -1653,12 +1653,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         onOk: async () => {
           try {
             await harnessApi.harness.deleteWorkspace(ws.id)
-            // 记住的「工作模式那一条内容」指向被删的工作区时一并作废：恢复逻辑虽然会兜底，
-            // 但留着一条指不到东西的记忆，下次启动就要多绕一次
+            // Also invalidate the remembered "work mode current content" if it points at the deleted workspace: the restore logic has a fallback,
+            // but leaving a memory that points nowhere costs one extra detour on the next launch
             const wasRememberedWork = workContentRef.current?.workspaceId === ws.id
             if (activeWorkspaceId === ws.id) {
-              // 删除的是当前工作区：自动切到剩余的用户工作区；一个都不剩则回到「未配置」状态。
-              // 插件 / 对话工作区不算「用户的」——切过去的话用户会莫名其妙落到插件目录或对话目录上
+              // The deleted one is the current workspace: automatically switch to a remaining user workspace; if none remain, return to the "not configured" state.
+              // Plugin / chat workspaces do not count as "the user's" — switching to one would drop the user into a plugin or chat directory unexpectedly
               const remaining = (await harnessApi.harness.getAllWorkspaces()).filter(
                 (candidate) => !isNonUserWorkspace(candidate.id)
               )
@@ -1689,10 +1689,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 window.dispatchEvent(new CustomEvent('workspace-changed', { detail: {} }))
                 rememberWork(null)
               }
-              // 原会话已随工作区删除，回到空白欢迎态
+              // The original conversation was deleted with the workspace; return to the blank welcome state
               onNewHarness()
             } else if (wasRememberedWork) {
-              // 当前内容在别的侧，但被删的正是工作侧记住的那一条：清掉，别留悬空记忆
+              // The current content is on another side, but the deleted one is exactly what the work side remembered: clear it, do not leave a dangling memory
               rememberWork(null)
             }
             await loadWorkspaces()
@@ -1721,11 +1721,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 「在文件夹中显示」：让系统文件管理器打开这个工作区的目录。
+   * "Show in folder": have the system file manager open this workspace's directory.
    *
-   * 只传工作区 id，目录由主进程按行解析（渲染层拿不到、也不该传任意路径）；
-   * 目录已被删/挪走时主进程回一句可读原因，这里原样弹提示条——不给用户看
-   * `shell.openPath` 的英文失败串。
+   * Only the workspace id is passed; the main process resolves the directory from the row (the renderer cannot get it and should not pass arbitrary paths);
+   * when the directory has been deleted/moved the main process returns a readable reason and this shows it verbatim — the user never sees
+   * the English failure string of `shell.openPath`.
    */
   const handleRevealWorkspace = useCallback(
     async (ws: WorkspaceRow): Promise<void> => {
@@ -1739,14 +1739,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [viewMessage]
   )
 
-  /* 打开重命名弹窗 */
+  /* Open the rename modal */
   const openRename = useCallback((ws: WorkspaceRow): void => {
     setRenameTarget(ws)
     setRenameName(ws.name)
     setRenameOpen(true)
   }, [])
 
-  /* 保存重命名 */
+  /* Save the rename */
   const handleRenameSave = useCallback(async (): Promise<void> => {
     const name = renameName.trim()
     if (!name || !renameTarget) {
@@ -1767,12 +1767,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [renameName, renameTarget, viewMessage, loadWorkspaces, t])
 
-  /* ── 会话行的动作（置顶 / 重命名 / 分叉 / 在应用中打开 / 归档 / 删除） ────────
-   * 用户口径 2026-11-25（参考图）：会话的「⋯」里要这些功能，除了「复制 Session ID」。
-   * 置顶 / 归档都不改活跃时间（主进程只写 pinned_at / archived_at）：取消之后回到原来的位置。
+  /* ── Conversation row actions (pin / rename / fork / open in app / archive / delete) ────────
+   * User wording 2026-11-25 (mockup): the conversation "…" menu should contain these items, except "Copy Session ID".
+   * Neither pin nor archive changes the active time (the main process only writes pinned_at / archived_at): after undoing, the row returns to its original position.
    */
 
-  /** 会话列表刷新：活动工作区走 Provider（标题/顺序以它为准），其余工作区重拉第一页 */
+  /** Conversation list refresh: the active workspace goes through the Provider (title/order follow it), other workspaces re-fetch the first page */
   const refreshTopicList = useCallback(
     async (workspaceId: number): Promise<void> => {
       if (workspaceId === topicsWorkspaceId) {
@@ -1784,7 +1784,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [topicsWorkspaceId, onRefreshTopics, loadWorkspaceTopics]
   )
 
-  /** 置顶 / 取消置顶 */
+  /** Pin / unpin */
   const handleToggleTopicPin = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
       try {
@@ -1798,7 +1798,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [refreshTopicList, t, viewMessage]
   )
 
-  /** 归档 / 取消归档（归档的会话收进「已归档」分组，数据不删） */
+  /** Archive / unarchive (archived conversations go into the "Archived" group, data is not deleted) */
   const handleToggleTopicArchive = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
       const next = !topic.archived_at
@@ -1806,7 +1806,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await harnessApi.harness.setTopicArchived(topic.id, next)
         await refreshTopicList(workspaceId)
         void loadArchivedTopics()
-        // 改的是当前正在看的那条：让对话页同步只读态（取消归档后输入框要回来）
+        // Editing the one currently being viewed: sync the read-only state in the chat page (the input box must come back after unarchiving)
         if (topic.id === currentTopicId) {
           window.dispatchEvent(
             new CustomEvent('harness-topic-archive-changed', {
@@ -1857,8 +1857,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [topicRenameName, topicRenameTarget, refreshTopicList, loadArchivedTopics, viewMessage, t])
 
   /**
-   * 分叉会话：主进程复制「话题 + 全部对话」成一条新会话，这里刷新列表并**打开那条新会话**
-   * （走 handleOpenTopic：跨工作区、切模式、记忆作用域、路由都跟点会话行同一条链）。
+   * Fork a conversation: the main process copies "topic + all messages" into a new conversation; here refresh the list and **open that new conversation**
+   * (through handleOpenTopic: cross-workspace, mode switch, memory scope and route follow the same chain as clicking a conversation row).
    */
   const handleForkTopic = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow): Promise<void> => {
@@ -1880,7 +1880,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [handleOpenTopic, refreshTopicList, t, viewMessage]
   )
 
-  /** 「在应用中打开」：用选中的应用打开这条会话的工作区目录 */
+  /** "Open in app": open this conversation's workspace directory with the selected app */
   const handleOpenTopicInApp = useCallback(
     async (workspaceId: number, appId: string): Promise<void> => {
       try {
@@ -1894,10 +1894,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 删除会话（原先写在行内菜单里的那段流程，原样搬出来给菜单构造器用）。
+   * Delete a conversation (the flow previously written inline in the row menu, moved out as-is for the menu builder).
    *
-   * 删当前那条时要复位对话目录 / 记忆作用域；删非活动工作区的会话要补刷本地缓存
-   * ——理由都在下面逐段注释里（用户 2026-10-26 的「删了还是选中的历史记录」）。
+   * Deleting the current one resets the chat directory / memory scope; deleting a conversation in a non-active workspace must refresh the local cache
+   * — the reasons are in the per-block comments below (user's 2026-10-26 "deleted but still selected in history").
    */
   const handleDeleteTopicRow = useCallback(
     async (workspaceId: number, topic: HarnessTopicRow, running: boolean): Promise<void> => {
@@ -1905,21 +1905,21 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       const isChatTopic = chatWorkspaceIds.has(workspaceId)
       const pluginId = pluginWorkspaces.find((item) => item.workspaceId === workspaceId)?.draftId
       const wasCurrent = currentTopicId === topic.id
-      // 先登记：否则「记住当前内容」的 effect 会拿旧的 currentTopicId 迟到覆盖一次
-      // （见 deletedTopicIdsRef 的说明）
+      // Register first: otherwise the "remember current content" effect would overwrite it late with the old currentTopicId
+      // (see the deletedTopicIdsRef explanation)
       deletedTopicIdsRef.current.add(topic.id)
       await onDeleteTopic(topic.id)
       if (isChatTopic) {
-        // 对话模式：列表从本地那份里摘掉（它不属于当前活动工作区时 useHarness 不刷），
-        // 并顺手删掉这条会话自己的目录（主进程有两道闸，失败不影响删话题）
+        // Chat mode: remove it from the local list (useHarness does not refresh when it does not belong to the current active workspace),
+        // and also delete this conversation's own directory (the main process has two safeguards; failure does not affect deleting the topic)
         setChatWorkspaceTopics((prev) => prev.filter((item) => item.id !== topic.id))
         void harnessApi.harness.removeChatTopicDir(topic.id)
         if (wasCurrent) {
-          // 删的是**正在看的**这条：`onDeleteTopic → onNewHarness` 只清空了视图，
-          // 活动目录还停在这条会话的子目录上（已被删掉 → 模型一写文件就 ENOENT），
-          // 挂起的记忆作用域也被清成了「工作区」。两样都要就地复位：
-          // 目录回对话根、记忆回 chat（下一条新话题由主进程按工作区种类兜底，
-          // 这里把界面这一侧也同步回 chat，侧栏记忆块才显示对的那一份）。
+          // Deleting the one **currently being viewed**: `onDeleteTopic → onNewHarness` only cleared the view,
+          // the active directory still points at this conversation's subdirectory (now deleted -> the model gets ENOENT on the first file write),
+          // and the pending memory scope was cleared to "workspace". Both must be reset in place:
+          // the directory back to the chat root, the memory back to chat (the next new topic falls back by workspace kind in the main process;
+          // here the UI side is synced back to chat too, so the sidebar memory block shows the right set).
           const activation = await activateChatTopic()
           if (activation) {
             rememberChat({ workspaceId: activation.workspaceId, topicId: null })
@@ -1933,9 +1933,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       } else if (workspaceId !== activeWorkspaceId) {
         await loadWorkspaceTopics(workspaceId)
       }
-      // 插件会话同理：`onDeleteTopic → onNewHarness` 会把挂起作用域清成工作区，
-      // 下一条新话题就会串进工作记忆；把这份插件的作用域补回去（目录不用动，
-      // 插件工作区还指着插件源码目录，它没被删）
+      // Same for plugin conversations: `onDeleteTopic → onNewHarness` clears the pending scope to workspace,
+      // so the next new topic would leak into work memory; put this plugin's scope back (no need to touch the directory,
+      // the plugin workspace still points at the plugin source directory, which was not deleted)
       if (!isChatTopic && wasCurrent && pluginId) {
         rememberPlugin({ pluginId, workspaceId, topicId: null })
         window.dispatchEvent(
@@ -1944,7 +1944,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           })
         )
       }
-      // 删掉的可能是归档列表里的那条：清单跟着收一次
+      // The deleted one may be the row in the archived list: refresh that list too
       void loadArchivedTopics()
     },
     [
@@ -1961,7 +1961,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     ]
   )
 
-  /** 快捷键提示文案：Windows/Linux 是 Ctrl + Alt，macOS 显示 ⌘ + ⌥ */
+  /** Shortcut hint text: Ctrl + Alt on Windows/Linux, ⌘ + ⌥ on macOS */
   const shortcutHint = (key: string, shift = false): string => {
     const mod = isMacPlatform ? '⌘' : 'Ctrl'
     const alt = shift ? 'Shift' : isMacPlatform ? '⌥' : 'Alt'
@@ -1969,13 +1969,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }
 
   /**
-   * 会话行的「⋯」菜单（顺序对齐用户 2026-11-25 给的参考图）：
-   * 置顶 / 重命名 / 分叉 → 在应用中打开 ▸ → 归档 / 删除。
-   * 参考图里的「复制 Session ID」按用户口径**不做**。
+   * The conversation row's "…" menu (order matches the mockup the user gave on 2026-11-25):
+   * pin / rename / fork -> open in app ▸ -> archive / delete.
+   * The mockup's "Copy Session ID" is **not** implemented per user wording.
    *
-   * 每个菜单项都 `domEvent.stopPropagation()`：菜单挂在**这一行的 React 子树**里
-   * （portal 只换 DOM 位置，React 事件仍按组件树冒泡），不拦住就会顺带触发行的
-   * onClick → 打开这条会话（用户 2026-10-26「删除的是当前的会话…内容还是选中的历史记录」）。
+   * Every menu item calls `domEvent.stopPropagation()`: the menu lives in **this row's React subtree**
+   * (the portal only changes the DOM location; React events still bubble along the component tree), and without stopping them they would also trigger the row's
+   * onClick -> open this conversation (user 2026-10-26 "the deleted one is the current conversation… content is still the selected history").
    */
   const topicMenuItems = (
     workspaceId: number,
@@ -1990,7 +1990,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       ? openInApps.map((app) => ({
           key: `open-in:${app.id}`,
           label: app.label,
-          // 用系统里那个应用的真实图标（主进程 app.getFileIcon 抠出来的 PNG）；取不到才退回通用图标
+          // Use the real icon of the app installed on the system (a PNG extracted by the main process via app.getFileIcon); fall back to the generic icon only when unavailable
           icon: app.icon ? (
             <img
               src={app.icon}
@@ -2087,7 +2087,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     )
     items.push({
       key: 'delete',
-      // 会话生成中禁止删除（含后台仍在流式输出的话题）
+      // Deleting is forbidden while a conversation is generating (including topics still streaming in the background)
       label: running ? t('harness.sidebar.topicDeleteBlocked') : t('harness.sidebar.topicDelete'),
       danger: true,
       disabled: running,
@@ -2100,7 +2100,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return items
   }
 
-  /** 当前选中的会话（可能挂在任一工作区 / 对话根 / 插件工作区下） */
+  /** The currently selected conversation (may live under any workspace / chat root / plugin workspace) */
   const findTopicById = useCallback(
     (topicId: number): HarnessTopicRow | null => {
       for (const rows of Object.values(workspaceTopics)) {
@@ -2113,18 +2113,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 
   /**
-   * 会话快捷键（与菜单里标的一致）：Ctrl/⌘ + Alt + G 重命名、Ctrl/⌘ + Alt + F 分叉、
-   * Ctrl/⌘ + Shift + A 归档。
+   * Conversation shortcuts (matching the labels in the menu): Ctrl/⌘ + Alt + G rename, Ctrl/⌘ + Alt + F fork,
+   * Ctrl/⌘ + Shift + A archive.
    *
-   * 只作用于**当前选中的会话**，且只在对话页生效——侧栏在外壳里常驻，人停在资料库 /
-   * 设置页时按这些键不该动会话。
+   * They act only on **the currently selected conversation**, and only on the chat page — the sidebar is always mounted in the shell, so when the user is on Notes /
+   * the settings page these keys must not touch conversations.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      // 长按会连发：分叉/归档都不能被自动重复触发
+      // Holding the key repeats: fork/archive must not be triggered by auto-repeat
       if (event.repeat) return
       if (!(event.ctrlKey || event.metaKey)) return
-      // 应用是 hash 路由（`#/harness`）：URL 的 pathname 永远是 `/`，只能看 hash
+      // The app uses hash routing (`#/harness`): the URL pathname is always `/`, only the hash matters
       if (!window.location.hash.startsWith('#/harness')) return
       if (currentTopicId == null) return
       const topic = findTopicById(currentTopicId)
@@ -2150,7 +2150,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     if (!el) return
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40
     if (!nearBottom) return
-    // 「对话」模式的列表没有工作区那一层：滚动分页走它自己的那一套
+    // The "chat" mode list has no workspace layer: scroll pagination uses its own path
     if (mode === 'chat') {
       void loadMoreChatTopics()
       return
@@ -2159,12 +2159,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     onLoadMoreTopics()
   }, [mode, loadMoreChatTopics, isLoadingMoreTopics, hasMoreTopics, onLoadMoreTopics])
 
-  /* 某个工作区当前的会话列表：统一取缓存（由 topics 属性按所属工作区刷新） */
+  /* Current conversation list of a workspace: always read the cache (refreshed by the topics prop for its workspace) */
   const topicsOf = useCallback(
     (workspaceId: number): HarnessTopicRow[] => workspaceTopics[workspaceId] ?? [],
     [workspaceTopics]
   )
-  /** 该工作区的会话是否已加载过（未加载过才显示 spinner，避免空列表闪一下） */
+  /** Whether this workspace's conversations have been loaded (show the spinner only when never loaded, so an empty list does not flash) */
   const hasTopicsLoaded = useCallback(
     (workspaceId: number): boolean =>
       Object.prototype.hasOwnProperty.call(workspaceTopics, workspaceId),
@@ -2173,7 +2173,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   const query = searchQuery.trim().toLowerCase()
 
-  /** 真正属于用户的工作区（插件 / 对话工作区不进这个列表，见各自的模式） */
+  /** Workspaces that truly belong to the user (plugin / chat workspaces do not enter this list, see their modes) */
   const userWorkspaces = workspaces.filter((ws) => !isNonUserWorkspace(ws.id))
   const visibleWorkspaces = query
     ? userWorkspaces.filter(
@@ -2183,10 +2183,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       )
     : userWorkspaces
   /**
-   * 会话排序：置顶在前，其余按最近活跃倒序。
+   * Conversation order: pinned first, the rest by most recent activity descending.
    *
-   * 主进程的查询也这么排（见 mapper 的 topicOrderBy）；这里再排一遍是为了本地乐观更新
-   * （置顶/取消置顶后不等 IPC 回来）与分页追加时顺序不跳。
+   * The main process query sorts this way too (see the mapper's topicOrderBy); sorting again here keeps local optimistic updates
+   * (not waiting for IPC after pin/unpin) and paged appends from jumping.
    */
   const sortTopics = (list: HarnessTopicRow[]): HarnessTopicRow[] =>
     [...list].sort((a, b) => {
@@ -2197,11 +2197,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     })
 
   const visibleTopicsOf = (workspaceId: number): HarnessTopicRow[] => {
-    // 归档的会话不留在工作区列表里：它们统一收在侧栏底部的「已归档」分组（只读查看）
+    // Archived conversations do not stay in the workspace list: they are collected in the "Archived" group at the bottom of the sidebar (read-only)
     const list = topicsOf(workspaceId).filter((topic) => !topic.archived_at)
     return sortTopics(query ? list.filter((t) => t.title.toLowerCase().includes(query)) : list)
   }
-  /** 插件模式下的草稿清单（搜索框在三种模式里共用：按名字/id/它自己的会话标题过滤） */
+  /** Draft list in plugin mode (the search box is shared by all three modes: filter by name/id/its own conversation titles) */
   const visibleDrafts = query
     ? drafts.filter((draft) => {
         if (draft.title.toLowerCase().includes(query) || draft.id.toLowerCase().includes(query)) {
@@ -2212,14 +2212,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       })
     : drafts
 
-  /** 「对话」模式的会话列表（搜索框共用：按会话标题过滤；置顶同样排在前面） */
+  /** "Chat" mode conversation list (shared search box: filter by conversation title; pinned rows still come first) */
   const chatVisibleTopics = sortTopics(
     query
       ? chatWorkspaceTopics.filter((topic) => topic.title.toLowerCase().includes(query))
       : chatWorkspaceTopics
   )
 
-  /** 草稿状态行：构建 / 验收 / 安装三件事各自的最新结果 */
+  /** Draft status row: the latest result of each of build / accept / install */
   const draftStateOf = (draft: WorkshopDraftSummary): { text: string; color: string } => {
     if (draft.installed) {
       return {
@@ -2245,32 +2245,32 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }
 
   /**
-   * 插件行：点一行 = 打开它的工坊详情；悬停出现「⋯（构建/验收/安装/重命名/删除）」与
-   * 「＋（针对这个插件新建会话）」——与工作区行的两个行内动作一一对应
-   * （用户口径 2026-09-27「插件没有像工作区那样的功能」）。
+   * Plugin row: clicking a row = open its workshop detail; hover reveals "… (build/accept/install/rename/delete)" and
+   * "+ (create a conversation for this plugin)" — one-to-one with the workspace row's two inline actions
+   * (user wording 2026-09-27: "plugins do not have features like workspaces do").
    *
-   * 这份插件开过会话之后，**行首那个 16px 槽位**就是折叠箭头，且**常驻**：展开就是**它自己的会话**
-   * （会话挂在「插件工作区」下 = 插件源码目录，见 main/workshop/workspace.ts）。
-   * 与工作区行的差别只在触发方式——那一行整行可点（点行 = 展开），
-   * 这一行整行是「打开工坊详情」，所以折叠得是一个自己的按钮，不抢既有的点击语义。
+   * Once this plugin has had a conversation, **the 16px slot at the row start** becomes the collapse arrow, and it is **always shown**: expanding reveals **its own conversations**
+   * (conversations attach under the "plugin workspace" = plugin source directory, see main/workshop/workspace.ts).
+   * The only difference from the workspace row is the trigger: that row is clickable across its width (click row = expand),
+   * while this row's whole area is "open workshop detail", so collapsing needs its own button and must not steal the existing click semantics.
    *
-   * 用户口径 2026-09-28「折叠重复显示了，一开始显示折叠按钮，移动进入又是折叠按钮，
-   * 直接常驻在开头，和工作模式要一致」：折叠箭头原先夹在标题与状态文字之间——
-   * 静止时挨着「草稿/使用中」，悬停时那两个 22px 动作把状态文字顶掉，箭头于是**左移 24px**，
-   * 同一个控件在两个状态里出现在两个位置，看着就像冒出第二个折叠按钮（实测 x 156 → 132）。
-   * 工作区行（工作模式）的折叠指示本来就是**行首那个常驻图标**（文件夹开/合），这里对齐它：
-   * 箭头常驻行首槽位 ⇒ 标题右边只剩状态与悬停动作，两态都不再位移。
-   * 还没开过会话（没有可展开的东西）时，行首仍是插件图标。
-   * 用户口径 2026-09-28「插件目录不进『工作』列表，只属于那份插件」。
+   * User wording 2026-09-28: "the collapse is displayed twice, it shows a collapse button at first, then hovering shows the collapse button again,
+   * keep it at the beginning, consistent with work mode": the collapse arrow used to sit between the title and the status text —
+   * at rest it sat next to "Draft/In use", and on hover those two 22px actions pushed the status text away, so the arrow **shifted left by 24px**,
+   * the same control appearing in two positions across two states, looking like a second collapse button popped out (measured x 156 -> 132).
+   * The workspace row (work mode) already uses **a persistent icon at the row start** as its collapse indicator (folder open/closed); align with it here:
+   * the arrow stays in the row-start slot => only the status and hover actions remain right of the title, and neither state shifts.
+   * When no conversation has been opened yet (nothing to expand), the row start still shows the plugin icon.
+   * User wording 2026-09-28: "the plugin directory does not enter the 'work' list, it belongs only to that plugin".
    */
   const renderDraft = (draft: WorkshopDraftSummary): React.ReactNode => {
     const state = draftStateOf(draft)
-    /** 这一行正跑着构建/验收/安装：行内动作先收起来，避免重复点 */
+    /** This row is running build/accept/install: hide the inline actions first to prevent double clicks */
     const busy = draftBusyIds.has(draft.id)
-    /** 这份插件的「插件工作区」（会话的工作目录）；没开过会话就还没有这一行 */
+    /** This plugin's "plugin workspace" (the conversation's working directory); absent until a conversation has been opened */
     const pluginWsId = pluginWorkspaceIdOf(draft)
     const expanded = pluginWsId != null && expandedWorkspaceId === pluginWsId
-    /** 这份插件自己的会话是否有正在生成的（删除源码会抽掉它的工作目录） */
+    /** Whether this plugin's own conversations have one generating (deleting the sources would pull its working directory away) */
     const pluginSessionRunning =
       pluginWsId != null && topicsOf(pluginWsId).some((topic) => loadingTopicIds.has(topic.id))
     return (
@@ -2285,8 +2285,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             background: expanded ? token.colorFillTertiary : 'transparent'
           }}
           onClick={() => {
-            // 点插件行 = 针对这份插件开（或切到）一条会话：内容在对话页上
-            // （路由由 handlePluginSession 在内容就位后带回，见 onOpenHarness 的说明）
+            // Clicking a plugin row = open (or switch to) a conversation for this plugin: the content is on the chat page
+            // (the route is brought back by handlePluginSession once content is in place, see onOpenHarness)
             void handlePluginSession(draft, { navigate: true })
           }}
           title={t('harness.sidebar.pluginNewSession')}
@@ -2298,9 +2298,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           }}
         >
           {/*
-            行首 16px 槽位（与工作区行的文件夹图标同一个槽、同一个 x ⇒ 标题都落在 30px）：
-            有会话可展开时是**常驻的折叠箭头**，箭头形状与深浅都照工作区行的文件夹
-            （合 = 三级灰、开 = 二级灰）；还没开过会话就仍是插件图标。
+            16px slot at the row start (same slot, same x as the workspace row's folder icon => titles all land at 30px):
+            a **persistent collapse arrow** when there are conversations to expand, matching the workspace row's folder in shape and tone
+            (closed = tertiary gray, open = secondary gray); before any conversation exists it is still the plugin icon.
           */}
           {pluginWsId != null ? (
             <button
@@ -2333,13 +2333,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <RiPuzzleLine size={15} />
             </span>
           )}
-          {/* 标题字号/字重与工作区行一致（两行都是这棵树的顶层行，会话行才是常规字重） */}
+          {/* Title size/weight match the workspace row (both are top-level rows of this tree; conversation rows use regular weight) */}
           <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13, fontWeight: 500 }}>
             {draft.title}
           </span>
           {/*
-            状态槽：跑构建/验收/安装时是转圈（原先在行首，让位给常驻的折叠箭头），
-            其余时候是状态文字（悬停让位给「⋯ ＋」）。
+            Status slot: a spinner while build/accept/install runs (previously at the row start, moved aside for the persistent collapse arrow),
+            otherwise the status text (on hover it yields to "… +").
           */}
           {busy && (
             <span className="shrink-0 flex items-center justify-center" style={{ width: 20 }}>
@@ -2388,7 +2388,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  // 路由由 handlePluginSession 在内容就位后带回（先切会闪一下上一条会话）
+                  // The route is brought back by handlePluginSession once content is in place (switching first would flash the previous conversation)
                   void handlePluginSession(draft, { navigate: true })
                 }}
                 title={t('harness.sidebar.pluginNewSession')}
@@ -2408,36 +2408,36 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           )}
         </div>
 
-        {/* 展开 = 这份插件自己的会话（挂在插件工作区下，与其他工作区的会话同一套渲染） */}
+        {/* Expanded = this plugin's own conversations (attached under the plugin workspace, rendered the same as conversations of other workspaces) */}
         {expanded && pluginWsId != null && renderTopicList(pluginWsId)}
       </div>
     )
   }
 
-  /* 按目标分组的热记忆数量 */
+  /* Hot-memory counts grouped by target */
   const userEntries = memorySnap?.runtime?.entries.filter((e) => e.target === 'user') ?? []
   const memoryEntries = memorySnap?.runtime?.entries.filter((e) => e.target === 'memory') ?? []
 
-  /* 顶行右侧动作胶囊的配色：深色外壳用手写色（与模式开关同一套），浅色跟随 antd token */
+  /* Colors of the top-row right action capsule: hand-written colors for the dark shell (same set as the mode switch), antd tokens for light */
   const headerTrack = shellMode ? '#2a2a2d' : colorFillAlter
-  // 顶行胶囊里「搜索 / 新建」之间的竖线：深色外壳用手写色，亮色主题用 colorBorder
-  // （colorBorderSecondary 在浅灰胶囊上几乎看不出，用户 2026-11-26「中间那个分割线看不见」）
+  // Vertical divider between "search / new" in the top capsule: hand-written color for the dark shell, colorBorder for the light theme
+  // (colorBorderSecondary is almost invisible on the light-gray capsule; user 2026-11-26 "the divider in the middle is invisible")
   const headerHairline = shellMode ? '#3a3a40' : token.colorBorder
   const headerHover = shellMode ? '#3a3a40' : token.colorFill
 
   /**
-   * 头部小图标按钮。
+   * Header icon button.
    *
-   * - `compact`：右侧动作胶囊里的一格（26×20，图标 14，圆角 5，贴合 24px 胶囊内高）；
-   * - 默认：搜索模式里的关闭键（26×26，圆角 7）。
+   * - `compact`: one cell in the right action capsule (26x20, icon 14, radius 5, fitting the 24px capsule inner height);
+   * - default: the close button in search mode (26x26, radius 7).
    *
-   * 悬停只换底色与图标色，不加边框/阴影：顶行已经有一枚白色滑块，动作按钮保持安静。
+   * Hover only changes the background and icon color, no border/shadow: the top row already has a white thumb, so action buttons stay quiet.
    */
   const iconBtn = (
     title: string,
     onClick: () => void,
     icon: React.ReactNode,
-    /** 紧凑样式：用于右侧动作胶囊 */
+    /** Compact style: for the right action capsule */
     compact = false
   ): React.ReactNode => (
     <button
@@ -2466,12 +2466,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     </button>
   )
 
-  /** 会话行 */
+  /** Conversation row */
   const renderTopicRow = (workspaceId: number, topic: HarnessTopicRow): React.ReactNode => {
     const isTopicLoading = loadingTopicIds.has(topic.id)
     /**
-     * 行首指示槽显示哪一种状态（优先级见 resolveTopicRunStatus 与用户口径 2026-11-23）：
-     * 等待用户确认（黄点呼吸）> 进行中（追逐点）> 刚完成（绿点呼吸，点开即清）。
+     * Which state the row-start indicator slot shows (priority per resolveTopicRunStatus and user wording 2026-11-23):
+     * waiting for user confirmation (yellow breathing dot) > in progress (chasing dots) > just finished (green breathing dot, cleared on open).
      */
     const topicStatus = resolveTopicRunStatus({
       awaiting: awaitingTopicIds.has(topic.id),
@@ -2484,23 +2484,23 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       <div
         key={topic.id}
         onClick={() => handleOpenTopic(workspaceId, topic)}
-        /* 稳定钩子：工装靠它判断「现在是哪一条会话」（切模式后内容有没有跟着切） */
+        /* Stable hook: the test harness uses it to tell "which conversation is current" (whether content followed after a mode switch) */
         data-topic-id={topic.id}
         data-topic-selected={selected ? '1' : '0'}
         data-topic-archived={archived ? '1' : '0'}
         data-topic-pinned={topic.pinned_at ? '1' : '0'}
-        /* 稳定钩子：行首指示器的状态（idle / running / awaiting / completed），工装断言用 */
+        /* Stable hook: state of the row-start indicator (idle / running / awaiting / completed), asserted by the test harness */
         data-topic-status={topicStatus}
         className="group flex items-center gap-2 mx-2 my-0.5 rounded-md cursor-pointer transition-colors"
         style={{
-          // 左内边距 6 + 行首 16px 指示槽 = 与工作区行图标列（14~30px）对齐；
-          // 槽位 + gap(8) 后标题落在 38px，与工作区名称同列
+          // Left padding 6 + 16px row-start indicator slot = aligned with the workspace row icon column (14-30px);
+          // with the slot + gap(8) the title lands at 38px, same column as workspace names
           paddingLeft: 6,
           paddingRight: 8,
           height: 30,
           color: selected ? colorText : colorTextSecondary,
           background: selected ? token.colorFill : 'transparent',
-          // 归档的会话收在「已归档」分组里：淡一档，一眼看出它不是主列表的
+          // Archived conversations sit in the "Archived" group: rendered dimmer so they are obviously not in the main list
           opacity: archived ? 0.62 : 1
         }}
         onMouseEnter={(e) => {
@@ -2510,8 +2510,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
           if (!selected) e.currentTarget.style.background = 'transparent'
         }}
       >
-        {/* 行首指示槽：固定 16px（平时留空；进行中 = 追逐点，等待确认 = 黄点呼吸，
-            刚完成 = 绿点呼吸），保证与工作区图标同列且标题不位移 */}
+        {/* Row-start indicator slot: fixed 16px (empty at rest; in progress = chasing dots, awaiting confirmation = yellow breathing dot,
+            just finished = green breathing dot), keeping the same column as workspace icons and the title from shifting */}
         <span
           className="flex items-center justify-center shrink-0"
           style={{ width: 16, height: 16 }}
@@ -2524,8 +2524,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             <TopicStatusDot color={colorSuccess} label={t('harness.sidebar.topicCompleted')} />
           ) : null}
         </span>
-        {/* 置顶标记放行尾（用户口径 2026-11-25「应该放在后面」）：时间在左、图钉最右，
-            悬停时只是时间换成 ⋯，标记本身不挪位置 */}
+        {/* Pin marker at the row end (user wording 2026-11-25: "it should go at the back"): time on the left, pin rightmost;
+            on hover only the time is replaced by …, the marker itself does not move */}
         <span className="flex-1 min-w-0 truncate" style={{ fontSize: 13 }}>
           {topic.title}
         </span>
@@ -2566,12 +2566,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     )
   }
 
-  /** 工作区行 + 其下会话 */
+  /** Workspace row + its conversations below */
   const renderWorkspace = (ws: WorkspaceRow): React.ReactNode => {
     const expanded = expandedWorkspaceId === ws.id
     const active = activeWorkspaceId === ws.id
-    // 该工作区下是否有会话正在生成（用未过滤的完整列表判断，避免搜索时漏判）：
-    // 有则禁止删除该工作区，否则会连坐删掉进行中的会话
+    // Whether any conversation under this workspace is generating (judged on the unfiltered full list, so search does not miss it):
+    // if so, deleting this workspace is forbidden, otherwise generating conversations would be deleted along with it
     const hasRunningTopic = topicsOf(ws.id).some((t) => loadingTopicIds.has(t.id))
     const hovered = hoveredWorkspaceId === ws.id
     const showControls = hovered || active
@@ -2608,7 +2608,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             {ws.name}
           </span>
 
-          {/* 悬停/激活时显示：重命名 / 在文件夹中显示 / 删除 菜单 + 新建会话 */}
+          {/* Shown on hover/active: rename / show in folder / delete menu + new conversation */}
           <span className="flex items-center gap-0.5 shrink-0">
             <Dropdown
               menu={{
@@ -2617,7 +2617,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     key: 'rename',
                     label: t('common.action.rename'),
                     icon: <RiEditLine size={14} />,
-                    // 同会话行：菜单点击别冒泡到工作区行的 onClick（那会顺手折叠/展开它）
+                    // Same as the conversation row: menu clicks must not bubble to the workspace row's onClick (that would collapse/expand it as a side effect)
                     onClick: ({ domEvent }) => {
                       domEvent.stopPropagation()
                       openRename(ws)
@@ -2634,7 +2634,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                   },
                   {
                     key: 'delete',
-                    // 该工作区下有会话正在生成时禁止删除（避免连坐删掉进行中的会话）
+                    // Forbid deleting while a conversation under this workspace is generating (to avoid deleting in-progress conversations along with it)
                     label: hasRunningTopic
                       ? t('harness.sidebar.workspaceHasRunning')
                       : t('harness.sidebar.workspaceDelete'),
@@ -2703,18 +2703,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }
 
   /**
-   * 某个工作区展开后的会话列表。
+   * The conversation list under an expanded workspace.
    *
-   * 工作区行与插件行共用同一套（插件会话就挂在它的「插件工作区」下）：加载骨架 / 空态 /
-   * 会话行 / 滚动分页的落点全部一致，免得两处各写一份、日子久了两边长得不一样。
+   * Workspace rows and plugin rows share it (plugin conversations attach under their "plugin workspace"): loading skeleton / empty state /
+   * conversation rows / scroll pagination landing all behave the same, so the two places do not diverge over time.
    *
-   * 空态与 loading 一样在整栏居中：不能再加左侧缩进，否则 text-center 只在「缩进剩下的」
-   * 区域里居中，看起来整体偏右。
+   * The empty state, like loading, is centered in the whole column: no extra left indent, otherwise text-center only centers inside "what is left after the indent"
+   * and looks shifted right overall.
    */
   /**
-   * 归档行（侧栏底部「已归档」分组里的那一行）：标题 + 所属工作区（小字）+ ⋯ 菜单。
-   * 点开 = 只读查看（输入框隐藏，见 useHarnessHandlers 的 currentTopicArchived）。
-   * 归档是跨工作区的清单，所以每行都带工作区名字，避免同名会话分不清。
+   * Archived row (a row in the "Archived" group at the bottom of the sidebar): title + owning workspace (small text) + … menu.
+   * Opening it = read-only view (input hidden, see currentTopicArchived in useHarnessHandlers).
+   * The archived list is cross-workspace, so every row carries the workspace name to tell same-named conversations apart.
    */
   const renderArchivedRow = (topic: HarnessTopicRow): React.ReactNode => {
     const selected = activeWorkspaceId === topic.workspace_id && currentTopicId === topic.id
@@ -2773,8 +2773,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   const renderTopicList = (workspaceId: number): React.ReactNode => {
     const list = visibleTopicsOf(workspaceId)
-    // 只有「该工作区会话从未加载过」才算加载中：缓存已有内容时直接无缝渲染。
-    // 拉取失败过的不再算加载中（否则那一行会永远停在骨架屏，见 topicFetchFailedRef）
+    // Only "this workspace's conversations have never loaded" counts as loading: when the cache already has content, render seamlessly.
+    // Workspaces whose fetch failed no longer count as loading (otherwise the row would sit on the skeleton forever, see topicFetchFailedRef)
     const loading =
       !hasTopicsLoaded(workspaceId) &&
       !topicFetchFailedRef.current.has(workspaceId) &&
@@ -2792,12 +2792,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         ) : (
           <>
             {list.map((topic) => renderTopicRow(workspaceId, topic))}
-            {/* 仅当前工作区的「滚动分页」显示底部 spinner；整表刷新（切换工作区）不显示，避免闪动 */}
+            {/* Show the bottom spinner only for the current workspace's scroll pagination; full-list refresh (workspace switch) does not show it to avoid flicker */}
             {workspaceId === activeWorkspaceId &&
               isLoadingMoreTopics &&
               !isRefreshingTopics &&
               hasMoreTopics && (
-                /* 滚动分页的落点是「下面还会长出话题」，所以铺两行话题骨架而不是居中转圈 */
+                /* Scroll pagination lands where "more topics grow below", so lay out two rows of topic skeletons instead of a centered spinner */
                 <div className="py-1">
                   <SkeletonListRows rows={2} variant="stacked" />
                 </div>
@@ -2808,34 +2808,34 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     )
   }
 
-  /* ── 切换模式 = 同时切到那个模式「当前那一条内容」 ───────────────────────────
-   * 用户口径 2026-09-28「切换工作模式或者插件模式下，就默认切换到当前模式下的默认选中项的内容」：
-   * 面板在看哪一类内容，主区域就跟着显示那一类内容里当前选中的那一条——
-   * 否则会出现「侧栏列着工作区、主区域还停在一段插件会话上」这种开关与内容打架的状态。
+  /* ── Switching modes = also switching to that mode's "current content" ───────────────────────────
+   * User wording 2026-09-28: "when switching to work mode or plugin mode, default to the content of the currently selected item in that mode":
+   * whichever kind of content the panel is viewing, the main area shows the currently selected item of that kind —
+   * otherwise you get the conflicting state "sidebar lists workspaces while the main area still sits on a plugin conversation".
    */
 
-  /** 当前内容是不是插件那一侧的（活动工作区是插件工作区）——各 enter* 都按它判要不要动 */
+  /** Whether the current content is on the plugin side (the active workspace is a plugin workspace) — each enter* uses it to decide whether to act */
   const inPluginContent = activeWorkspaceId != null && pluginWorkspaceIds.has(activeWorkspaceId)
-  /** 当前内容是不是「对话」那一侧的（活动工作区是对话工作区） */
+  /** Whether the current content is on the "chat" side (the active workspace is a chat workspace) */
   const inChatContent = activeWorkspaceId != null && chatWorkspaceIds.has(activeWorkspaceId)
-  /** 当前内容属于「工作」那一侧（用户自己的工作区） */
+  /** The current content belongs to the "work" side (the user's own workspace) */
   const inWorkContent = activeWorkspaceId != null && !inPluginContent && !inChatContent
 
-  // 记下工作模式最后待过的用户工作区（切回工作模式时优先回到它，而不是永远回到第一个）
+  // Remember the last user workspace visited in work mode (switching back to work mode prefers it rather than always the first one)
   useEffect(() => {
     if (activeWorkspaceId != null && !isNonUserWorkspace(activeWorkspaceId)) {
       lastWorkWorkspaceIdRef.current = activeWorkspaceId
     }
   }, [activeWorkspaceId, isNonUserWorkspace])
 
-  // 记下各模式当前那一条内容（切模式时切回去 + 下次进应用恢复它）
-  // 话题可能是刚从「空白会话」发出来的：那时 currentTopicId 才第一次有值，也在这里记上。
-  // **只在话题列表已属于活动工作区时记**（topicsWorkspaceId === activeWorkspaceId）：
-  // 跨工作区选会话时 topics 还是旧工作区的，那时记会把话题挂到错的工作区上。
+  // Remember each mode's current content (switch back on mode switch + restore on next launch)
+  // The topic may have just been sent from a "blank conversation", when currentTopicId gets its first value; record it here too.
+  // **Record only when the topic list already belongs to the active workspace** (topicsWorkspaceId === activeWorkspaceId):
+  // when selecting a conversation across workspaces, topics still belongs to the old workspace, and recording then would attach the topic to the wrong workspace.
   useEffect(() => {
     if (currentTopicId == null || topicsWorkspaceId == null) return
     if (topicsWorkspaceId !== activeWorkspaceId) return
-    // 已经删掉的话题不许再被记住（见 deletedTopicIdsRef：删会话时 effect 可能迟到一次）
+    // Never remember an already-deleted topic (see deletedTopicIdsRef: the effect may run late once when deleting a conversation)
     if (deletedTopicIdsRef.current.has(currentTopicId)) return
     const pluginId =
       pluginWorkspaces.find((item) => item.workspaceId === topicsWorkspaceId)?.draftId ?? null
@@ -2865,12 +2865,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     rememberWork
   ])
 
-  /** 模式也落盘：下次进应用回到同一侧（内容跟着它恢复，见 restoreLastContent） */
+  /** Persist the mode too: next launch returns to the same side (content is restored along with it, see restoreLastContent) */
   useEffect(() => {
     persistSelection({ activeMode: mode })
   }, [mode, persistSelection])
 
-  /** 按 id 重新读一条话题行（记的是 id，标题可能已经改过，不能拿旧快照渲染） */
+  /** Re-read a topic row by id (the id is stored; the title may have changed, so do not render an old snapshot) */
   const fetchTopicRow = useCallback(async (topicId: number): Promise<HarnessTopicRow | null> => {
     try {
       const rows = await harnessApi.harness.getTopicById(topicId)
@@ -2880,13 +2880,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [])
 
-  /* ── 会话检索（标题 + 正文混合）────────────────────────────────────────── */
+  /* ── Conversation search (title + body mixed) ────────────────────────────────────────── */
 
-  /** 搜哪个工作区：对话模式用自己的根工作区，工作模式用当前选中的工作区 */
+  /** Which workspace to search: chat mode uses its own root workspace, work mode uses the currently selected workspace */
   const searchWorkspaceId =
     mode === 'chat' ? (chatWorkspaces.rootWorkspaceId ?? null) : topicsWorkspaceId
   const searchNeedle = searchQuery.trim()
-  /** 输入 ≥2 个字符才查主进程；1 个字符继续走原来的本地标题过滤（不打扰后端） */
+  /** Only inputs of >= 2 characters query the main process; 1 character keeps the original local title filter (does not bother the backend) */
   const serverSearchActive = searchMode && mode !== 'plugin' && searchNeedle.length >= 2
 
   useEffect(() => {
@@ -2899,7 +2899,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     let cancelled = false
     setSearchLoading(true)
     setSearchFailed(false)
-    // 防抖：连续输入只查最后一次（正文 LIKE 查询比标题过滤重得多）
+    // Debounce: consecutive input only queries the last one (body LIKE queries are much heavier than title filtering)
     const timer = window.setTimeout(() => {
       void harnessApi.harness
         .searchWorkspace({
@@ -2926,7 +2926,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     }
   }, [serverSearchActive, searchNeedle, searchWorkspaceId])
 
-  /** 收起搜索态（点结果 / 点关闭都走这里，避免下次打开还带着旧查询） */
+  /** Collapse search mode (clicking a result / clicking close both come here, so the next open does not carry a stale query) */
   const resetSearch = useCallback((): void => {
     setSearchMode(false)
     setSearchQuery('')
@@ -2936,8 +2936,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [onSetPendingJumpDialogue])
 
   /**
-   * 打开一条搜索结果：标题命中只切会话；正文命中额外把 dialogueId 交给消息区定位。
-   * 工作区切换 / 对话模式激活 / 路由回对话页都复用 `handleOpenTopic` 那一套。
+   * Open a search result: a title hit only switches the conversation; a body hit additionally hands the dialogueId to the message area for locating.
+   * Workspace switching / chat mode activation / routing back to the chat page all reuse `handleOpenTopic`.
    */
   const openSearchResult = useCallback(
     async (topicId: number, dialogueId?: number): Promise<void> => {
@@ -2946,7 +2946,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         viewMessage('harness-search-open', 'error', t('harness.sidebar.searchOpenFailed'), 3)
         return
       }
-      // 工作区以搜索范围为准；极端情况下（对话根工作区还没建好）退回话题行自己的归属
+      // The workspace follows the search scope; in edge cases (the chat root workspace is not ready yet) fall back to the topic row's own workspace
       const workspaceId = searchWorkspaceId ?? activeWorkspaceId ?? topic.workspace_id
       resetSearch()
       if (dialogueId != null) onSetPendingJumpDialogue?.(dialogueId)
@@ -2964,7 +2964,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     ]
   )
 
-  /** 命中片段里的关键词高亮（后端给的是纯文本片段） */
+  /** Highlight the keyword inside a hit snippet (the backend provides plain-text snippets) */
   const renderSearchSnippet = (snippet: string, needle: string): React.ReactNode => {
     const lower = snippet.toLowerCase()
     const at = lower.indexOf(needle.toLowerCase())
@@ -2985,8 +2985,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }
 
   /**
-   * 搜索态的结果面板：会话标题命中 + 消息正文命中两组。
-   * 打开定位的点击目标都带 `data-search-*` 钩子，E2E 工装按它断言。
+   * Search-mode result panel: two groups, conversation-title hits + message-body hits.
+   * Click targets that open and locate carry `data-search-*` hooks for E2E harness assertions.
    */
   const renderSearchResults = (): React.ReactNode => {
     if (searchLoading) return <SkeletonListRows rows={4} />
@@ -3099,21 +3099,21 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }
 
   /**
-   * 插件中心「在对话中修改」（`lattice.openSource`）成功后的交接事件。
+   * Handoff event after the plugin center's "edit in conversation" (`lattice.openSource`) succeeds.
    *
-   * 主进程已经建/复用了插件工作区、开好一条插件会话，并把 `activeMode:'plugin'` +
-   * `pluginContent` 写进设置——但它只广播 `harness:workshop-changed`，侧栏不会因此
-   * 重新挂载，也不会重新读设置。所以渲染层在 openSource 成功后再派发这个事件，
-   * 侧栏按 pluginId + topicId **直接切过去**（与点插件行里的会话同一条链：
-   * ensureWorkspace → 写活动工作区 → workspace-changed → 选中话题）。
+   * The main process has already created/reused the plugin workspace, opened a plugin conversation, and written `activeMode:'plugin'` +
+   * `pluginContent` into settings — but it only broadcasts `harness:workshop-changed`, so the sidebar would not remount
+   * for it and would not re-read settings. Therefore the renderer dispatches this event after openSource succeeds,
+   * and the sidebar switches **directly** by pluginId + topicId (same chain as clicking a conversation in a plugin row:
+   * ensureWorkspace -> write active workspace -> workspace-changed -> select topic).
    */
   useEffect(() => {
     const handler = (e: Event): void => {
       const detail = (e as CustomEvent<{ pluginId?: string; topicId?: number }>).detail
       if (!detail?.pluginId) return
       const pluginId = detail.pluginId
-      // 插件中心 →「在对话中修改」：这是用户动作，主内容区要跟到对话页
-      // （navigate 交给 handlePluginSession 在内容就位后再切，先切会闪一下上一条会话）
+      // Plugin center -> "edit in conversation": this is a user action, so the main content area must follow to the chat page
+      // (navigate is left to handlePluginSession to switch after content is in place; switching first would flash the previous conversation)
       setMode('plugin')
       void (async () => {
         const topic = detail.topicId != null ? await fetchTopicRow(detail.topicId) : undefined
@@ -3127,10 +3127,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     return () => window.removeEventListener('lattice-open-source', handler)
   }, [fetchTopicRow, handlePluginSession])
 
-  /** 切到「工作」那一侧的内容：上次那条工作会话；没有就回到用户工作区的空白会话 */
+  /** Switch to the "work" side's content: the last work conversation; otherwise fall back to a user workspace's blank conversation */
   const enterWorkModeContent = useCallback(async (): Promise<void> => {
     if (inWorkContent) return
-    // 现取一份工作区列表（本地那份可能刚被刷新过）：切模式是靠它找「上次那个用户工作区」的
+    // Fetch a fresh workspace list (the local one may have just been refreshed): mode switching uses it to find "the last user workspace"
     const { list } = await loadWorkspaces()
     const userList = list.filter((ws) => !isNonUserWorkspace(ws.id))
     const remembered = workContentRef.current
@@ -3143,13 +3143,13 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await onSelectTopic(topic)
         return
       }
-      // 会话已经被删了：退回「这个工作区的空白会话」
+      // The conversation was already deleted: fall back to "this workspace's blank conversation"
       rememberWork({ workspaceId: remembered.workspaceId, topicId: null })
     }
     const target =
       userList.find((w) => w.id === lastWorkWorkspaceIdRef.current) ?? userList[0] ?? null
     if (!target) {
-      // 一个用户工作区都没有（只剩插件 / 对话工作区）：回到「尚未配置工作区」的空白态
+      // There is no user workspace at all (only plugin / chat workspaces): return to the "no workspace configured" blank state
       try {
         await window.api.systemSettings.update({
           harness: {
@@ -3182,21 +3182,21 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   ])
 
   /**
-   * 切到「插件」那一侧的内容：上次那条插件会话；这份插件还没开过会话时走「＋」那套
-   * （取插件工作区 + 空白会话 + 记忆作用域）——那就是插件模式里的默认选中项。
+   * Switch to the "plugin" side's content: the last plugin conversation; if this plugin has had no conversation yet, use the "+" path
+   * (fetch the plugin workspace + blank conversation + memory scope) — that is the default selection in plugin mode.
    *
-   * 刻意**只依赖记住的那条记录**（插件 id + 话题 id），不去查本地缓存里的草稿/工作区列表：
-   * 那两份缓存可能刚被刷新过（工作区行是刚建的、草稿在重载），拿它们当门槛会让「切回来」
-   * 偶发退化成空白会话。工作区由主进程按插件 id 现取（`handlePluginSession` 里的
-   * `ensureWorkspace`），话题按 id 现读——主进程才是真源，这样切回来稳定命中同一条会话。
+   * Deliberately **relies only on the remembered record** (plugin id + topic id) and does not consult the cached draft/workspace lists:
+   * those caches may have just been refreshed (the workspace row was just created, drafts are reloading), and using them as a gate would make "switching back"
+   * occasionally degrade into a blank conversation. The workspace is fetched by plugin id from the main process (`ensureWorkspace` in
+   * `handlePluginSession`), the topic is read fresh by id — the main process is the source of truth, so switching back reliably hits the same conversation.
    */
   const enterPluginModeContent = useCallback(async (): Promise<void> => {
     if (inPluginContent) return
     const remembered = pluginContentRef.current
     /**
-     * 记住的插件已经不在草稿清单里（源码被删/被移走，甚至不是通过本应用删的）：
-     * 先清掉这条记忆，再回落到第一份可用插件。否则会对着不存在的插件目录
-     * `ensureWorkspace` → 每次切到插件模式都弹一次「源码目录不存在」。
+     * The remembered plugin is no longer in the draft list (sources deleted/moved, possibly not via this app):
+     * clear this memory first, then fall back to the first available plugin. Otherwise `ensureWorkspace` runs against a non-existent plugin directory
+     * and every switch to plugin mode pops "source directory does not exist".
      */
     if (remembered && !drafts.some((draft) => draft.id === remembered.pluginId)) {
       rememberPlugin(null)
@@ -3214,7 +3214,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )
         return
       }
-      // 那条会话已经被删了：退回「这份插件的空白会话」
+      // That conversation was already deleted: fall back to "this plugin's blank conversation"
       rememberPlugin(null)
     }
     const fallback = visibleDrafts[0] ?? drafts[0] ?? null
@@ -3223,12 +3223,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   }, [inPluginContent, drafts, visibleDrafts, fetchTopicRow, handlePluginSession, rememberPlugin])
 
   /**
-   * 切到「对话」那一侧的内容：上次那条会话；没记住过（或那条已删）就开一条干净的空白会话
-   * ——那就是这个模式里的默认落点。
+   * Switch to the "chat" side's content: the last conversation; if none was remembered (or it was deleted), open a clean blank conversation
+   * — that is this mode's default landing spot.
    *
-   * 与插件侧同一套判据：**只认记住的那条记录**（话题 id），话题按 id 现读；
-   * 目录由主进程按话题 id 现算（`activateChatTopic`），不依赖本地缓存的工作区清单
-   * （那份可能刚被刷新过，拿它当门槛会让「切回来」偶发退化成空白会话）。
+   * Same criterion as the plugin side: **trust only the remembered record** (topic id), read the topic fresh by id;
+   * the directory is computed fresh by the main process from the topic id (`activateChatTopic`), not from the cached workspace list
+   * (which may have just been refreshed; using it as a gate would make "switching back" occasionally degrade into a blank conversation).
    */
   const enterChatModeContent = useCallback(async (): Promise<void> => {
     const remembered = chatContentRef.current
@@ -3238,19 +3238,19 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await handleChatSession({ topic, focus: false })
         return
       }
-      // 那条会话已经被删了：记住的内容退回「空白会话」而不是 null——null 会被启动恢复当成
-      // 老配置的 `'chat'`（= 工作），下次进应用就落错侧（见 restoreLastContent 的历史归一）
+      // That conversation was already deleted: fall the remembered content back to "blank conversation" rather than null — null would be treated by startup restore as
+      // the old config's `'chat'` (= work), landing on the wrong side on next launch (see the history normalization in restoreLastContent)
       rememberChat({ workspaceId: remembered.workspaceId, topicId: null })
     }
-    // 已经在对话侧、而且正看着一条会话：不动（不重开、不抢光标）
+    // Already on the chat side and viewing a conversation: do nothing (do not reopen, do not steal the caret)
     if (inChatContent && currentTopicId != null) return
-    // 其余情况都走「这个模式的默认落点」：空白会话 + 活动目录 = 对话根目录。
-    // 已经在对话侧也要走一遍——上次停的可能是已被删掉的会话子目录，活动路径还指着它，
-    // 只有这一条会把它复位（否则模型的文件工具落在不存在的目录上）。
+    // All other cases take "this mode's default landing spot": blank conversation + active directory = chat root directory.
+    // Even when already on the chat side this must run — the last stop may have been a deleted conversation subdirectory, with the active path still pointing at it,
+    // and only this path resets it (otherwise the model's file tools operate on a non-existent directory).
     await handleChatSession({ focus: false })
   }, [inChatContent, currentTopicId, fetchTopicRow, handleChatSession, rememberChat])
 
-  /** 模式开关：切模式 = 同时把内容切到那一侧（用户口径 2026-09-28） */
+  /** Mode switch: switching the mode = switching the content to that side too (user wording 2026-09-28) */
   const switchMode = useCallback(
     (next: SidebarMode): void => {
       if (next === mode) return
@@ -3262,18 +3262,18 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     [mode, enterWorkModeContent, enterPluginModeContent, enterChatModeContent]
   )
 
-  /* ── 启动恢复：上次待在哪一侧、各侧各自选的是哪条会话 ─────────────────────────
-   * 用户口径 2026-09-28「要记住工作模式和插件模式，选中的会话，下次进来可以记住」：
-   * 进应用时读回 activeMode + workContent / chatContent / pluginContent，把那一侧的那条会话
-   * 重新选上（主区域、侧栏选中态、记忆作用域、资源管理器根全都跟着它走）。
+  /* ── Startup restore: which side was last active and which conversation each side selected ─────────────────────────
+   * User wording 2026-09-28: "remember work mode and plugin mode, the selected conversation, so it can be remembered next time":
+   * on launch read back activeMode + workContent / chatContent / pluginContent, and re-select that side's conversation
+   * (main area, sidebar selection, memory scope and file explorer root all follow it).
    *
-   * 三条纪律：
-   * - **清单都读完再恢复**：工作区列表 / 草稿 + 插件工作区 + 对话工作区还没到位时，
-   *   「这条还在不在」会误判成「已删除」，于是把记住的内容降级成空白会话；
-   * - **只跑一次**（hydratedRef），而且**跑完之前不写设置**（persistSelection 里的那道闸）：
-   *   挂载时 mode 的初始值是「工作」，抢在恢复前落盘就把记住的「插件」冲掉了；
-   * - **命不中就退回默认落点**，不报错也不提示：那条会话/工作区/插件已经删了是正常事，
-   *   退回该侧的空白会话（工作 / 对话）或第一份插件（插件）即可。
+   * Three rules:
+   * - **Restore only after all lists are read**: while the workspace list / drafts + plugin workspaces + chat workspaces are not ready,
+   *   "is this row still there" misjudges as "deleted" and downgrades the remembered content to a blank conversation;
+   * - **Run only once** (hydratedRef), and **do not write settings before it finishes** (the guard in persistSelection):
+   *   at mount the initial mode is "work", and persisting before restore would clobber the remembered "plugin";
+   * - **Fall back to the default landing spot on a miss**, with no error and no hint: the conversation/workspace/plugin having been deleted is normal,
+   *   just fall back to that side's blank conversation (work / chat) or the first plugin (plugin).
    */
   const restoreLastContent = useCallback(async (): Promise<void> => {
     let saved: HarnessSettings | undefined
@@ -3284,12 +3284,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       return
     }
     /**
-     * 盘上的模式归一。
+     * Normalizing the mode on disk.
      *
-     * `'chat'` 在「对话」模式上线**之前**是「工作」那一档的名字（历史值），现在它表示对话模式
-     * ——老配置必须按 `'work'` 读，否则升级后第一次打开会莫名其妙落到「对话」里。
-     * 「对话」模式写盘用的是同一批键，但它同时会把 chatContent 记下来：那份记录存在，
-     * 说明这个 `'chat'` 是新语义（老配置不可能有 chatContent）。
+     * `'chat'` was the name of the "work" position **before** "chat" mode existed (historical value); now it means chat mode
+     * — old configs must be read as `'work'`, otherwise the first launch after upgrade lands in "chat" for no reason.
+     * "Chat" mode writes to the same keys, but it also records chatContent: that record existing
+     * means this `'chat'` is the new semantics (old configs cannot have chatContent).
      */
     const remembered = saved?.activeMode
     const savedMode: SidebarMode =
@@ -3303,14 +3303,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
     const work = saved?.workContent ?? null
     const chat = saved?.chatContent ?? null
     const plugin = saved?.pluginContent ?? null
-    // 记忆先落回内存：随后切模式也要回到它们（切模式那套只认这几个 ref）
+    // Put memory back into memory state first: subsequent mode switches also return to it (the mode-switch path trusts only these refs)
     workContentRef.current = work
     chatContentRef.current = chat
     pluginContentRef.current = plugin
     lastWorkWorkspaceIdRef.current = work?.workspaceId ?? null
     setMode(savedMode)
-    // 把模式本身写实一次：一直待在「工作」不切档的话，下面那个跟随 mode 的 effect 永远不会跑，
-    // 盘上就缺 activeMode 这一格（下次进来虽然也能默认成工作，但持久化状态应当是完整的）
+    // Persist the mode itself once: if the app stays on "work" and never switches, the effect following mode below never runs
+    // and activeMode would be missing on disk (next launch still defaults to work, but the persisted state should be complete)
     persistSelection({ activeMode: savedMode })
 
     if (savedMode === 'plugin') {
@@ -3320,7 +3320,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await handlePluginSession(draft, { topic: topic ?? undefined, focus: false })
         return
       }
-      // 没记住过插件内容（或那份插件已删）：按「切到插件模式」的默认落点来
+      // No remembered plugin content (or that plugin was deleted): use the default landing spot of "switch to plugin mode"
       await enterPluginModeContent()
       return
     }
@@ -3331,7 +3331,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await handleChatSession({ topic, focus: false })
         return
       }
-      // 没记住过对话内容（或那条会话已删）：按「切到对话模式」的默认落点来
+      // No remembered chat content (or that conversation was deleted): use the default landing spot of "switch to chat mode"
       await enterChatModeContent()
       return
     }
@@ -3345,12 +3345,12 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         await onSelectTopic(topic)
         return
       }
-      // 记住的那条会话已经删了：留在这个工作区的空白会话上
+      // The remembered conversation was already deleted: stay on this workspace's blank conversation
       rememberWork({ workspaceId: ws.id, topicId: null })
       onNewHarness()
       return
     }
-    // 工作侧没记住 / 那个工作区已删：当前内容要是在插件 / 对话工作区上，先按切模式那套换回来
+    // Work side has no memory / that workspace was deleted: if the current content is on a plugin / chat workspace, switch back via the mode-switch path first
     if (inPluginContent || inChatContent) await enterWorkModeContent()
     else onNewHarness()
   }, [
@@ -3380,8 +3380,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
 
   return (
     <div
-      /* 稳定钩子：这块面板没有 class 名（宽度是内联样式、用户可以拖），
-         工装（test/probe-plugin-workshop-live.mjs）靠它定位侧栏 */
+      /* Stable hook: this panel has no class name (its width is an inline style, user-resizable),
+         and the test harness (test/probe-plugin-workshop-live.mjs) locates the sidebar by it */
       data-harness-sidebar="1"
       className="flex flex-col overflow-hidden h-full"
       style={{
@@ -3389,7 +3389,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         borderRadius: borderRadiusLG
       }}
     >
-      {/* 头部：模式开关（对话 / 工作 / 插件）+ 右侧动作胶囊（搜索 / 新建） */}
+      {/* Header: mode switch (chat / work / plugin) + right action capsule (search / new) */}
       <div
         data-harness-sidebar-header="1"
         className="flex items-center"
@@ -3426,11 +3426,11 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         ) : (
           <>
             {/*
-              模式切换：这块面板装三套内容——「对话」是**一份扁平的会话列表**（该模式没有工作区
-              概念，排在最前面：用户口径 2026-09-29「对话模式要放在最前面」），
-              「工作」是工作区 → 会话，「插件」是插件草稿。
-              胶囊样式 + 一枚滑块（transform 过渡）而不是几个按钮换背景色：
-              切换时滑块滑过去，位置本身就在说「现在在哪一档」。
+              Mode switch: this panel holds three sets of content — "chat" is **a flat conversation list** (that mode has no workspace
+              concept and is placed first: user wording 2026-09-29 "chat mode should come first"),
+              "work" is workspaces -> conversations, "plugin" is plugin drafts.
+              Capsule style + one thumb (transform transition) instead of several buttons changing background color:
+              the thumb slides on switch, and its position itself says "which position is active now".
             */}
             <SidebarModeSwitch
               mode={mode}
@@ -3444,9 +3444,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             />
             <span className="flex-1" />
             {/*
-              右侧动作：搜索 + 新建，收进一枚 24px 高的胶囊——与左侧三档开关同高、同圆角、
-              同一层底色，顶行两端形成呼应；中间用 1px 竖线把「查找」与「创建」分开。
-              「助手设置」不放在这里：入口在左下角用户区齿轮与「应用」菜单。
+              Right-side actions: search + new, grouped into one 24px-high capsule — same height, same radius and
+              same background as the three-position switch on the left, echoing at both ends of the top row; a 1px vertical divider separates "find" from "create".
+              "Assistant settings" is not placed here: its entry is the gear in the user area at the bottom left and the "App" menu.
             */}
             <div
               style={{
@@ -3477,7 +3477,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                 }}
               />
               {mode === 'plugin'
-                ? /* 新建插件：没配存放路径时先弹文件夹选择，再弹「新建草稿」（弹窗里不含路径选择器） */
+                ? /* New plugin: when no storage path is configured, show the folder picker first, then the "New draft" dialog (the dialog has no path picker) */
                   iconBtn(
                     t('harness.sidebar.newDraft'),
                     () => void handleNewDraft(),
@@ -3485,17 +3485,17 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     true
                   )
                 : mode === 'chat'
-                  ? /* 对话模式：新建会话（该模式没有工作区，所以没有「新建工作区」这个动作） */
+                  ? /* Chat mode: new conversation (this mode has no workspace, so there is no "new workspace" action) */
                     iconBtn(
                       t('harness.sidebar.newSession'),
                       () => {
-                        // 空白会话备好之后由 handleChatSession 把路由带回对话页
+                        // Once the blank conversation is ready, handleChatSession brings the route back to the chat page
                         void handleChatSession({ navigate: true })
                       },
                       <RiAddLine size={14} />,
                       true
                     )
-                  : /* 工作模式：新建工作区 */
+                  : /* Work mode: new workspace */
                     iconBtn(
                       t('harness.sidebar.newWorkspace'),
                       handleBrowseFolder,
@@ -3507,7 +3507,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )}
       </div>
 
-      {/* 工作区 → 会话树 ／ 对话模式的扁平会话列表 ／ 插件草稿清单 */}
+      {/* Workspace -> conversation tree / chat mode's flat conversation list / plugin draft list */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto py-1 history-scrollbar"
@@ -3529,10 +3529,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               </p>
             ) : (
               /*
-               * 还没配插件存放路径：灰字空态保持与「尚未配置工作区」一致的观感，
-               * 但下面**明确给一个「选择插件存放路径」按钮**（用户 2026-11-21 口径：
-               * 空态要能直接选路径；原先只能靠右上角 ＋ 猜）。右上角 ＋ 的原行为保留：
-               * 没配路径时它仍先弹文件夹选择，再弹新建草稿框。
+               * No plugin storage path configured yet: the gray empty state keeps the same look as "no workspace configured",
+               * but below it **explicitly offers a "Choose plugin storage path" button** (user wording 2026-11-21:
+               * the empty state must allow choosing a path directly; previously it could only be guessed from the top-right +). The original behavior of the top-right + stays:
+               * when no path is set it still shows the folder picker first, then the new-draft dialog.
                */
               <div className="flex flex-col items-center gap-2.5 px-3 py-8">
                 <p className="text-xs text-center" style={{ color: colorTextTertiary }}>
@@ -3559,7 +3559,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             visibleDrafts.map((draft) => renderDraft(draft))
           )
         ) : mode === 'chat' ? (
-          /* 对话模式：**没有工作区这一层**，只有一份会话列表（空态与工作区下的会话列表同一副样子） */
+          /* Chat mode: **no workspace layer**, just one conversation list (its empty state looks the same as the conversation list under a workspace) */
           !chatTopicsLoaded && chatWorkspaceTopics.length === 0 ? (
             <div className="py-1">
               <SkeletonListRows rows={5} variant="stacked" />
@@ -3570,8 +3570,8 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
             </p>
           ) : (
             <div className="pb-1">
-              {/* 根工作区那一行是**按需创建**的（第一次进入这个模式才建），没有它就没得点。
-                  归档的会话不在这里：统一收在侧栏底部的「已归档」分组 */}
+              {/* The root workspace row is **created on demand** (first entry into this mode does it); without it there is nothing to click.
+                  Archived conversations are not here: they are collected in the "Archived" group at the bottom of the sidebar */}
               {chatWorkspaces.rootWorkspaceId != null &&
                 chatVisibleTopics
                   .filter((topic) => !topic.archived_at)
@@ -3593,9 +3593,9 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       </div>
 
       {/*
-        「已归档」：**所有工作区**归档的会话都收在这一处（用户 2026-11-25「所有归档会话，
-        都在记忆上面」），位置就在「记忆」上方，默认收起。点开只读查看——输入框不显示、
-        发送被拒（见 useHarnessHandlers 的 currentTopicArchived）。
+        "Archived": conversations archived from **all workspaces** are collected here (user 2026-11-25 "all archived conversations,
+        above memory"), right above "memory", collapsed by default. Opening one is a read-only view — the input box is hidden and
+        sending is rejected (see currentTopicArchived in useHarnessHandlers).
       */}
       <div
         data-harness-archived-block="1"
@@ -3645,10 +3645,10 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
       </div>
 
       {/*
-        Mnemon 记忆概览：两个模式都常驻（用户口径 2026-09-28「插件的记忆，并没有像工作里面的
-        记忆一样显示在侧边栏」）——它显示的是**当前会话**那套记忆，插件会话就是这份插件自己的
-        （`<memoryPath>/plugin-<id>/`）。标题只写「记忆」，不缀作用域名（同一天的「不需要
-        （记忆 · 个人记账台账）这个内容」）。
+        Mnemon memory overview: persistent in both modes (user wording 2026-09-28 "the plugin's memory is not, like the memory inside
+        work, shown in the sidebar") — it shows the **current conversation's** memory set; a plugin conversation shows that plugin's own
+        (`<memoryPath>/plugin-<id>/`). The title says only "Memory", with no scope name appended (same-day "the (Memory · personal ledger)
+        content is not needed").
       */}
       <div
         data-harness-memory-block="1"
@@ -3693,7 +3693,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
               </div>
             ) : (
               <div className="pt-1">
-                {/* 用户画像（USER）——仅显示数量，不展示内容 */}
+                {/* User profile (USER) — counts only, content not displayed */}
                 {memorySnap.runtime && userEntries.length > 0 && (
                   <div className="mb-2">
                     <div
@@ -3714,7 +3714,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                   </div>
                 )}
 
-                {/* 项目记忆（MEMORY）——仅显示数量，不展示内容 */}
+                {/* Project memory (MEMORY) — counts only, content not displayed */}
                 {memorySnap.runtime && memoryEntries.length > 0 && (
                   <div className="mb-2">
                     <div
@@ -3742,7 +3742,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                     </p>
                   ))}
 
-                {/* 统计行（换行排列，不挤压） */}
+                {/* Stats row (wraps, no squeezing) */}
                 <div
                   className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-2 text-xs"
                   style={{
@@ -3773,7 +3773,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
                   </span>
                 </div>
 
-                {/* 管理入口 */}
+                {/* Management entry */}
                 <button
                   onClick={handleOpenMemoryPage}
                   className="flex items-center justify-center gap-1.5 w-full py-2 mt-2.5 rounded text-xs transition-colors"
@@ -3788,14 +3788,14 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         )}
       </div>
 
-      {/* 新建草稿弹窗（插件模式的 ＋；与设置页工坊共用同一个组件） */}
+      {/* New draft dialog (plugin mode's +; shares the same component as the workshop on the settings page) */}
       <NewDraftModal
         open={newDraftOpen}
         onClose={() => setNewDraftOpen(false)}
         onCreated={() => void loadDrafts()}
       />
 
-      {/* 重命名工作区弹窗 */}
+      {/* Rename workspace dialog */}
       <Modal
         title={t('harness.sidebar.renameWorkspace')}
         open={renameOpen}
@@ -3818,7 +3818,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         />
       </Modal>
 
-      {/* 重命名会话弹窗（与工作区那个同一套交互：一行输入 + 保存） */}
+      {/* Rename conversation dialog (same interaction as the workspace one: one input line + save) */}
       <Modal
         title={t('harness.sidebar.topicRenameTitle')}
         open={topicRenameOpen}
@@ -3842,7 +3842,7 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
         />
       </Modal>
 
-      {/* 重命名插件弹窗（与工作区重命名同一套交互；只改展示名，目录名/id 不动） */}
+      {/* Rename plugin dialog (same interaction as the workspace rename; only the display name changes, directory name/id unchanged) */}
       <Modal
         title={t('harness.sidebar.pluginRename')}
         open={draftRenameTarget !== null}
@@ -3869,6 +3869,6 @@ const HarnessSidebar: React.FC<HarnessSidebarProps> = ({
   )
 }
 
-// memo：聊天区流式输出时父级会高频重渲染，侧边栏（含搜索框）props 全部稳定引用，
-// 不应跟着重渲染
+// memo: while the chat area streams, the parent re-renders frequently; the sidebar's (including the search box) props are all stable references,
+// so it should not re-render along with it
 export default React.memo(HarnessSidebar)

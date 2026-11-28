@@ -4,24 +4,30 @@ import * as path from 'node:path'
 import { draftDir } from './paths'
 
 /**
- * 草稿源码指纹：产物/验收报告「是不是当前这份源码的」的**唯一判据**。
+ * Draft source fingerprint: the **single source of truth** for whether a build output or
+ * verification report belongs to the current source.
  *
- * 为什么不能用 mtime（2026-11-23 用户事故的根因）：`buildDraft` 把产物写进
- * `dist/<id>/` 之后，`patchDraftMeta` 还要回写草稿里的 `workshop.json`
- * （`builtAt` / `updatedAt`）。这个文件永远比 `dist/<id>/plugin.json` 新，
- * 于是旧实现「草稿里最新 mtime > 产物 mtime = 过期」**每次构建完都立刻成立**：
- * `plugin_publish install` 永久报「产物比源码旧」，模型只能反复重试，
- * 最后被防循环护栏拦下，人只能手工把产物拷进插件目录（不符合生产流程）。
+ * Why mtime cannot be used (root cause of the 2026-11-23 user incident): after `buildDraft`
+ * writes the output into `dist/<id>/`, `patchDraftMeta` also writes `workshop.json` back into
+ * the draft (`builtAt` / `updatedAt`). That file is always newer than
+ * `dist/<id>/plugin.json`, so the old rule "newest mtime in the draft > output mtime = stale"
+ * held **immediately after every build**: `plugin_publish install` reported forever that the
+ * output was older than the source, the model could only retry repeatedly, and it eventually
+ * got stopped by the loop guard, leaving the user to copy the output into the plugin
+ * directory by hand (which is not the production flow).
  *
- * 内容指纹没有这个顺序问题：只有**参与构建/验收的文件内容**真的变了，指纹才变。
- * 因此 `workshop.json`（工坊自己的时间戳/展示名）不参与指纹；它的 `css` 模式
- * 会影响产物，单独拼进指纹前缀。
+ * A content fingerprint has no such ordering problem: the fingerprint changes only when the
+ * **content of files involved in building/verification** actually changes. Therefore
+ * `workshop.json` (the workshop's own timestamps/display name) does not participate in the
+ * fingerprint; its `css` mode does affect the output, so it is prepended to the fingerprint
+ * separately.
  *
- * 收录范围刻意只含「能影响产物或验收结论」的扩展名：
- * 改 `WORKSHOP.md` 这类纯文档不该让插件变成「需要重新构建」。
+ * The included set deliberately covers only extensions that "can affect the output or the
+ * verification result": editing pure documentation such as `WORKSHOP.md` should not make the
+ * plugin "need a rebuild".
  */
 
-/** 参与指纹的文件扩展名（构建输入 + 冒烟用例） */
+/** File extensions included in the fingerprint (build inputs + smoke tests) */
 const SOURCE_EXT: ReadonlySet<string> = new Set([
   '.ts',
   '.tsx',
@@ -34,7 +40,7 @@ const SOURCE_EXT: ReadonlySet<string> = new Set([
   '.svg'
 ])
 
-/** 不参与构建的目录（产物、依赖、VCS、编辑器缓存、工坊备份） */
+/** Directories excluded from the build (output, dependencies, VCS, editor caches, workshop backups) */
 const SKIP_DIRS: ReadonlySet<string> = new Set([
   'node_modules',
   '.git',
@@ -43,7 +49,7 @@ const SKIP_DIRS: ReadonlySet<string> = new Set([
   'backups'
 ])
 
-/** 收集草稿内参与构建的文件（posix 相对路径，稳定排序） */
+/** Collect the files in the draft that participate in the build (posix relative paths, stable order) */
 function buildInputs(root: string): string[] {
   const out: string[] = []
   const walk = (dir: string, prefix: string): void => {
@@ -54,8 +60,9 @@ function buildInputs(root: string): string[] {
       return
     }
     for (const entry of entries) {
-      // 点开头的一律跳过：.git/.vscode/.DS_Store 不是插件源码（.vscode/settings.json
-      // 扩展名是 .json，不跳过会让人改一下编辑器配置就「产物过期」）
+      // Skip anything starting with a dot: .git/.vscode/.DS_Store are not plugin source
+      // (.vscode/settings.json has a .json extension; without this skip, touching an editor
+      // config would mark the output as stale)
       if (entry.name.startsWith('.')) continue
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name
       const full = path.join(dir, entry.name)
@@ -65,7 +72,7 @@ function buildInputs(root: string): string[] {
         continue
       }
       if (!entry.isFile()) continue
-      // 工坊元数据由工坊自己维护（每次构建后都会写），不是构建输入
+      // Workshop metadata is maintained by the workshop itself (written after every build); it is not a build input
       if (rel === 'workshop.json') continue
       if (!SOURCE_EXT.has(path.extname(entry.name).toLowerCase())) continue
       out.push(rel)
@@ -76,13 +83,14 @@ function buildInputs(root: string): string[] {
 }
 
 /**
- * 计算草稿源码指纹（`sha256`，稳定、跨平台、与 mtime 无关）。
+ * Compute the draft source fingerprint (`sha256`, stable, cross-platform, independent of mtime).
  *
- * 前缀带算法版本与 css 模式：`workshop.json` 里 `css` 从 `auto` 改到 `file`
- * 也会改变产物，必须让指纹跟着变；元数据结构或收录范围将来调整时递增 `v1`。
+ * The prefix carries the algorithm version and the css mode: changing `css` in
+ * `workshop.json` from `auto` to `file` also changes the output, so the fingerprint must
+ * follow; bump `v1` when the metadata structure or the included file set changes later.
  *
- * 读文件失败会抛错：调用方（构建/验收/发布闸门）要么把它当致命错误，
- * 要么自己兜底——不能悄悄返回一个「看起来相同」的指纹。
+ * A file read failure throws: callers (build/verify/publish gate) must either treat it as a
+ * fatal error or handle it themselves — never silently return a fingerprint that "looks the same".
  */
 export function draftSourceHash(id: string, cssMode: string): string {
   const root = draftDir(id)

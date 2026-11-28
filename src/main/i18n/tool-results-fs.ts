@@ -1,38 +1,43 @@
 import { getMainLanguage } from './index'
 
 /**
- * 文件系统工具（fs-backend）/ 溢出定位（spill）/ 提问工具（ask）/ 压缩裁剪（compaction）
- * 的返回文案。
+ * Result texts for the filesystem tools (fs-backend), spill locators, the ask tool and
+ * compaction pruning.
  *
- * **会渲染在聊天的工具调用卡片上**（模型读到的也是同一份文本），因此必须跟随界面语言。
- * 与 `tool-results.ts` 的分工：那边是 mnemon 工具组，这边是运行时工具与中间层。
+ * **Rendered on the tool-call cards in the chat** (the model reads the same text), so they must
+ * follow the UI language.
+ * Split of work with `tool-results.ts`: that file covers the mnemon tool group, this one the
+ * runtime tools and intermediate layers.
  *
- * 中文是源语言，`enUSFsToolTexts` 用 `typeof zhCNFsToolTexts` 约束，缺键/多键都是编译期错误。
- * 插值统一用 `{{name}}` + `mainFormat`（中英句式不同，占位符顺序由词条自己决定）。
+ * Chinese is the source language; `enUSFsToolTexts` is constrained by `typeof zhCNFsToolTexts`,
+ * so a missing or extra key is a compile-time error.
+ * Interpolation always uses `{{name}}` + `mainFormat` (Chinese and English phrase things
+ * differently, so each entry decides its own placeholder order).
  *
- * 注意：这里只放「话术」。工具 `name` / `description` / `.describe()` / schema、字段名、
- * 溢出文件名、虚拟路径、`ASK_ABORTED` 标识串都是协议或数据，不是文案。
+ * Note: only user-facing wording belongs here. Tool `name` / `description` / `.describe()` /
+ * schema, field names, spill filenames, virtual paths and the `ASK_ABORTED` marker are protocol
+ * or data, not text.
  */
 export const zhCNFsToolTexts = {
   path: {
-    /** 虚拟路径为空 */
+    /** The virtual path is empty */
     empty: '路径不能为空',
-    /** Windows 绝对路径被拒绝（不给模型扫描驱动器的入口） */
+    /** A Windows absolute path was rejected (no entry point for the model to scan drives) */
     absolute: '路径 "{{path}}" 是绝对路径，请使用虚拟路径（如 /uploads/xxx）',
-    /** ../ 逃逸出挂载根目录 */
+    /** ../ escaped the mount root directory */
     escapesMount: '路径 "{{path}}" 越出挂载根目录',
-    /** 没有任何挂载能匹配该虚拟路径 */
+    /** No mount matches this virtual path */
     notMounted: '路径 "{{path}}" 未挂载到任何虚拟目录'
   },
 
   read: {
     notFile: '路径不是文件: {{path}}',
     failed: '读取文件失败: {{message}}',
-    /** 按 offset/limit 读行区间时的头部注记 */
+    /** Header note when reading a line range by offset/limit */
     lineRange: '（第 {{start}}-{{end}} 行 / 共 {{total}} 行）\n',
-    /** 同上，但文件超过内存保护上限、只保留了前 2M 字符 */
+    /** Same as above, but the file exceeds the in-memory guard limit and only the first 2M characters are kept */
     lineRangeOversized: '（第 {{start}}-{{end}} 行 / 共 {{total}} 行，文件超大仅索引前 2M 字符）\n',
-    /** 内联上限截断（read 不走溢出策略，大文件按需读取） */
+    /** Truncated at the inline limit (read does not spill; large files are read on demand) */
     truncated:
       '（文件过长，共 {{total}} 字符，已省略中间内容。可用 offset/limit 参数按行读取任意片段，或用 grep 检索关键字。）'
   },
@@ -45,12 +50,12 @@ export const zhCNFsToolTexts = {
     ok: '已读取图片 {{path}}（{{mime}}，{{width}}×{{height}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
     okNoDimensions:
       '已读取图片 {{path}}（{{mime}}，{{bytes}} 字节）。图片已附在本工具结果之后，可直接查看。',
-    /** 规范化发生时的追加说明（原文件未改动） */
+    /** Extra note when normalization happened (the original file is untouched) */
     normalizedNote: '（已按上下文预算缩放/重编码；原文件未改动。）',
-    /** 视觉门禁：当前路由的模型档案没有声明图片输入能力 */
+    /** Vision gate: the model profile for the current route does not declare image input */
     modelUnsupported:
       '当前模型不支持图片输入（模型档案未声明 supports_image_input），read_image 已拒绝执行。请切换到支持视觉的模型，或先在模型设置里为该模型补充图片输入能力。',
-    /** 追加进模型上下文的图像消息抬头（模型侧文案） */
+    /** Header of the image message appended to the model context (model-facing text) */
     attached: '工具 {{tool}} 读取的图片：{{path}}'
   },
 
@@ -60,11 +65,11 @@ export const zhCNFsToolTexts = {
   },
 
   edit: {
-    /** 空 old_string 会让非重叠计数循环死循环，入口显式拒绝 */
+    /** An empty old_string would make the non-overlapping count loop spin forever, so the entry point rejects it explicitly */
     emptyOldString: 'old_string 不能为空：请提供文件中真实存在的原文片段作为查找目标。',
     noMatch:
       '未找到匹配内容，未做任何修改。请检查 old_string 是否与文件内容完全一致（包括空白与换行）。',
-    /* 出现次数 / 替换处数走 mainPlural：中文两份相同，英文 1 occurrence / n occurrences */
+    /* Occurrence and replacement counts go through mainPlural: both Chinese forms are identical, English uses 1 occurrence / n occurrences */
     occurrences_one:
       'old_string 在文件中出现 {{count}} 次。请提供更长的唯一上下文，或将 replace_all 设为 true。',
     occurrences_other:
@@ -75,7 +80,7 @@ export const zhCNFsToolTexts = {
   },
 
   applyPatch: {
-    /** 补丁应用成功：{{summary}} 是逐文件摘要行 */
+    /** Patch applied: {{summary}} is the per-file summary lines */
     applied: '补丁已应用（{{files}} 个文件）：\n{{summary}}',    parseFailed:
       '补丁格式错误（{{code}}）。请用 "*** Begin Patch" / "*** End Patch" 包裹，更新块的行以空格（上下文）、"-"（删除）或 "+"（新增）开头。',
     addExists: '文件已存在，无法新增（如要修改请用 Update File）: {{path}}',
@@ -90,7 +95,7 @@ export const zhCNFsToolTexts = {
     summaryUpdate: 'M {{path}}（+{{added}} −{{removed}}）'
   },
 
-  /** str_replace_editor：view / create / str_replace / insert */
+  /** str_replace_editor: view / create / str_replace / insert */
   strEditor: {
     missing: '文件不存在: {{path}}',
     exists: '文件已存在，无法创建: {{path}}',
@@ -104,14 +109,14 @@ export const zhCNFsToolTexts = {
     failed: 'str_replace_editor 失败: {{message}}'
   },
 
-  /** read_document：从 docx/xlsx/pptx/纯文本里抽取文本 */
+  /** read_document: extract text from docx / xlsx / pptx / plain text */
   readDocument: {
     unsupported:
       '不支持的文档类型: {{path}}（支持 .docx / .xlsx / .pptx / .csv / .tsv / .md / .txt / .json / .yaml；.pdf 暂不支持）',
     empty: '文档没有可提取的文本: {{path}}',
     tooLarge: '文档过大（{{bytes}} 字节，上限 {{limit}} 字节）: {{path}}',
     failed: '读取文档失败: {{message}}',
-    /** 成功头部：类型与字节数；{{meta}} 是可选的结构化摘要行 */
+    /** Success header: kind and byte size; {{meta}} is an optional structured summary line */
     header: '文档: {{path}}（{{kind}}，{{bytes}} 字节）{{meta}}',
     truncated: '\n\n（文档共 {{total}} 字符，已截断；可只导出需要的部分后再读。）'
   },
@@ -125,89 +130,91 @@ export const zhCNFsToolTexts = {
   },
 
   exec: {
-    /** execute 输出硬上限截断 */
+    /** Hard output cap truncation for execute */
     truncated: '（输出过长，已截断）',
-    /** 命令超时被终止 */
+    /** The command timed out and was terminated */
     timedOut: '（命令超时，已终止）',
-    /** 该平台没有可用沙箱后端：命令**未执行**（故障关闭） */
+    /** No sandbox backend is available on this platform: the command was **not run** (fail closed) */
     sandboxUnavailable: '沙箱不可用，命令未执行：{{reason}}',
-    /** 沙箱后端自身启动失败：命令**未执行**（与「命令失败」区分开） */
+    /** The sandbox backend itself failed to start: the command was **not run** (distinct from "command failed") */
     sandboxRunnerFailed: '沙箱后端启动失败，命令未执行：{{detail}}',
-    /** 沙箱在操作系统层拒绝了这次操作（越界写入等） */
+    /** The OS denied this operation at the sandbox layer (e.g. writes outside the allowed roots) */
     sandboxDenied: '命令试图做沙箱允许范围之外的事（{{mode}} 模式），已被操作系统拒绝：',
 
-    /* ── 后台运行（run_in_background） ── */
-    /** 启动回执：告诉模型任务在后台继续、怎么读输出、怎么停 */
+    /* ── Background execution (run_in_background) ── */
+    /** Start receipt: tells the model the task keeps running in the background, how to read output and how to stop it */
     backgroundStarted:
       '命令已在后台启动（job_id={{id}}）。你可以继续处理或总结本轮，不必等它结束；用 job_output(job_id="{{id}}") 增量读取输出，用 job_kill(job_id="{{id}}") 终止它。',
-    /** 没有话题上下文（子代理路径）时拒绝后台运行 */
+    /** Reject background execution when there is no topic context (subagent path) */
     backgroundNoTopic:
       '后台运行只在主代理的会话中可用（缺少话题上下文）。请改为前台执行，或让主代理启动这个任务。',
-    /** 后台输出超过留存上限后补的一行 */
+    /** Line appended once background output exceeds the retention limit */
     backgroundTruncated: '（后台输出超过留存上限，后续输出已丢弃）',
-    /** 命令退出时追加的终态行（模型/界面都能看到退出码） */
+    /** Terminal line appended when the command exits (both the model and the UI can see the exit code) */
     backgroundExitCode: '（命令已退出，退出码 {{code}}）',
-    /** 后台任务自身异常（启动/执行抛错，不是命令的非零退出） */
+    /** The background task itself failed (an error thrown while starting or running, not a non-zero command exit) */
     backgroundFailed: '后台任务执行失败：{{message}}'
   },
 
   output: {
-    /** formatOutput 的工具输出硬上限截断 */
+    /** Hard output cap truncation applied by formatOutput */
     truncated: '（输出过大，已截断，共 {{total}} 字符）'
   },
 
   spill: {
-    /** 超限结果内联预览中被略去的中间段 */
+    /** Middle segment omitted from the inline preview of an oversized result */
     middleOmitted: '……（中间 {{omitted}} 字符已省略）……',
-    /** 溢出定位符 + 检索指引（read_file 带 offset/limit，或 grep 定位） */
+    /** Spill locator plus retrieval guidance (read_file with offset/limit, or grep to locate content) */
     locator:
       '（输出共 {{total}} 字符，超出内联上限，完整结果已保存至 {{virtualPath}}。可用 read_file 加 offset/limit 按行读取该文件的片段，或用 grep 在 / 下检索关键字定位具体内容。）'
   },
 
   ask: {
     /**
-     * 提问被本轮取消信号中止。`ASK_ABORTED` 是标识串，中英两份都必须原样保留
-     * （调用方按 err.name === 'AskAbortedError' 判定，不按 message 匹配）。
+     * The question was aborted by this turn's cancellation signal. `ASK_ABORTED` is an identifier
+     * string that must be kept verbatim in both the Chinese and English trees (the caller checks
+     * `err.name === 'AskAbortedError'`, not the message).
      */
     aborted: '提问已取消（ASK_ABORTED）',
-    /** 工具层返回给模型的取消说明 */
+    /** Cancellation note the tool layer returns to the model */
     abortedDetail: '提问已取消（ASK_ABORTED）：用户取消了本轮对话。',
     failed: '提问失败: {{message}}'
   },
 
   compaction: {
-    /** 摘要模型只返回空白 */
+    /** The summarizer returned only whitespace */
     summaryEmpty: '摘要输出为空',
-    /** 历史回灌时工具结果的裁剪标记（完整内容保留在会话记录里） */
+    /** Pruning marker for tool results replayed into history (the full content stays in the conversation record) */
     toolResultPruned: '……（{{omitted}} 字符已裁剪，完整内容保留在会话记录中）……',
-    /** 旧工具结果被清理后的占位符：保留“调用过什么”，去掉原始字节（结构不能删） */
+    /** Placeholder left after an old tool result is cleared: keeps "what was called" and drops the raw bytes (the structure must stay) */
     observationMasked:
       '[旧工具结果已清理] {{call}}（callId={{callId}}）。如需原始内容，请重新读取该文件或重跑该命令。',
-    /** 压缩后重注入的标题（文件内容跟在后面） */
+    /** Heading for files re-injected after compaction (their content follows) */
     restoredContext: '以下是你压缩前读过/改过的文件（自动恢复，供继续工作参考）：',
-    /** 压缩后重注入的待办清单标题 */
+    /** Heading for the todo list re-injected after compaction */
     restoredTodos: '当前待办清单：'
   },
 
   /**
-   * 沙箱（权限档位）相关文案。
+   * Sandbox (permission mode) texts.
    *
-   * `[sandbox: ...]` 标记本身是**协议字符串**，不在这里——真源在 runtime/permission.ts
-   * （模型按标记识别拦截，工装按标记断言），这里只放跟随界面语言的正文。
+   * The `[sandbox: ...]` marker itself is a **protocol string** and does not live here; its source
+   * of truth is runtime/permission.ts (the model recognizes denials by the marker, and tooling
+   * asserts on it). Only the body text that follows the UI language belongs here.
    */
   sandbox: {
     reason: {
-      /** 仅可查看模式下写文件 */
+      /** Writing a file in read-only mode */
       readOnlyWrite: '当前权限是「仅可查看」：写文件需要你临时提权后才能执行。',
-      /** 仅可查看模式下的危险命令 */
+      /** A risky command in read-only mode */
       readOnlyExec: '当前权限是「仅可查看」：这条命令会改动系统，已被拦截（{{evidence}}）。',
-      /** 仅可查看模式下的外部工具（无法确认是否只读） */
+      /** An external tool in read-only mode (its read-only status cannot be verified) */
       readOnlyExternal: '当前权限是「仅可查看」：无法确认这个外部工具（MCP / 插件）是否只读。',
-      /** 命令里出现工作区以外的路径 */
+      /** The command references a path outside the workspace */
       outsidePath: '命令里出现工作区以外的路径：{{evidence}}',
-      /** 命令里出现危险操作 */
+      /** The command contains a risky operation */
       riskyCommand: '命令里出现危险操作：{{evidence}}',
-      /** 插件工坊工具会构建/在主进程执行模型写的代码 */
+      /** Plugin workshop tools build or run model-written code in the main process */
       codeExec:
         '这个插件工坊工具会构建或在主进程执行模型写的代码，需要你确认后才能继续。'
     },
@@ -398,7 +405,7 @@ export const enUSFsToolTexts: typeof zhCNFsToolTexts = {
   }
 }
 
-/** 按当前界面语言取文件系统/溢出/提问/压缩的工具文案树 */
+/** Return the fs / spill / ask / compaction tool text tree for the current UI language */
 export function getFsToolTexts(): typeof zhCNFsToolTexts {
   return getMainLanguage() === 'en-US' ? enUSFsToolTexts : zhCNFsToolTexts
 }

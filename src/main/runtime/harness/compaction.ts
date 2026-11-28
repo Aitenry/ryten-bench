@@ -1,28 +1,29 @@
 /**
- * 上下文压缩（compaction）— 对应 deepseek-harness 的 compaction 体系
- * （dsh-compaction / dsh-compaction-tool-result-pruner / dsh-compaction-basic）
+ * Context compaction.
  *
- * 两臂（参考 DSH 机制）：
- * 1. 工具结果智能裁剪（pruneToolOutput，无模型成本）：
- *    - 在历史回灌路径（convertDialoguesToMessages）执行，实时工具执行由溢出策略
- *      （spill.ts）负责内联上限；
- *    - 回放安全：原始完整结果保留在会话记录（harness_dialogue.blocks），裁剪文本只进
- *      本轮模型上下文（参考 dsh-compaction-tool-result-pruner）。
- *    - 更早、可重放的结果在回灌时直接清成占位符（observation masking，见
- *      runtime/harness/observation-mask.ts 与 history.ts）——保留调用结构、只清内容。
- * 2. LLM 摘要压缩（summarizeDialogues + topic_compactions 持久化 checkpoint）：
- *    - 压力触发：**优先按真实 token**——上一轮模型调用用掉的上下文 ≥ 窗口 × 79% 即触发
- *      （见 context-pressure.ts；含系统提示词 / 工具 schema / 注入记忆）；
- *      拿不到 usage_metadata 时退回字符启发式：历史字符总量 ≥ 窗口 × PRESSURE_RATIO（0.7）。
- *      触发后把最老一段对话压缩为结构化 checkpoint，最近 RETAIN_RATIO 段保持原样
- *      （参考 dsh-compaction-basic 的 thresholdRatio/retainRatio）；待压缩段超过
- *      单次转录上限时按块增量合并，避免压缩请求本身超窗；
- *    - 持久化复用：checkpoint 落库（topic_compactions，每话题一行）。压缩边界
- *      未推进（无新对话进入压缩段）时直接复用既有摘要，不重复调用 LLM；
- *      边界推进（上下文又超预算）时只把新增的早期对话增量合并进既有摘要，
- *      一次调用后更新落库；
- *    - 失败兜底：摘要失败时回退为原有字符预算截断行为（旧 checkpoint 保留，
- *      下次仍可复用）。
+ * Two arms:
+ * 1. Smart tool-result pruning (pruneToolOutput, no model cost):
+ *    - Runs on the history re-feed path (convertDialoguesToMessages); live tool execution is
+ *      bounded inline by the spill policy (spill.ts);
+ *    - Replay-safe: the full original result stays in the session record (harness_dialogue.blocks);
+ *      the pruned text only enters this round's model context.
+ *    - Older, replayable results are cleared to placeholders on re-feed (observation masking, see
+ *      runtime/harness/observation-mask.ts and history.ts) — the call structure is kept and only
+ *      the content is cleared.
+ * 2. LLM summary compaction (summarizeDialogues + persisted topic_compactions checkpoints):
+ *    - Pressure trigger: **prefer real tokens** — compaction fires when the context used by the
+ *      previous model call is >= 79% of the window (see context-pressure.ts; this includes the
+ *      system prompt, tool schemas and injected memory). Without usage_metadata it falls back to
+ *      the character heuristic: total history chars >= window * PRESSURE_RATIO (0.7). After
+ *      triggering, the oldest stretch of conversation becomes a structured checkpoint while the
+ *      most recent RETAIN_RATIO portion stays as-is; a stretch exceeding the per-call transcript
+ *      limit is merged incrementally in chunks so the request itself does not overflow the window;
+ *    - Persistence reuse: checkpoints live in topic_compactions (one row per topic). If the boundary
+ *      has not advanced (no new dialogue entered the compacted range), the existing summary is
+ *      reused with no LLM call; if it advanced, only the newly added early dialogue is merged into
+ *      the summary and the row is updated after one call;
+ *    - Failure fallback: on summary failure, fall back to the previous character-budget truncation
+ *      behavior, keeping the old checkpoint for reuse next time.
  */
 
 import type { BaseChatModel } from '../../ai/chat-model'
@@ -33,28 +34,29 @@ import { getFsToolTexts } from '../../i18n/tool-results-fs'
 import { invokeWithModelRecovery } from './model-recovery'
 import { extractCheckpointText } from './summary-format'
 
-/** 历史回灌时单个工具结果的内联预算（字符） */
+/** Inline budget per tool result when re-feeding history (characters) */
 export const TOOL_RESULT_PRUNE_CHARS = 4_000
-/** 裁剪保留：头部字符数 */
+/** Pruning keeps this many head characters */
 const PRUNE_HEAD_CHARS = 2_800
-/** 裁剪保留：尾部字符数 */
+/** Pruning keeps this many tail characters */
 const PRUNE_TAIL_CHARS = 1_000
 
 /**
- * 字符口径的压缩压力阈值（0.7）：**只在拿不到真实 token 时兜底**。
- * 真实 token 口径的阈值是 context-pressure.ts 里的 TOKEN_PRESSURE_RATIO（0.79）。
+ * Character-based compaction pressure threshold (0.7): **a fallback used only when real tokens
+ * are unavailable**.
+ * The real-token threshold is TOKEN_PRESSURE_RATIO (0.79) in context-pressure.ts.
  */
 export const PRESSURE_RATIO = 0.7
-/** 保留比例：最近 20% 的对话保持原样不参与摘要（DSH retainRatio=0.16） */
+/** Retain ratio: the most recent 20% of the dialogue stays as-is and is not summarized */
 export const RETAIN_RATIO = 0.2
-/** 摘要输出的目标上限（字符，提示词约束，非硬截断） */
+/** Target cap for summary output (characters, a prompt constraint rather than a hard cut) */
 const SUMMARY_TARGET_CHARS = 2_000
 
-/** checkpoint 落地包裹文案（参考 DSH CHECKPOINT_PREAMBLE，英文改写） */
+/** Wrapper text for the landed checkpoint */
 const CHECKPOINT_PREAMBLE =
   'The following is an automatic compacted summary (checkpoint) of earlier conversation. Treat it as established background and continue the task directly; do not restate or acknowledge it:'
 
-/** 压缩指令（结构沿用 DSH；新增 `<analysis>` 草稿与「用户原话」一节，提升召回） */
+/** Compaction instruction (adds an `<analysis>` scratchpad and a verbatim "User Messages" section for recall) */
 const COMPACTION_INSTRUCTION = `You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.
 
 First think in a private <analysis> block: walk the transcript briefly and note (a) what the user asked for, (b) what was actually completed, (c) what failed and why, (d) what is still pending. Use a few terse bullets. The analysis is a scratchpad: it is stripped before the checkpoint is shown to the resumed model, so use it to avoid missing important details.
@@ -88,14 +90,14 @@ Rules:
 - If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.
 Keep the checkpoint within ${SUMMARY_TARGET_CHARS} characters (the analysis is stripped, but keep it short anyway).`
 
-/** 摘要输入单条记录形态 */
+/** Shape of one transcript record fed to summarization */
 export interface TranscriptDialogue {
   role: 'user' | 'assistant'
   content: string
   blocks?: string | null
 }
 
-/** 构建角色标注的对话转录文本（含工具调用名与结果概要，供摘要器理解已完成的工作） */
+/** Build role-annotated transcript text (with tool call names and result snippets so the summarizer can see what was done) */
 export function buildTranscript(dialogues: TranscriptDialogue[]): string {
   const lines: string[] = []
   for (const d of dialogues) {
@@ -103,7 +105,7 @@ export function buildTranscript(dialogues: TranscriptDialogue[]): string {
       lines.push(`[user] ${d.content}`)
       continue
     }
-    // 助手消息：文本块 + 工具块概要
+    // Assistant message: text blocks + tool block summaries
     let text = d.content
     if (d.blocks) {
       try {
@@ -122,7 +124,7 @@ export function buildTranscript(dialogues: TranscriptDialogue[]): string {
           if (outputText) lines.push(`[tool result] ${outputText}`)
         }
       } catch {
-        // blocks 解析失败：仅用 content
+        // blocks failed to parse: use content only
       }
     }
     lines.push(`[assistant] ${text}`)
@@ -130,10 +132,10 @@ export function buildTranscript(dialogues: TranscriptDialogue[]): string {
   return lines.join('\n')
 }
 
-/** 摘要回调契约：transcript 为早期对话转录，priorSummary 为既有摘要（增量合并时传入） */
+/** Summary callback contract: transcript is the early-dialogue transcript, priorSummary the existing summary (passed when merging incrementally) */
 export type SummarizerFn = (transcript: string, priorSummary?: string) => Promise<string>
 
-/** 构造标准 AbortError（调用方按 name 识别为「用户取消」，静默放弃而非报错） */
+/** Build a standard AbortError (callers recognize it by name as user cancel and give up silently) */
 function compactionAbortError(): Error {
   const err = new Error('Compaction aborted')
   err.name = 'AbortError'
@@ -141,9 +143,10 @@ function compactionAbortError(): Error {
 }
 
 /**
- * 用 LLM 生成 checkpoint 摘要（一次调用，只取文本输出；失败抛错由调用方兜底）。
- * signal 贯通后：已中止时立即抛 AbortError（不发起请求）；请求途中中止由底层
- * model.invoke 以 AbortError 拒绝，真正中断摘要调用（不再白烧 token）。
+ * Generate a checkpoint summary with the LLM (one call, text output only; failures throw and the
+ * caller falls back). With signal wired through: throw AbortError immediately if already aborted
+ * (no request is made); an abort mid-request rejects via model.invoke as AbortError, truly
+ * interrupting the summary call (no more wasted tokens).
  */
 export async function summarizeDialogues(
   model: BaseChatModel,
@@ -171,30 +174,29 @@ export async function summarizeDialogues(
           .filter((c) => c && c.type === 'text')
           .map((c) => c.text || '')
           .join('')
-  // 只取 <summary> 正文（<analysis> 草稿不进上下文）；模型没按格式输出时降级保留全文
+  // Keep only the <summary> body (<analysis> scratchpad never enters context); if the model ignored the format, keep the full text
   const summary = extractCheckpointText(text)
   if (!summary) throw new Error(getFsToolTexts().compaction.summaryEmpty)
   return summary
 }
 
-/** 摘要压缩模型调用的恢复环境（重试进度上报 + 换模型询问所需身份） */
+/** Recovery environment for compaction model calls (retry progress reporting + identity needed for the model-switch prompt) */
 export interface SummarizeRecoveryEnv {
   topicId: number
-  /** 调用来源：'goal-round' 的目标自动续跑轮不弹换模型询问 */
+  /** Call origin: 'goal-round' automatic continuation rounds skip the model-switch prompt */
   turnSource?: string
   signal?: AbortSignal
-  /** 自动重试进度（第 attempt/retries 次）：由 IPC 层推送「正在重试」过渡 chunk */
+  /** Automatic retry progress (attempt/retries): the IPC layer pushes a "retrying" transition chunk */
   onRetry?: (attempt: number, retries: number) => void
 }
 
 /**
- * 带自动重试与「换模型继续」兜底的摘要调用（与正文 callModel 同款恢复语义，共用同一个执行器）：
- * - 失败先分类：永久性错误（鉴权/模型不存在/请求被拒/上下文超长/图片不支持）直接抛错，
- *   不重试也不弹窗；瞬时错误（限流/5xx/网络/网关超时）原地自动重试各自预算内的次数，
- *   每次重试前经 env.onRetry 上报进度（前端展示「正在重试（第 N/M 次）」并保持「正在压缩…」卡）；
- * - 瞬时错误重试耗尽且允许询问（主话题、非目标自动轮）→ 挂起弹出换模型选择，用户选定后
- *   用新模型在原位置重新压缩（不丢弃既有 checkpoint、不静默回退截断）；
- * - 用户放弃/询问不可用 → 抛错，由调用方回退字符预算截断（旧 checkpoint 保留复用）。
+ * Summary call with automatic retry and model-switch fallback (same recovery semantics as
+ * callModel, sharing one executor):
+ * - Classify first: permanent errors (auth, missing model, rejected request, oversized context, unsupported image) throw at once;
+ *   transient errors (rate limit, 5xx, network, gateway timeout) retry in place within budget, reporting progress via env.onRetry each attempt (frontend shows "retrying (N/M)" beside the "compacting…" card);
+ * - If transient retries are exhausted and prompting is allowed (main topic, not a goal auto round), suspend with a model-switch choice and re-compact in place with the chosen model (checkpoint kept, no silent truncation);
+ *   if the user gives up or prompting is unavailable, throw so the caller falls back to character-budget truncation (old checkpoint preserved).
  */
 export async function summarizeDialoguesWithRecovery(
   model: BaseChatModel,
@@ -218,23 +220,23 @@ export async function summarizeDialoguesWithRecovery(
   })
 }
 
-/** 组装 checkpoint 落地消息（置于消息头，模型视作既定背景） */
+/** Build the landed checkpoint message (placed at the head of messages so the model treats it as established background) */
 export function buildCheckpointMessage(summary: string): SystemMessage {
   return new SystemMessage(
     `${CHECKPOINT_PREAMBLE}\n\n<compacted-summary>\n${summary}\n</compacted-summary>`
   )
 }
 
-/** 压缩 checkpoint（持久化于 topic_compactions 表，每话题一行） */
+/** Compaction checkpoint (persisted in topic_compactions, one row per topic) */
 export interface CompactionCheckpoint {
-  /** 已摘要段的最末对话记录 id（边界；后续只合并新增的早期对话） */
+  /** Last dialogue record id of the summarized stretch (the boundary; later runs merge only newly added early dialogue) */
   boundaryId: number
   summary: string
 }
 
 /**
- * 工具结果裁剪：超预算时保留有界头/尾，中间替换为省略标记。
- * 未超预算时原样返回（无成本）。
+ * Tool-result pruning: when over budget keep a bounded head/tail and replace the middle with an
+ * omission marker. Returns the input unchanged when within budget (zero cost).
  */
 export function pruneToolOutput(text: string, budget = TOOL_RESULT_PRUNE_CHARS): string {
   if (!text || text.length <= budget) return text
@@ -247,7 +249,7 @@ export function pruneToolOutput(text: string, budget = TOOL_RESULT_PRUNE_CHARS):
   return `${head}\n${marker}\n${tail}`
 }
 
-/** 供日志使用的安全错误格式化 */
+/** Safe error formatting for logs */
 export function compactionError(err: unknown): void {
   logger.warn('[Compaction] Summary compaction failed, falling back to character-budget truncation:', err)
 }

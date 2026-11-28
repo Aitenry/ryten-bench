@@ -1,21 +1,26 @@
 import { getMainLanguage } from './index'
 
 /**
- * 天气工具（get_weather）的返回文案——**会渲染在聊天的工具调用卡片上**，因此跟随界面语言。
+ * Result texts for the weather tool (get_weather) -- **rendered on the chat tool-call cards**, so
+ * they follow the UI language.
  *
- * 与 `messages.ts` 的 `weather` 分工：那边是底栏天气组件（主进程把缓存下发给渲染层前用它
- * 渲染 weatherDesc / label）；这里是工具把手里的结果告诉用户的话术，含天气码、风向、周几
- * 三张词表——`shared/weather-utils.ts` 的 weatherCodeMap / windDirectionLabel / weekdayLabel
- * 是这一路的旧中文表，只服务于主进程缓存的历史字段。
+ * Split with `weather` in `messages.ts`: that side is the bottom-bar weather widget (the main
+ * process uses it to render weatherDesc / label before pushing cached data to the renderer); this
+ * side is what the tool tells the user about the result it holds, including three term tables --
+ * weather codes, wind directions and weekdays -- while weatherCodeMap / windDirectionLabel /
+ * weekdayLabel in `shared/weather-utils.ts` are the legacy Chinese tables on the other path,
+ * serving only historical fields of the main-process cache.
  *
- * 中文是源语言，`enUSWeatherToolTexts` 用 `typeof` 约束，缺键/多键都是编译期错误。
- * 插值统一 `{{name}}`，由 `mainFormat` 替换（中英句式不同，占位符顺序由词条决定）。
+ * Chinese is the source language; `enUSWeatherToolTexts` is constrained with `typeof`, so missing
+ * or extra keys are compile errors. Interpolation is uniformly `{{name}}`, replaced by
+ * `mainFormat` (the placeholder order is decided per entry because Chinese and English phrasing
+ * differ).
  */
 export const zhCNWeatherToolTexts = {
-  // ----- 地点 -----
-  /** 地理编码没命中 */
+  // ----- Location -----
+  /** Geocoding returned no match */
   notFound: '未找到地点 "{{location}}" 的天气信息。',
-  /** 首选地点显示名：中文用全角顿号与括号，英文用半角逗号与括号 */
+  /** Preferred-location display name: full-width punctuation in Chinese, half-width in English */
   locationWithAdmin: '{{name}}，{{admin1}}（{{country}}）',
   location: '{{name}}（{{country}}）',
   coordinatesLabel: '经纬度 {{lat}}, {{lon}}',
@@ -30,12 +35,12 @@ export const zhCNWeatherToolTexts = {
   noDaily: '天气服务没有返回逐日预报。',
   noHourly: '天气服务没有返回逐小时预报。',
   hourlyUnavailable: '指定日期没有可用的逐小时数据（预报范围最长 16 天）。',
-  /** 其他匹配地点（用 location_index 选择） */
+  /** Other matching locations (pick one with location_index) */
   otherLocations: '\n**匹配地点（用 location_index 选择）：**',
   otherLocationWithAdmin: '  [{{index}}] {{name}}, {{admin1}}, {{country}}',
   otherLocation: '  [{{index}}] {{name}}, {{country}}',
 
-  // ----- 当前实况 -----
+  // ----- Current conditions -----
   timezoneLine: '时区：{{timezone}}（UTC{{offset}}） · 观测时间：{{observedAt}}',
   timezoneLineNoObservation: '时区：{{timezone}}（UTC{{offset}}）',
   currentHeader: '**当前实况**',
@@ -46,7 +51,7 @@ export const zhCNWeatherToolTexts = {
   precipitation: '  降水：{{precip}} mm（雨 {{rain}} mm / 阵雨 {{showers}} mm / 雪 {{snow}} cm）',
   cloudPressure: '  云量：{{cloud}}% · 气压：{{pressure}} hPa',
 
-  // ----- 未来预报 -----
+  // ----- Forecast -----
   forecastHeader: '**未来 {{days}} 天预报**\n',
   today: '今天',
   daily:
@@ -59,10 +64,10 @@ export const zhCNWeatherToolTexts = {
   hourly:
     '  {{time}} {{condition}}，{{temp}}°C，降水概率 {{prob}}% / {{precip}}mm，风 {{speed}}km/h {{direction}}',
 
-  /** 天气码不在词表里时的兜底（weatherCodeLabel 用） */
+  /** Fallback when a weather code is not in the table (used by weatherCodeLabel) */
   unknownCode: '天气码 {{code}}',
 
-  /** WMO 天气码 → 描述（28 条，与 shared/weather-utils.ts 的 weatherCodeMap 同集） */
+  /** WMO weather code -> description (28 entries; same set as weatherCodeMap in weather-utils) */
   codes: {
     0: '晴天',
     1: '大部晴朗',
@@ -94,7 +99,7 @@ export const zhCNWeatherToolTexts = {
     99: '大冰雹雷暴'
   },
 
-  /** 16 方位缩写 → 风向描述 */
+  /** 16-point compass abbreviation -> wind direction label */
   windDirections: {
     N: '北风',
     NNE: '北东北风',
@@ -114,7 +119,7 @@ export const zhCNWeatherToolTexts = {
     NNW: '北西北风'
   },
 
-  /** Date.getDay() 键（0 = 周日）→ 周几 */
+  /** Date.getDay() keys (0 = Sunday) -> weekday label */
   weekdays: {
     sun: '周日',
     mon: '周一',

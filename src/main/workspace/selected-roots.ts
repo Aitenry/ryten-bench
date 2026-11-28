@@ -1,32 +1,37 @@
 /**
- * 「用户经系统对话框亲自选过」的目录登记表。
+ * Registry of directories "personally selected by the user through a system dialog".
  *
- * 背景（安全审计 S03）：渲染层可以把 `harness.workspacePath` 改成任意目录，而
- * 文件类 IPC 用这个值当工作区根做 `assertInsideWorkspace`——于是越权读写任意文件。
- * 只校验「路径在库里」还不够：`workspace-create` 本身也接受渲染层传入的任意 path。
+ * Background (security audit S03): the renderer can point `harness.workspacePath` at any
+ * directory, and the file IPC handlers use that value as the workspace root for
+ * `assertInsideWorkspace` — thus allowing arbitrary files to be read/written beyond the
+ * intended scope. Checking only "the path is in the database" is not enough: `workspace-create`
+ * itself also accepts an arbitrary path passed from the renderer.
  *
- * 因此工作区目录的信任来源收敛为两条：
- * 1. 用户在系统目录选择框（`dialog.showOpenDialog`）里**亲手点过**的目录（本模块记录）；
- * 2. 已经落进 `workspace` 表的工作区行（由主进程写入，渲染层只能引用其 id/路径）。
+ * So the trust sources for workspace directories are narrowed to two:
+ * 1. directories the user **picked in person** in the system directory chooser
+ *    (`dialog.showOpenDialog`), recorded by this module;
+ * 2. workspace rows already stored in the `workspace` table (written by the main process; the
+ *    renderer can only reference their id/path).
  *
- * 这是一个内存态白名单：重启后需要重新选目录——可接受，因为新建工作区本来就要先弹框；
- * 已存在的用户工作区走第 2 条，不受影响。
+ * This is an in-memory allowlist: a restart requires picking the directory again — acceptable,
+ * because creating a workspace has to show the dialog first anyway; existing user workspaces go
+ * through source 2 and are unaffected.
  */
 import { basename, dirname, join, resolve, sep } from 'path'
 import * as fs from 'fs'
 
-/** 最多记住的目录数（防止渲染层反复弹框把内存撑大；对话框本身需要用户操作，实际很难触顶） */
+/** Maximum number of remembered directories (prevents the renderer from growing memory by repeated dialog opens; the dialog itself needs user action, so the cap is rarely reached) */
 const MAX_REMEMBERED_ROOTS = 64
 
 const selectedRoots = new Set<string>()
 
-/** 路径比较键：去掉尾部分隔符，Windows 下大小写不敏感 */
+/** Path comparison key: strips trailing separators and is case-insensitive on Windows */
 export function workspacePathKey(input: string): string {
   const normalized = resolve(input).replace(/[\\/]+$/, '')
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
-/** 记录一个用户亲手选过的目录（按 LRU 上限淘汰最旧的） */
+/** Record a directory the user picked in person (evicting the oldest by LRU cap) */
 export function rememberSelectedRoot(dir: string): void {
   if (typeof dir !== 'string' || !dir.trim()) return
   const key = workspacePathKey(dir)
@@ -39,15 +44,16 @@ export function rememberSelectedRoot(dir: string): void {
   }
 }
 
-/** 该目录是否是用户经系统对话框亲手选过的 */
+/** Whether the directory was picked by the user in person through a system dialog */
 export function isUserSelectedRoot(dir: string): boolean {
   if (typeof dir !== 'string' || !dir.trim()) return false
   return selectedRoots.has(workspacePathKey(dir))
 }
 
 /**
- * 目标路径是否落在给定的根目录内（字符串级；符号链接的 realpath 校验由调用方补）。
- * 抽出来是因为 IPC 层与文件工具层都需要同一套边界语义，避免两份 `isPathInside` 漂移。
+ * Whether the target path falls inside the given root directory (string level; the caller adds
+ * the symlink realpath check). Extracted because the IPC layer and the file tool layer both need
+ * the same boundary semantics, avoiding two drifting copies of `isPathInside`.
  */
 export function isPathInsideRoot(target: string, root: string): boolean {
   const normalizedRoot = resolve(root)
@@ -60,12 +66,14 @@ export function isPathInsideRoot(target: string, root: string): boolean {
 }
 
 /**
- * 解析真实路径；目标不存在（新建文件/目录）时，沿父目录回溯到最近的已存在祖先，
- * 再把不存在的尾部拼回去。
+ * Resolve the real path; when the target does not exist (new file/directory), walk up to the
+ * nearest existing ancestor and append the missing tail back.
  *
- * 为什么需要（安全审计 S06）：字符串级 `path.relative` 校验挡不住符号链接——工作区内
- * 若存在指向根外的 symlink/junction，写操作会跟随链接落到根外。realpath 先解析链接，
- * 再做边界比较；「目标尚不存在」是写文件的常态，所以要能处理缺失尾部。
+ * Why this is needed (security audit S06): a string-level `path.relative` check cannot stop
+ * symlinks — if the workspace contains a symlink/junction pointing outside the root, writes
+ * follow the link and land outside. realpath resolves links first and the boundary comparison
+ * happens afterwards; "the target does not exist yet" is the normal case when writing files, so
+ * the missing tail must be handled.
  */
 export function realpathWithMissingTail(input: string): string {
   let current = resolve(input)
@@ -84,8 +92,9 @@ export function realpathWithMissingTail(input: string): string {
 }
 
 /**
- * 真实路径级边界校验：先 realpath 再比较，符号链接无法逃出根目录。
- * 路径不存在时按 `realpathWithMissingTail` 的解析结果比较（仍能挡住父目录链接）。
+ * Real-path level boundary check: realpath first, then compare, so symlinks cannot escape the
+ * root directory. For nonexistent paths the result of `realpathWithMissingTail` is compared
+ * (still blocking parent-directory links).
  */
 export function isReallyInsideRoot(target: string, root: string): boolean {
   return isPathInsideRoot(realpathWithMissingTail(target), realpathWithMissingTail(root))

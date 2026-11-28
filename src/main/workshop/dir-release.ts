@@ -1,12 +1,15 @@
 /**
- * 「替换/删除草稿目录前先放掉文件监听」的桥。
+ * Bridge for "release the file watcher before replacing/deleting a draft directory".
  *
- * 工坊服务（service/store/scaffold）刻意不 import electron，离线工装与单元测试
- * 才能用临时目录跑完整的生成→构建→发布链路。但 Windows 上 `fs.watch` 的目录句柄
- * 不允许删除/改名被监听的目录：插件工作区打开着时，删除草稿会 EPERM。
+ * The workshop service (service/store/scaffold) deliberately does not import electron, so
+ * offline tooling and unit tests can run the full generate → build → publish pipeline
+ * against a temp directory. On Windows, however, the directory handle held by `fs.watch`
+ * does not allow deleting/renaming the watched directory: deleting a draft while a plugin
+ * workspace is open fails with EPERM.
  *
- * 主进程装配时（system/harness.ts）注入工作区监听的真实实现；未注入时（离线工装）
- * 返回 null，调用方照常执行。这样两边都不需要知道对方。
+ * The main process injects the real workspace-watcher implementation during assembly
+ * (system/harness.ts); when nothing is injected (offline tooling) it returns null and the
+ * caller proceeds as usual. That way neither side needs to know about the other.
  */
 
 type DirReleaseHook = (dir: string) => (() => void) | null
@@ -15,7 +18,7 @@ type DirResumeHook = () => void
 let hook: DirReleaseHook | null = null
 let resumeHook: DirResumeHook | null = null
 
-/** 注入实现（主进程启动时调用；传 null 取消） */
+/** Inject the implementation (called on main-process startup; pass null to clear) */
 export function configureWorkshopDirReleaseHook(
   next: DirReleaseHook | null,
   resume: DirResumeHook | null = null
@@ -25,9 +28,10 @@ export function configureWorkshopDirReleaseHook(
 }
 
 /**
- * 目录即将被删除/替换：如果它正被工作区监听占用，先放掉监听。
+ * The directory is about to be deleted/replaced: if it is currently held by the workspace
+ * watcher, release the watcher first.
  *
- * @returns 恢复监听的函数（不需要恢复时返回 null）
+ * @returns A function that restores watching (null when no restore is needed)
  */
 export function releaseWorkshopDir(dir: string): (() => void) | null {
   try {
@@ -38,15 +42,17 @@ export function releaseWorkshopDir(dir: string): (() => void) | null {
 }
 
 /**
- * 操作完成后重新对齐工作区监听（按当前设置）。
+ * Re-align workspace watchers after an operation completes (per the current settings).
  *
- * 用于「旧目录被删掉后又在原位置建了同名目录」的覆盖/重建：`releaseWorkshopDir`
- * 的恢复回调执行时目录还不存在，监听会自然停掉；重建完成后需要再同步一次。
+ * Used for the overwrite/rebuild case where the old directory was deleted and a
+ * same-named directory was recreated at the same path: when `releaseWorkshopDir`'s restore
+ * callback runs the directory does not exist yet, so watching naturally stops; after the
+ * rebuild completes, sync once more.
  */
 export function resumeWorkshopDirs(): void {
   try {
     resumeHook?.()
   } catch {
-    // 监听恢复失败不影响已经完成的文件操作
+    // A failure to restore watching does not affect file operations already completed
   }
 }

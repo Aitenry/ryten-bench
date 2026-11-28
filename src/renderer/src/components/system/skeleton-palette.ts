@@ -3,19 +3,22 @@ import type { CSSProperties } from 'react'
 import { useTheme } from '../../hooks/useTheme'
 
 /**
- * 骨架屏的节奏与取色（不含任何 JSX 物料，见同目录 Skeleton.tsx）。
+ * Rhythm and color picking for skeletons (no JSX material; see Skeleton.tsx in the same directory).
  *
- * 拆成独立模块的原因有两个：一是 eslint 的 react-refresh 规则要求组件文件只导出组件；
- * 二是「脉动 CSS + 主题取色」是路由级骨架（route/RouteSkeleton.tsx）与组件级骨架共用的底层，
- * 单独放一处才不会再次出现两套颜色。
+ * Split into its own module for two reasons: the eslint react-refresh rule requires component files
+ * to export only components; and "pulse CSS + theme color picking" is the shared foundation of
+ * route-level skeletons (route/RouteSkeleton.tsx) and component-level skeletons, so keeping it in
+ * one place avoids having two sets of colors again.
  */
 
 /**
- * 脉动动画：透明度呼吸，深浅色通用。
+ * Pulse animation: opacity breathing, works in both light and dark themes.
  *
- * 兜底色刻意用「中灰 + 低透明度」而不是浅色主题的 rgba(0,0,0,.06)：裸用
- * `<SkeletonBlock />`（没有预设根节点、拿不到 --rb-skel-block）时，浅底与深底上都要看得见——
- * 只写浅色值会在深色主题下糊成一片。预设内部的精确取色仍走 CSS 变量。
+ * The fallback color deliberately uses "mid gray + low opacity" rather than the light theme's
+ * rgba(0,0,0,.06): when `<SkeletonBlock />` is used bare (no preset root node, so --rb-skel-block
+ * is unavailable), it must be visible on both light and dark backgrounds — a light-only value
+ * blurs into the background in dark themes. Exact colors inside presets still come from CSS
+ * variables.
  */
 export const SKELETON_CSS = `
 .rb-skel-block {
@@ -36,19 +39,19 @@ export const SKELETON_CSS = `
 
 export interface SkeletonPalette {
   isDark: boolean
-  /** 主色块 */
+  /** Main color block */
   block: string
-  /** 更弱的底（轨道 / 辐条） */
+  /** Weaker base (track / spokes) */
   track: string
-  /** 强调色点缀（甘特条、中心节点） */
+  /** Accent touches (Gantt bars, center nodes) */
   accent: string
-  /** 发丝线 */
+  /** Hairline */
   hairline: string
 }
 
 /**
- * 骨架取色：默认跟随应用主题（useTheme），`dark` 可显式覆盖——
- * ToolDetailView 这类自带暗色皮肤的面板不跟 antd token 走。
+ * Skeleton colors: follow the app theme by default (useTheme); `dark` can override explicitly —
+ * panels with their own dark skin, such as ToolDetailView, do not follow antd tokens.
  */
 export function useSkeletonPalette(dark?: boolean): SkeletonPalette {
   const { effectiveTheme } = useTheme()
@@ -63,7 +66,7 @@ export function useSkeletonPalette(dark?: boolean): SkeletonPalette {
   }
 }
 
-/** 把取色挂成 CSS 变量，铺在骨架预设的根节点上 */
+/** Expose the picked colors as CSS variables on the skeleton preset root node */
 export function skeletonVars(palette: SkeletonPalette): CSSProperties {
   return {
     '--rb-skel-block': palette.block,

@@ -123,7 +123,7 @@ export async function appendDocs(
     return { entitiesAdded: 0, relationsAdded: 0 }
   }
 
-  // 1. 并行读取所有文档内容
+  // 1. Read all document contents
   currentPhaseIndex = PHASE_ORDER.indexOf('collect')
   phaseProgress = 0
   sendProgress('collect', gp.messages.readingDocs, { totalDocs })
@@ -146,13 +146,13 @@ export async function appendDocs(
     throw new Error(gp.errors.emptyDocs)
   }
 
-  // 2. 获取已有图谱实体
+  // 2. Fetch existing graph entities
   currentPhaseIndex = PHASE_ORDER.indexOf('extract')
   phaseProgress = 0
   sendProgress('extract', gp.messages.loadingExistingEntities, { totalDocs })
   const { entities: existingEntities } = await getFullGraphData(wikiId)
 
-  // 3. 分块 + 统一抽取（实体+关系）
+  // 3. Chunking + unified extraction (entities + relations)
   const allChunks: TextChunk[] = []
   for (const entry of docEntries) {
     const chunks = splitByMarkdownHeaders(entry.content, maxChunkSize)
@@ -271,7 +271,7 @@ export async function appendDocs(
     )
   }
 
-  // Gleaning 二次抽取
+  // Gleaning second-pass extraction
   const enableGleaning = config?.enableGleaning !== false
   if (enableGleaning && allChunks.length > 0) {
     currentPhaseIndex = PHASE_ORDER.indexOf('gleaning')
@@ -348,13 +348,13 @@ export async function appendDocs(
     return { entitiesAdded: 0, relationsAdded: 0 }
   }
 
-  // 4. 将已有实体转为 ExtractedEntity 格式，与新实体一起合并
+  // 4. Convert existing entities to ExtractedEntity format and merge them with the new entities
   const existingAsExtracted: ExtractedEntity[] = existingEntities.map((e) => ({
     name: e.name,
     type: e.type,
     description: e.description || '',
     aliases: e.aliases ? JSON.parse(e.aliases) : [],
-    // confidence 库列为可空（DEFAULT 1），null 按默认置信度处理
+    // The confidence DB column is nullable (DEFAULT 1); treat null as the default confidence
     confidence: e.confidence ?? 1,
     source_doc_ids: e.source_note_ids ? JSON.parse(e.source_note_ids) : []
   }))
@@ -389,7 +389,7 @@ export async function appendDocs(
     }
   )
 
-  // 5. 跨块关系补全
+  // 5. Cross-chunk relation completion
   const allEntityNames = mergedEntities.map((e) => e.name)
   const entityDescMap = new Map(
     mergedEntities.map((e) => [e.name, { name: e.name, type: e.type, description: e.description }])
@@ -503,7 +503,7 @@ export async function appendDocs(
     }
   }
 
-  // 6. 批量保存合并后的实体
+  // 6. Batch-save the merged entities
   currentPhaseIndex = PHASE_ORDER.indexOf('save_entities')
   phaseProgress = 0
   sendProgress(
@@ -535,7 +535,7 @@ export async function appendDocs(
     relationCount: allNewRelations.length
   })
 
-  // 7. 查询已有关系，与新抽取关系合并用于置信度计算
+  // 7. Query existing relations and merge them with newly extracted relations for confidence scoring
   currentPhaseIndex = PHASE_ORDER.indexOf('load_existing_relations')
   phaseProgress = 0
   sendProgress('load_existing_relations', gp.messages.loadingExistingRelations, {
@@ -569,7 +569,7 @@ export async function appendDocs(
     }
   )
 
-  // 8. 混合置信度计算
+  // 8. Hybrid confidence scoring
   currentPhaseIndex = PHASE_ORDER.indexOf('adjust_confidence')
   phaseProgress = 0
   sendProgress('adjust_confidence', gp.messages.adjustingConfidence, {
@@ -586,7 +586,7 @@ export async function appendDocs(
     statWeight
   )
 
-  // 9. 更新实体置信度
+  // 9. Update entity confidence
   currentPhaseIndex = PHASE_ORDER.indexOf('update_confidence')
   phaseProgress = 0
   sendProgress('update_confidence', gp.messages.updatingConfidence, {
@@ -607,7 +607,7 @@ export async function appendDocs(
     relationCount: allNewRelations.length
   })
 
-  // 10. 去重并批量保存关系
+  // 10. Deduplicate and batch-save relations
   currentPhaseIndex = PHASE_ORDER.indexOf('save_relations')
   phaseProgress = 0
   sendProgress('save_relations', gp.messages.savingCrossChunkRelations, {
@@ -656,7 +656,7 @@ export async function appendDocs(
     `Notes append completed: ${mergedEntities.length - existingEntities.length} entities, ${savedRelationCount} relations in ${Date.now() - startTime}ms`
   )
 
-  // 更新 build job
+  // Update the build job
   const existingJob = await getBuildJobByWikiId(wikiId)
   const existingDocIds: number[] = existingJob?.processed_note_ids
     ? JSON.parse(existingJob.processed_note_ids)

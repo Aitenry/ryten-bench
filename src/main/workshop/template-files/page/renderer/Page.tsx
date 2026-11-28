@@ -4,19 +4,22 @@ import { RiSaveLine, RiRefreshLine } from '@remixicon/react'
 import { invoke } from './context'
 
 /**
- * ${vars.title} 的页面。
+ * Page for ${vars.title}.
  *
- * 数据来源是插件自己的主进程通道（plugin:${vars.id}:state-get / plugin:${vars.id}:state-set）——
- * 页面永远不直接读磁盘，跨进程一律走 plugin:<id>:* 通道（契约见 WORKSHOP.md）。
+ * Data comes from the plugin's own main-process channels
+ * (plugin:${vars.id}:state-get / plugin:${vars.id}:state-set) — the page never reads the disk
+ * directly; everything cross-process goes through plugin:<id>:* channels.
  *
- * 两个容易犯的错（都在 WORKSHOP.md 第 6 节里，验收电池会点名）：
- * 1. **根节点不能带 `overflow-auto`**：宿主的插件容器高度是确定的，根节点自己滚会把标题一起
- *    滚出窗口、并顶出「整页滚动条」。正确写法见下面的根节点 + 正文块（要滚只滚正文块）；
- * 2. **不要用 Tailwind 的 `dark:` 变体做暗色**：插件编出来的 CSS 里 `dark:` 落成的是
- *    `prefers-color-scheme`（跟操作系统配色），而应用主题是宿主自己的一套（还可能按时间切）
- *    ——两者对不上。颜色取 antd token（`theme.useToken()`）或宿主
- *    `@host/renderer/hooks/useTheme` 的 `effectiveTheme`（插件模板 full 的
- *    `renderer/components/ui.tsx` 里有现成的 `usePluginPalette()` 可以直接抄）。
+ * Two easy mistakes (both named by the acceptance battery):
+ * 1. **The root node must not use `overflow-auto`**: the host's plugin container has a fixed
+ *    height, so a scrolling root drags the title out of the window and produces a full-page
+ *    scrollbar. Use the root + body block below instead (only the body scrolls).
+ * 2. **Do not use Tailwind's `dark:` variant for dark mode**: in the CSS the plugin builds,
+ *    `dark:` compiles to `prefers-color-scheme` (follows the OS color scheme), while the app
+ *    theme is the host's own (and may switch by time of day) — the two never line up. Take
+ *    colors from antd tokens (`theme.useToken()`) or the host
+ *    `@host/renderer/hooks/useTheme` `effectiveTheme` (the full plugin template's
+ *    `renderer/components/ui.tsx` has a ready-made `usePluginPalette()` to copy).
  */
 export default function Page(): React.JSX.Element {
   const [value, setValue] = useState('')
@@ -49,7 +52,7 @@ export default function Page(): React.JSX.Element {
   }
 
   return (
-    // 根节点：撑满宿主给的高度、自己不滚（整页不出滚动条）
+    // Root: fill the height the host provides and do not scroll itself (no page-level scrollbar)
     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden p-6">
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">

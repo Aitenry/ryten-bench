@@ -5,16 +5,18 @@ import { useTranslation } from '@renderer/i18n'
 import { systemSettingsSections } from '@renderer/components/system/settings/sections'
 
 /**
- * 「更多」里的助手设置页 —— 侧栏「更多」菜单选中的那一项，在这里完整展示。
+ * Assistant settings page under "More" — the item selected in the sidebar's "More" menu is shown
+ * here in full.
  *
- * 只有助手这一组设置（智能体 / 技能 / 记忆 / MCP）走独立页面（用户 2026-11-20
- * 「只要助手的」）；常规设置仍在设置弹窗里。
+ * Only the assistant group of settings (agents / skills / memory / MCP) gets a standalone page
+ * (user feedback 2026-11-20: "assistant only"); regular settings stay in the settings modal.
  *
- * 页面不再带左侧菜单：入口改成侧栏的「更多」下拉菜单（见 AppShell.tsx），
- * 菜单只负责选择，选中后整页就是该项内容——顶部 icon + 大标题 + 描述，
- * 下面沿用设置页的分区卡片（`SettingsSection` 已按更宽松的 toC 样式重构）。
- * 页面自己的 `SettingsPageHeader` 在独立页面里隐藏（描述已经在 hero 里），
- * 由 `main.css` 的 `.more-detail .sui-page-header` 控制。
+ * The page no longer carries a left-hand menu: the entry point is the sidebar's "More" dropdown
+ * (see AppShell.tsx), which only selects; once chosen the whole page is that item's content —
+ * icon, large title and description at the top, with the settings section cards below
+ * (`SettingsSection` has been reworked for the roomier toC styling). The page's own
+ * `SettingsPageHeader` is hidden on the standalone page (the description already lives in the
+ * hero), controlled by `.more-detail .sui-page-header` in `main.css`.
  */
 
 const ASSISTANT_SECTIONS = systemSettingsSections
@@ -27,9 +29,11 @@ const More: React.FC = () => {
   const { tab } = useParams()
 
   /**
-   * 路由里的 tab 不存在（旧链接 / 手改地址）时**重定向**到第一个可用页签，不白屏、也不
-   * 让地址栏停在一个不存在的路径上——旧实现只做内容回落，用户看到的是「智能体」页而
-   * 地址栏仍是 /more/workshop，侧栏再点同一条也只会重复导航同一个地址（表现为卡住）。
+   * When the tab in the route does not exist (old link / hand-edited address), **redirect** to
+   * the first available tab instead of a blank screen, and never leave the address bar on a
+   * nonexistent path. The old implementation only fell back in content: the user saw the "agents"
+   * page while the address bar still said /more/workshop, and clicking the same item in the
+   * sidebar only re-navigated to the same address (appearing stuck).
    */
   const known = ASSISTANT_SECTIONS.find((section) => section.tabKey === tab)
   if (!known) {
@@ -39,13 +43,15 @@ const More: React.FC = () => {
   const active = known
   const ActiveView = active.Component
   /**
-   * 技能页是唯一的「填满剩余高度」页面：目录区固定在顶部，技能卡片列表在下面自己
-   * 滚动。其它页仍按内容自然增高、整页滚动（用户 2026-11-27：技能页不能只占半屏、
-   * 小屏不要莫名出现整页滚动条）。
+   * The skills page is the only one that "fills the remaining height": its header stays pinned at
+   * the top and the skill card list scrolls on its own below. Other pages still grow with their
+   * content and scroll as a whole (user feedback 2026-11-27: the skills page must not occupy only
+   * half the screen, and small windows must not suddenly show a whole-page scrollbar).
    */
   const fillPage = active.tabKey === 'skills'
 
-  /** 页头图标：注册表里是 16px 的导航图标，hero 里放大到 22px */
+  /** Page header icon: the registry entry is a 16px navigation icon; the hero enlarges it to
+   *  22px */
   const heroIcon = React.isValidElement(active.icon)
     ? React.cloneElement(active.icon as React.ReactElement<{ size?: number }>, { size: 20 })
     : active.icon

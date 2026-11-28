@@ -1,17 +1,21 @@
 /**
- * AI 工具注册表的**纯逻辑**（零 import，可被 node 直接加载做离线回归）。
+ * **Pure logic** of the AI tool registry (zero imports, loadable directly by node for offline
+ * regression testing).
  *
- * 为什么从 `builders.ts` 抽出来：注册表要合并三路来源（本地工具 / 插件贡献 / MCP 服务器），
- * 而「同名谁赢、清单顺序、前缀命名」这些规则恰恰是最容易出漂移的地方，必须能离线断言。
- * builders.ts 依赖 AI 层/electron 等运行期模块（且是**无扩展名相对导入**，Node 直接加载
- * 不了），所以把规则搬到这里：谁都不 import，测试直接 `import` 本文件即可。
+ * Why it was extracted from `builders.ts`: the registry merges three sources (local tools / plugin
+ * contributions / MCP servers), and the rules for "who wins on duplicate names, list order,
+ * prefixed naming" are exactly the ones most prone to drift, so they must be assertable offline.
+ * builders.ts depends on runtime modules such as the AI layer/electron (and uses **extensionless
+ * relative imports**, which Node cannot load directly), so the rules live here: nothing is
+ * imported, and tests can simply `import` this file.
  */
 
 /**
- * 工具在设置页/清单里的展示元数据。
+ * Display metadata for a tool in the settings page/list.
  *
- * 与 core 的 `ToolInfo`（`src/main/plugins/tool-contract.ts`）**结构一致**：这里刻意不 import
- * 那份定义，只为让本模块保持零依赖（见文件头注释）。赋值方向是安全的——结构相同即兼容。
+ * **Structurally identical** to core's `ToolInfo` (`src/main/plugins/tool-contract.ts`): that
+ * definition is deliberately not imported here, only to keep this module zero-dependency (see the
+ * file header). The assignment direction is safe — identical structure means compatible.
  */
 export interface ToolInfoLike {
   name: string
@@ -20,23 +24,24 @@ export interface ToolInfoLike {
   icon: string
   color: string
   /**
-   * 来源标签：`system` / `plugin` / `mcp`（与 core 的 `ToolSourceKind` 同值）。
-   * 本模块保持零依赖，故不 import 那份类型；字段只做透传，合并规则不关心它。
+   * Source label: `system` / `plugin` / `mcp` (same values as core's `ToolSourceKind`).
+   * This module stays zero-dependency, so that type is not imported; the field is passed through
+   * and the merge rules don't care about it.
    */
   source?: 'system' | 'plugin' | 'mcp'
 }
 
-/** 一路工具来源：名字 + 展示元数据，以及「拿到可调用实例」的工厂 */
+/** One tool source: name + display metadata, plus a factory that yields a callable instance */
 export interface ToolSource<T = unknown> {
   info: ToolInfoLike
-  /** 真正构建工具实例（延迟到需要时调用） */
+  /** Actually builds the tool instance (called lazily when needed) */
   build: () => T
 }
 
-/** 已告警过的重名（同名每轮组装都会撞上，只提示一次，避免刷日志） */
+/** Duplicate names already warned about (collisions recur on every assembly round; warn once to avoid log spam) */
 const warnedConflicts = new Set<string>()
 
-/** 记录并提示一次重名冲突（本地工具优先于一切，先到先得） */
+/** Record and warn once about a duplicate-name conflict (local tools win over everything, first come first served) */
 export function warnConflict(name: string, onWarn?: (message: string) => void): void {
   if (warnedConflicts.has(name)) return
   warnedConflicts.add(name)
@@ -45,22 +50,24 @@ export function warnConflict(name: string, onWarn?: (message: string) => void): 
   else console.warn(message)
 }
 
-/** 合并结果：可调用实例表 + 展示清单（同一个顺序与同一套去重规则） */
+/** Merge result: callable instance map + display list (same order and same dedup rules) */
 export interface MergedTools<T> {
   builders: Record<string, () => T>
   infos: ToolInfoLike[]
 }
 
 /**
- * 合并三路工具来源（顺序即优先级）：
- *  1. `local` —— 本地工具（weather / time），永远最先；
- *  2. `contributed` —— 各插件经 `harness.tool` 贡献点注册的工具，**按 name 排序**
- *     （注册表顺序取决于插件装载顺序，不排序的话启停一次插件就会让设置页下拉的顺序变化）；
- *  3. `mcp` —— 外部 MCP 服务器当前暴露的工具，同样按 name 排序
- *     （全名带服务器命名空间前缀，因此同一台服务器的工具自然聚在一起）。
+ * Merge the three tool sources (order is priority):
+ *  1. `local` — local tools (weather / time), always first;
+ *  2. `contributed` — tools registered by plugins through the `harness.tool` contribution point,
+ *     **sorted by name** (registry order depends on plugin load order; without sorting, toggling a
+ *     plugin once would change the dropdown order in the settings page);
+ *  3. `mcp` — tools currently exposed by external MCP servers, also sorted by name
+ *     (full names carry the server namespace prefix, so one server's tools naturally stay together).
  *
- * 同名先到先得，后来的记一次冲突告警后丢弃——**绝不抛错**：某台服务器/某个插件与内置工具
- * 撞名只该少一个工具，不该让整轮对话起不来。
+ * Duplicate names are first come first served; later ones emit a conflict warning and are dropped —
+ * **never throw**: a server or plugin colliding with a built-in tool should only cost one tool, not
+ * keep the whole conversation from starting.
  */
 export function mergeToolSources<T>(sources: {
   local: ToolSource<T>[]

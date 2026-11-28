@@ -10,19 +10,23 @@ import {
 } from '../lock/service'
 
 /**
- * 锁屏 IPC（core）。
+ * Lock screen IPC (core).
  *
- * 通道边界：**解锁码摘要永远不出主进程**。
- * 渲染层只能拿到快照（开关 / 是否有码 / 是否仍为默认码 / 自动锁屏时长 / 当前是否已锁），
- * 解锁、改码、开关都由主进程校验与落盘。
+ * Channel boundary: **the unlock code digest never leaves the main process**.
+ * The renderer only receives a snapshot (enabled / whether a code is set / whether it is still the
+ * default code / auto-lock timeout / whether it is currently locked); unlocking, changing the code
+ * and toggling are all validated and persisted by the main process.
  */
 export function registerLockIpc(): void {
-  // 自动锁屏监听只启动一次（与窗口重建无关）
+  // The auto-lock watcher starts only once, independent of window recreation
   startLockScreenWatcher()
 
   ipcMain.handle('lock-screen-state', () => getLockScreenSnapshot())
 
-  /** 手动锁屏（Esc）。未启用 / 没有解锁码时返回当前快照，不做任何事 */
+  /**
+   * Manual lock (Esc). When disabled / no unlock code is set, returns the current snapshot and does
+   * nothing.
+   */
   ipcMain.handle('lock-screen-lock', () => {
     lockNow('manual')
     return getLockScreenSnapshot()

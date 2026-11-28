@@ -1,5 +1,5 @@
-/* 跨模块通用词条：操作、状态、提示。
-   命名约定：t('common.<group>.<key>')，键名一律 camelCase，不写中文。 */
+/* Cross-module common entries: actions, states, messages.
+   Naming convention: t('common.<group>.<key>'), keys are always camelCase and never Chinese. */
 export const zhCNCommon = {
   action: {
     confirm: '确定',

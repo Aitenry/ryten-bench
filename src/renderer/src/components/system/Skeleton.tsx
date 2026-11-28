@@ -2,27 +2,33 @@ import React from 'react'
 import { SKELETON_CSS, skeletonVars, useSkeletonPalette } from './skeleton-palette'
 
 /**
- * 全局骨架屏物料（加载态的唯一真源）。
+ * Global skeleton materials (the single source of truth for loading states).
  *
- * 背景：改版前项目的加载态混着三套语言——antd `Spin` / `LoadingOutlined` / `RiLoader2Line spin-anim`，
- * 同一个列表上方换个页面就换个转圈样式。2026-09-26 起统一成骨架屏：结构先到位、数据随后填，
- * 避免「整块空白 + 居中转圈」的跳变。
+ * Background: before the redesign, loading states mixed three different languages — antd `Spin` /
+ * `LoadingOutlined` / `RiLoader2Line spin-anim` — so the same list showed a different spinner style
+ * on a different page. Since 2026-09-26 they are unified into skeletons: structure first, data
+ * filled in after, avoiding the jump of "blank block + centered spinner".
  *
- * 节奏与取色沿用 RouteSkeleton 那一套（1.8s ease-in-out 的透明度呼吸；
- * 深色 rgba(255,255,255,.09) / 浅色 rgba(0,0,0,.06)），路由级骨架（route/RouteSkeleton.tsx）
- * 与组件级骨架共用同一套底层常量——见同目录 skeleton-palette.ts。
+ * Rhythm and colors follow the RouteSkeleton set (1.8s ease-in-out opacity breathing; dark
+ * rgba(255,255,255,.09) / light rgba(0,0,0,.06)); route-level skeletons (route/RouteSkeleton.tsx)
+ * and component-level skeletons share the same low-level constants — see skeleton-palette.ts in the
+ * same directory.
  *
- * 取色走 CSS 变量：预设根节点调用一次 useSkeletonPalette()，把 --rb-skel-block / --rb-skel-track
- * 写进内联样式，子树里的 SkeletonBlock 直接引用变量——仪表盘这种几十块的结构没必要一块读一次 token。
+ * Colors go through CSS variables: the preset root node calls useSkeletonPalette() once and writes
+ * --rb-skel-block / --rb-skel-track into inline styles, and SkeletonBlock in the subtree references
+ * the variables directly — a dashboard with dozens of blocks need not read tokens per block.
  */
 
-/** 同一屏幕里可能同时挂多个骨架预设：样式表重复注入同一条规则没有副作用 */
+/**
+ * A screen may mount several skeleton presets at once: injecting the same rule twice is harmless
+ */
 export const SkeletonStyle: React.FC = () => <style>{SKELETON_CSS}</style>
 
 /**
- * 骨架块：唯一的原子件。宽高圆角都显式给，保证结构稳定（不用随机宽度）。
- * 不传 color 时用根节点上的 --rb-skel-block；没有预设根节点（裸用）时退到 SKELETON_CSS 里的
- * 中灰兜底色，深浅色主题都看得见。
+ * Skeleton block: the only atom. Width, height and radius are always explicit so the structure
+ * stays stable (no random widths). Without a color it uses --rb-skel-block from the root node; with
+ * no preset root node (bare use) it falls back to the mid-gray default in SKELETON_CSS, visible in
+ * both light and dark themes.
  */
 export const SkeletonBlock: React.FC<{
   w?: number | string
@@ -45,7 +51,10 @@ export const SkeletonBlock: React.FC<{
   />
 )
 
-/** 段落文本骨架：宽度按固定 pattern 递变（用随机数会让每次渲染的结构都在抖） */
+/**
+ * Paragraph text skeleton: widths follow a fixed pattern (random numbers would make the structure
+ * jitter on every render)
+ */
 const TEXT_RATIOS = [1, 0.94, 0.82, 0.97, 0.7, 0.88, 0.62]
 
 export const SkeletonTextLines: React.FC<{
@@ -71,9 +80,9 @@ export const SkeletonTextLines: React.FC<{
 }
 
 /**
- * 列表骨架：
- * - line    ：单行（可带前置图标位）——目录、文件夹列表
- * - stacked ：两行堆叠（标题 + 副信息）——话题栏、笔记列表
+ * List skeleton:
+ * - line    : single row (optionally with a leading icon slot) — directories, folder lists
+ * - stacked : two stacked rows (title + secondary info) — topic bar, note list
  */
 export const SkeletonListRows: React.FC<{
   rows?: number
@@ -105,7 +114,10 @@ export const SkeletonListRows: React.FC<{
   )
 }
 
-/** 设置面板行骨架：左「标题 + 描述」右「控件」，行间发丝线，对齐 SettingRow */
+/**
+ * Settings panel row skeleton: title + description on the left, control on the right, hairlines
+ * between rows, matching SettingRow
+ */
 export const SkeletonSettingRows: React.FC<{ rows?: number; dark?: boolean }> = ({
   rows = 4,
   dark
@@ -135,7 +147,10 @@ export const SkeletonSettingRows: React.FC<{ rows?: number; dark?: boolean }> = 
   )
 }
 
-/** 消息流骨架：加载更早的消息时用，左右交错的气泡轮廓 */
+/**
+ * Message stream skeleton: used when loading earlier messages, staggered bubble outlines on the
+ * left and right
+ */
 export const SkeletonMessages: React.FC<{ rows?: number; dark?: boolean }> = ({
   rows = 2,
   dark
@@ -153,7 +168,10 @@ export const SkeletonMessages: React.FC<{ rows?: number; dark?: boolean }> = ({
   )
 }
 
-/** 图谱画布骨架：中心节点 + 六条辐条 + 环绕节点，先把画布的结构占住 */
+/**
+ * Graph canvas skeleton: center node + six spokes + surrounding nodes, occupying the canvas
+ * structure first
+ */
 export const SkeletonGraph: React.FC<{ dark?: boolean }> = ({ dark }) => {
   const palette = useSkeletonPalette(dark)
   const spokes = [0, 60, 120, 180, 240, 300]
@@ -214,7 +232,10 @@ export const SkeletonGraph: React.FC<{ dark?: boolean }> = ({ dark }) => {
   )
 }
 
-/** 首页仪表盘骨架：问候 + 统计三块 + 快速新建三块 + 两栏列表（对齐 EmptyDashboard 排版） */
+/**
+ * Home dashboard skeleton: greeting + three stat blocks + three quick-create blocks + two-column
+ * list (matching the EmptyDashboard layout)
+ */
 export const SkeletonDashboard: React.FC<{ dark?: boolean }> = ({ dark }) => {
   const palette = useSkeletonPalette(dark)
   return (
@@ -280,7 +301,10 @@ export const SkeletonDashboard: React.FC<{ dark?: boolean }> = ({ dark }) => {
   )
 }
 
-/** 文档编辑器骨架：标题 + 元信息行 + 三段落（段落宽度逐段收窄） */
+/**
+ * Document editor skeleton: title + metadata row + three paragraphs (paragraph width narrows
+ * progressively)
+ */
 export const SkeletonDocPane: React.FC<{ dark?: boolean }> = ({ dark }) => {
   const palette = useSkeletonPalette(dark)
   return (
@@ -307,7 +331,7 @@ export const SkeletonDocPane: React.FC<{ dark?: boolean }> = ({ dark }) => {
   )
 }
 
-/** 待办面板骨架：勾选位 + 标题 + 字段胶囊行 + 正文 */
+/** Todo panel skeleton: checkbox slot + title + field pill row + body text */
 export const SkeletonTodoPane: React.FC<{ dark?: boolean }> = ({ dark }) => {
   const palette = useSkeletonPalette(dark)
   return (

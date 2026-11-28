@@ -34,39 +34,51 @@ import type {
 } from './types'
 
 /**
- * 安装记录 + 插件数据的双向同步。
+ * Bidirectional sync of install records and plugin data.
  *
- * 口径（契约 §4 / PL-18）：
- * - **本地视图** = `scanExternalPlugins()` + `isEnabledPlugin()`；数据 = 插件贡献的
- *   `PLUGIN_SYNC_SNAPSHOT`（设置 + 业务表，新口径），没有贡献时回退到
- *   `userData/plugin-state/<id>.json`（存在且 ≤256KiB 才带）；
- * - **push**：逐插件 `PUT /v1/hub/installs/{id}`，`data_rev` 取本地缓存（`userData/lattice-sync.json`
- *   的 `revs`）；`409 data_conflict` **记冲突不覆盖**（不静默 force）；平台 410/404（插件已被删除）→
- *   **保留本地插件目录与数据**，只把安装记录标记为 `orphaned`（同步详情可见，不自动删除用户数据）；
- * - **pull**：`GET /v1/hub/installs?include_data=1`，只应用 `data_rev` 更大的数据、应用云端启用态；
- *   **换机自动补齐**：平台有安装记录而本机没有插件包时（换机/重装/用户删了目录），按设置项
- *   （默认开启）自动调用安装、恢复安装包 + 源码，返回 `{installed,failed}` 明细；失败逐个可见、
- *   不中断其它插件；关闭时只把缺失项放进 `pending`。整个插件被平台删除的记录标记 `orphaned`；
- * - **触发**：启动/登录后 pull；插件状态变化（`plugin-state-changed`）后 5s 防抖 push；
- *   插件写业务表后调 `ctx.requestSync()` 也会触发同一条防抖 push。
+ * Semantics:
+ * - **Local view** = `scanExternalPlugins()` + `isEnabledPlugin()`; data = the
+ *   `PLUGIN_SYNC_SNAPSHOT` contributed by the plugin (settings + business tables), falling back to
+ *   `userData/plugin-state/<id>.json` when nothing is contributed (only included if it exists and
+ *   is ≤256KiB);
+ * - **push**: per plugin `PUT /v1/hub/installs/{id}`, with `data_rev` taken from the local cache
+ *   (`revs` in `userData/lattice-sync.json`); `409 data_conflict` **records a conflict without
+ *   overwriting** (no silent force); platform 410/404 (plugin already deleted) →
+ *   **keep the local plugin directory and data**, only mark the install record as `orphaned`
+ *   (visible in sync details, never auto-deletes user data);
+ * - **pull**: `GET /v1/hub/installs?include_data=1`, applies only data with a larger `data_rev` and
+ *   applies the cloud enabled state;
+ *   **automatic restore on a new machine**: when the platform has an install record but this
+ *   machine has no plugin package (new machine/reinstall/user deleted the directory), automatically
+ *   install it and restore the package + source per the setting (enabled by default), returning
+ *   `{installed,failed}` details; failures are visible per plugin and do not interrupt other
+ *   plugins; when disabled, missing items only go into `pending`. Records whose plugin was deleted
+ *   from the platform are marked `orphaned`;
+ * - **triggers**: pull after startup/login; a 5s debounced push after plugin state changes
+ *   (`plugin-state-changed`); calling `ctx.requestSync()` after a plugin writes business tables
+ *   triggers the same debounced push.
  *
- * 快照的**应用**必须幂等：`import` 由插件实现为替换语义，重复 pull / 冲突重放都不会产生重复行。
- * 使用快照贡献的插件不再读写 `plugin-state/<id>.json` 作为同步载荷（那里只有设置）；
- * 插件停用期间收到的快照先存内存，启用后由 `flushPendingSnapshots()` 补应用。
+ * Snapshot **application** must be idempotent: `import` is implemented by plugins with replace
+ * semantics, so repeated pulls / conflict replays never produce duplicate rows.
+ * Plugins using the snapshot contribution no longer read/write `plugin-state/<id>.json` as the sync
+ * payload (it only holds settings); snapshots received while a plugin is disabled are kept in memory
+ * and applied by `flushPendingSnapshots()` once it is enabled.
  *
- * `lattice-sync.json` 同时缓存最近一次同步结果：状态卡/设置页冷启动也能显示「上次同步」。
+ * `lattice-sync.json` also caches the most recent sync result, so the status card/settings page can
+ * show the "last sync" after a cold start.
  */
 
-/** 平台单插件数据上限（设计 §17.16）：256KiB JSON */
+/** Platform per-plugin data limit: 256KiB of JSON */
 const DATA_MAX_BYTES = 256 * 1024
 const SYNC_CACHE_FILE = 'lattice-sync.json'
 const PUSH_DEBOUNCE_MS = 5_000
 const PLUGIN_STATE_DIR = 'plugin-state'
 /**
- * 合并基线（merge base）落盘目录：`plugin-state/.lattice-sync-base/<id>.json`。
+ * On-disk directory for merge bases: `plugin-state/.lattice-sync-base/<id>.json`.
  *
- * 放在 `plugin-state/` 里面是刻意的：账号切换时 `PROFILE_ITEMS` 会把整个 `plugin-state/`
- * 对调，基线跟着账号走，不会出现「A 账号的 base 配 B 账号的 rev」这种串号。
+ * Living inside `plugin-state/` is intentional: on account switch `PROFILE_ITEMS` swaps the whole
+ * `plugin-state/` directory, so the base follows the account and an "account A base paired with
+ * account B rev" mix-up cannot happen.
  */
 const MERGE_BASE_DIR = '.lattice-sync-base'
 
@@ -74,64 +86,76 @@ interface LatticeSyncCacheFile {
   revs: Record<string, number>
   last?: LatticeSyncResult
   /**
-   * 未解决的 `data_rev` 冲突（push 时 409 记录，用户在插件仓库「解决冲突」里选择用哪边）。
-   * 只存本地缓存；`server_data` 在列表时按需拉取，避免把 256KiB 数据长期复制一份。
+   * Unresolved `data_rev` conflicts (recorded on a 409 during push; the user picks a side in
+   * "resolve conflict" in the plugin repository). Local cache only; `server_data` is fetched on
+   * demand when listing, to avoid keeping a long-lived copy of up to 256KiB of data.
    */
   conflicts?: LatticeSyncConflict[]
   /**
-   * 「平台已删除」的安装记录（orphaned）。保留本地插件目录与数据，只做标记；插件重新出现或
-   * push 成功后自动清除。同步详情里的「平台已删除的记录」区块读这份缓存。
+   * Install records whose plugin was deleted from the platform (orphaned). The local plugin
+   * directory and data are kept, only the marker is added; the marker clears automatically when the
+   * plugin reappears or the push succeeds. The "records deleted from the platform" section in sync
+   * details reads this cache.
    */
   orphaned?: LatticeSyncOrphanedItem[]
   /**
-   * 插件源码的本机落点（v2 §2 安装/重新发布后的附件信息）。
+   * Local location of the plugin source (attachment info after install/republish).
    *
-   * 只是**本地缓存**（不参与 push/pull）：`lattice:source-path` 仍以磁盘上的 source.json 为准，
-   * 这份记录用于排障与「冷启动后快速知道上次源码在哪」。
+   * Local cache only (not part of push/pull): `lattice:source-path` still comes from source.json on
+   * disk; this record is for troubleshooting and for quickly knowing where the source was after a
+   * cold start.
    */
   sources?: Record<string, LatticeSourceCacheEntry>
   /**
-   * 使用**插件自述快照**（`PLUGIN_SYNC_SNAPSHOT` 贡献）同步的插件。
+   * Plugins that sync using their **own snapshot** (the `PLUGIN_SYNC_SNAPSHOT` contribution).
    *
-   * 这些插件的数据不在 `plugin-state/<id>.json` 里（那里只有设置），所以：
-   * - push 只认插件 `export()` 的结果，不再回退到那个文件（否则会把云端数据覆盖成设置）；
-   * - pull 时插件未装载（停用）→ 快照先不落盘，等它启用后由 `requestSync` 再同步。
-   * 一旦观察到某插件贡献过快照就记下来，卸载/停用后仍然记得。
+   * The data of these plugins is not in `plugin-state/<id>.json` (that file only holds settings),
+   * so:
+   * - push only uses the plugin's `export()` result and never falls back to that file (otherwise
+   *   cloud data would be overwritten with settings);
+   * - if the plugin is not loaded (disabled) during pull → the snapshot is not written to disk; it is
+   *   synced again by `requestSync` once the plugin is enabled.
+   * Once a plugin is observed contributing a snapshot it is recorded, and stays recorded after
+   * uninstall/disable.
    */
   snapshotPlugins?: Record<string, true>
   /**
-   * 已经成功上传过「插件自述快照」的插件（**只**在带数据的 push 成功后标记）。
+   * Plugins whose own snapshot has already been uploaded successfully (marked **only** after a push
+   * that carried data).
    *
-   * 与 `snapshotPlugins`（口径标记，pull 导入时也会写）分开：首次从「设置文件口径」
-   * 切到「快照口径」时必须先上传一次整本数据，否则云端永远停在旧设置快照。
-   * 用这个标记判断「还没推过快照」，而不是 `snapshotPlugins`。
+   * Kept separate from `snapshotPlugins` (a semantics marker that pull import also writes): when
+   * switching from the "settings file" semantics to the "snapshot" semantics for the first time,
+   * the whole dataset must be uploaded once, otherwise the cloud stays on the old settings snapshot
+   * forever. This marker — not `snapshotPlugins` — decides "snapshot not pushed yet".
    */
   snapshotPushed?: Record<string, true>
   /**
-   * 本机有**还没推上去**的数据改动（插件写库后经 `ctx.requestSync()` 标记）。
+   * Local data changes that have **not been pushed yet** (marked via `ctx.requestSync()` after a
+   * plugin writes to its tables).
    *
-   * pull 的保护：`serverRev > localRev` 且本机脏时**不导入**（否则云端的更新会覆盖掉
-   * 本机未同步的修改，属于静默丢数据），改为记一条冲突，由用户在「解决冲突」里显式选
-   * 用本机还是用云端；push 成功 / 选云端后才清掉。
+   * Pull protection: when `serverRev > localRev` and the local copy is dirty, the cloud data is
+   * **not imported** (the cloud update would overwrite unsynced local edits — silent data loss);
+   * a conflict is recorded instead and the user explicitly chooses local or cloud in "resolve
+   * conflict". Cleared only after a successful push or choosing cloud.
    */
   dirty?: Record<string, true>
 }
 
-/** 一次未解决的插件数据冲突（`data_rev` 不一致） */
+/** One unresolved plugin data conflict (mismatched `data_rev`) */
 export interface LatticeSyncConflict {
   plugin_id: string
-  /** 本机 cached rev（push 时带上去的那个） */
+  /** Locally cached rev (the one sent with push) */
   local_rev: number
-  /** 服务端当前 rev（409 返回） */
+  /** Current server rev (returned by the 409) */
   server_rev: number
-  /** 本机数据快照（用户选择"用本机覆盖"时直接重推这份；无数据则 undefined） */
+  /** Local data snapshot (re-pushed as-is when the user chooses "use local"; undefined if no data) */
   local_data?: unknown
-  /** 冲突来源：真分叉 / 旧口径 rev 冲突 / 缺基线 */
+  /** Conflict source: real divergence / rev conflict from old semantics / missing base */
   reason?: 'diverged' | 'no-base' | 'rev'
   at: number
 }
 
-/** 某插件源码的本机落点缓存（`lattice-sync.json` 的 `sources[pluginId]`） */
+/** Cached local location of a plugin's source (`sources[pluginId]` in `lattice-sync.json`) */
 export interface LatticeSourceCacheEntry {
   path: string
   version?: string
@@ -141,16 +165,19 @@ export interface LatticeSourceCacheEntry {
 }
 
 interface LatticeSyncHooks {
-  /** 一次同步结束（index.ts 接成广播 `lattice:sync-state` + 刷新状态） */
+  /** A sync finished (wired in index.ts to broadcast `lattice:sync-state` and refresh state) */
   onSyncState?: (result: LatticeSyncResult) => void
-  /** 同步改动了启用态等状态（index.ts 接成广播 `lattice:state-changed`） */
+  /** Sync changed the enabled state etc. (wired in index.ts to broadcast `lattice:state-changed`) */
   onStateChanged?: () => void
   /**
-   * 换机自动补齐：调用现有安装流程（下载安装包 + 源码 + 写安装记录）。
+   * Automatic restore on a new machine: calls the existing install flow (download package + source
+   * + write install record).
    *
-   * 用钩子注入而不是直接 import `./hub`：`hub.ts` 反向依赖本模块的 `recordLatticeSourceCache`，
-   * 静态互相 import 在 CJS 打包下容易出现半初始化对象；由 `lattice/index.ts` 统一接线。
-   * 未接线（独立单元测试/异常装配）时自动补齐退化为 `pending` 列表，不崩。
+   * Injected as a hook instead of importing `./hub` directly: `hub.ts` depends back on this module's
+   * `recordLatticeSourceCache`, and static mutual imports easily produce half-initialized objects
+   * under the CJS bundle; `lattice/index.ts` does the wiring instead.
+   * When not wired (standalone unit tests / abnormal assembly), automatic restore degrades to a
+   * `pending` list instead of crashing.
    */
   installPlugin?: (pluginId: string, version?: string) => Promise<LatticeInstallResult>
 }
@@ -160,22 +187,23 @@ let cache: LatticeSyncCacheFile | null = null
 let lastResult: LatticeSyncResult | null = null
 let running: Promise<LatticeSyncResult> | null = null
 let debounceTimer: NodeJS.Timeout | null = null
-/** pull 应用云端启用态时会广播 plugin-state-changed：抑制由此触发的防抖 push */
+/** pull broadcasts plugin-state-changed when applying the cloud enabled state: suppress the debounced push it would trigger */
 let suppressPush = false
 /**
- * 账号数据空间切换期间挂起同步（见 `pauseLatticeSync`）。
+ * Suspends sync while the account data space is being switched (see `pauseLatticeSync`).
  *
- * 切换要对调 `plugin-state/` 与 `lattice-sync.json`——同步流程正好在读写这两处，
- * 必须在切换窗口里彻底停手，否则要么 rename 失败，要么把上一个账号的快照推进新空间。
+ * The switch swaps `plugin-state/` and `lattice-sync.json` — exactly the files the sync flow reads
+ * and writes, so it must stay completely idle during the switch window; otherwise the rename fails
+ * or the previous account's snapshot is pushed into the new space.
  */
 let paused = false
 
-/** 由 `lattice/index.ts` 在启动时接线（避免 sync → index 的循环依赖） */
+/** Wired by `lattice/index.ts` at startup (avoids the sync → index circular dependency) */
 export function configureLatticeSync(next: LatticeSyncHooks): void {
   hooks = next
 }
 
-// ---------- 小工具 ----------
+// ---------- Small helpers ----------
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
@@ -197,18 +225,20 @@ function pluginStatePath(pluginId: string): string {
   return path.join(app.getPath('userData'), PLUGIN_STATE_DIR, `${pluginId}.json`)
 }
 
-// ---------- 合并基线（merge base） ----------
+// ---------- Merge base ----------
 
-/** 某插件的基线文件路径（账号级：随 plugin-state 一起对调） */
+/** Merge base file path for a plugin (account-scoped: swapped together with plugin-state) */
 function mergeBasePath(pluginId: string): string {
   return path.join(app.getPath('userData'), PLUGIN_STATE_DIR, MERGE_BASE_DIR, `${pluginId}.json`)
 }
 
 /**
- * 读某插件的合并基线：**上次成功同步时的云端快照 + 对应 data_rev**。
+ * Reads a plugin's merge base: **the cloud snapshot from the last successful sync plus its
+ * data_rev**.
  *
- * 没有基线（升级后第一次、换节点、基线文件坏了）就返回 null——调用方必须退化成
- * 「先同步一次」而不是猜，这是「不把已删除/已修改的行并回来」的前提。
+ * Returns null without a base (first sync after upgrade, node change, corrupt base file) — callers
+ * must degrade to "sync once first" instead of guessing; that is the precondition for "never merge
+ * deleted/modified rows back".
  */
 function readMergeBase(pluginId: string): MergeBaseSnapshot | null {
   try {
@@ -230,7 +260,7 @@ function readMergeBase(pluginId: string): MergeBaseSnapshot | null {
   }
 }
 
-/** 写基线（原子替换；失败只告警，下一次合并会退化成 no-base，不会写坏数据） */
+/** Writes the base (atomic replace; failures only warn, the next merge degrades to no-base and data is not corrupted) */
 function writeMergeBase(pluginId: string, rev: number, data: unknown): void {
   if (!Number.isFinite(rev) || rev < 0 || data === undefined) return
   const file = mergeBasePath(pluginId)
@@ -247,12 +277,12 @@ function writeMergeBase(pluginId: string, rev: number, data: unknown): void {
     try {
       fs.rmSync(tmp, { force: true })
     } catch {
-      // 清理临时文件失败无意义
+      // Failing to clean up the temp file does not matter
     }
   }
 }
 
-/** 清掉某插件的基线（卸载清数据 / 手动重置用） */
+/** Clears a plugin's base (used on uninstall data purge / manual reset) */
 function clearMergeBase(pluginId: string): void {
   try {
     fs.rmSync(mergeBasePath(pluginId), { force: true })
@@ -261,7 +291,7 @@ function clearMergeBase(pluginId: string): void {
   }
 }
 
-/** 清掉全部基线（切换插件中心节点：不同节点的 data_rev 不可比） */
+/** Clears all bases (plugin hub node switch: data_rev is not comparable across nodes) */
 function clearAllMergeBases(): void {
   try {
     fs.rmSync(path.join(app.getPath('userData'), PLUGIN_STATE_DIR, MERGE_BASE_DIR), {
@@ -273,7 +303,7 @@ function clearAllMergeBases(): void {
   }
 }
 
-/** 读 `lattice-sync.json`（坏文件退回空缓存，不阻塞同步） */
+/** Reads `lattice-sync.json` (a corrupt file falls back to an empty cache without blocking sync) */
 function loadSyncCache(): LatticeSyncCacheFile {
   if (cache) return cache
   let last: LatticeSyncResult | undefined
@@ -383,9 +413,11 @@ function loadSyncCache(): LatticeSyncCacheFile {
 }
 
 /**
- * 记录某插件源码的本机落点（安装时下载源码 / 重新发布成功后调用）。
+ * Records the local location of a plugin's source (called after downloading the source on install /
+ * after a successful republish).
  *
- * 只写本地缓存，不参与 push/pull；失败只告警（源码已经在磁盘上，缓存只是附件信息）。
+ * Local cache only, not part of push/pull; failures only warn (the source is already on disk, the
+ * cache is just attachment info).
  */
 export function recordLatticeSourceCache(
   pluginId: string,
@@ -414,13 +446,14 @@ function saveSyncCache(): void {
     try {
       fs.rmSync(tmp, { force: true })
     } catch {
-      // 清理临时文件失败无意义
+      // Failing to clean up the temp file does not matter
     }
   }
 }
 
 /**
- * 统计一份快照里的业务数据条数（插件提供 `count()` 时才有；失败按 0 计，不影响同步）。
+ * Counts business data rows in a snapshot (only when the plugin provides `count()`; failures count
+ * as 0 and do not affect sync).
  */
 async function countSnapshotRows(pluginId: string, data: unknown): Promise<number> {
   const counter = pluginSyncSnapshot(pluginId)?.count
@@ -434,7 +467,7 @@ async function countSnapshotRows(pluginId: string, data: unknown): Promise<numbe
   }
 }
 
-/** 记下「这个插件的同步载荷由插件自己提供」——停用后仍要记得，避免回退到设置文件 */
+/** Records that "this plugin provides its own sync payload" — remembered across disable to avoid falling back to the settings file */
 function markSnapshotPlugin(pluginId: string): void {
   const store = loadSyncCache()
   if (store.snapshotPlugins?.[pluginId]) return
@@ -442,17 +475,17 @@ function markSnapshotPlugin(pluginId: string): void {
   saveSyncCache()
 }
 
-/** 该插件是否使用插件自述快照（曾经贡献过 `PLUGIN_SYNC_SNAPSHOT`） */
+/** Whether the plugin uses its own snapshot (it has contributed `PLUGIN_SYNC_SNAPSHOT` before) */
 function isSnapshotPlugin(pluginId: string): boolean {
   return loadSyncCache().snapshotPlugins?.[pluginId] === true
 }
 
-/** 该插件是否已经成功上传过一次自述快照（只有带数据的 push 成功才会置位） */
+/** Whether the plugin has uploaded its own snapshot successfully once (set only after a push that carried data succeeds) */
 function isSnapshotPushed(pluginId: string): boolean {
   return loadSyncCache().snapshotPushed?.[pluginId] === true
 }
 
-/** 记下「某插件的自述快照已经成功上传过」——之后不带 dirty 的 push 无需再传整本数据 */
+/** Records that "a plugin's own snapshot has been uploaded successfully" — later pushes without dirty need not resend the whole dataset */
 function markSnapshotPushed(pluginId: string): void {
   const store = loadSyncCache()
   if (store.snapshotPushed?.[pluginId]) return
@@ -460,7 +493,7 @@ function markSnapshotPushed(pluginId: string): void {
   saveSyncCache()
 }
 
-/** 插件写库后标记「本机有未推送的修改」（`ctx.requestSync()` 带插件 id 进来） */
+/** Marks "local has unpushed changes" after a plugin writes to its tables (`ctx.requestSync()` passes the plugin id) */
 export function markLatticePluginDirty(pluginId: string): void {
   const id = String(pluginId ?? '').trim()
   if (!id) return
@@ -485,10 +518,10 @@ function clearPluginDirty(pluginId: string): void {
 }
 
 /**
- * 记一条「本机有未同步修改、云端也有更新」的冲突（pull 侧）。
+ * Records a conflict for "local has unsynced changes and the cloud has updates too" (pull side).
  *
- * 与 push 的 409 冲突共用同一份 `conflicts` 列表和同一个「解决冲突」弹窗：
- * 用户选「用本机」= force push，选「用云端」= 导入；两条路都会清掉 dirty。
+ * Shares the same `conflicts` list and the same "resolve conflict" dialog as push 409 conflicts:
+ * the user choosing "use local" = force push, "use cloud" = import; both paths clear dirty.
  */
 function recordPullConflict(
   pluginId: string,
@@ -526,13 +559,15 @@ function recordPullConflict(
 }
 
 /**
- * 读同步载荷。
+ * Reads the sync payload.
  *
- * 优先级：
- * 1. 插件贡献了 `PLUGIN_SYNC_SNAPSHOT` → 用它的 `export()`（设置 + 业务表的完整快照）。
- *    这条路径**失败/超限就返回 null、不回退文件**：`plugin-state/<id>.json` 只是设置，
- *    拿它当快照上传会把云端数据覆盖成设置；
- * 2. 否则按老口径读 `plugin-state/<id>.json`（不存在 / 非法 JSON / 超 256KiB 都视为无数据）。
+ * Priority:
+ * 1. The plugin contributes `PLUGIN_SYNC_SNAPSHOT` → use its `export()` (a complete snapshot of
+ *    settings + business tables). This path **returns null on failure/oversize and never falls back
+ *    to the file**: `plugin-state/<id>.json` only holds settings, and uploading it as a snapshot
+ *    would overwrite cloud data with settings;
+ * 2. Otherwise read `plugin-state/<id>.json` with the legacy semantics (missing / invalid JSON /
+ *    over 256KiB all count as no data).
  */
 async function readPluginData(pluginId: string): Promise<{ data: unknown; bytes: number } | null> {
   const snapshot = pluginSyncSnapshot(pluginId)
@@ -555,13 +590,14 @@ async function readPluginData(pluginId: string): Promise<{ data: unknown; bytes:
         `[Lattice] Plugin snapshot export failed for ${pluginId}; cloud data is left untouched:`,
         err
       )
-      // 不标记 snapshotPlugins：让下一次 push 继续重试导出（标记了就会因为「不脏」而永远跳过）
+      // Do not mark snapshotPlugins: let the next push retry the export (marking it would make it skip forever as "not dirty")
       return null
     }
   }
 
-  // 已知使用自述快照、但当前没装载（停用/装载失败）：**不能**回退到设置文件——
-  // 那会把云端快照覆盖成一份设置。只同步 version/enabled，数据等插件启用后再推。
+  // Known to use its own snapshot but not loaded right now (disabled/load failed): must **not**
+  // fall back to the settings file — that would overwrite the cloud snapshot with settings. Only
+  // version/enabled are synced; data is pushed after the plugin is enabled.
   if (isSnapshotPlugin(pluginId)) return null
 
   const file = pluginStatePath(pluginId)
@@ -585,20 +621,23 @@ async function readPluginData(pluginId: string): Promise<{ data: unknown; bytes:
 }
 
 /**
- * 插件停用期间收到的云端快照（内存暂存）：等插件重新装载后再应用。
+ * Cloud snapshots received while a plugin is disabled (kept in memory): applied once the plugin is
+ * loaded again.
  *
- * 不能直接写 `plugin-state/<id>.json`——那是设置文件，写进去以后 push 会把
- * 设置当成快照推回云端（覆盖真数据）。所以这里只存内存，`plugin-state-changed`
- * 时尝试应用。
+ * They cannot be written straight to `plugin-state/<id>.json` — that is the settings file, and a
+ * later push would send those settings back to the cloud as a snapshot (overwriting real data). So
+ * they stay in memory and are applied on `plugin-state-changed`.
  */
 const pendingSnapshots = new Map<string, { data: unknown; rev: number }>()
 
 /**
- * 把云端快照应用到本机。
+ * Applies a cloud snapshot locally.
  *
- * - 插件装载中且实现了 `import` → 交给插件（**替换 + 幂等**，重复应用不产生重复行）；
- * - 使用自述快照的插件但当前未装载 → **不落盘**，暂存内存等启用后再应用（返回 false，rev 不前移）；
- * - 其余插件保持老口径：写回 `plugin-state/<id>.json`。
+ * - Plugin loaded and implements `import` → hand it to the plugin (**replace + idempotent**;
+ *   repeated application never produces duplicate rows);
+ * - Plugin uses its own snapshot but is not loaded → **do not write to disk**, keep it in memory
+ *   until it is enabled (returns false, rev is not advanced);
+ * - Other plugins keep the legacy semantics: write back to `plugin-state/<id>.json`.
  */
 async function applyRemoteData(pluginId: string, data: unknown, rev: number): Promise<boolean> {
   const snapshot = pluginSyncSnapshot(pluginId)
@@ -607,7 +646,7 @@ async function applyRemoteData(pluginId: string, data: unknown, rev: number): Pr
       await snapshot.import(data)
       pendingSnapshots.delete(pluginId)
       markSnapshotPlugin(pluginId)
-      // 应用成功 = 本机与云端这份快照对齐：它就成为下一次合并的 baseline
+      // Apply succeeded = local now matches this cloud snapshot: it becomes the baseline for the next merge
       writeMergeBase(pluginId, rev, data)
       logger.info(`[Lattice] Applied cloud snapshot via plugin: ${pluginId} (data_rev=${rev})`)
       return true
@@ -630,7 +669,7 @@ async function applyRemoteData(pluginId: string, data: unknown, rev: number): Pr
   return writePluginStateFile(pluginId, data)
 }
 
-/** 写回云端数据（原子写；超过 256KiB 的异常数据拒绝落盘） */
+/** Writes back cloud data (atomic write; oversized data over 256KiB is not written) */
 function writePluginStateFile(pluginId: string, data: unknown): boolean {
   let text: string
   try {
@@ -656,7 +695,7 @@ function writePluginStateFile(pluginId: string, data: unknown): boolean {
     try {
       fs.rmSync(tmp, { force: true })
     } catch {
-      // 清理临时文件失败无意义
+      // Failing to clean up the temp file does not matter
     }
     return false
   }
@@ -681,8 +720,9 @@ function mapRemoteInstall(raw: unknown): LatticeRemoteInstall {
           status: readOptionalString(pluginRaw.status)
         }
       : null,
-    // 平台对已删除插件有两种表现：明确返回 `plugin:null`，或软删后插件行仍在（`status:'removed'`）。
-    // 老平台两个字段都没有时不能当「已删除」（否则会把老平台的所有记录误标 orphaned）。
+    // The platform shows a deleted plugin in two ways: an explicit `plugin:null`, or the plugin row
+    // still present after a soft delete (`status:'removed'`). When an old platform has neither
+    // field, do not treat it as deleted (that would mark every record from old platforms orphaned).
     plugin_deleted:
       ('plugin' in record && record.plugin === null) ||
       readOptionalString(pluginRaw?.status) === 'removed',
@@ -690,9 +730,9 @@ function mapRemoteInstall(raw: unknown): LatticeRemoteInstall {
   }
 }
 
-// ---------- 本地视图 ----------
+// ---------- Local view ----------
 
-/** `lattice:hub-installs` 的返回：本机已安装插件 + 本地缓存的 data_rev */
+/** Return of `lattice:hub-installs`: locally installed plugins + cached local data_rev */
 export function listLatticeLocalInstalls(): LatticeInstallSummary[] {
   const revs = loadSyncCache().revs
   return scanExternalPlugins().map((plugin) => ({
@@ -711,23 +751,25 @@ export function getLastLatticeSyncResult(): LatticeSyncResult | null {
   return lastResult
 }
 
-/** 未解决的冲突列表（给渲染层「解决冲突」弹窗用；server_data 按需补） */
+/** Unresolved conflict list (for the renderer's "resolve conflict" dialog; server_data added on demand) */
 export function listLatticeSyncConflicts(): LatticeSyncConflict[] {
   return [...(loadSyncCache().conflicts ?? [])]
 }
 
-// ---------- 孤儿安装记录（平台已删除插件；保留本地数据，只做标记） ----------
+// ---------- Orphaned install records (plugin deleted from the platform; local data kept, only marked) ----------
 
-/** 当前仍未解决的「平台已删除」安装记录（本地插件目录与数据保留，不自动删除） */
+/** Install records still marked "deleted from the platform" (local plugin directory and data kept, never auto-deleted) */
 export function listLatticeSyncOrphaned(): LatticeSyncOrphanedItem[] {
   return [...(loadSyncCache().orphaned ?? [])]
 }
 
 /**
- * 标记/更新一条孤儿记录（幂等：同插件只保留一条）。
+ * Marks/updates an orphaned record (idempotent: one record per plugin).
  *
- * `at` 保留首次标记时间；`reason`/`error` 用最新一次观测覆盖（平台重新删除时可见最新原因）。
- * 清除只发生在 pull 观测到插件重新可见时（push 成功不等于插件还在，见 pushInstallRecords）。
+ * `at` keeps the first marking time; `reason`/`error` are overwritten by the latest observation (so
+ * the latest cause is visible if the platform deletes the plugin again). Clearing only happens when
+ * pull observes the plugin visible again (a successful push does not mean the plugin still exists,
+ * see pushInstallRecords).
  */
 function markLatticeOrphaned(
   pluginId: string,
@@ -753,7 +795,7 @@ function markLatticeOrphaned(
   )
 }
 
-/** 插件重新出现在平台上（pull 观测到 `plugin` 非 null）：清掉孤儿标记；本地数据不受影响 */
+/** The plugin reappears on the platform (pull observes a non-null `plugin`): clear the orphaned flag; local data is unaffected */
 function clearLatticeOrphaned(pluginId: string): boolean {
   const id = String(pluginId ?? '').trim()
   if (!id) return false
@@ -768,7 +810,7 @@ function clearLatticeOrphaned(pluginId: string): boolean {
   return true
 }
 
-/** `lattice:sync-details`：同步详情弹窗的数据（最近一次同步明细 + 冲突 + 孤儿记录） */
+/** `lattice:sync-details`: data for the sync details dialog (last sync detail + conflicts + orphaned records) */
 export function getLatticeSyncDetails(): LatticeSyncDetails {
   return {
     last: getLastLatticeSyncResult(),
@@ -778,10 +820,11 @@ export function getLatticeSyncDetails(): LatticeSyncDetails {
 }
 
 /**
- * 补齐云端数据快照，供用户对比「用本机 / 用云端」。
+ * Fetches cloud data snapshots so the user can compare "use local / use cloud".
  *
- * 409 响应里只有服务端 `data_rev`（不重复回传 256KiB 数据），所以这里对冲突插件单独
- * `GET /v1/hub/installs?include_data=1` 取一次；失败则只展示 rev，不阻塞弹窗。
+ * A 409 response only carries the server `data_rev` (no 256KiB payload echo), so this fetches the
+ * conflicting plugins' data separately via `GET /v1/hub/installs?include_data=1`; on failure it
+ * shows rev only instead of blocking the dialog.
  */
 export async function listLatticeSyncConflictsDetailed(): Promise<
   Array<LatticeSyncConflict & { server_data?: unknown }>
@@ -798,8 +841,9 @@ export async function listLatticeSyncConflictsDetailed(): Promise<
       const item = items.find((i) => i.plugin_id === conflict.plugin_id)
       return {
         ...conflict,
-        // 只有声明了「支持基于 merge base 的三方合并」的插件才显示「合并两边」：
-        // 旧版插件的 merge() 是无条件并集，会把本机删掉/改过的行回填，必须禁用。
+        // Only plugins declaring "supports merge-base three-way merge" show "merge both":
+        // the merge() of older plugins is an unconditional union and would bring back rows deleted/
+        // edited locally, so it must stay disabled.
         merge_supported: pluginSyncSnapshot(conflict.plugin_id)?.mergeBase === true,
         server_rev: item?.data_rev ?? conflict.server_rev,
         ...(item && item.data !== undefined ? { server_data: item.data } : {})
@@ -812,15 +856,17 @@ export async function listLatticeSyncConflictsDetailed(): Promise<
 }
 
 /**
- * 解决一个 `data_rev` 冲突。
+ * Resolves one `data_rev` conflict.
  *
- * - `strategy='local'`：用本机数据覆盖云端（`PUT ...?force=1`，语义即「最后写入者赢」）；
- * - `strategy='cloud'`：用云端数据覆盖本机（自述快照插件交给它的 `import`，其余写回
- *   `plugin-state/<id>.json`，并对齐 rev；云端无数据时保持两边一致）。
+ * - `strategy='local'`: overwrite the cloud with local data (`PUT ...?force=1`, i.e. "last writer
+ *   wins");
+ * - `strategy='cloud'`: overwrite local with cloud data (handed to the plugin's `import` for
+ *   own-snapshot plugins, otherwise written back to `plugin-state/<id>.json`, and rev aligned; when
+ *   the cloud has no data, both sides are kept consistent).
  *
- * 两种选择都必须是用户显式点击（不静默覆盖），与 ⑤ §12.7 的冲突模型一致。
+ * Both choices require an explicit user click (no silent overwrite).
  */
-/** 冲突处理策略：用本机 / 用云端 / 两边合并 */
+/** Conflict handling strategy: use local / use cloud / merge both */
 export type LatticeConflictStrategy = 'local' | 'cloud' | 'merge'
 
 export async function resolveLatticeSyncConflict(
@@ -855,7 +901,7 @@ export async function resolveLatticeSyncConflict(
       )
       if (typeof record?.data_rev === 'number') store.revs[id] = record.data_rev
       if (dataInfo) {
-        // 只有自述快照插件才需要合并基线（文件口径插件的 data 不参与三方合并）
+        // Only own-snapshot plugins need a merge base (file-semantics plugin data does not take part in three-way merges)
         if (pluginSyncSnapshot(id)) {
           writeMergeBase(id, store.revs[id] ?? conflict.local_rev, dataInfo.data)
         }
@@ -883,7 +929,7 @@ export async function resolveLatticeSyncConflict(
         if (item.data === undefined || item.data === null) {
           return { ok: false, error: '云端没有可合并的数据' }
         }
-        // 合并会改本机数据：先留一份回滚点，推送失败/409 时恢复，避免「半合并」
+        // Merging changes local data: keep a rollback point first and restore it on push failure/409 to avoid a half-merged state
         const beforeInfo = await readPluginData(id)
         const before = beforeInfo?.data
         markLatticePluginDirty(id)
@@ -931,8 +977,9 @@ export async function resolveLatticeSyncConflict(
             }
           }
         } else if (!isSnapshotPlugin(id)) {
-          // 云端没有数据：本机也清空，避免下次 push 又把旧数据推回去。
-          // 自述快照插件不走这条：`plugin-state/<id>.json` 是它的设置文件，删掉会丢设置。
+          // The cloud has no data: clear local as well so the next push does not send the old data
+          // back. Own-snapshot plugins skip this: `plugin-state/<id>.json` is their settings file
+          // and deleting it would lose settings.
           try {
             fs.rmSync(pluginStatePath(id), { force: true })
           } catch (err) {
@@ -943,7 +990,7 @@ export async function resolveLatticeSyncConflict(
       }
     }
     store.conflicts = (store.conflicts ?? []).filter((c) => c.plugin_id !== id)
-    // 三条路（用本机 / 用云端 / 合并）都把本机与云端对齐了：不再有未同步修改
+    // All three paths (use local / use cloud / merge) align local with cloud: no unsynced changes remain
     clearPluginDirty(id)
     saveSyncCache()
     try {
@@ -971,20 +1018,26 @@ export async function resolveLatticeSyncConflict(
 // ---------- push / pull ----------
 
 /**
- * 「合并云端数据」：逐插件做 **git 式快进 / 冲突**，不再做无条件并集。
+ * "Merge cloud data": per-plugin **git-style fast-forward / conflict**, no more unconditional
+ * unions.
  *
- * 旧实现（用户 2026-11-25 报障）把云端快照直接 `merge()` 进本机再 `force=1` 推回：
- * - 没有 merge base，分不清「本机删了」和「云端新增」→ 删掉/改过的行被回填；
- * - 不看本机 dirty，删完 5s 内点合并就会把行加回来；
- * - 推送失败也不回滚，本机留下「半合并」状态。
+ * The old implementation (reported by a user on 2026-11-25) `merge()`d the cloud snapshot into local
+ * data and pushed it back with `force=1`:
+ * - no merge base, so "deleted locally" could not be told apart from "added in the cloud" → deleted/
+ *   edited rows were restored;
+ * - local dirty state was ignored, so clicking merge within 5s after a delete brought the rows back;
+ * - a failed push did not roll back, leaving local data half-merged.
  *
- * 现在按 merge base（`plugin-state/.lattice-sync-base/<id>.json`）+ dirty/快照漂移判断：
- * - 只有本机动 → push（删除/修改往上推，不会被云端旧数据回填）；
- * - 只有云端动 → pull（本机没有任何未同步改动才允许覆盖）；
- * - 两边都动 → 记冲突，**绝不自动并集/覆盖**，由用户在「解决冲突」里显式选择；
- * - 一律不带 `force`，服务端 409 就是"云端又动了"，直接转冲突。
+ * It now decides from the merge base (`plugin-state/.lattice-sync-base/<id>.json`) plus dirty/
+ * snapshot drift:
+ * - only local changed → push (deletions/edits go up and are not restored by stale cloud data);
+ * - only cloud changed → pull (only allowed when local has no unsynced changes);
+ * - both changed → record a conflict, **never auto-union/overwrite**, the user explicitly chooses in
+ *   "resolve conflict";
+ * - never send `force`; a server 409 means "the cloud moved again" and turns directly into a
+ *   conflict.
  *
- * 失败按插件隔离：某个插件失败不影响其它插件。
+ * Failures are isolated per plugin: one plugin failing does not affect the others.
  */
 export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResult> {
   if (!isLatticeLoggedIn()) return { ok: false, error: '未登录插件中心，请先登录' }
@@ -1008,7 +1061,7 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
 
     for (const plugin of scanExternalPlugins()) {
       const contribution = pluginSyncSnapshot(plugin.id)
-      // 只有「自述快照」插件参与：没有 export 的插件没有可对齐的数据
+      // Only own-snapshot plugins take part: plugins without export have no data to align
       if (!contribution) continue
       const item = items.find((i) => i.plugin_id === plugin.id)
       if (!item || item.plugin_deleted) continue
@@ -1043,7 +1096,7 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
         }
 
         if (decision === 'no-base') {
-          // 升级后第一次 / 刚换节点：两边内容一致且本机不脏，可以安全地把云端这份记成基线
+          // First time after upgrade / just switched node: both sides match and local is clean, so the cloud copy can safely become the base
           if (!isPluginDirty(plugin.id) && snapshotsEqual(localInfo.data, remoteData)) {
             store.revs[plugin.id] = serverRev
             writeMergeBase(plugin.id, serverRev, remoteData)
@@ -1090,7 +1143,7 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
             mergedRows += await countSnapshotRows(plugin.id, localInfo.data)
             summaries.push(`${name}: 已推送本机更新`)
           } catch (err) {
-            // 409 = 比对之后云端又动了：转冲突，绝不 force 覆盖
+            // 409 = the cloud moved again after the comparison: turn into a conflict, never force-overwrite
             if (err instanceof LatticeApiError && err.status === 409) {
               recordPullConflict(
                 plugin.id,
@@ -1108,7 +1161,7 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
           continue
         }
 
-        // decision === 'pull'：本机没有任何未同步改动，才允许用云端快照替换本机
+        // decision === 'pull': only allowed to replace local with the cloud snapshot when local has no unsynced changes
         const before = localInfo.data
         if (!(await applyRemoteData(plugin.id, remoteData, serverRev))) {
           const restored = await restoreLocalSnapshot(plugin.id, before)
@@ -1143,8 +1196,9 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
     )
     const merged = pushed + pulled
     if (merged === 0 && failures.length === 0 && conflicts === 0) {
-      // 一个都没动、也没有失败/冲突：没装快照插件，或云端没有它们的快照。
-      // 不是错误——交给界面用「没有可合并的数据」提示，而不是弹「合并完成：0 个插件」。
+      // Nothing moved and no failure/conflict: no snapshot plugins installed, or the cloud has no
+      // snapshots for them. Not an error — let the UI say "no data to merge" instead of showing
+      // "merge complete: 0 plugins".
       return {
         ok: true,
         merged: 0,
@@ -1175,7 +1229,7 @@ export async function mergeAllLatticePluginData(): Promise<LatticeMergeDataResul
   }
 }
 
-/** 把本机快照恢复到合并前（插件的 `import` 是替换语义，幂等） */
+/** Restores the local snapshot to its pre-merge state (the plugin's `import` has replace semantics and is idempotent) */
 async function restoreLocalSnapshot(pluginId: string, before: unknown): Promise<boolean> {
   const importer = pluginSyncSnapshot(pluginId)?.import
   if (!importer) return false
@@ -1189,7 +1243,7 @@ async function restoreLocalSnapshot(pluginId: string, before: unknown): Promise<
   }
 }
 
-/** 从 409 响应里读服务端当前 rev（用于冲突记录；读不到就按 +1 估算） */
+/** Reads the current server rev from a 409 response (for conflict records; falls back to +1 estimate) */
 function conflictServerRev(err: LatticeApiError, fallback: number): number {
   const detail = asRecord(err.details)
   const server = asRecord(detail?.server)
@@ -1198,21 +1252,23 @@ function conflictServerRev(err: LatticeApiError, fallback: number): number {
   return fallback + 1
 }
 
-/** push 遇到「平台已删除」类错误（404/410） */
+/** Push hit a "deleted from the platform" error (404/410) */
 function isOrphanedPushError(err: unknown): err is LatticeApiError {
   return err instanceof LatticeApiError && (err.status === 404 || err.status === 410)
 }
 
 /**
- * 逐插件推安装记录（带本地数据时附 data + data_rev）。
+ * Pushes install records plugin by plugin (attaching data + data_rev when there is local data).
  *
- * - 409：云端被别的设备改过 → 记冲突不覆盖（用户显式选择）；
- * - 410/404：安装记录指向的插件已在平台删除 → **保留本地插件目录与 plugin-state 数据**，
- *   只把记录标记为 `orphaned`（同步详情可见），不自动删除用户数据；不中断其它插件。
+ * - 409: the cloud was changed by another device → record a conflict without overwriting (the user
+ *   chooses explicitly);
+ * - 410/404: the plugin the install record points to was deleted from the platform → **keep the
+ *   local plugin directory and plugin-state data**, only mark the record `orphaned` (visible in sync
+ *   details), never auto-delete user data, and do not interrupt other plugins.
  */
 async function pushInstallRecords(): Promise<{
   pushed: number
-  /** 这次真正上传的业务数据条数（插件 count() 统计） */
+  /** Number of business data rows actually uploaded this time (counted by the plugin's count()) */
   rows: number
   conflicts: number
   orphaned: LatticeSyncOrphanedItem[]
@@ -1223,14 +1279,16 @@ async function pushInstallRecords(): Promise<{
   let rows = 0
   let conflicts = 0
   for (const plugin of scanExternalPlugins()) {
-    // 自述快照插件只在「本机有未同步修改」「还没推过」或「第一次从文件口径切到快照口径」时
-    // 导出并上传数据：避免每次启停 / 别的插件变更都把 data_rev 顶一格，也避免其它设备无谓地重复导入。
+    // Own-snapshot plugins export and upload data only when "local has unsynced changes", "never
+    // pushed yet" or "first switch from file semantics to snapshot semantics": this avoids bumping
+    // data_rev on every enable/disable or unrelated plugin change, and avoids pointless re-imports
+    // on other devices.
     const contribution = pluginSyncSnapshot(plugin.id)
     const snapshotMode = contribution !== null || isSnapshotPlugin(plugin.id)
     const firstPush = !(plugin.id in store.revs)
-    // 注意用 snapshotPushed（只在带数据 push 成功后置位），不能用 snapshotPlugins：
-    // pull 导入（哪怕是旧的「只有设置」快照）也会把 snapshotPlugins 置位，用它判断会让
-    // 「升级后首次上传整本账」永远不触发。
+    // Use snapshotPushed (set only after a push that carried data), not snapshotPlugins: a pull
+    // import (even of an old "settings only" snapshot) also sets snapshotPlugins, so using it here
+    // would mean the "first full upload after upgrade" never triggers.
     const firstSnapshotPush = contribution !== null && !isSnapshotPushed(plugin.id)
     const withData = !snapshotMode || firstPush || firstSnapshotPush || isPluginDirty(plugin.id)
     const dataInfo = withData ? await readPluginData(plugin.id) : null
@@ -1250,10 +1308,11 @@ async function pushInstallRecords(): Promise<{
         { method: 'PUT', body }
       )
       if (typeof record?.data_rev === 'number') store.revs[plugin.id] = record.data_rev
-      // 数据已随这次 push 上传 → 本机不再有「未同步修改」，且「首次快照」已完成
+      // Data was uploaded with this push → local has no "unsynced changes" and the "first snapshot" is done
       if (dataInfo) {
-        // 上传成功 = 云端与本机对齐：这份数据成为下一次合并的 baseline。
-        // 只给「自述快照」插件记基线：文件口径插件（music 的播放列表等）不参与三方合并。
+        // Upload succeeded = cloud and local are aligned: this data becomes the baseline for the
+        // next merge. Only own-snapshot plugins get a base: file-semantics plugins (e.g. music
+        // playlists) do not take part in three-way merges.
         if (contribution !== null || isSnapshotPlugin(plugin.id)) {
           writeMergeBase(
             plugin.id,
@@ -1265,17 +1324,18 @@ async function pushInstallRecords(): Promise<{
         markSnapshotPushed(plugin.id)
         rows += uploadedRows
       }
-      // 成功推送说明该插件已无冲突（例如用户选了"用本机覆盖"后重试成功）
+      // A successful push means the plugin has no conflict left (e.g. retry succeeded after the user chose "use local")
       if (store.conflicts?.some((c) => c.plugin_id === plugin.id)) {
         store.conflicts = store.conflicts.filter((c) => c.plugin_id !== plugin.id)
       }
-      // 注意：push 成功只代表平台接受了安装记录，**不代表插件还在插件中心**
-      // （平台对已删除插件也接受 installs upsert）。所以孤儿标记只由 pull 观测到
-      // 「插件重新可见（plugin 字段非 null）」时清除——见 pullInstallRecords。
+      // Note: a successful push only means the platform accepted the install record, **not that the
+      // plugin still exists in the plugin hub** (the platform accepts installs upserts for deleted
+      // plugins too). So the orphaned flag is cleared only when pull observes "plugin visible again
+      // (plugin field non-null)" — see pullInstallRecords.
       pushed += 1
     } catch (err) {
       if (isOrphanedPushError(err)) {
-        // 平台已删除该插件：保留本地记录并标记 orphaned（不删数据、不中断其它插件）
+        // The platform deleted this plugin: keep the local record and mark it orphaned (no data deletion, no interruption of other plugins)
         markLatticeOrphaned(
           plugin.id,
           plugin.manifest.version,
@@ -1285,7 +1345,7 @@ async function pushInstallRecords(): Promise<{
         continue
       }
       if (err instanceof LatticeApiError && err.status === 409) {
-        // 云端被别的设备改过：记冲突，不 force 覆盖（用户需要自己选「用哪边」）
+        // The cloud was changed by another device: record a conflict, no force overwrite (the user must pick a side)
         const detail = asRecord(err.details)
         const server = asRecord(detail?.server)
         const serverRev =
@@ -1318,17 +1378,20 @@ async function pushInstallRecords(): Promise<{
   return { pushed, rows, conflicts, orphaned: listLatticeSyncOrphaned() }
 }
 
-/** 自动补齐一个插件的单向结果（成功带恢复信息，失败带可读原因） */
+/** Result of auto-restoring one plugin (success carries restore info, failure carries a readable reason) */
 type AutoInstallOutcome =
   | { ok: true; item: LatticeSyncAutoInstallItem; rows: number }
   | { ok: false; failure: LatticeSyncAutoInstallFailure }
 
 /**
- * 自动补齐一个「平台有安装记录、本机没有插件包」的插件（换机/重装/用户删了目录）。
+ * Auto-restores a plugin that "has a platform install record but no local package" (new machine/
+ * reinstall/user deleted the directory).
  *
- * 复用现有安装流程（下载安装包 → sha256 校验 → 解压安装 → 下载源码 → 写安装记录）；
- * 这里只多做两件事：按云端安装记录应用启用态、按 pull 口径写回云端更新的数据。
- * **不吞错**：失败原因原样返回给同步结果（autoInstall.failed），由 UI 逐条展示。
+ * Reuses the existing install flow (download package → sha256 verify → unpack/install → download
+ * source → write install record); this only adds two things: apply the enabled state from the cloud
+ * install record, and write back newer cloud data with pull semantics.
+ * **Errors are not swallowed**: failure reasons are returned as-is in the sync result
+ * (autoInstall.failed) and shown one by one by the UI.
  */
 async function autoInstallMissingPlugin(
   item: LatticeRemoteInstall,
@@ -1353,7 +1416,7 @@ async function autoInstallMissingPlugin(
       )
       return failure(result.error || '安装失败')
     }
-    // 启用态：安装默认启用；云端记录明确停用时按云端关掉（不擅自启用用户停用过的插件）
+    // Enabled state: installs are enabled by default; when the cloud record explicitly says disabled, follow it (never re-enable a plugin the user disabled)
     if (typeof item.enabled === 'boolean' && item.enabled !== isEnabledPlugin(pluginId)) {
       setEnabledOverride(pluginId, item.enabled)
       try {
@@ -1369,7 +1432,7 @@ async function autoInstallMissingPlugin(
         )
       }
     }
-    // 数据：补齐后本机没有数据，沿用 pull 口径应用云端 rev 更大的数据
+    // Data: after restoring, local has no data, so apply cloud data with a larger rev using pull semantics
     const serverRev = item.data_rev ?? 0
     let dataRows = 0
     if (serverRev > (store.revs[pluginId] ?? 0)) {
@@ -1403,21 +1466,25 @@ async function autoInstallMissingPlugin(
 }
 
 /**
- * 拉取安装记录：只写回云端更新的数据；应用启用态；自动补齐缺失插件。
+ * Pulls install records: writes back only newer cloud data, applies the enabled state, and
+ * auto-restores missing plugins.
  *
- * - 平台返回 `plugin:null` 的记录 = 插件已被删除 → 标记 orphaned（本地数据保留，不自动安装）；
- * - 本机没有插件包的记录：`installMissing=true` 时逐个自动安装（失败逐个记录、不中断其它插件），
- *   关闭时只放进 `pending` 让用户手动处理；
- * - 只写回 `data_rev > 本地缓存 rev` 的数据（不覆盖本地较新的数据，冲突仍走 push 的 409 机制）。
+ * - A record returned with `plugin:null` = the plugin was deleted → mark orphaned (local data kept,
+ *   no auto-install);
+ * - records with no local package: when `installMissing=true`, auto-install them one by one
+ *   (failures are recorded individually and do not interrupt other plugins); when disabled, only put
+ *   them into `pending` for the user to handle manually;
+ * - write back only data with `data_rev > cached local rev` (never overwrite newer local data;
+ *   conflicts still go through the push 409 mechanism).
  */
 async function pullInstallRecords(installMissing: boolean): Promise<{
   pulled: number
-  /** 这次真正应用下来的业务数据条数（插件 count() 统计） */
+  /** Number of business data rows actually applied this time (counted by the plugin's count()) */
   rows: number
   pending: string[]
   autoInstall: LatticeSyncAutoInstallResult
   orphaned: LatticeSyncOrphanedItem[]
-  /** 本次 pull 期间新记下的冲突数（本机有未同步改动、云端也更新了） */
+  /** Number of conflicts newly recorded during this pull (local has unsynced changes and the cloud also updated) */
   conflicts: number
 }> {
   const raw = await latticeRequest<unknown>('/v1/hub/installs', {
@@ -1437,8 +1504,9 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
   for (const item of items) {
     if (!item.plugin_id) continue
     if (item.plugin_deleted) {
-      // 平台已删除该插件（安装记录还在）：保留本地插件目录与数据，只标记 orphaned。
-      // 这类记录不尝试安装（平台上已没有可下载版本），也不删用户数据。
+      // The platform deleted this plugin (install record still exists): keep the local plugin
+      // directory and data, only mark orphaned. Such records are never auto-installed (no
+      // downloadable version remains) and user data is not deleted.
       markLatticeOrphaned(
         item.plugin_id,
         item.version,
@@ -1447,13 +1515,15 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
       )
       continue
     }
-    // 插件在平台可见：历史 orphaned 标记自动消除（作者重新发布后恢复）
+    // The plugin is visible on the platform: clear any historical orphaned flag (recovered after the author republished)
     clearLatticeOrphaned(item.plugin_id)
 
     /**
-     * 本机**显式卸载过**的插件：平台记录可能因为离线卸载/别的设备推送而还在。
-     * 这时不能走「换机自动补齐」（否则卸载同步一次就复活），也不放进 pending
-     * （那不是「缺失」，是用户主动不要了）。重新安装会清掉这个标记。
+     * Plugins **explicitly uninstalled** on this machine: the platform record may still exist
+     * because of an offline uninstall or a push from another device. Such plugins must not go
+     * through "auto-restore on a new machine" (otherwise a single sync resurrects them), nor into
+     * `pending` (they are not "missing", the user deliberately removed them). Reinstalling clears
+     * this flag.
      */
     if (!localIds.has(item.plugin_id) && isInstallRemoved(item.plugin_id)) {
       logger.info(
@@ -1463,7 +1533,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
     }
 
     if (!localIds.has(item.plugin_id)) {
-      // 换机/重装/用户删了插件目录：平台有安装记录但本机没有插件包
+      // New machine/reinstall/user deleted the plugin directory: the platform has an install record but this machine has no package
       if (installMissing) {
         autoInstall.attempted += 1
         const outcome = await autoInstallMissingPlugin(item, store)
@@ -1480,7 +1550,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
       continue
     }
 
-    // ① 启用态：云端为准；只在真的不同时才写 + load/unload（避免每次同步都重载插件）
+    // 1. Enabled state: the cloud wins; write and load/unload only when it actually differs (avoid reloading plugins on every sync)
     if (typeof item.enabled === 'boolean' && item.enabled !== isEnabledPlugin(item.plugin_id)) {
       setEnabledOverride(item.plugin_id, item.enabled)
       try {
@@ -1496,7 +1566,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
       }
     }
 
-    // ② 数据：只应用更新的版本；本机有未推送修改/从未推过快照且本机有数据时不覆盖
+    // 2. Data: apply only newer versions; do not overwrite when local has unpushed changes / has never pushed a snapshot and holds data
     const serverRev = item.data_rev ?? 0
     const localRev = store.revs[item.plugin_id] ?? 0
     if (serverRev > localRev) {
@@ -1515,9 +1585,11 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
         }
       }
       /**
-       * 基线漂移检查：有些写入（例如助手工具直接改库）不一定经过 `requestSync()`，
-       * `dirty` 可能是空的。覆盖前再和 merge base 比一次——宁可转冲突让用户选，
-       * 也不静默把本机删除/修改覆盖掉（用户 2026-11-25：「删了/改了，后面还给我推送」）。
+       * Base drift check: some writes (e.g. an assistant tool modifying the database directly) do
+       * not necessarily go through `requestSync()`, so `dirty` may be empty. Compare against the
+       * merge base once more before overwriting — better to turn it into a conflict for the user to
+       * decide than to silently overwrite local deletions/edits (user, 2026-11-25: "I deleted/
+       * edited it and it still got pushed back to me").
        */
       if (!protectLocal) {
         const base = readMergeBase(item.plugin_id)
@@ -1542,7 +1614,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
         }
       }
       if (protectLocal) {
-        // 静默导入会丢掉本机未同步的编辑/从未上传过的整本账 → 交给「解决冲突」显式选择（含合并）
+        // A silent import would drop unsynced local edits / a dataset never uploaded → hand it to "resolve conflict" for an explicit choice (including merge)
         recordPullConflict(item.plugin_id, localRev, serverRev)
         conflicts += 1
       } else if (item.data !== undefined && item.data !== null) {
@@ -1559,7 +1631,7 @@ async function pullInstallRecords(installMissing: boolean): Promise<{
     }
   }
 
-  // 平台安装记录已被删除（用户在别处删记录 / 平台清理）→ 对应孤儿标记也清掉，避免本地缓存残留
+  // Install records deleted on the platform (user deleted them elsewhere / platform cleanup) → clear the matching orphaned flags so nothing lingers in the local cache
   const remoteIds = new Set(items.map((item) => item.plugin_id))
   const orphanedBefore = store.orphaned ?? []
   const orphanedNow = orphanedBefore.filter((entry) => remoteIds.has(entry.plugin_id))
@@ -1616,31 +1688,33 @@ async function runSync(
   }
   if (!isLatticeLoggedIn()) {
     result.error = '未登录插件中心，请先登录'
-    // 未登录不是一次「同步结果」：不写 cache、不广播，避免退出登录后一次后台 pull
-    // 把「未登录」错误写进新账号空间的 lattice-sync.json
+    // Not logged in is not a "sync result": do not write the cache or broadcast, so a background
+    // pull after logout does not write a "not logged in" error into the new account space's
+    // lattice-sync.json
     return result
   }
-  // 账号数据空间与登录身份不一致（刚登录/登出、还没重启）→ 暂停同步，避免串号
+  // The account data space and the signed-in identity disagree (just logged in/out, no restart yet) → pause sync to avoid cross-account mixing
   const profileGuard = profileSyncGuard()
   if (profileGuard) {
     result.error = profileGuard
     return result
   }
-  // 正在原地切换账号数据空间：此刻目录会被对调，任何同步都不能写盘
+  // Switching the account data space in place: the directories are being swapped, so no sync may write to disk
   if (paused) {
     result.error = '账号数据空间正在切换，已暂停同步'
     return result
   }
-  // 未显式传 installMissing 时跟设置项走（默认开启）：启动/登录后的后台 pull 也能换机自动补齐
+  // Without an explicit installMissing, follow the setting (enabled by default), so the background pull after startup/login also auto-restores on a new machine
   const installMissing = options.installMissing ?? getLatticeAutoInstallMissing()
   try {
-    // 先 pull 再 push：先把云端更新拉下来（rev 对齐），再推本地最新的安装态/数据；
-    // 这样多设备场景下不会把刚拉到的云端数据当成「本地脏数据」再推回去。
+    // Pull first, then push: pull cloud updates down (align rev), then push the latest local
+    // install state/data; this way a multi-device setup never treats freshly pulled cloud data as
+    // "local dirty data" and pushes it back.
     if (direction === 'pull' || direction === 'both') {
       const pulled = await pullInstallRecords(installMissing)
       result.pulled = pulled.pulled
       result.pulledRows = pulled.rows
-      // pull 期间发现的「本机脏 + 云端更新」也要计入冲突数（否则同步栏看不到）
+      // Conflicts found during pull (local dirty + cloud updated) also count toward the conflict total (otherwise the sync bar would not show them)
       result.conflicts += pulled.conflicts
       if (pulled.pending.length > 0) result.pending = pulled.pending
       if (pulled.autoInstall.attempted > 0) result.autoInstall = pulled.autoInstall
@@ -1662,15 +1736,16 @@ async function runSync(
 }
 
 /**
- * 执行一次同步（push / pull / both，可带自动补齐选项）。
+ * Runs one sync (push / pull / both, optionally with the auto-restore option).
  *
- * 入参兼容两种写法（契约 §3 的 `{direction}` 与裸字符串）：
- * - `syncLattice('pull')`；
- * - `syncLattice({ direction: 'pull', installMissing: true })` —— 显式要求本次 pull 自动补齐
- *   缺失插件（否则跟随设置项，默认开启）。
+ * Accepts two argument forms (the `{direction}` object and a bare string):
+ * - `syncLattice('pull')`;
+ * - `syncLattice({ direction: 'pull', installMissing: true })` — explicitly request that this pull
+ *   auto-restore missing plugins (otherwise the setting is followed, enabled by default).
  *
- * 并发调用共享同一次运行的 Promise（同一时刻只跑一份，避免请求风暴与 rev 竞争）。
- * 错误不抛：失败写进结果的 `error` 字段（渲染层按状态条展示）。
+ * Concurrent calls share the same running Promise (only one run at a time, avoiding request storms
+ * and rev races). Errors are not thrown: failures go into the result's `error` field (shown by the
+ * renderer in the status bar).
  */
 export async function syncLattice(
   directionOrOptions: LatticeSyncDirection | LatticeSyncOptions = 'both'
@@ -1690,7 +1765,7 @@ export async function syncLattice(
   }
 }
 
-/** 5s 防抖 push（插件启用态/安装态变化后触发；登录态变化时由调用方再触发一次） */
+/** 5s debounced push (triggered after plugin enabled/install state changes; callers trigger it again on login state changes) */
 export function scheduleLatticePush(delayMs = PUSH_DEBOUNCE_MS): void {
   if (suppressPush) return
   if (paused) return
@@ -1706,10 +1781,11 @@ export function scheduleLatticePush(delayMs = PUSH_DEBOUNCE_MS): void {
 }
 
 /**
- * 取消尚未触发的防抖 push（退出登录/切换基址时用）。
+ * Cancels a not-yet-fired debounced push (used on logout / base URL switch).
  *
- * 不清 rev 缓存：本地 plugin-state 数据还在，下次登录后 push 仍需用「上次看到的 rev」
- * 做冲突检测——清掉会退化成 rev=0 覆盖，可能丢掉本机未同步的修改。
+ * Does not clear the rev cache: local plugin-state data is still there, and a push after the next
+ * login still needs the "last seen rev" for conflict detection — clearing it would degrade to a
+ * rev=0 overwrite and could lose unsynced local changes.
  */
 export function cancelPendingLatticePush(): void {
   if (debounceTimer) {
@@ -1719,20 +1795,26 @@ export function cancelPendingLatticePush(): void {
 }
 
 /**
- * 切换账号数据空间前调用：挂起同步，并等正在跑的那一次收尾。
+ * Call before switching the account data space: suspend sync and wait for the running sync to
+ * finish.
  *
- * 不中断网络请求（中断只会留下半截写入），只是**等它写完**再让调用方去改目录；
- * 超时上限避免网络卡死把切号永远挂住（超时后仍然继续切，最坏情况是那次同步报错）。
+ * It does not abort the network request (aborting would leave a half-written state); it just
+ * **waits for the write to finish** so the caller can swap directories. The timeout keeps a stuck
+ * network from hanging the account switch forever (after the timeout the switch still proceeds; the
+ * worst case is that sync reports an error).
  */
 /**
- * 切换账号数据空间前调用：挂起同步，并等正在跑的那一次收尾。
+ * Call before switching the account data space: suspend sync and wait for the running sync to
+ * finish.
  *
- * 不中断网络请求（中断只会留下半截写入），只是**等它写完**再让调用方去改目录；
- * 超时上限避免网络卡死把切号永远挂住。
+ * It does not abort the network request (aborting would leave a half-written state); it just
+ * **waits for the write to finish** so the caller can swap directories. The timeout keeps a stuck
+ * network from hanging the account switch forever.
  *
- * @returns true = 已经没有在跑的同步（可以安全对调目录）；false = 超时后仍在跑。
- * 返回 false 时调用方**不能**对调目录：正在跑的同步持有旧账号的内存缓存，
- * 而路径已经指向新空间，继续写就会把 A 的数据写进 B（串号）。宁可这次切号失败/重启。
+ * @returns true = no sync is running (directories can be swapped safely); false = still running
+ * after the timeout. On false the caller **must not** swap directories: the running sync holds the
+ * old account's in-memory cache while paths already point to the new space, so further writes would
+ * put A's data into B (cross-account mixing). Better to fail the switch / restart this time.
  */
 export async function pauseLatticeSync(timeoutMs = 5000): Promise<boolean> {
   paused = true
@@ -1750,16 +1832,17 @@ export async function pauseLatticeSync(timeoutMs = 5000): Promise<boolean> {
   ])
 }
 
-/** 切换完成（或失败回滚）后恢复同步 */
+/** Resumes sync after the switch completes (or rolls back on failure) */
 export function resumeLatticeSync(): void {
   paused = false
 }
 
 /**
- * 账号数据空间换过之后重新读 `lattice-sync.json`。
+ * Re-reads `lattice-sync.json` after the account data space has switched.
  *
- * 与 `resetLatticeSyncCache()` 的区别：**不清空、也不写文件**——新空间里那份缓存
- * （revs / conflicts / 上次同步结果）才是当前账号的；丢掉会退化成 rev=0 覆盖云端数据。
+ * Unlike `resetLatticeSyncCache()`, it **neither clears nor writes the file** — the cache in the new
+ * space (revs / conflicts / last sync result) belongs to the current account; losing it would
+ * degrade to a rev=0 overwrite of cloud data.
  */
 export function reloadLatticeSyncCache(): void {
   cache = null
@@ -1773,24 +1856,27 @@ export function reloadLatticeSyncCache(): void {
 }
 
 /**
- * 本机插件数据被清（卸载勾选「删除全部数据」）后，丢掉该插件的 `data_rev` 缓存。
+ * Drops a plugin's `data_rev` cache after its local data was purged (uninstall with "delete all
+ * data" checked).
  *
- * 云端安装记录与数据快照**保留**；本地 rev 若还停在旧值，重新安装后的 pull 会拿
- * 旧 rev 与服务端比较，误判「已经是最新」而不回写数据。清掉后服务端 rev > 0 即会
- * 把云端快照恢复到 `plugin-state/<id>.json`，用户重新安装后数据照常同步。
- * 同插件的历史冲突也一并丢弃：本地数据已经不存在，保留冲突只会误导用户。
+ * The cloud install record and data snapshot are **kept**; if the local rev stays at the old value,
+ * a pull after reinstalling compares that old rev with the server, wrongly decides "already up to
+ * date" and does not write the data back. Once cleared, a server rev > 0 restores the cloud
+ * snapshot into `plugin-state/<id>.json`, and data syncs normally after the user reinstalls.
+ * Historical conflicts for the plugin are also discarded: the local data no longer exists, so
+ * keeping conflicts would only mislead the user.
  */
 function forgetLocalPluginDataRev(pluginId: string): void {
   const id = String(pluginId ?? '').trim()
   if (!id) return
   pendingSnapshots.delete(id)
-  // 本机数据被清空：基线也一并清掉，重新安装后先建立新的基线再合并
+  // Local data was purged: clear the base too, so a new base is established before merging after reinstall
   clearMergeBase(id)
   const store = loadSyncCache()
   const hadRev = id in store.revs
   if (hadRev) delete store.revs[id]
   if (store.dirty?.[id]) clearPluginDirty(id)
-  // 本机数据被清掉后，下一次有数据时仍需完整上传一次
+  // After local data is purged, the next time there is data it must still be uploaded in full once
   if (store.snapshotPushed?.[id]) {
     const next = { ...store.snapshotPushed }
     delete next[id]
@@ -1809,10 +1895,12 @@ function forgetLocalPluginDataRev(pluginId: string): void {
 }
 
 /**
- * 插件装载后补应用「停用期间收到的云端快照」。
+ * Applies "cloud snapshots received while disabled" once a plugin is loaded.
  *
- * 停用时不能把快照写进 `plugin-state/<id>.json`（那是设置，会被下次 push 当快照推回云端），
- * 所以 pull 先存内存；插件启用（`plugin-state-changed`）后在这里补应用，成功后对齐 rev。
+ * While disabled the snapshot cannot be written to `plugin-state/<id>.json` (that is settings and
+ * would be pushed back to the cloud as a snapshot on the next push), so pull keeps it in memory;
+ * after the plugin is enabled (`plugin-state-changed`) it is applied here and the rev aligned on
+ * success.
  */
 async function flushPendingSnapshots(): Promise<void> {
   if (pendingSnapshots.size === 0) return
@@ -1832,7 +1920,7 @@ async function flushPendingSnapshots(): Promise<void> {
   }
 }
 
-/** 启动接线：旁听 `plugin-state-changed`（安装/卸载/启停统一走这条广播） */
+/** Startup wiring: listen to `plugin-state-changed` (install/uninstall/enable/disable all go through this broadcast) */
 export function initLatticeSync(): void {
   onPluginStateChanged(() => {
     void flushPendingSnapshots()
@@ -1846,7 +1934,7 @@ export function initLatticeSync(): void {
   })
 }
 
-/** 基址切换后清空 rev 缓存（不同节点的 data_rev 不可比） */
+/** Clears the rev cache after a base URL switch (data_rev is not comparable across nodes) */
 export function resetLatticeSyncCache(): void {
   cache = { revs: {} }
   lastResult = null

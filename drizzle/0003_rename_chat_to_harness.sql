@@ -1,8 +1,8 @@
--- chat → harness 模块改名：四张对话相关表连同索引、外键、唯一约束、CHECK 约束一并改名。
+-- chat → harness: the four dialogue tables renamed with indexes, FKs, unique and CHECK constraints.
 --
--- 只做 RENAME，不重建表：本地 PGlite 数据目录（userData/RytenBenchDB）里已有的话题、
--- 消息、目标与用量数据全部原样保留。表名改完后外键按对象 OID 自动跟随新表，
--- 但索引/约束的名字不会跟着变，所以下面逐个显式改名。
+-- RENAME only, no table rebuild: the topics, messages, goals, and usage data already in the local
+-- PGlite data directory (userData/RytenBenchDB) are preserved as-is. Foreign keys follow
+-- the renamed tables by object OID, but index/constraint names do not, so each is renamed below.
 ALTER TABLE "chat_topic" RENAME TO "harness_topic";--> statement-breakpoint
 ALTER TABLE "harness_topic" RENAME CONSTRAINT "chat_topic_workspace_id_fkey" TO "harness_topic_workspace_id_fkey";--> statement-breakpoint
 ALTER INDEX "chat_topic_pkey" RENAME TO "harness_topic_pkey";--> statement-breakpoint
@@ -26,9 +26,10 @@ ALTER TABLE "harness_dialogue_usage" RENAME CONSTRAINT "chat_dialogue_usage_dial
 ALTER INDEX "chat_dialogue_usage_pkey" RENAME TO "harness_dialogue_usage_pkey";--> statement-breakpoint
 ALTER INDEX "idx_chat_dialogue_usage_topic" RENAME TO "idx_harness_dialogue_usage_topic";--> statement-breakpoint
 ALTER INDEX "idx_chat_dialogue_usage_workspace" RENAME TO "idx_harness_dialogue_usage_workspace";--> statement-breakpoint
--- 上面改写的是代码里显式声明的索引与约束。PostgreSQL 还会为每个 NOT NULL 列建一条
--- 隐式目录约束（chat_topic_title_not_null 这类），名字由系统生成、代码里没有对应声明，
--- 所以这里按目录扫描统一清掉残留的 chat_ 前缀，而不是硬编码二十多条清单。
+-- The above covers the indexes and constraints declared in code. PostgreSQL also creates an
+-- implicit catalog constraint per NOT NULL column (chat_topic_title_not_null etc.), whose names
+-- are system-generated and undeclared, so the sweep below clears chat_ prefixes catalog-wide
+-- rather than hardcoding a list.
 DO $$
 DECLARE r RECORD;
 BEGIN

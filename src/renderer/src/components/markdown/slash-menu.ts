@@ -20,7 +20,10 @@ import { i18n } from '@renderer/i18n'
 import SlashMenuList from './SlashMenuList'
 import type { SlashMenuListHandle, SlashMenuListProps } from './SlashMenuList'
 
-/** Slash 菜单主题色（由编辑器注入 antd token，弹层挂载在 body 上无主题上下文） */
+/**
+ * Slash menu theme colors (injected by the editor from antd tokens; the popup mounts on body
+ * without theme context)
+ */
 export interface SlashMenuTheme {
   bg: string
   border: string
@@ -33,10 +36,11 @@ export interface SlashMenuTheme {
 }
 
 /**
- * 斜杠菜单条目的文案键。本模块是非组件模块（不持有 t），
- * 因此 title / description 存**词条键**而不是中文文案，由渲染组件
- * SlashMenuList 用 t() 求值；查询过滤（filterItems）用全局 i18n 解析。
- * i18next 的键受资源类型约束，故在此收窄成字面量联合类型。
+ * Label keys for slash menu entries. This is a non-component module (it has no t),
+ * so title / description store **translation keys** rather than display text, and the
+ * SlashMenuList component resolves them with t(); query filtering (filterItems) resolves
+ * them through the global i18n instance. i18next keys are constrained by the resource
+ * types, so they are narrowed to literal union types here.
  */
 type SlashItemNameKey =
   | 'markdown.slash.paragraph'
@@ -88,21 +92,22 @@ type SlashItemKeywordKey =
 
 export interface SlashMenuItemDef {
   key: string
-  /** 词条键（由渲染层 t() 求值），不是可直接展示的文案 */
+  /** Translation key (resolved by t() in the renderer), not display-ready text */
   title: SlashItemNameKey
-  /** 词条键（由渲染层 t() 求值），不是可直接展示的文案 */
+  /** Translation key (resolved by t() in the renderer), not display-ready text */
   description?: SlashItemDescKey
-  /** 检索词词条键（空格分隔，由渲染层按当前语言解析） */
+  /** Keyword translation key (space-separated, resolved by the renderer for the locale) */
   keywords?: SlashItemKeywordKey
-  /** 文字图标（如 H1），优先于 Icon 渲染 */
+  /** Text icon (e.g. H1), rendered in preference to Icon */
   iconText?: string
-  /** remixicon 图标组件（size 为 number|string，与 RemixiconProps 一致） */
+  /** remixicon icon component (size is number|string, matching RemixiconProps) */
   Icon?: ComponentType<{ size?: number | string }>
   run: (editor: Editor) => void
 }
 
-/* ──────────── 菜单项定义 ──────────── */
-/* 检索词也走词条：中文/英文关键词都随界面语言取，不在代码里写死 */
+/* ──────────── Menu item definitions ──────────── */
+/* Keywords also use translation keys: both Chinese and English keywords follow the UI
+   language instead of being hardcoded */
 
 export const SLASH_ITEMS: SlashMenuItemDef[] = [
   {
@@ -228,7 +233,7 @@ export const SLASH_ITEMS: SlashMenuItemDef[] = [
   }
 ]
 
-/* ──────────── 查询过滤 ──────────── */
+/* ──────────── Query filtering ──────────── */
 
 const normalize = (s: string): string => s.toLowerCase().replace(/\s+/g, '')
 
@@ -236,7 +241,8 @@ const filterItems = (query: string): SlashMenuItemDef[] => {
   const q = normalize(query)
   if (!q) return SLASH_ITEMS
   return SLASH_ITEMS.filter((item) => {
-    /* 文案键在过滤时按当前语言解析：用户按界面上看到的词搜索 */
+    /* Label keys are resolved for the current language during filtering: users search by the
+       words they see in the UI */
     const haystack = [
       i18n.t(item.title),
       item.description ? i18n.t(item.description) : '',
@@ -248,11 +254,11 @@ const filterItems = (query: string): SlashMenuItemDef[] => {
   })
 }
 
-/* ──────────── 扩展工厂 ──────────── */
+/* ──────────── Extension factory ──────────── */
 
 /**
- * Slash 块菜单：在段落开头输入 "/" 弹出块插入菜单（Notion/思源交互）。
- * @tiptap/suggestion v3 返回原生 PM 插件，经 addProseMirrorPlugins 注册。
+ * Slash block menu: typing "/" at the start of a paragraph opens the block insertion menu.
+ * @tiptap/suggestion v3 returns a native PM plugin, registered via addProseMirrorPlugins.
  */
 export function buildSlashMenuExtension(themeRef: MutableRefObject<SlashMenuTheme>): Extension {
   return Extension.create({
@@ -265,7 +271,7 @@ export function buildSlashMenuExtension(themeRef: MutableRefObject<SlashMenuThem
           char: '/',
           startOfLine: true,
           decorationClass: 'slash-decoration',
-          /* 代码块内不触发 */
+          /* Do not trigger inside code blocks */
           allow: ({ state, range }) => {
             const parent = state.doc.resolve(range.from).parent
             return !parent.type.spec.code
@@ -289,12 +295,13 @@ export function buildSlashMenuExtension(themeRef: MutableRefObject<SlashMenuThem
                   },
                   editor: props.editor
                 })
-                /* 挂载并托管定位（锚定光标，跟随滚动） */
+                /* Mount and let the host handle positioning (anchored to the cursor,
+                   follows scrolling) */
                 unmount = props.mount(component.element, {})
                 component.element.classList.add('slash-menu-wrap')
               },
               onUpdate: (props) => {
-                /* 必须同步新的 command 闭包：range 会随查询文本增长 */
+                /* Must sync the new command closure: the range grows with the query text */
                 component?.updateProps({
                   items: props.items,
                   theme: themeRef.current,

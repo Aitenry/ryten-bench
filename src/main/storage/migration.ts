@@ -3,34 +3,41 @@ import * as path from 'path'
 import { STORAGE_LABELS, type StorageKind } from './types'
 
 /**
- * 存储目录搬迁（用户主动改「记忆 / 插件 / 技能」地址时用）。
+ * Storage directory migration (used when the user changes the "memory / plugins / skills" location).
  *
- * 设计目标只有一条：**不丢数据**。因此：
- * - 目标是空目录 → 整根目录一次 `rename`（同盘原子、跨盘自动降级为「复制后删除」）；
- * - 目标已有内容 → 逐个条目合并：目标里没有的搬过去，同名的**保留目标那份**，
- *   源文件改名成 `<name>.migrated-<时间戳>` 一起留在目标里（谁都没被覆盖）；
- * - 源目录只在真的搬空后才删；搬不动的条目留在原处并如实报错/告警。
+ * There is a single design goal: **never lose data**. Therefore:
+ * - target is an empty directory → `rename` the whole root at once (atomic on the same disk; across
+ *   disks it automatically degrades to "copy then delete");
+ * - target already has content → merge entry by entry: entries missing from the target are moved over,
+ *   on a name clash **the target copy is kept**, and the source file is renamed to
+ *   `<name>.migrated-<timestamp>` and left in the target (nothing is overwritten);
+ * - the source directory is deleted only once it is truly empty; entries that cannot be moved stay
+ *   where they are and are reported truthfully as errors/warnings.
  *
- * 模块刻意不 import electron / electron-log：离线工装可以直接跑真实文件操作。
+ * The module deliberately does not import electron / electron-log: offline tooling can exercise real
+ * file operations directly.
  */
 
 export type StorageMigrationSkip = 'same-path' | 'source-missing' | 'empty-source'
 
 export interface StorageMigrationResult {
   kind: StorageKind
-  /** 解析后的绝对路径（`..` / 相对路径都已归一） */
+  /** Resolved absolute paths (`..` / relative segments are normalized) */
   from: string
   to: string
-  /** 顶层条目名（插件工坊用它显示「N 个已有插件也搬了过去」） */
+  /** Top-level entry names (the plugin workshop uses this to show "N existing plugins were moved too") */
   moved: string[]
-  /** 因目标已存在同名文件而留档的相对路径（`<name>.migrated-<时间戳>`） */
+  /** Relative paths archived because the target already had the same name (`<name>.migrated-<timestamp>`) */
   conflicts: string[]
-  /** 搬迁完成但清理旧目录失败等非致命问题（数据已在目标里，不影响使用） */
+  /**
+   * Non-fatal issues such as failing to clean up the old directory after a completed move (the data
+   * is already in the target, so this does not affect use)
+   */
   warnings: string[]
   skipped: StorageMigrationSkip | null
 }
 
-/** 路径比较口径：Windows 大小写不敏感；空的配置值只与空值相等 */
+/** Path comparison semantics: case-insensitive on Windows; an empty config value only equals another empty value */
 export function isSamePath(a: string, b: string): boolean {
   const left = typeof a === 'string' ? a.trim() : ''
   const right = typeof b === 'string' ? b.trim() : ''
@@ -43,10 +50,11 @@ export function isSamePath(a: string, b: string): boolean {
 }
 
 /**
- * `child` 是否在 `parent` 里面（相等不算「里面」）。
+ * Whether `child` is inside `parent` (equal paths do not count as "inside").
  *
- * 搬迁前必须挡住「新旧目录互相嵌套」：否则把父目录搬进子目录会自我递归，
- * 或在子目录被搬走后又回头写父目录，轻则产生垃圾，重则把数据搬丢。
+ * Nested old/new directories must be blocked before migrating: otherwise moving a parent into its
+ * child recurses into itself, or writes back into the parent after the child was moved away — at
+ * best producing garbage, at worst losing data.
  */
 export function isPathInside(child: string, parent: string): boolean {
   const c = typeof child === 'string' ? child.trim() : ''
@@ -64,9 +72,10 @@ export function isPathInside(child: string, parent: string): boolean {
 }
 
 /**
- * 把一个存储目录的内容迁移到新目录。
+ * Migrate the contents of one storage directory to a new directory.
  *
- * @throws 目标不是目录 / 新旧目录互相嵌套 / 文件操作失败（错误原样抛出，调用方决定是否保存设置）
+ * @throws target is not a directory / the old and new directories nest into each other / a file
+ * operation fails (errors are rethrown so the caller can decide whether to save the settings)
  */
 export function migrateStorageDirectory(
   kind: StorageKind,
@@ -124,15 +133,16 @@ export function migrateStorageDirectory(
     return { ...result, skipped: 'empty-source' }
   }
 
-  // 最常见也最安全的一条：新目录是空的 → 整根搬过去（同盘 rename 原子完成）
+  // The most common and safest path: the new directory is empty → move the whole root over
+  // (an atomic rename on the same disk)
   if (isEmptyDirectory(to)) {
     const movedWholeRoot = tryReplaceEmptyDirectory(from, to, result.warnings)
     if (movedWholeRoot) {
       return { ...result, moved: entries }
     }
   }
-  // tryReplaceEmptyDirectory 在失败时会恢复空目标；恢复失败时这里再兜一次，
-  // 保证下面逐项 move 的目标父目录一定存在。
+  // tryReplaceEmptyDirectory restores the empty target when it fails; retry here in case that restore
+  // failed, so the per-entry move below always has an existing target parent
   ensureTargetDirectory(kind, to)
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -156,8 +166,8 @@ export function migrateStorageDirectory(
       continue
     }
 
-    // 同名但不是「两边都是目录」：目标那份保留，源文件另存一份，
-    // 绝不覆盖用户可能已经放进新目录的文件。
+    // Same name but not "both are directories": keep the target copy and store the source under
+    // another name, never overwriting files the user may already have put in the new directory.
     const conflict = uniqueConflictPath(target, stamp)
     moveEntry(source, conflict, result.warnings)
     result.moved.push(name)
@@ -168,7 +178,7 @@ export function migrateStorageDirectory(
   return result
 }
 
-// ---------- 内部实现 ----------
+// ---------- Internal implementation ----------
 
 function lstatOrNull(target: string): fs.Stats | null {
   try {
@@ -191,7 +201,7 @@ function removeEmptyDirectory(target: string): void {
   try {
     fs.rmdirSync(target)
   } catch {
-    // 还有没搬走的条目 / 目录已不在：保持原样，交给下一次重试
+    // Entries still not moved / directory already gone: leave as-is, a later retry handles it
   }
 }
 
@@ -207,13 +217,15 @@ function ensureTargetDirectory(kind: StorageKind, target: string): void {
 }
 
 /**
- * 目标空目录 → 尝试整根替换。
+ * Empty target directory → try to replace the whole root.
  *
- * @returns true = 已成功搬完；false = 没搬（目标被重建为空目录），调用方继续逐项合并。
+ * @returns true = moved successfully; false = nothing moved (the target was recreated as an empty
+ * directory) and the caller continues merging entry by entry.
  */
 function tryReplaceEmptyDirectory(from: string, to: string, warnings: string[]): boolean {
   try {
-    // rename 不能可靠地覆盖「已存在的空目录」（Windows 直接失败），先摘掉它
+    // rename cannot reliably replace an "existing empty directory" (it just fails on Windows), so
+    // remove it first
     fs.rmdirSync(to)
   } catch {
     return false
@@ -223,15 +235,16 @@ function tryReplaceEmptyDirectory(from: string, to: string, warnings: string[]):
     fs.renameSync(from, to)
     return true
   } catch (err) {
-    // rename 失败：先把目标空目录恢复回来，避免调用方看到一个「目标不存在」的状态
+    // rename failed: restore the empty target first so the caller never sees a "target missing" state
     try {
       fs.mkdirSync(to, { recursive: true })
     } catch {
-      // 恢复失败也继续走后面的分支：真正的错误以原因为准
+      // Continue into the later branches even if the restore fails: the real error is what matters
     }
     if ((err as NodeJS.ErrnoException).code !== 'EXDEV') return false
 
-    // 跨盘（EXDEV）：整树复制后再删源目录。复制失败时清掉半成品并恢复空目标。
+    // Cross-device (EXDEV): copy the whole tree, then delete the source directory. If the copy fails,
+    // clear the partial output and restore the empty target.
     try {
       fs.cpSync(from, to, {
         recursive: true,
@@ -244,7 +257,7 @@ function tryReplaceEmptyDirectory(from: string, to: string, warnings: string[]):
         fs.rmSync(to, { recursive: true, force: true })
         fs.mkdirSync(to, { recursive: true })
       } catch {
-        // 清理失败不掩盖复制错误
+        // A cleanup failure does not mask the copy error
       }
       throw copyErr
     }
@@ -269,18 +282,21 @@ function moveEntry(from: string, to: string, warnings: string[]): void {
       errorOnExist: true
     })
   } catch (err) {
-    // 复制失败：删掉可能写了一半的目标，源目录保持原样
+    // Copy failed: remove the possibly half-written target, leaving the source directory untouched
     try {
       fs.rmSync(to, { recursive: true, force: true })
     } catch {
-      // 清理失败不掩盖复制错误
+      // A cleanup failure does not mask the copy error
     }
     throw err
   }
   removeTreeAfterCopy(from, warnings)
 }
 
-/** 复制成功后的删源：删干净才算「搬」；删不掉只告警（目标里已有完整数据） */
+/**
+ * Deleting the source after a successful copy: a move only counts once it is fully deleted; if
+ * deletion fails, only warn (the target already has the complete data)
+ */
 function removeTreeAfterCopy(source: string, warnings: string[]): void {
   try {
     fs.rmSync(source, { recursive: true, force: true })
@@ -332,7 +348,7 @@ function mergeDirectory(
   return result
 }
 
-/** 同名冲突的留档名：`plugin.json` → `plugin.json.migrated-<时间戳>` */
+/** Archive name for a name clash: `plugin.json` → `plugin.json.migrated-<timestamp>` */
 function uniqueConflictPath(target: string, stamp: string): string {
   let index = 0
   while (true) {

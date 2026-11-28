@@ -12,23 +12,25 @@ interface UserMessageProps {
   colorTextSecondary: string
   colorBorderSecondary: string
   /**
-   * 这条提问没有对应的回复（下一条不是助手消息，或它本身就是最后一条）。
+   * This question has no corresponding reply (the next message is not an assistant message, or it
+   * is itself the last one).
    *
-   * 出现这种孤立提问的典型场景：发送时流失败/被中止、或数据库事故后只留下了提问。
-   * 此时气泡后面没有任何可操作的入口，只能干看着——所以给它补上「编辑 / 删除」。
+   * Typical cases for such an orphan question: the stream failed/was aborted on send, or a database
+   * incident left only the question behind. In that case there is no actionable entry point after
+   * the bubble and the user can only stare at it — so add "edit / delete" for it.
    */
   orphan?: boolean
-  /** 正在**气泡内**编辑这条提问 */
+  /** Editing this question **inside the bubble** */
   editing?: boolean
-  /** 只读（归档会话）：孤立提问也不给「编辑 / 删除」入口 */
+  /** Read-only (archived session): no "edit / delete" entry even for orphan questions */
   readOnly?: boolean
-  /** 进入编辑态 */
+  /** Enter edit mode */
   onEdit?: () => void
-  /** 气泡内回车提交（内容已就地替换这条提问，不会新增用户气泡） */
+  /** Enter inside the bubble submits (content replaces this question in place; no new user bubble) */
   onEditSubmit?: (content: string) => void
-  /** Esc / 取消编辑 */
+  /** Esc / cancel editing */
   onEditCancel?: () => void
-  /** 点击删除（确认后由上层删除库内行与界面消息） */
+  /** Click delete (after confirmation the parent removes the DB row and the UI message) */
   onDelete?: () => void
 }
 
@@ -50,17 +52,18 @@ const UserMessage: React.FC<UserMessageProps> = ({
   const { token } = theme.useToken()
   const { modal } = App.useApp()
   const [hovered, setHovered] = useState<'edit' | 'delete' | null>(null)
-  /** 气泡内编辑的草稿 */
+  /** Draft for in-bubble editing */
   const [draft, setDraft] = useState(message.content)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // 进入编辑态：草稿取当前正文，焦点落到末尾（与「接着改」的直觉一致）
+  // Enter edit mode: the draft starts from the current body and focus lands at the end (matches the
+  // "keep editing where I left off" intuition)
   useEffect(() => {
     if (!editing) return
     setDraft(message.content)
   }, [editing, message.content])
 
-  // 输入框高度随内容自适应（气泡不能被撑出滚动条）
+  // Textarea height adapts to content (the bubble must not grow a scrollbar)
   useLayoutEffect(() => {
     const el = textareaRef.current
     if (!el) return
@@ -77,8 +80,8 @@ const UserMessage: React.FC<UserMessageProps> = ({
   }, [editing])
 
   /**
-   * 气泡内键盘约定：Enter 发送、Shift+Enter 换行、Esc 取消。
-   * 输入法组词中的 Enter 不能当发送（中文场景极易误触）。
+   * In-bubble keyboard convention: Enter sends, Shift+Enter inserts a newline, Esc cancels.
+   * Enter while an IME is composing must not send (very easy to trigger by accident in Chinese).
    */
   const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Escape') {
@@ -96,11 +99,12 @@ const UserMessage: React.FC<UserMessageProps> = ({
 
   const imageBlocks = message.blocks.filter((b) => b.type === 'image' && b.image_url)
   const documentBlocks = message.blocks.filter((b) => b.type === 'document' && b.fileName)
-  // 目标自动续跑轮：渲染为居中的自动运行横幅（非普通用户气泡）
+  // Goal auto-continuation round: rendered as a centered auto-run banner (not a normal user bubble)
   const goalRoundBlock = message.blocks.find((b) => b.type === 'goalRound')
 
   if (goalRoundBlock) {
-    /* 单轮/未合并时的续跑横幅：与批次横幅同一组件（窄窗口可收缩、单行省略） */
+    /* Continuation banner for a single round / unmerged rounds: same component as the batch banner
+       (shrinkable in narrow windows, single-line ellipsis) */
     return (
       <GoalRoundBanner
         current={goalRoundBlock.round ?? 1}
@@ -111,7 +115,7 @@ const UserMessage: React.FC<UserMessageProps> = ({
     )
   }
 
-  /** 孤立提问的操作按钮：与助手消息操作栏同款（图标 + Tooltip，悬停加底色变深） */
+  /** Action buttons for an orphan question: same as the assistant message action bar (icon + Tooltip, background darkens on hover) */
   const actionButton = (
     kind: 'edit' | 'delete',
     icon: React.ReactNode,
@@ -120,8 +124,8 @@ const UserMessage: React.FC<UserMessageProps> = ({
   ): React.ReactNode => {
     const active = hovered === kind
     return (
-      /* 与助手消息操作栏（MessageActions 的 tooltipCommon）对齐：都朝下弹，
-         避免朝上盖住用户刚写完的那段提问正文 */
+      /* Aligned with the assistant message action bar (tooltipCommon in MessageActions): both pop
+         downward so they never cover the question text the user just finished typing */
       <Tooltip title={title} placement="bottom">
         <button
           type="button"
@@ -145,21 +149,23 @@ const UserMessage: React.FC<UserMessageProps> = ({
 
   return (
     <div className="flex justify-end harness-message-body">
-      {/* min-w-0：flex 子项默认 min-width:auto，长哈希/URL 这类不可断词会把气泡顶出 80% 上限 */}
+      {/* min-w-0: flex children default to min-width:auto, so long unbreakable tokens such as
+          hashes/URLs push the bubble past the 80% limit */}
       <div className="max-w-[80%] min-w-0">
         <div
           style={{
-            /* 用户气泡：中性深灰（用户 2026-11-19 指定样式 rgb(60 60 60) / rgba(255,255,255,.85)），
-               取代原先的蓝色气泡；亮色主题用对应的中性浅灰，避免颜色主题里出现突兀的蓝块。 */
+            /* User bubble: neutral dark gray (style specified by the user on 2026-11-19 as
+                rgb(60 60 60) / rgba(255,255,255,.85)), replacing the old blue bubble; the light
+                theme uses the corresponding neutral light gray so no jarring blue block appears. */
             background: isDarkMode ? 'rgb(60 60 60)' : token.colorFillSecondary,
             color: colorText,
-            // 编辑中：加一圈主色描边，明确「正在改这条提问」
+            // Editing: add a primary-colored outline to make "editing this question" obvious
             boxShadow: editing ? `0 0 0 1.5px ${token.colorPrimary}` : undefined
           }}
           className="px-5 py-3 rounded-2xl rounded-br-sm"
         >
           {editing ? (
-            /* 就地编辑：输入区就在气泡里（不用聊天输入框），回车即发送 */
+            /* In-place editing: the input lives inside the bubble (not the chat input), Enter sends */
             <textarea
               ref={textareaRef}
               value={draft}
@@ -231,7 +237,8 @@ const UserMessage: React.FC<UserMessageProps> = ({
           </div>
         )}
 
-        {/* 孤立提问（没有回复）才有这行：状态说明 + 编辑 / 删除；编辑中就换成键盘约定提示 */}
+        {/* Only for orphan questions (no reply): status text + edit / delete; while editing it
+            turns into the keyboard convention hint */}
         {orphan && !readOnly ? (
           <div
             className="flex items-center justify-end gap-2 mt-1.5"

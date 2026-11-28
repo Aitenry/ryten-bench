@@ -20,10 +20,11 @@ import {
 } from '../../database/mapper/notes/wiki'
 
 /**
- * 知识库（Wiki）IPC 处理器表（notes 插件的第 3 个域）。
+ * Wiki (knowledge base) IPC handler map (the third domain of the notes plugin).
  *
- * 通道名一律 `notes:<channel>`；迁移说明：原 `src/main/ipc/wiki.ts` 的 13 个
- * 扁平通道（`wiki-*`）逐个改名，参数与返回类型不变，只去掉 ipcMain 的 `_event` 形参。
+ * Channel names are always `notes:<channel>`. Migration note: the 13 flat channels (`wiki-*`) from
+ * the former `src/main/ipc/wiki.ts` were renamed one by one; parameters and return types are
+ * unchanged, apart from dropping ipcMain's `_event` parameter.
  */
 export const wikiIpcHandlers: IpcHandlerMap = {
   'notes:wiki-get-by-id': async (id: number) => {

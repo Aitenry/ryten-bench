@@ -1,10 +1,12 @@
 import { getMainLanguage } from './index'
 
 /**
- * 定时任务（schedule_*）工具与投递文案。
+ * Texts for the scheduled-task (schedule_*) tools and deliveries.
  *
- * 与其它 `tool-results-*` 模块同一约定：中文是源语言，英文树用 `typeof` 约束。
- * 时间统一以 ISO 8601 展示（机器可读、无歧义），规则描述保持数据原样。
+ * Same convention as the other `tool-results-*` modules: Chinese is the source language and the
+ * English tree is checked with `typeof`.
+ * Times are always shown in ISO 8601 (machine-readable and unambiguous), and rule descriptions
+ * keep the data as-is.
  */
 export const zhCNScheduleToolTexts = {
   notConfigured: '定时任务存储未初始化，暂时不可用。',
@@ -36,10 +38,10 @@ export const zhCNScheduleToolTexts = {
   runStatusCancelled: '已取消',
   runStatusFailed: '失败',
   none: '—',
-  /** 定时任务投递给模型的消息抬头（runner 使用） */
+  /** Message header used when a scheduled task is delivered to the model (by the runner) */
   question:
     '[定时任务：{{title}}]\n{{prompt}}\n\n（这条消息由用户创建的定时任务自动投递。请直接开始处理，不要向用户确认。）',
-  /** 触发规则无效的原因 */
+  /** Reasons the trigger rule is invalid */
   reasons: {
     missing: '缺少触发规则',
     'unknown-kind': '未知类型（仅支持 once / every / daily）',
@@ -92,7 +94,7 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
   }
 }
 
-/** 按当前界面语言取定时任务文案 */
+/** Return the scheduled-task texts for the current UI language */
 export function getScheduleToolTexts(): typeof zhCNScheduleToolTexts {
   return getMainLanguage() === 'en-US' ? enUSScheduleToolTexts : zhCNScheduleToolTexts
 }

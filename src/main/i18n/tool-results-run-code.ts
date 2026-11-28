@@ -1,9 +1,10 @@
 import { getMainLanguage } from './index'
 
 /**
- * `run_code`（PTC：模型写 JS 调只读工具）结果文案。
+ * Result texts for `run_code` (PTC: the model writes JS to call read-only tools).
  *
- * 中文是源语言，英文树用 `typeof` 约束键一致。代码与工具输出属于模型数据、不翻译。
+ * Chinese is the source language and the English tree is checked with `typeof` for key parity.
+ * Code and tool output are model data and are not translated.
  */
 export const zhCNRunCodeTexts = {
   denied:
@@ -47,7 +48,7 @@ export const enUSRunCodeTexts: typeof zhCNRunCodeTexts = {
   toolList: 'Available tools: {{tools}}'
 }
 
-/** 按当前界面语言取 run_code 文案 */
+/** Return the run_code texts for the current UI language */
 export function getRunCodeTexts(): typeof zhCNRunCodeTexts {
   return getMainLanguage() === 'en-US' ? enUSRunCodeTexts : zhCNRunCodeTexts
 }

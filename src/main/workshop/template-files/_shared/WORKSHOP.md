@@ -28,7 +28,7 @@
 | `locales/{index,zh-CN,en-US}.ts` | 词条（渲染层 install 时注册；英文逐键对齐中文） |
 | `renderer/plugin.tsx` | 渲染层入口：`export default { install(ctx) }`，**只做装配**。**必需** |
 | `renderer/api.ts` | 主进程通道的薄封装（组件不直接写通道名） |
-| `renderer/Page.tsx` / `renderer/Settings.tsx` | 页面与设置页（路由的 `load()` 指向它们才会拆成懒加载 chunk） |
+| `renderer/Page.tsx` / `renderer/Settings.tsx` | 页面与设置页（路由的 `load()` 指向它们才会拆成懒加载 chunk）。设置页用 `components/ui.tsx` 的 `SettingsCard` / `SettingRow` 写（第 6.6 节） |
 | `renderer/components/ui.tsx` | **布局与配色原语**（PageShell / Panel / pageTabsProps / formModalProps / FitTable / FitList / ChartBox / usePluginPalette）。页面与组件都从这里取，**别自己重新发明根节点与弹窗样式**——第 6 节的坑都在这一个文件里解决掉了 |
 | `renderer/components/*.tsx` | 拆出来的组件（表单弹窗这类状态多的块别塞进页面） |
 | `plugin.css` | 可选：手写样式（`workshop.json` 的 `css: 'file'` 时原样进包）。默认 `auto`，由工坊用 Tailwind 扫源码生成 |
@@ -182,10 +182,10 @@ export async function listItems() {
   7. **反例**：只实现 `merge(remote)` 并集、忽略 base；只合并业务表忘了设置；把云端原始引用直接
      insert 进库；用 `JSON.stringify` 直接比较含 `exportedAt` 的快照。
 
-  参考实现（本机工坊 / ryten-plugins）：
-  - `personal-ledger/main/db/merge.ts`：自然键 + 内容指纹 + 设置集合 + 引用体检；
-  - `task-planner/main/db/merge.ts`：任务树自然键 + id 对齐编辑；
-  - `global-time-zones/main/db/merge.ts`：`zone` 唯一键 + base 删除过滤。
+  合并要点（按业务表选择）：
+  - 业务表用自然键 + 内容指纹 + 设置集合 + 引用体检；
+  - 任务树用 id 对齐编辑；
+  - 带唯一键的表（如时区表）用唯一键 + base 删除过滤。
 
   最小骨架：
   ```ts
@@ -302,16 +302,34 @@ custom-frame-outer(100vh) → custom-frame(h100%, overflow hidden, flex col)
   （按列宽选 ⇒ 同列每行同高 ⇒ 自适应表格量到的行高对每行都成立）；
 - 长文本列补 `ellipsis: true`。
 
-### 6.6 设置页的观感（字段顺排）
+### 6.6 设置页的观感（字段顺排 + 改完即时落盘）
 
-设置页（`settingsSection`）与宿主的设置页放在一起看，所以：
+设置页（`settingsSection`）会和宿主的设置页并排放在同一个设置弹窗里，用户是**连着看**的。
+照着插件中心里真实插件的写法来（`global-time-zones` / `personal-ledger` 的设置页，
+模板 `full` 的 `Settings.tsx` 是同一份样板的源码版）。`full` 把两个原语放在
+`renderer/components/ui.tsx`（`SettingsCard` / `SettingRow`）；窄骨架没有 `ui.tsx` 时，
+照同样的结构在设置页里定义本地 `Section` / `Row`（`panel` / `tool` 模板就是这么写的）。
 
-- **一行一个字段**，标签在左、控件在右；**不要**装饰性分组标题（强调色圆点 + 发丝线 +「连接/模型」
-  这类空标签），也**不要**带框的信息块 / 徽章面板 —— 分组标签只用纯文本；
-- 结构只在**携带信息**时才成立（状态、计数、明细），而且信息该放进字段本身（placeholder / 说明文字），
-  不要另加一块「当前值：…」的展示面板；
-- 悬停/浮层要展示明细时给**结构化面板**（标题行 + 发丝线 + 左右对齐的键值明细），
-  不要把信息拼成一行字符串。
+- **分组用 `Card size="small"`**，标题写这一组管什么（「列表」「提醒」「汇率」）：
+  一个 Card 就是一组，组内字段用 `gap-3.5`。不要用强调色圆点 + 发丝线 +「连接/模型」
+  这类空标签，也不要带框的信息块 / 徽章面板 —— 分组只看卡片标题；
+- **一行一个字段**（`SettingRow`）：标签在左（13px）、控件在右（`size="small"`、`shrink-0`）；
+- 字段的补充信息放**标签下面那行 11px 灰字**（`text-[11px] opacity-60`），
+  不要另加「当前值：…」的展示面板，也不要把说明拼进标签；
+- **内容少就只放一张卡**，不要为了铺满硬凑第二张；字段多（>4 行）再用
+  `grid grid-cols-1 gap-3 xl:grid-cols-2` 铺成两列。设置页由宿主滚动，这里用断点不会撑破
+  页面——第 6.1 节「不要用断点切栏数」只针对**不出滚动条的插件页面**；
+- **改完即时落盘，不要「保存」按钮**（用户会以为不点不生效，点了又不知道存没存住）：
+  开关 / 下拉在 `onChange` 里 `void save(patch)`；输入框在**回车或失焦**时提交（每敲一个字
+  都写主进程既吵又慢）。写成功用主进程返回的值回填，失败退回改之前的值并 `message.error`
+  ——本地 state 与主进程不要各存一份「真相」；
+- **文案**：标签是名词短语（「隐藏已完成」）；说明写**会影响到什么**
+  （「只影响列表显示，记录不会被删除」）。不写「这一页由插件自己注册…」「示例开关」
+  这类实现说明 / 占位字样；控件值放 placeholder；界面上一律走 `t()`（第 5c 节）；
+- **能真生效**：每个设置项都要在页面或工具里真的被读到（模板里 `hideDone` 被页面拿去过滤、
+  `note` 显示在概览面板）——留一个只落盘、没人读的开关，用户第一件事就是拨它，然后发现没反应。
+  `panel` / `tool` 是窄骨架：它们的设置页只演示「表单 + 落盘 + 即时保存」这套写法，
+  把这几个字段换成你真正要控制的配置时，记得在页面或工具里接上消费方。
 
 ### 6.7 样式产物本身
 
@@ -398,6 +416,8 @@ export default {
 - [ ] **每个 Modal 都展开 `formModalProps` 或 `createModalProps`**，矮窗口下标题与按钮都点得到；
 - [ ] **暗色主题**：切到暗色（设置 → 外观）后没有白底白字、没有比背景还亮的网格线，
       代码里搜不到 `dark:` 与字面量色值；
+- [ ] **设置页**：`SettingsCard` 分组、一行一个字段、说明在标签下面（11px 灰字），
+      开关/输入改完即时落盘（**没有「保存」按钮**），每个设置项在页面或工具里真的被读取（不是死开关）；
 - [ ] **词条**：新增的文案都进 `locales/`（中英逐键对齐），界面上没有 `${vars.id}.xxx` 这样的原始键名；
 - [ ] **不碰宿主生命周期**：没有 `process.exit` / `process.abort` / 直接 `ipcMain.*`
       （`safety.scan` 全过），通道都走 `ctx.registerIpc`；

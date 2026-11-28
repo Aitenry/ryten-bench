@@ -1,16 +1,18 @@
 import { EditorState } from '@codemirror/state'
 
 /**
- * CodeMirror 内置界面（查找面板 / 合并视图按钮 / 无障碍朗读）的中英文案。
+ * Chinese and English copy for CodeMirror's built-in UI (search panel / merge view buttons /
+ * accessibility announcements).
  *
- * CodeMirror 的所有内置 UI 文案都走 EditorState.phrases 这个 Facet，
- * 不覆盖的话界面上会出现中英混排（面板里是英文 Find/Replace，旁边的应用界面是中文）。
- * 键名取自 @codemirror/search 与 @codemirror/merge 的 phrase() 调用，一处集中维护。
+ * All CodeMirror built-in UI text goes through the `EditorState.phrases` facet; without
+ * overriding it the UI mixes languages (English Find/Replace in the panel while the surrounding
+ * app UI is Chinese). Keys are taken from the `phrase()` calls in @codemirror/search and
+ * @codemirror/merge, maintained in one place.
  */
 type Phrases = Record<string, string>
 
 const ZH: Phrases = {
-  // 查找 / 替换面板
+  // Find / replace panel
   Find: '查找',
   Replace: '替换',
   next: '下一个',
@@ -28,12 +30,12 @@ const ZH: Phrases = {
   go: '跳转',
   'replaced $ matches': '已替换 $ 处',
   'replaced match on line $': '已替换第 $ 行的匹配',
-  // 合并视图（差异）
+  // Merge view (diff)
   Accept: '保留',
   Reject: '撤销',
   'Revert this chunk': '撤销这一处',
   '$ unchanged lines': '$ 行未改动',
-  // 自动补全
+  // Autocomplete
   Completions: '补全',
   Diagnostics: '诊断'
 }
@@ -64,7 +66,7 @@ const EN: Phrases = {
   Diagnostics: 'Diagnostics'
 }
 
-/** 按界面语言取 CodeMirror 文案扩展 */
+/** Pick the CodeMirror phrase extension for the UI language */
 export function editorPhrases(language: string): ReturnType<typeof EditorState.phrases.of> {
   return EditorState.phrases.of(language.startsWith('zh') ? ZH : EN)
 }

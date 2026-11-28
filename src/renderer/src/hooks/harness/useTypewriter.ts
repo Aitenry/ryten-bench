@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 
-/** 打字机效果 Hook：逐字输出文本 */
+/** Typewriter effect hook: outputs text character by character */
 export const useTypewriter = (
   text: string,
   speed = 80,
@@ -29,8 +29,8 @@ export const useTypewriter = (
       }, speed)
     }, startDelay)
 
-    // 修复：interval 句柄提升到 effect 作用域,cleanup 时一并清除
-    //（此前外层 return 只清 timeout,已启动的 interval 永久空转）
+    // Fix: the interval handle is hoisted to the effect scope and cleared during cleanup
+    // (previously the outer return only cleared the timeout, so a started interval spun forever)
     return () => {
       cancelled = true
       clearTimeout(timeout)
@@ -41,7 +41,7 @@ export const useTypewriter = (
   return { displayedText, isDone }
 }
 
-/** 循环打字机 Hook：逐字输出 → 暂停 → 从右删 → 切下一句 → 循环 */
+/** Cycling typewriter hook: type out → pause → delete from the right → next sentence → loop */
 export const useCyclingTypewriter = (
   texts: string[],
   typeSpeed = 60,

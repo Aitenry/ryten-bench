@@ -1,26 +1,27 @@
 /**
- * 目录内「最旧文件」清理（异步、best-effort，零第三方依赖）。
+ * Oldest-file pruning inside a directory (async, best-effort, no third-party dependencies).
  *
- * 为什么单独抽出来：工具详情目录与 spill 目录都按「先写后剪」维护文件数上限，
- * 原实现用 `readdirSync` + 逐文件 `statSync` + `unlinkSync`，在工具调用密集时会
- * 直接阻塞主进程事件循环（性能审计 P19）。这里统一成异步实现，两处共用，
- * 也便于离线断言（返回被删除的文件、串行合并用调用方自己的标志位）。
+ * Why it lives on its own: the tool-detail directory and the spill directory both enforce a file
+ * count cap by pruning after writing. The original implementation used `readdirSync` plus a
+ * `statSync` and `unlinkSync` per file, which blocked the main-process event loop under heavy tool
+ * use (performance audit P19). This is one shared async implementation, also easy to assert
+ * offline (it returns the deleted files; serial merge relies on the caller's own flag).
  */
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import type { Dirent } from 'node:fs'
 
 export interface PruneOldestOptions {
-  /** 只处理满足条件的文件（例如扩展名 / 文件名前缀） */
+  /** Only process files that match (e.g. extension or file-name prefix) */
   match: (fileName: string) => boolean
-  /** 保留多少个最新文件 */
+  /** How many of the newest files to keep */
   keep: number
 }
 
 /**
- * 按 mtime 升序删除最旧文件，直到目录内匹配文件数不超过 `keep`。
+ * Delete the oldest files in ascending mtime order until at most `keep` matching files remain.
  *
- * @returns 实际删除的文件路径（删除失败的会被跳过，不抛错）
+ * @returns Paths of the files actually deleted (failures are skipped and never thrown)
  */
 export async function pruneOldestFiles(
   dir: string,
@@ -31,7 +32,7 @@ export async function pruneOldestFiles(
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch {
-    // 目录不存在（还没写过文件）或不可读：没有可清理的东西
+    // Directory missing (nothing written yet) or unreadable: nothing to prune
     return []
   }
   const files: Array<{ full: string; mtime: number }> = []
@@ -42,7 +43,7 @@ export async function pruneOldestFiles(
       const stat = await fs.stat(full)
       files.push({ full, mtime: stat.mtimeMs })
     } catch {
-      // 已被并发删除/无权限：跳过
+      // Already deleted concurrently or no permission: skip
     }
   }
   files.sort((a, b) => a.mtime - b.mtime)
@@ -52,7 +53,7 @@ export async function pruneOldestFiles(
       await fs.unlink(files[i].full)
       removed.push(files[i].full)
     } catch {
-      // 删除失败不阻塞写入
+      // A failed delete must not block writes
     }
   }
   return removed

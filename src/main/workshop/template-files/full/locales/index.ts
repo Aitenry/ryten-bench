@@ -2,10 +2,10 @@ import { ${vars.pascal}ZhCN } from './zh-CN'
 import { ${vars.pascal}EnUS } from './en-US'
 
 /**
- * ${vars.title} 的词条注册表：渲染层 install 时经
- * `ctx.use('i18n').addResources('translation', ${vars.pascal}Locales)` 注入 i18next。
+ * Locale registry for ${vars.title}: injected into i18next during renderer install via
+ * `ctx.use('i18n').addResources('translation', ${vars.pascal}Locales)`.
  *
- * 插件停用这些键随之消失——别把它们塞进宿主内核的词条文件。
+ * These keys disappear when the plugin is deactivated — do not put them into the host core's locale files.
  */
 export const ${vars.pascal}Locales = {
   'zh-CN': ${vars.pascal}ZhCN,

@@ -5,22 +5,26 @@ import { mainFormat } from '../../i18n'
 import { getAgentToolTexts } from '../../i18n/tool-results-agent'
 
 /**
- * 目标轮次驱动器（goal-round-driver）— 对应 deepseek-harness 的 dsh-goal-round-driver
+ * Goal round driver (goal-round-driver)
  *
- * 机制（适配 RytenBench 无事件总线的结构）：
- * - 用户轮次完成后调用 maybeDrive：目标 active + armed（内存武装态）且未达轮次上限时，
- *   自动发起下一轮（注入 <goal_round> 消息 + 目标来源元信息）；
- * - 轮次计数：roundsStarted 表示「已开始的自动续跑轮数」，创建目标的用户轮不计入
- *   （goal.ts create 时 roundsStarted=0），自动轮在派发时结算（roundsStarted + 1，
- *   首次续跑即第 1 轮），保证轮内 update_goal(complete/blocked) 的
- *   「精确命中当前目标轮」校验能匹配，也让注入提示词的 "round N/M"、
- *   消息徽标「第 N 轮」与目标栏计数三处一致；
- * - 每话题互斥：同一时间一个话题至多一个自动轮在跑（用户消息被 UI 层串行化，实际不重叠）；
- * - 用户取消自动轮 → 目标 disarm（停止自动续跑，等用户要求「继续」→ resume 重新武装）；
- * - 达轮次上限 → blocked(round-limit) 并停止。
+ * How it works (adapted to the structure that has no event bus):
+ * - After a user turn completes, maybeDrive is called: when the goal is active + armed (in-memory
+ *   armed state) and the round limit is not reached, the next round is launched automatically
+ *   (injecting a <goal_round> message + goal source metadata);
+ * - Round counting: roundsStarted means "auto-continuation rounds already started"; the user turn
+ *   that created the goal does not count (goal.ts create sets roundsStarted=0), and an auto round
+ *   is settled when dispatched (roundsStarted + 1, so the first continuation is round 1). This
+ *   keeps the in-round update_goal(complete/blocked) "exact current goal round" check matching,
+ *   and keeps the injected prompt's "round N/M", the message badge "round N" and the goal bar
+ *   count consistent;
+ * - Per-topic mutual exclusion: at most one auto round runs per topic at a time (user messages are
+ *   serialized by the UI layer, so they do not actually overlap);
+ * - User cancels an auto round → goal disarm (stops auto-continuation; waits for the user to ask
+ *   "continue" → resume re-arms);
+ * - Round limit reached → blocked(round-limit) and stop.
  */
 
-/** 执行一轮对话的回调（由 IPC 层注入，复用 runHarnessTurn 管线） */
+/** Callback that runs one conversation round (injected by the IPC layer, reuses the runHarnessTurn pipeline) */
 export type DriveTurnFn = (params: {
   topicId: number
   question: string
@@ -35,31 +39,33 @@ export class GoalRoundDriver {
   }
 
   /**
-   * 清空「正在自动续跑」的话题集合（账号数据空间切换时用）。
+   * Clear the set of topics that are "auto-continuing" (used when switching account data space).
    *
-   * 正常路径由 `maybeDrive` 的 finally 自行释放；这里兜住「切换那一刻正好在跑」的残留，
-   * 否则新账号里同 id 的话题会被误判成「已在续跑」而永远不派发自动轮。
+   * The normal path releases in maybeDrive's finally; this covers leftovers "running at the moment
+   * of the switch", otherwise a topic with the same id in the new account would be misjudged as
+   * "already continuing" and would never dispatch auto rounds.
    */
   reset(): void {
     this.running.clear()
   }
 
-  /** 轮次结束后调度：满足条件则自动发起下一轮（循环派发直至停止条件） */
+  /** Schedule after a turn ends: launch the next round automatically when conditions hold (dispatch in a loop until a stop condition) */
   async maybeDrive(topicId: number, drive: DriveTurnFn): Promise<void> {
     if (this.running.has(topicId)) return
-    // 先占位再 await（修复：此前占用点位于多个 await 之后，「守卫通过」与「占用」之间
-    // 存在竞态窗口，两个并发完成点可重复 incrementRound 并双派发自动轮）
+    // Claim first, then await (fix: the claim used to happen after several awaits, leaving a race
+    // window between "guard passes" and "claim", so two concurrent completion points could
+    // incrementRound twice and dispatch two auto rounds)
     this.running.add(topicId)
     try {
       while (await this.driveOnce(topicId, drive)) {
-        // 一轮完成且未达停止条件：继续派发下一轮
+        // A round completed without a stop condition: keep dispatching the next one
       }
     } finally {
       this.running.delete(topicId)
     }
   }
 
-  /** 检查并派发一轮；返回 true 表示本轮已派发完成且应继续检查下一轮 */
+  /** Check and dispatch one round; true means this round was dispatched and completed and the next round should be checked */
   private async driveOnce(topicId: number, drive: DriveTurnFn): Promise<boolean> {
     const goal = await goalStore.load(topicId)
     if (!goal || goal.phase !== 'active' || !goalStore.isArmed(topicId)) {
@@ -69,7 +75,7 @@ export class GoalRoundDriver {
       return false
     }
 
-    // 达轮次上限：标记 blocked(round-limit) 并停止
+    // Round limit reached: mark blocked(round-limit) and stop
     if (goal.roundsStarted >= goal.maxGoalRounds) {
       try {
         await goalStore.update(topicId, goal.id, goal.revision, 'blocked', {
@@ -86,7 +92,7 @@ export class GoalRoundDriver {
       return false
     }
 
-    // 派发时结算：roundsStarted + 1（round = 结算后的轮次号）
+    // Settle at dispatch: roundsStarted + 1 (round = the round number after settlement)
     const updated = await goalStore.incrementRound(topicId)
     if (!updated || updated.phase !== 'active') return false
 
@@ -112,7 +118,7 @@ Objective: ${updated.objective}
     try {
       const result = await drive({ topicId, question, turnMeta })
       if (result.cancelled) {
-        // 用户取消自动轮：停止自动续跑（armed → disarmed），目标保持 active
+        // User cancelled the auto round: stop auto-continuation (armed → disarmed), goal stays active
         logger.info('[GoalDriver] Auto round cancelled by user, goal disarmed')
         goalStore.disarm(topicId)
         return false
@@ -127,5 +133,5 @@ Objective: ${updated.objective}
   }
 }
 
-/** 进程级单例 */
+/** Process-level singleton */
 export const goalRoundDriver = new GoalRoundDriver()

@@ -1,19 +1,27 @@
 /**
- * MCP（Model Context Protocol）客户端管理器 —— harness 主进程侧的全部连接逻辑。
+ * MCP (Model Context Protocol) client manager — all connection logic on the harness main-process
+ * side.
  *
- * 职责：
- *  1. 把 electron-store 里的服务器配置翻成真实的 MCP 连接（stdio 子进程 / Streamable HTTP / SSE）；
- *  2. 连上后把服务器暴露的工具翻成 **AI 工具实例**，并入 harness 的工具注册表；
- *  3. 维护「设置页看得到的状态」：连没连上、报什么错、这台服务器有哪些工具。
+ * Responsibilities:
+ *  1. Turn server configurations in electron-store into real MCP connections (stdio child process /
+ *     Streamable HTTP / SSE);
+ *  2. After connecting, turn the tools exposed by the server into **AI tool instances** and merge
+ *     them into the harness tool registry;
+ *  3. Maintain "the state visible in the settings page": connected or not, what error, which tools
+ *     this server has.
  *
- * 为什么自己建连接而不直接用 `MultiServerMCPClient`：那个封装会把所有服务器塞进一个
- * 客户端，任一台连不上时**整份工具表**都可能拿不到；而默认托管进程（stdio）一旦起不来，
- * 用户在设置页只看到「没有工具」而看不到原因。这里逐台建连、逐台记账，一台坏不影响其余。
+ * Why build connections ourselves instead of using `MultiServerMCPClient`: that wrapper stuffs all
+ * servers into one client, so when any single server fails to connect the **entire tool table** may
+ * be unavailable; and when the default-managed process (stdio) fails to start, the user only sees
+ * "no tools" in the settings page without the reason. Here each server connects and is accounted for
+ * separately, so one broken server does not affect the rest.
  *
- * 生命周期（谁调谁）：`configureMcp()`（插件 install，只注入存储读法）→ `refreshCatalog()`
- * （启动预热 / 保存配置后重连）→ `currentMcpTools()`（每轮组装工具集时同步取快照）。
- * 工具实例**不预先全部创建**：设计期发现 stdio 进程只能靠真正启动才知道好坏，所以
- * `currentMcpTools()` 永远是同步返回当前快照，慢的连接在后台 `refreshCatalog()` 里跑。
+ * Lifecycle (who calls whom): `configureMcp()` (plugin install, only injects the store reader) →
+ * `refreshCatalog()` (startup warm-up / reconnect after saving configuration) → `currentMcpTools()`
+ * (takes a snapshot synchronously each round when assembling the tool set). Tool instances are **not
+ * all created up front**: stdio processes can only be validated by actually starting them, so
+ * `currentMcpTools()` always returns the current snapshot synchronously while slow connections run in
+ * the background `refreshCatalog()`.
  */
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -41,36 +49,39 @@ import {
   type McpToolInfo
 } from '../../../shared/harness/mcp'
 
-/** 工具详情卡片的图标与配色（MCP 工具统一用「插头」，与内置/插件工具区分开） */
+/** Icon and color of the tool detail card (MCP tools all use a "plug", distinguishing them from built-in/plugin tools) */
 const MCP_TOOL_ICON = 'RiPlug2Line'
 const MCP_TOOL_COLOR = '#8c6b3f'
 
 /**
- * 一次连接尝试的握手超时（毫秒）：服务起不来要尽快反馈到设置页，而不是干等。
- * 工具调用超时在 `mcp-tool.ts`（`DEFAULT_MCP_TOOL_TIMEOUT_MS`），可由服务器配置覆盖。
+ * Handshake timeout for one connection attempt (ms): a server that fails to start must be reported to
+ * the settings page quickly rather than hanging. The tool call timeout lives in `mcp-tool.ts`
+ * (`DEFAULT_MCP_TOOL_TIMEOUT_MS`) and can be overridden by the server configuration.
  */
 const CONNECT_TIMEOUT_MS = 20_000
 
-/** 快照被认为「还新鲜」的时长；过期后下一次取工具会顺手在后台重连 */
+/** How long a snapshot is considered "fresh"; after it expires, the next tool fetch also reconnects in the background */
 const SNAPSHOT_TTL_MS = 5 * 60_000
 
-/* ── MCP SDK 的加载方式（有意为之，别改回静态 import） ─────────────────────
+/* ── How the MCP SDK is loaded (intentional; do not change back to a static import) ─────────
  *
- * `@modelcontextprotocol/sdk` 是 **ESM-only**（package.json "type": "module"），而插件
- * 主进程入口是 **CJS**（打包产物 `userData/plugins/<id>/main.cjs`，见 src/main/workshop/README.md）。
- * 打包器把裸模块改写成**同步**的宿主解析调用（`globalThis.__RB_HOST_RESOLVE__(spec)`），
- * 于是 `require('@modelcontextprotocol/sdk/...')` 只会在插件装载期直接抛 ERR_REQUIRE_ESM；
- * 动态 `import()` 又会在**插件目录**下解析说明符——userData 不在应用树里，那里没有
- * node_modules，必然 ERR_MODULE_NOT_FOUND。
+ * `@modelcontextprotocol/sdk` is **ESM-only** (package.json "type": "module"), while the plugin
+ * main-process entry is **CJS** (build artifact `userData/plugins/<id>/main.cjs`).
+ * The bundler rewrites bare modules into **synchronous** host resolution calls
+ * (`globalThis.__RB_HOST_RESOLVE__(spec)`), so `require('@modelcontextprotocol/sdk/...')` throws
+ * ERR_REQUIRE_ESM directly during plugin load; and a dynamic `import()` resolves the specifier under
+ * the **plugin directory** — userData is not inside the app tree and has no node_modules there, so it
+ * inevitably fails with ERR_MODULE_NOT_FOUND.
  *
- * 因此：用 `createRequire(应用根)` **惰性**加载。既能解析到 SDK（与宿主同一份实例），
- * 又不在模块顶层就加载（没配服务器时根本不碰 MCP 代码）。应用根由插件 install 经
- * `setMcpModuleBase(app.getAppPath())` 注入。
- * ────────────────────────────────────────────────────────────────────── */
+ * Therefore: load **lazily** with `createRequire(app root)`. This both resolves the SDK (the same
+ * instance as the host) and avoids loading it at module top level (no MCP code is touched when no
+ * server is configured). The app root is injected by the plugin install via
+ * `setMcpModuleBase(app.getAppPath())`.
+ * ──────────────────────────────────────────────────────────────────────────────────────── */
 
-/** 应用根（含 package.json 的目录）：插件 install 时注入 */
+/** App root (directory containing package.json): injected during plugin install */
 let moduleBase: string | null = null
-/** 已加载的 SDK 类型（进程内缓存；失败不缓存，用户修好环境后重试应能成功） */
+/** Loaded SDK types (cached in-process; failures are not cached, so a retry after the user fixes the environment can succeed) */
 let sdkModule: Promise<McpSdkModule> | null = null
 
 interface McpSdkModule {
@@ -80,20 +91,21 @@ interface McpSdkModule {
   SSEClientTransport: typeof import('@modelcontextprotocol/sdk/client/sse.js').SSEClientTransport
 }
 
-/** 注入宿主应用根（插件 install 的可逆装配里调用；停用时传 undefined 复位） */
+/** Inject the host app root (called from the plugin install's reversible wiring; pass undefined to reset on disable) */
 export function setMcpModuleBase(base?: string): void {
   moduleBase = base ?? null
   sdkModule = null
 }
 
-/** 已连接客户端的类型（SDK 类型只在内部用，对外只见结构化工具） */
+/** Type of a connected client (SDK types are used internally only; externally only structured tools are exposed) */
 type McpClient = import('@modelcontextprotocol/sdk/client/index.js').Client
 
 /**
- * 惰性加载 MCP SDK。
+ * Lazily load the MCP SDK.
  *
- * 依赖 Node 的 `require(ESM)` 能力（Node 22.12+ 默认开启，Electron 44 自带满足）；
- * 老版本 Node 上这里会抛错并被上层记成「这台服务器连接失败」，其余功能不受影响。
+ * Relies on Node's `require(ESM)` support (enabled by default in Node 22.12+, which Electron 44
+ * ships); on older Node versions this throws and the caller records it as "this server failed to
+ * connect", leaving the rest of the functionality unaffected.
  */
 async function loadSdk(): Promise<McpSdkModule> {
   if (!sdkModule) {
@@ -116,13 +128,13 @@ async function loadSdk(): Promise<McpSdkModule> {
   return sdkModule
 }
 
-/** 一条已就绪的 MCP 工具（渲染层的清单与模型侧的实例都来自它） */
+/** One ready MCP tool (both the renderer-side list and the model-side instance come from it) */
 interface McpToolDef {
-  /** 全名：`mcp__<server>__<tool>`，即模型看到的名字 */
+  /** Full name: `mcp__<server>__<tool>`, i.e. the name the model sees */
   name: string
-  /** 服务器上报的原始工具名 */
+  /** Raw tool name reported by the server */
   rawName: string
-  /** 服务器名字（配置里的 name，用于展示与反查） */
+  /** Server name (the name in the configuration, used for display and reverse lookup) */
   serverName: string
   serverId: string
   description: string
@@ -130,51 +142,52 @@ interface McpToolDef {
   instance: StructuredToolInterface
 }
 
-/** 一台服务器的运行期记录 */
+/** Runtime record of one server */
 interface McpServerEntry {
   config: McpServerConfig
   status: McpServerStatus
   error?: string
   tools: McpToolInfo[]
   /**
-   * 服务器有没有声明 resources 能力（MCP initialize 的 `capabilities.resources`）。
-   * 资源三件套只给声明了的服务器挂：没声明的调用只会拿到空清单，白占上下文。
+   * Whether the server declares the resources capability (MCP initialize's `capabilities.resources`).
+   * The three resource tools are attached only to servers that declare it: calling them on a server
+   * that does not only yields an empty list and wastes context.
    */
   supportsResources: boolean
 }
 
 interface McpSnapshot {
-  /** 取快照的时刻（判断新鲜度 / 触发后台重连） */
+  /** Time the snapshot was taken (for freshness checks / triggering background reconnects) */
   at: number
-  /** 配置指纹：配置变了立刻作废，不必等 TTL */
+  /** Configuration fingerprint: a configuration change invalidates it immediately, without waiting for the TTL */
   signature: string
   byFullName: Map<string, McpToolDef>
-  /** 服务器名字（净化后的命名空间）→ 连接的逆查表，工具调用时用 */
+  /** Server name (sanitized namespace) → connection reverse lookup, used for tool calls */
   clients: Map<string, McpClient>
   entries: McpServerEntry[]
 }
 
-/** 存储读取器由插件 install 注入（管理器本身不 import electron，便于离线回归） */
+/** Store reader injected by the plugin install (the manager itself does not import electron, for offline regression) */
 let readServersFromStore: () => McpServerInput[] = () => []
 
-/** 当前快照（同步读，供每轮工具组装） */
+/** Current snapshot (read synchronously, for each round's tool assembly) */
 let snapshot: McpSnapshot = emptySnapshot()
 let loading: Promise<void> | null = null
-/** 连接代次：配置变更/关闭时 +1，让在途的旧连接结果作废 */
+/** Connection generation: incremented on configuration change/close, invalidating in-flight results of old connections */
 let generation = 0
-/** 上一次打印过错误的服务器（同一轮刷新里同样的错只记一次日志） */
+/** Servers whose error was printed last time (the same error is logged only once per refresh round) */
 const loggedErrors = new Set<string>()
 
 function emptySnapshot(): McpSnapshot {
   return { at: 0, signature: '', byFullName: new Map(), clients: new Map(), entries: [] }
 }
 
-/** 插件 install 时注入「从 electron-store 读配置」的方法；停用时传 undefined 复位 */
+/** Inject the "read configuration from electron-store" method during plugin install; pass undefined to reset on disable */
 export function configureMcp(reader?: () => McpServerInput[]): void {
   readServersFromStore = reader ?? (() => [])
 }
 
-/** 规范化后的服务器配置列表（非法条目跳过并记日志，不让一条坏配置毁掉整页） */
+/** Normalized server configuration list (invalid entries are skipped and logged, so one bad configuration does not ruin the whole page) */
 export function listMcpServers(): McpServerConfig[] {
   let raw: McpServerInput[]
   try {
@@ -194,7 +207,7 @@ export function listMcpServers(): McpServerConfig[] {
   return out
 }
 
-/** 配置指纹：连接相关的字段全进签名（改超时也算配置变更，应重连） */
+/** Configuration fingerprint: all connection-related fields go into the signature (changing a timeout counts as a configuration change and should reconnect) */
 function signatureOf(servers: McpServerConfig[]): string {
   return JSON.stringify(
     servers.map((s) => [
@@ -213,13 +226,13 @@ function signatureOf(servers: McpServerConfig[]): string {
   )
 }
 
-/** 敏感值不落日志：只看键名，值一律打码 */
+/** Sensitive values never reach the log: only key names are shown, values are always masked */
 function maskMap(map?: Record<string, string>): Record<string, string> {
   if (!map) return {}
   return Object.fromEntries(Object.keys(map).map((k) => [k, '***']))
 }
 
-/** 建一台服务器的连接（不含工具加载）；返回已 connect 的 Client */
+/** Create a connection to one server (without loading tools); returns a connected Client */
 async function connectServer(config: McpServerConfig): Promise<McpClient> {
   const { Client, StdioClientTransport, StreamableHTTPClientTransport, SSEClientTransport } =
     await loadSdk()
@@ -229,12 +242,14 @@ async function connectServer(config: McpServerConfig): Promise<McpClient> {
       ? new StdioClientTransport({
           command: config.command as string,
           args: config.args ?? [],
-          // 只在用户显式配了 env 时覆盖：默认继承宿主环境（npx 找不到 PATH 就起不来）
+          // Only override env when the user configured it explicitly: by default the host environment
+          // is inherited (npx cannot start without PATH)
           ...(config.env
             ? { env: { ...process.env, ...config.env } as Record<string, string> }
             : {}),
           cwd: config.cwd,
-          // stderr 进管道而不是 inherit：MCP 服务器爱往 stderr 打日志，直接继承会污染应用日志
+          // stderr goes into a pipe rather than inherit: MCP servers love logging to stderr, and
+          // inheriting would pollute the app log
           stderr: 'pipe'
         })
       : config.transport === 'sse'
@@ -246,7 +261,8 @@ async function connectServer(config: McpServerConfig): Promise<McpClient> {
           })
 
   if (config.transport === 'stdio') {
-    // stderr 是 stdio 传输独有的：服务器日志进管道（见上方 spawn 参数），这里转进应用日志
+    // stderr is unique to the stdio transport: server logs go into a pipe (see the spawn arguments
+    // above) and are forwarded to the app log here
     const stdio = transport as InstanceType<McpSdkModule['StdioClientTransport']>
     stdio.stderr?.on('data', (chunk: Buffer) => {
       const text = String(chunk).trim().split('\n').slice(0, 3).join(' | ')
@@ -259,11 +275,14 @@ async function connectServer(config: McpServerConfig): Promise<McpClient> {
 }
 
 /**
- * 服务器有没有声明 resources 能力（MCP initialize 结果里的 `capabilities.resources`）。
+ * Whether the server declares the resources capability (`capabilities.resources` in the MCP
+ * initialize result).
  *
- * 这是「要不要给这一台挂资源三件套」的唯一依据：没声明的服务器，`resources/list` 只会
- * 拿到空清单，挂上去白占上下文（用户 2026-11-27 问「3 个资源工具有什么用」之后改成按能力挂）。
- * 读不到 capabilities 时按「不支持」处理——不会挂错，顶多少一个本可用的能力。
+ * This is the sole basis for "should the three resource tools be attached to this server": on a server
+ * that does not declare it, `resources/list` only returns an empty list, and attaching them just
+ * wastes context (changed to capability-based attachment after the user asked on 2026-11-27 what the
+ * 3 resource tools are for). When capabilities cannot be read, treat it as "not supported" — never
+ * attach wrongly, at most one potentially usable capability is missed.
  */
 function readResourceCapability(client: McpClient): boolean {
   try {
@@ -274,10 +293,12 @@ function readResourceCapability(client: McpClient): boolean {
 }
 
 /**
- * 读一台服务器暴露的工具（不含内置限制：MCP 服务器还支持 resources/prompts，这里只接工具）。
+ * Read the tools exposed by one server (excluding built-in limits: MCP servers also support
+ * resources/prompts, but only tools are handled here).
  *
- * 自己做而不是 `loadMcpTools`：需要**按台**控制命名与超时，并在单台失败时只标记这一台。
- * tools/list 支持分页游标，照游标翻到底。
+ * Done manually instead of `loadMcpTools`: naming and timeouts must be controlled **per server**, and
+ * a single failure should mark only that server. tools/list supports a pagination cursor, so keep
+ * paging until the end.
  */
 async function listServerTools(
   client: McpClient,
@@ -309,17 +330,20 @@ async function listServerTools(
   return collected
 }
 
-/** `client.callTool` 的返回形状见 mcp-tool.ts（`McpCallToolResult`），这里只做连接与记账 */
+/** The return shape of `client.callTool` is described in mcp-tool.ts (`McpCallToolResult`); this file only handles connections and bookkeeping */
 
 /**
- * 重连全部服务器并重建快照。
+ * Reconnect all servers and rebuild the snapshot.
  *
- * - 逐台串行：并发起十几个子进程会让「哪台拖慢了启动」无从判断，而这段本该是后台任务；
- * - 单台失败只记在这一台上（status='error' + 原因），其余照常可用；
- * - 代次守卫：刷新期间配置又变了（或插件被停用）时，旧结果直接丢弃、连接就地关掉。
+ * - Serially, one server at a time: spawning a dozen child processes concurrently makes it impossible
+ *   to tell which one slowed down startup, and this is supposed to be a background task;
+ * - A single failure is recorded on that server only (status='error' + reason); the rest stay usable;
+ * - Generation guard: if the configuration changes again during the refresh (or the plugin is
+ *   disabled), the old results are discarded and the connections closed on the spot.
  */
 export async function refreshCatalog(): Promise<McpServerView[]> {
-  // 同一时刻只允许一次刷新：并发的保存/预热共用同一趟连接，避免反复起子进程
+  // Only one refresh at a time: concurrent saves/warm-ups share the same connection pass, avoiding
+  // repeated child processes
   if (loading) {
     await loading
     return snapshot.entries.map(toView)
@@ -388,8 +412,9 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
               rawName: item.rawName,
               serverName: config.name,
               description: item.description,
-              // 服务器声明的参数契约必须下发给模型：缺了它，模型只看到「无参数的工具」，
-              // 必填参数（如 PubMed 的 query）就会以空对象调用并被服务器拒绝
+              // The parameter contract declared by the server must be passed down to the model:
+              // without it the model only sees "a tool with no parameters", and required parameters
+              // (such as PubMed's query) are called with an empty object and rejected by the server
               inputSchema: item.inputSchema,
               caller: client,
               timeoutMs: config.timeoutMs
@@ -417,7 +442,8 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
 
     if (runGeneration !== generation) return
 
-    // 关掉旧快照里不再出现的连接（配置删除/改名/停用后不留孤儿子进程）
+    // Close connections that no longer appear in the new snapshot (leaving no orphan child processes
+    // after a configuration is deleted/renamed/disabled)
     for (const [namespace, client] of previous.clients) {
       if (!clients.has(namespace)) await client.close().catch(() => undefined)
     }
@@ -438,11 +464,13 @@ export async function refreshCatalog(): Promise<McpServerView[]> {
 }
 
 /**
- * 设置页视图：**凭据值在这里掩码**。
+ * Settings-page view: **credential values are masked here**.
  *
- * 下发到渲染层的配置里，env/headers 的值一律替换成掩码串（键名保留，用户得看见自己配了
- * 哪些变量）；保存时 mcp-store 会把掩码还原成磁盘上的原值。这样 token 不会经过渲染进程，
- * 表单也不会因为「不回显」而把已存的凭据写坏。`entry.config` 本身保持原值供连接使用。
+ * In the configuration sent to the renderer, the values of env/headers are always replaced with a mask
+ * string (key names are kept so users can see which variables they configured); on save, mcp-store
+ * restores the mask to the original values on disk. This way tokens never pass through the renderer
+ * process, and the form does not corrupt stored credentials by "not echoing" them. `entry.config`
+ * itself keeps the original values for connection use.
  */
 function toView(entry: McpServerEntry): McpServerView {
   return {
@@ -457,7 +485,7 @@ function toView(entry: McpServerEntry): McpServerView {
   }
 }
 
-/** 凭据「配没配」的只读信息（列表在没有运行期记录时也要给得出） */
+/** Read-only info about whether credentials are configured (the list must provide it even without a runtime record) */
 function hasSecretsOf(config: McpServerConfig): McpServerView['hasSecrets'] {
   return {
     env: Object.keys(config.env ?? {}).length > 0,
@@ -466,8 +494,10 @@ function hasSecretsOf(config: McpServerConfig): McpServerView['hasSecrets'] {
 }
 
 /**
- * 每轮组装工具集时的**同步**入口：给当前快照；顺带在后台做两件事——
- * 配置变了就重连，或快照过期了刷新一次。同步返回保证工具装配路径不被网络拖住。
+ * **Synchronous** entry point for each round's tool assembly: returns the current snapshot and, in the
+ * background, does two things — reconnect if the configuration changed, or refresh once if the
+ * snapshot expired. Returning synchronously keeps the tool assembly path from being held up by the
+ * network.
  */
 export function currentMcpTools(): { tools: StructuredToolInterface[]; infos: ToolInfo[] } {
   const servers = listMcpServers()
@@ -482,7 +512,7 @@ export function currentMcpTools(): { tools: StructuredToolInterface[]; infos: To
 
 /* ────────────────────────── MCP resources ────────────────────────── */
 
-/** 当前已连接的服务器名（资源工具报错时列出可用服务器） */
+/** Names of currently connected servers (listed when a resource tool errors) */
 export function connectedMcpServerNames(): string[] {
   return snapshot.entries
     .filter((entry) => entry.status === 'ok' && snapshot.clients.has(mcpNamespace(entry.config.name)))
@@ -490,10 +520,12 @@ export function connectedMcpServerNames(): string[] {
 }
 
 /**
- * 已连接**且声明了 resources 能力**的服务器名。
+ * Names of connected servers that **declare the resources capability**.
  *
- * 资源三件套只按这个清单挂载：勾了 3 台、只有 1 台支持 resources 时，就只为这 1 台挂
- * （工具内部的 `server` 参数也只允许它）。一台都没有时干脆不挂，省下 3 个工具定义。
+ * The three resource tools are attached only according to this list: when 3 servers are selected but
+ * only 1 supports resources, they are attached only for that one (the tool's `server` parameter also
+ * allows only that one). When there are none, they are not attached at all, saving 3 tool
+ * definitions.
  */
 export function resourceCapableMcpServers(): string[] {
   return snapshot.entries
@@ -506,7 +538,7 @@ export function resourceCapableMcpServers(): string[] {
     .map((entry) => entry.config.name)
 }
 
-/** 按配置名取已连接的客户端；未连接/停用返回 null */
+/** Get a connected client by configuration name; returns null when not connected/disabled */
 function connectedClient(server: string): McpClient | null {
   const entry = snapshot.entries.find(
     (item) => item.status === 'ok' && item.config.name === server
@@ -515,7 +547,7 @@ function connectedClient(server: string): McpClient | null {
   return snapshot.clients.get(mcpNamespace(entry.config.name)) ?? null
 }
 
-/** 列出某台服务器的资源（支持分页游标） */
+/** List the resources of one server (supports a pagination cursor) */
 export async function listMcpResources(
   server: string,
   cursor?: string
@@ -541,7 +573,7 @@ export async function listMcpResources(
   }
 }
 
-/** 列出某台服务器的资源模板（参数化 URI） */
+/** List the resource templates of one server (parameterized URIs) */
 export async function listMcpResourceTemplates(
   server: string,
   cursor?: string
@@ -572,7 +604,7 @@ export async function listMcpResourceTemplates(
   }
 }
 
-/** 读取一个资源（文本 / base64 blob 由工具层决定怎么展示） */
+/** Read one resource (text / base64 blob; how to display it is decided by the tool layer) */
 export async function readMcpResource(
   server: string,
   uri: string
@@ -597,15 +629,18 @@ export async function readMcpResource(
 }
 
 /**
- * 设置页当前视图：**只读最近一次真实结果，绝不发起连接**。
+ * Current settings-page view: **read-only of the latest real result, never initiates a connection**.
  *
- * 为什么不顺手重连一次（2026-09-26 用户要求「加载列表的时候，不需要测试连接，不然会很卡」）：
- * 每次打开设置页（以及每次目录广播后刷新）都去起一轮子进程 / 做一遍 HTTP 握手，
- * 服务器一多就整页卡住；而这些连接一旦有变化会由保存/切换/手动重连主动刷新。
+ * Why not reconnect on the fly (after the user asked on 2026-09-26: "when loading the list, don't test
+ * connections, it gets very laggy"): opening the settings page every time (and refreshing after every
+ * directory broadcast) would spawn a round of child processes / do an HTTP handshake, freezing the
+ * whole page once there are several servers; and these connections are actively refreshed by save /
+ * toggle / manual reconnect whenever they change.
  *
- * 视图因此**从配置出发**再叠加运行期记录：配置里有、但还没连过的服务器也要出现在列表里
- * （否则冷启动后的第一次打开会是「一台服务器都没有」）。它的状态是 `unknown`（未连接），
- * 用户点「重新连接」或试连时才真正去连。
+ * The view therefore starts **from the configuration** and overlays runtime records: servers that are
+ * configured but never connected still appear in the list (otherwise the first open after a cold start
+ * would show "no servers at all"). Their status is `unknown` (not connected), and the actual
+ * connection happens when the user clicks "reconnect" or tests the connection.
  */
 export function mcpServerViews(): McpServerView[] {
   const runtimeById = new Map(snapshot.entries.map((entry) => [entry.config.id, entry]))
@@ -622,10 +657,11 @@ export function mcpServerViews(): McpServerView[] {
 }
 
 /**
- * 单独试连一台服务器（新增/编辑弹窗的「测试连接」用）。
+ * Test a single server connection (used by the "test connection" action in the add/edit dialog).
  *
- * 刻意**不写 store**：测试的是表单里还没保存的这份配置；连上就报工具数，连不上报原始错误，
- * 让用户在看得到原因的情况下决定要不要保存。
+ * Deliberately **does not write the store**: what is tested is the unsaved configuration in the form;
+ * on success it reports the tool count, on failure the raw error, so the user can decide whether to
+ * save while seeing the reason.
  */
 export async function testMcpServer(input: McpServerInput): Promise<{
   ok: boolean
@@ -634,7 +670,8 @@ export async function testMcpServer(input: McpServerInput): Promise<{
 }> {
   let config: McpServerConfig
   try {
-    // 编辑既有服务器时表单里是掩码串：先按磁盘上的原值还原，否则「测试连接」会拿 •••••• 去连
+    // When editing an existing server the form holds the mask string: restore the real values from
+    // disk first, otherwise "test connection" would connect with ••••••
     const previous = input.id ? listMcpServers().find((s) => s.id === input.id) : undefined
     config = normalizeMcpServer(restoreServerSecrets(input, previous))
   } catch (err) {
@@ -660,7 +697,7 @@ export async function testMcpServer(input: McpServerInput): Promise<{
   }
 }
 
-/** 直接调用一条 MCP 工具（离线回归/调试用；主链路是 AI 工具实例内部自调用） */
+/** Call an MCP tool directly (for offline regression/debugging; the main path is the AI tool instance self-calling) */
 export async function callMcpTool(
   fullName: string,
   args: Record<string, unknown>,
@@ -678,7 +715,7 @@ export async function callMcpTool(
   return formatMcpToolResult(parsed.tool, parsed.server, result as McpCallToolResult)
 }
 
-/** 关闭全部连接并清空快照（插件停用 / 应用退出前调用，避免留下孤儿子进程） */
+/** Close all connections and clear the snapshot (called when the plugin is disabled / before app exit, to avoid orphan child processes) */
 export async function closeAllMcp(): Promise<void> {
   generation += 1
   const clients = [...snapshot.clients.values()]

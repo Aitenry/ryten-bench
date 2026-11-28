@@ -1,20 +1,26 @@
 /**
- * 文件系统工具的输出边界常量（单一真源）。
+ * Output boundary constants for filesystem tools (single source of truth).
  *
- * 抽成独立模块的原因：这些上限同时被两处消费——
- *  - `fs-backend.ts`：真正执行读取/搜索/命令时的硬边界；
- *  - `service/tool-presentation.ts`：把工具结果投影成前端卡片时，需要据此判断
- *    「结果是否被截断」并给出准确的元信息。
- * 该模块保持零依赖，因此可被 node 离线回归脚本直接导入。
+ * Why it is a separate module: these limits are consumed in two places at once —
+ *  - `fs-backend.ts`: the hard boundary when actually executing reads/searches/commands;
+ *  - `service/tool-presentation.ts`: when projecting tool results into frontend cards, it needs
+ *    them to decide "was the result truncated" and to report accurate metadata.
+ * The module stays dependency-free so node offline regression scripts can import it directly.
  */
 
-/** 单文件读取内联上限（字符；超出部分不进入模型上下文） */
+/**
+ * Inline limit for a single file read (characters; anything beyond does not enter the model
+ * context)
+ */
 export const MAX_FILE_CHARS = 20_000
-/** read_file 内存保护上限（超大文件截断到 2M 字符，防止把整个文件读进内存） */
+/**
+ * read_file in-memory protection limit (oversized files are truncated to 2M characters so the
+ * whole file is never pulled into memory)
+ */
 export const MAX_FILE_READ_CHARS = 2_000_000
-/** 命令输出上限（字符） */
+/** Command output limit (characters) */
 export const MAX_EXEC_CHARS = 8_000
-/** 递归搜索条目上限 */
+/** Recursive search entry limit */
 export const MAX_SCAN_ENTRIES = 2_000
-/** 工具输出硬上限（内存保护；12K~500K 由溢出策略处理） */
+/** Hard tool output limit (memory protection; 12K–500K is handled by the overflow strategy) */
 export const MAX_OUTPUT_CHARS = 500_000

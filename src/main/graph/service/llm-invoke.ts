@@ -21,9 +21,12 @@ export function createCachedInvoke(model: BaseChatModel, cache: Map<string, stri
     prompt: string,
     parser: StructuredOutputParser<z.ZodTypeAny>
   ): Promise<T | null> {
-    // 缓存键必须覆盖完整 prompt：此前只取首尾各 200 字符，模板首尾恒定、负载（实体列表等）
-    // 位于中部的调用（如实体合并/跨块补全的多批次）会共享同一键，第二批起命中第一批的
-    // 缓存答案，导致结果互相污染。整串哈希既保去重能力又避免键本身占用大量内存。
+    // The cache key must cover the whole prompt: taking only the first and last 200 characters
+    // meant that calls whose variable payload (entity lists and the like) sits in the middle and
+    // whose template edges stay constant (e.g. the multiple batches of entity merging or
+    // cross-chunk completion) shared one key, so later batches hit the first batch's cached answer
+    // and results contaminated each other. Hashing the entire string keeps deduplication while
+    // avoiding a large key in memory.
     const cacheKey = createHash('sha256').update(prompt).digest('hex')
     const cached = cache.get(cacheKey)
 

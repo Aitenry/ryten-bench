@@ -1,11 +1,11 @@
 import { getMainLanguage } from './index'
 
-/** 文档/知识库/图谱工具（manage_materials）的返回文案，跟随界面语言。 */
+/** Result copy for the document / knowledge base / graph tools (manage_materials); follows the UI language. */
 export const zhCNDocsToolTexts = {
-  /** 文档之间的列表分隔符（中文顿号 / 英文逗号） */
+  /** List separator between documents (Chinese enumeration comma / English comma) */
   listSeparator: '、',
 
-  // ----- 文档 -----
+  // ----- Documents -----
   docs: {
     searchCount_one: '共 {{count}} 条',
     searchCount_other: '共 {{count}} 条',
@@ -83,7 +83,7 @@ export const zhCNDocsToolTexts = {
     unknownCommand: '未知命令：{{command}}。'
   },
 
-  // ----- 知识库 -----
+  // ----- Knowledge bases -----
   wikis: {
     listEmpty: '还没有创建任何知识库。',
     listHeader: '**知识库列表**（共 {{count}} 个）\n',
@@ -131,7 +131,7 @@ export const zhCNDocsToolTexts = {
     unknownCommand: '未知命令：{{command}}。'
   },
 
-  // ----- 知识图谱 -----
+  // ----- Knowledge graph -----
   graph: {
     searchHeader: '**知识图谱搜索 "{{query}}"**\n',
     searchSummary: '{{count}} · {{wikis}} 个知识库命中',

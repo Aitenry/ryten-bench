@@ -2,10 +2,11 @@ import { useContext } from 'react'
 import { LatticeContext, type LatticeContextValue } from './LatticeContextCore'
 
 /**
- * 读取插件中心上下文。
+ * Read the plugin center context.
  *
- * 故意不在缺少 Provider 时抛错：`LatticeContext` 自带「不可用」兜底值，
- * 这样插件中心相关组件被单独渲染（测试、旧布局残留）时也只是降级，不会白屏。
+ * Deliberately does not throw when the provider is missing: `LatticeContext` carries an
+ * "unavailable" fallback value, so plugin center components rendered on their own (tests,
+ * leftovers from an older layout) merely degrade instead of showing a blank screen.
  */
 export function useLattice(): LatticeContextValue {
   return useContext(LatticeContext)

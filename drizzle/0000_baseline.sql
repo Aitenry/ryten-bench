@@ -1,12 +1,12 @@
--- RytenBench 数据库 baseline（drizzle 迁移 0000）
+-- RytenBench database baseline (drizzle migration 0000)
 --
--- 内容 = 迁移到 drizzle 之前 src/main/database/sql/ 下 24 个建表文件的合并结果，按文件名顺序排列。
--- 全部为幂等 DDL（CREATE TABLE/INDEX IF NOT EXISTS、ALTER TABLE ... DROP COLUMN IF EXISTS），因此：
---   * 全新安装：本次迁移建出全部 24 张表；
---   * 已有老库：这些语句逐条 no-op，仅把 baseline 记入 drizzle.__drizzle_migrations。
--- 该文件是历史快照，**不要手工修改**；后续结构变更一律由 `pnpm drizzle-kit generate` 生成新的迁移文件。
+-- Contents: merge of the 24 pre-drizzle table-creation SQL files, in filename order.
+-- Idempotent DDL only (CREATE TABLE/INDEX IF NOT EXISTS, ALTER TABLE ... DROP COLUMN IF EXISTS):
+--   * Fresh install: this migration creates all 24 tables;
+--   * Existing DB: all no-ops; the baseline is only recorded in drizzle.__drizzle_migrations.
+-- Historical snapshot, **do not edit by hand**; new migrations via `pnpm drizzle-kit generate`.
 
--- 数据库迁移记录表
+-- Database migration history table
 CREATE TABLE IF NOT EXISTS schema_migrations (
     id          SERIAL PRIMARY KEY,
     script_name TEXT      NOT NULL UNIQUE,
@@ -15,14 +15,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     description TEXT
 );
 --> statement-breakpoint
--- 图片存储表（以MD5去重）
+-- Image storage table (deduplicated by MD5)
 CREATE TABLE IF NOT EXISTS images (
     id         TEXT      PRIMARY KEY,
     data       TEXT      NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 工作区表
+-- Workspace table
 CREATE TABLE IF NOT EXISTS workspace (
     id         SERIAL PRIMARY KEY,
     name       TEXT      NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS workspace (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 待办事项表（全局数据，不按工作区隔离）
+-- Todo items table (global data, not isolated per workspace)
 CREATE TABLE IF NOT EXISTS todo_items (
     id           SERIAL PRIMARY KEY,
     title        TEXT      NOT NULL,
@@ -46,10 +46,10 @@ CREATE TABLE IF NOT EXISTS todo_items (
     completed_at TIMESTAMP
 );
 --> statement-breakpoint
--- 迁移：移除旧版的工作区隔离列（待办已改为全局数据，所有工作区共享同一份）
+-- Migration: drop the legacy workspace isolation column (todos are now global and shared)
 ALTER TABLE todo_items DROP COLUMN IF EXISTS workspace_id;
 --> statement-breakpoint
--- 待办事项表索引
+-- Todo items table indexes
 CREATE INDEX IF NOT EXISTS idx_todo_priority   ON todo_items (priority);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_todo_status     ON todo_items (status);
@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_todo_category   ON todo_items (category);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_todo_created_at ON todo_items (created_at);
 --> statement-breakpoint
--- 任务依赖关系表（用于甘特图展示前后依赖）
+-- Task dependency table (used by the Gantt chart to show predecessor/successor links)
 CREATE TABLE IF NOT EXISTS task_dependencies (
     id                 SERIAL PRIMARY KEY,
     task_id            INTEGER   NOT NULL,
@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     UNIQUE (task_id, depends_on_task_id)
 );
 --> statement-breakpoint
--- 任务依赖关系表索引
+-- Task dependency table indexes
 CREATE INDEX IF NOT EXISTS idx_task_deps_task       ON task_dependencies (task_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies (depends_on_task_id);
 --> statement-breakpoint
--- 甘特图计划任务表（支持树形层级：项目 > 阶段 > 任务）
+-- Gantt planner tasks table (supports tree levels: project > phase > task)
 CREATE TABLE IF NOT EXISTS planner_tasks (
     id              SERIAL PRIMARY KEY,
     parent_id       INTEGER,
@@ -99,10 +99,10 @@ CREATE INDEX IF NOT EXISTS idx_planner_tasks_type   ON planner_tasks (type);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_planner_tasks_sort   ON planner_tasks (sort_order);
 --> statement-breakpoint
--- 迁移：为已有数据库添加 priority 列
+-- Migration: add the priority column for existing databases
 ALTER TABLE planner_tasks ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0;
 --> statement-breakpoint
--- 甘特图任务依赖关系表
+-- Gantt task dependency table
 CREATE TABLE IF NOT EXISTS planner_dependencies (
     id                 SERIAL PRIMARY KEY,
     task_id            INTEGER   NOT NULL,
@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_planner_deps_task       ON planner_dependencies (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_planner_deps_depends_on ON planner_dependencies (depends_on_task_id);
 --> statement-breakpoint
--- 知识库表（全局数据，不按工作区隔离）
+-- Knowledge base table (global data, not isolated per workspace)
 CREATE TABLE IF NOT EXISTS wiki (
     id         SERIAL PRIMARY KEY,
     title      TEXT      NOT NULL,
@@ -128,15 +128,15 @@ CREATE TABLE IF NOT EXISTS wiki (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 迁移：移除旧版的工作区隔离列（知识库已改为全局数据，所有工作区共享同一份）
+-- Migration: drop legacy workspace column (wiki is now global and shared across workspaces)
 ALTER TABLE wiki DROP COLUMN IF EXISTS workspace_id;
 --> statement-breakpoint
--- 知识库表索引
+-- Knowledge base table indexes
 CREATE INDEX IF NOT EXISTS idx_wiki_title       ON wiki (title);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_wiki_created_at  ON wiki (created_at);
 --> statement-breakpoint
--- 知识库目录表
+-- Knowledge base directory table
 CREATE TABLE IF NOT EXISTS wiki_directories (
     id         SERIAL PRIMARY KEY,
     wiki_id    INTEGER   NOT NULL,
@@ -150,12 +150,12 @@ CREATE TABLE IF NOT EXISTS wiki_directories (
     FOREIGN KEY (parent_id) REFERENCES wiki_directories (id) ON DELETE CASCADE
 );
 --> statement-breakpoint
--- 知识库目录表索引
+-- Knowledge base directory table indexes
 CREATE INDEX IF NOT EXISTS idx_wiki_directories_wiki_parent ON wiki_directories (wiki_id, parent_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_wiki_directories_sort_order  ON wiki_directories (sort_order);
 --> statement-breakpoint
--- 文档表（全局数据，不按工作区隔离）
+-- Documents table (global data, not isolated per workspace)
 CREATE TABLE IF NOT EXISTS documents (
     id         SERIAL PRIMARY KEY,
     title      TEXT      NOT NULL,
@@ -165,17 +165,17 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 迁移：移除旧版的工作区隔离列（文档已改为全局数据，所有工作区共享同一份）
+-- Migration: drop legacy workspace column (documents are now global and shared across workspaces)
 ALTER TABLE documents DROP COLUMN IF EXISTS workspace_id;
 --> statement-breakpoint
--- 文档表索引
+-- Documents table indexes
 CREATE INDEX IF NOT EXISTS idx_documents_title      ON documents (title);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at);
 --> statement-breakpoint
--- 文档内容表
+-- Document content table
 CREATE TABLE IF NOT EXISTS documents_content (
     id         SERIAL PRIMARY KEY,
     doc_id     INTEGER   NOT NULL UNIQUE,
@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS documents_content (
     FOREIGN KEY (doc_id) REFERENCES documents (id) ON DELETE CASCADE
 );
 --> statement-breakpoint
--- 目录与文档关联表（多对多）
+-- Directory-document link table (many-to-many)
 CREATE TABLE IF NOT EXISTS directory_documents (
     id           SERIAL PRIMARY KEY,
     directory_id INTEGER   NOT NULL,
@@ -199,12 +199,12 @@ CREATE TABLE IF NOT EXISTS directory_documents (
     UNIQUE (directory_id, doc_id)
 );
 --> statement-breakpoint
--- 关联表索引
+-- Link table indexes
 CREATE INDEX IF NOT EXISTS idx_directory_documents_dir ON directory_documents (directory_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_directory_documents_doc ON directory_documents (doc_id);
 --> statement-breakpoint
--- 聊天话题表（会话级别，同一个 workspace_id 下的对话）
+-- Chat topic table (session level; conversations under one workspace_id)
 CREATE TABLE IF NOT EXISTS chat_topic (
     id            SERIAL PRIMARY KEY,
     workspace_id  INTEGER   NOT NULL,
@@ -216,12 +216,12 @@ CREATE TABLE IF NOT EXISTS chat_topic (
     FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE
 );
 --> statement-breakpoint
--- 聊天话题表索引
+-- Chat topic table indexes
 CREATE INDEX IF NOT EXISTS idx_chat_topic_workspace  ON chat_topic (workspace_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_chat_topic_updated_at ON chat_topic (updated_at);
 --> statement-breakpoint
--- 聊天消息表（消息级别）
+-- Chat message table (message level)
 CREATE TABLE IF NOT EXISTS chat_dialogue (
     id         SERIAL PRIMARY KEY,
     topic_id   INTEGER   NOT NULL,
@@ -232,12 +232,12 @@ CREATE TABLE IF NOT EXISTS chat_dialogue (
     FOREIGN KEY (topic_id) REFERENCES chat_topic (id) ON DELETE CASCADE
 );
 --> statement-breakpoint
--- 聊天消息表索引
+-- Chat message table indexes
 CREATE INDEX IF NOT EXISTS idx_chat_dialogue_topic         ON chat_dialogue (topic_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_chat_dialogue_topic_created ON chat_dialogue (topic_id, created_at);
 --> statement-breakpoint
--- 智能体（Agent）配置表（按工作区隔离）
+-- Agent config table (isolated per workspace)
 CREATE TABLE IF NOT EXISTS agent_config (
     id           SERIAL PRIMARY KEY,
     workspace_id INTEGER   NOT NULL,
@@ -259,7 +259,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_config_workspace ON agent_config (workspace
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_agent_config_enable   ON agent_config (enable);
 --> statement-breakpoint
--- 画布节点位置表
+-- Canvas node position table
 CREATE TABLE IF NOT EXISTS node_positions (
     node_id    TEXT      NOT NULL PRIMARY KEY,
     x          REAL      NOT NULL DEFAULT 0,
@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS node_positions (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 音乐歌单表
+-- Music folder table
 CREATE TABLE IF NOT EXISTS music_folders (
     id          TEXT PRIMARY KEY,
     path        TEXT NOT NULL UNIQUE,
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS music_folders (
     updated_at  TIMESTAMP DEFAULT NOW()
 );
 --> statement-breakpoint
--- 音乐曲目表
+-- Music track table
 CREATE TABLE IF NOT EXISTS music_tracks (
     id             SERIAL PRIMARY KEY,
     file_path      TEXT NOT NULL,
@@ -301,12 +301,12 @@ CREATE INDEX IF NOT EXISTS idx_music_tracks_folder ON music_tracks(folder_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_music_tracks_file_hash ON music_tracks(file_hash);
 --> statement-breakpoint
--- 大模型供应商表
+-- LLM provider table
 CREATE TABLE IF NOT EXISTS llm_providers
 (
   id          SERIAL PRIMARY KEY,
   name        TEXT   NOT NULL,
-  -- provider 为接口协议标识（如 openai / anthropic / zhipu），允许用户自由输入，不做白名单约束
+  -- provider is the API protocol id (openai / anthropic / zhipu); free input, no allowlist
   provider    TEXT   NOT NULL,
   base_url    TEXT,
   api_key_encrypted TEXT,
@@ -322,14 +322,14 @@ CREATE TABLE IF NOT EXISTS llm_providers
   updated_at  TIMESTAMP        DEFAULT NOW()
 );
 --> statement-breakpoint
--- 确保只有一个默认供应商的约束（PostgreSQL partial unique index）
+-- Ensure a single default provider (PostgreSQL partial unique index)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_providers_default ON llm_providers (is_default) WHERE is_default = TRUE;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_llm_providers_enabled ON llm_providers (is_enabled);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_llm_providers_sort ON llm_providers (sort_order);
 --> statement-breakpoint
--- 知识图谱实体表
+-- Knowledge graph entity table
 CREATE TABLE IF NOT EXISTS graph_entities (
   id              SERIAL PRIMARY KEY,
   wiki_id         INTEGER NOT NULL REFERENCES wiki(id) ON DELETE CASCADE,
@@ -350,7 +350,7 @@ CREATE INDEX IF NOT EXISTS idx_graph_entities_type ON graph_entities(type);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_graph_entities_name ON graph_entities(name);
 --> statement-breakpoint
--- 知识图谱关系表
+-- Knowledge graph relation table
 CREATE TABLE IF NOT EXISTS graph_relations (
   id              SERIAL PRIMARY KEY,
   wiki_id         INTEGER NOT NULL REFERENCES wiki(id) ON DELETE CASCADE,
@@ -370,7 +370,7 @@ CREATE INDEX IF NOT EXISTS idx_graph_relations_source ON graph_relations(source_
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_graph_relations_target ON graph_relations(target_id);
 --> statement-breakpoint
--- 图谱构建任务表（每个知识库仅一条记录，通过 wiki_id 唯一约束保证）
+-- Graph build job table (one row per knowledge base, enforced by the wiki_id unique constraint)
 CREATE TABLE IF NOT EXISTS graph_build_jobs (
   id                SERIAL PRIMARY KEY,
   wiki_id           INTEGER NOT NULL REFERENCES wiki(id) ON DELETE CASCADE,
@@ -389,10 +389,11 @@ CREATE TABLE IF NOT EXISTS graph_build_jobs (
 );
 --> statement-breakpoint
 -- 023_chat_goals.sql
--- 对话目标（goal）持久化：每个话题至多一个当前目标（参考 deepseek-harness dsh-goal 的单目标语义）。
--- revision 用于 CAS（乐观并发）校验：工具更新必须携带 {goal_id, revision}，过期即拒。
--- activation（armed/disarmed）为内存态，不持久化：进程重启后目标一律 disarmed，
--- 由用户在对话中要求「继续」触发 update_goal(resume) 后重新武装。
+-- Conversation goal persistence: each topic has at most one current goal (single-goal semantics).
+-- revision is used for CAS (optimistic concurrency): tool updates must carry {goal_id, revision},
+-- and stale revisions are rejected.
+-- activation (armed/disarmed) is in-memory and not persisted: after a process restart every goal is
+-- disarmed and is re-armed when the user asks to "continue", which triggers update_goal(resume).
 
 CREATE TABLE IF NOT EXISTS chat_goals (
   topic_id         INTEGER PRIMARY KEY,
@@ -411,15 +412,15 @@ CREATE TABLE IF NOT EXISTS chat_goals (
 CREATE INDEX IF NOT EXISTS idx_chat_goals_phase ON chat_goals (phase);
 --> statement-breakpoint
 -- 024_topic_compactions.sql
--- 话题级上下文压缩 checkpoint（持久化）：
--- 每个话题至多一行，落库 LLM 摘要结果。首次压缩后后续轮次直接复用，
--- 仅当压缩边界推进（新增早期对话进入压缩段，即上下文又超预算）时才增量合并并更新。
+-- Topic-level context compaction checkpoint (persisted):
+-- at most one row per topic, holding the LLM summary. After the first compaction later rounds
+-- reuse it; merged incrementally only when the boundary advances (context back over budget).
 
 CREATE TABLE IF NOT EXISTS topic_compactions (
   topic_id    INTEGER PRIMARY KEY,
-  -- 已摘要段最末对话记录 id（压缩边界：后续只有 id 大于它的对话进入压缩段时才需要增量合并）
+  -- id of the last summarized dialogue record (compaction boundary; larger ids trigger merge)
   boundary_id INTEGER NOT NULL,
-  -- checkpoint 摘要（LLM 输出，原样落地）
+  -- checkpoint summary (LLM output, stored verbatim)
   summary     TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()

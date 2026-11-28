@@ -15,11 +15,11 @@ import { harnessApi } from '../../api/harness'
 interface HarnessMessageAreaProps {
   messages: Message[]
   isDarkMode: boolean
-  /** 当前话题是否正在流式输出（驱动贴底跟随与按钮旋转光圈） */
+  /** Whether the current topic is streaming (drives stick-to-bottom following and the button's rotating glow) */
   streaming: boolean
-  /** 当前话题 id：切换话题 / 新建会话时重置为贴底状态 */
+  /** Current topic id: switching topics / starting a new conversation resets to the stick-to-bottom state */
   currentTopicId: number | null
-  /** 只读（归档会话）：保留复制等查看动作，隐藏编辑 / 删除 / 分支 / 存入记忆 */
+  /** Read-only (archived conversation): view actions such as copy are kept; edit / delete / branch / save to memory are hidden */
   readOnly?: boolean
   colorText: string
   colorTextSecondary: string
@@ -27,74 +27,84 @@ interface HarnessMessageAreaProps {
   colorFillAlter: string
   colorBorderSecondary: string
   copiedId: string | null
-  /** 分页 */
+  /** Pagination */
   hasMoreMessages: boolean
   isLoadingMoreMessages: boolean
   onCopy: (text: string, id: string) => Promise<void>
   onDelete: (msgIndex: number) => Promise<void>
   /**
-   * 孤立提问（没有回复）的气泡内编辑：进入编辑态 / 回车提交（就地替换并重发）/ 取消。
-   * 只有孤立提问才会用到。
+   * Inline editing inside the bubble of an orphan question (no reply): enter edit mode / submit
+   * with Enter (replace in place and resend) / cancel.
+   * Only used for orphan questions.
    */
   onStartEditMessage: (msgIndex: number) => void
   onSubmitEditMessage: (msgIndex: number, content: string) => Promise<void>
   onCancelEditMessage: () => void
-  /** 正在气泡内编辑的提问 id */
+  /** Id of the question currently being edited inside its bubble */
   editingMessageId: string | null
-  /** 分支：把到该条为止的消息复制到新话题并切过去（由 hooks 统一处理列表与切换） */
+  /** Branch: copy the messages up to this one into a new topic and switch to it (the hooks handle the list and the switch) */
   onBranch: (upToIndex: number) => Promise<void>
   onLoadMoreMessages: () => void
   messagesEndRef: React.RefObject<HTMLDivElement | null>
   /**
-   * 待审查改动（路径 → 待审查条数）。
+   * Pending-review changes (path → number of pending items).
    *
-   * 用来在**任务段头**上标出「这一段改了哪几个文件、还有几处没审」：段一折起，
-   * 段里的编辑卡片就全被卸载了，用户只能看到一行任务名（用户 2026-09-23 报的
-   * 「明明编辑了文件，聊天里找不到编辑卡片」正是这个）。有了这个计数，
-   * 改动在段头上仍然可见、可点开。
+   * Marks on the **task segment header** "which files this segment changed and how many items are
+   * still unreviewed": once a segment is folded, all of its edit cards are unmounted and the user
+   * only sees a single task name (exactly the issue reported on 2026-09-23: "it clearly edited files
+   * but I can't find the edit cards in the chat"). With this count, the changes stay visible and
+   * expandable from the segment header.
    */
   pendingByPath?: Map<string, number>
-  /** 点段头上的改动徽标：打开该文件的差异视图 */
+  /** Clicking the change badge on a segment header: open the diff view for that file */
   onOpenChangedFile?: (path: string) => void
   /**
-   * 会话检索命中后要定位的对话行 id（`harness_dialogue.id`）。
+   * Id of the conversation row to locate after a conversation search hit (`harness_dialogue.id`).
    *
-   * 侧栏搜索点「正文命中」时会先打开会话、再看消息是否已加载；MessageArea 负责
-   * 滚到那一行并短暂高亮，完成后通过 `onJumpToDialogueConsumed` 让父级清空目标。
+   * When "content hit" is clicked in the sidebar search, the conversation opens first and then
+   * whether its messages are loaded is checked; MessageArea scrolls to that row and briefly
+   * highlights it, then calls `onJumpToDialogueConsumed` so the parent clears the target.
    */
   jumpToDialogueId?: number | null
-  /** 定位完成（或确认当前列表里没有这条）后通知父级清空待定位目标 */
+  /** Notify the parent to clear the pending target after locating it (or confirming it isn't in the current list) */
   onJumpToDialogueConsumed?: () => void
 }
 
-/** 距离底部小于该值视为「贴底」 */
+/** Closer to the bottom than this counts as "at the bottom" */
 const STICK_THRESHOLD = 10
-/** 点击按钮后平滑滚动期间（ms）：期间的 scroll 事件视为程序滚动，不算用户打断 */
+/** Smooth-scroll window after a button click (ms): scroll events during it count as programmatic, not a user interruption */
 const PROGRAMMATIC_WINDOW = 600
 /**
- * 挂载窗口上限（条）：超出时只挂最近这么多条，更早的进「隐藏区」。
+ * Mount window limit (in rows): beyond it only the most recent rows are mounted and older ones go
+ * into the "hidden area".
  *
- * 背景：用户持续上滑会把分页一页页全加载进来（每页 20 条），历史回复里常有几十上百 KB
- * 的正文与工具输出，全部挂在 DOM 上正是渲染进程 OOM 的主要来源之一。这里不引入虚拟
- * 列表（依赖与回归面都太大），只给「常驻 DOM 的消息数」加一个上限：更早的消息留在
- * 内存里、需要时用顶部提示条一键恢复，滚动手感与定位标尺的行为完全不变。
+ * Background: continued scrolling up loads pagination page by page (20 rows each), and historical
+ * replies often carry tens to hundreds of KB of body text and tool output; keeping all of that in
+ * the DOM is one of the main sources of renderer OOM. A virtual list is not introduced here (too
+ * many dependencies and too much regression surface); instead the number of messages resident in
+ * the DOM is capped: older messages stay in memory and can be restored with the top notice bar when
+ * needed, while scrolling feel and locator behavior stay exactly the same.
  */
 const HISTORY_RENDER_CAP = 60
 /**
- * 流式期间的在屏消息上限（远小于历史态的 60）。
+ * On-screen message limit while streaming (far below the 60 of the history state).
  *
- * 为什么需要单独一个更小的上限：**每次 commit 的成本与「在屏消息数」成正比**，而不是与
- * 变化的那条消息成正比。用真实组件跑仿真（test/sim-renderer-memory.mjs：节点数与内容都
- * 不变，只按批追加流式块、每批后强制 GC 再量堆）实测：
- *   挂载 60 条 → 每批净常驻 1,112 KB ｜ 24 条 → 445 KB ｜ 12 条 → 272 KB（-76%）
- * 流式按 ~30 commit/s 跑，60 条在屏就是 ~33 MB/s 的常驻压力（长任务必然被 OOM 杀）。
- * 所以流式期间只挂最近 12 条；一轮结束回到历史态后不再自动补回（顶部「显示更早」可一键恢复），
- * 避免收尾瞬间又挂一次全量。
+ * Why a separate, smaller limit is needed: **the cost of each commit is proportional to the number
+ * of on-screen messages**, not to the single message that changed. A simulation with the real
+ * components (test/sim-renderer-memory.mjs: node count and content unchanged, only streaming chunks
+ * appended in batches, forcing GC after each batch and then measuring the heap) measured:
+ *   mounting 60 rows → 1,112 KB net resident per batch | 24 rows → 445 KB | 12 rows → 272 KB (-76%)
+ * Streaming runs at ~30 commits/s, so 60 rows on screen means ~33 MB/s of resident pressure (long
+ * tasks are guaranteed to be OOM-killed).
+ * So while streaming only the most recent 12 rows are mounted; when a round ends and the history
+ * state returns they are not automatically restored (the top "show earlier" restores them in one
+ * click), avoiding another full mount right at the end.
  *
- * 只在「用户贴底看最新输出」时收紧；上滑阅读历史时不动窗口，免得把正在读的内容抽走。
+ * Only tightened while the user is at the bottom watching the latest output; scrolling up to read
+ * history leaves the window alone so content being read isn't pulled away.
  */
 const STREAMING_RENDER_CAP = 12
-/** 「正文变化前记录视口锚点」的内部事件：见 renderFrom 的滚动补偿 */
+/** Internal event for "record the viewport anchor before the body changes": see the scroll compensation below */
 const VIEWPORT_SAVED_EVENT = 'harness-viewport-saved'
 
 const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
@@ -133,17 +143,18 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   const prevFirstIdRef = useRef<string | null>(null)
 
   /**
-   * 渲染窗口起点（messages 下标）：只挂载 messages.slice(renderFrom)。
-   * 上限见 HISTORY_RENDER_CAP；用户可点顶部提示条把隐藏的更早消息放回来。
+   * Render window start (messages index): only messages.slice(renderFrom) is mounted.
+   * See HISTORY_RENDER_CAP for the limit; the top notice bar restores hidden older messages.
    */
   const [renderFrom, setRenderFrom] = useState(0)
 
-  // 消息数量增长时维持「常驻条数 <= 上限」：只向前推进窗口起点，
-  // 已经展开（renderFrom=0）或本条数不足上限时不动。用函数式更新保证与流式高频
-  // 的 messages 变化不打架。
-  // 流式期间用更小的 STREAMING_RENDER_CAP（每次 commit 的成本与在屏消息数成正比），
-  // 且仅在用户贴底时收紧——上滑读历史时不抽走内容。stickToBottomRef 是 ref，
-  // 这里只在 messages.length 变化时读一次，语义足够。
+  // Keep "resident rows <= limit" as the message count grows: only push the window start forward,
+  // and leave it alone when already expanded (renderFrom=0) or when the count is below the limit.
+  // Functional updates keep this from fighting the high-frequency messages changes during streaming.
+  // While streaming a smaller STREAMING_RENDER_CAP is used (each commit costs proportionally to the
+  // number of on-screen messages), and it is only tightened when the user is at the bottom —
+  // scrolling up to read history doesn't pull content away. stickToBottomRef is a ref and is read
+  // only once when messages.length changes, which is sufficient.
   useEffect(() => {
     const cap = streaming && stickToBottomRef.current ? STREAMING_RENDER_CAP : HISTORY_RENDER_CAP
     const overflow = messages.length - cap
@@ -158,8 +169,9 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   const hiddenCount = Math.min(renderFrom, messages.length)
 
   /**
-   * 滚动锚点：可变对象（不是 ref.current，避免 TS 对 ref.current 的赋值窄化把读取推成
-   * never）。字段在 VIEWPORT_SAVED_EVENT 回调里写入、在 layout effect 里读取。
+   * Scroll anchor: a mutable object (not ref.current, whose assignment narrowing in TS would make
+   * reads resolve to never). Fields are written in the VIEWPORT_SAVED_EVENT callback and read in the
+   * layout effect.
    */
   const viewportAnchor = useRef<{ msgIndex: number; scrollTop: number; offset: number | null }>({
     msgIndex: -1,
@@ -168,9 +180,10 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   })
 
   /**
-   * 正文更新前记录「视口顶部那条消息 + 当时 scrollTop」。挂在 window 上、只注册一次；
-   * 由下方 layout effect 在每次提交前派发。用事件而不是直接调用，是为了让「保存」
-   * 与「还原」的时机严格分在两个 DOM 状态之间。
+   * Records "the message at the top of the viewport + the scrollTop at the time" before the body
+   * updates. Registered once on window and dispatched by the layout effect below before each commit.
+   * An event is used instead of a direct call so that "save" and "restore" strictly happen across
+   * two different DOM states.
    */
   useEffect(() => {
     const onSave = (): void => {
@@ -208,11 +221,14 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     return () => window.removeEventListener(VIEWPORT_SAVED_EVENT, onSave)
   }, [])
 
-  // 窗口起点前移会把上方内容摘掉、正文整体上移一截。若不补偿，正在上滑读历史的用户
-  // 会被「拽」着往下跑（新消息到达时尤其明显）。
-  // 补偿方式不依赖「每条多高」的估算，而是把「视口顶部那条消息」当作锚点：正文变化前
-  // 记下它相对内容顶部的偏移与当时的 scrollTop，重排后按锚点的新偏移还原 scrollTop，
-  // 读者的视线落点保持不变（点顶部「显示更早」把内容加回来时同理）。
+  // Moving the window start forward removes content above and shifts the body up by a chunk. Without
+  // compensation a user scrolling up through history gets "dragged" downward (especially noticeable
+  // when new messages arrive).
+  // Compensation doesn't rely on estimating "how tall each row is"; it uses "the message at the top
+  // of the viewport" as the anchor: before the body changes, record its offset from the content top
+  // and the scrollTop at the time; after reflow, restore scrollTop from the anchor's new offset, so
+  // the reader's gaze landing point stays the same (likewise when the top "show earlier" adds
+  // content back).
   useLayoutEffect(() => {
     const el = scrollRef.current
     const inner = contentRef.current
@@ -230,32 +246,37 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     if (Math.abs(next - el.scrollTop) > 0.5) el.scrollTop = next
   })
 
-  /** 贴底跟随开关：true 时新内容自动滚到底部；用户上滑阅读历史时关闭，回到底部或点击按钮恢复 */
+  /** Stick-to-bottom switch: when true new content scrolls to the bottom automatically; turned off when the user scrolls up to read history, restored on returning to the bottom or clicking the button */
   const stickToBottomRef = useRef(true)
-  /** 按钮平滑滚动的生效窗口：期间产生的 scroll 事件不算用户打断 */
+  /** Active smooth-scroll window for the button: scroll events during it don't count as a user interruption */
   const programmaticUntilRef = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
 
-  // 切换话题 / 新建会话后，默认回到最新位置
+  // After switching topics / starting a new conversation, return to the latest position by default
   useEffect(() => {
     stickToBottomRef.current = true
     setAtBottom(true)
-    // 重置前插判定基线（话题切换后消息整体替换,不能按「首条 id 变化」判前插）
+    // Reset the prepend-detection baseline (messages are replaced wholesale after a topic switch,
+    // so "first id changed" can't be used to detect a prepend)
     prevFirstIdRef.current = null
-    // 渲染窗口也要归零：新话题的消息列表是另一份，沿用旧起点会切出一段空窗口
+    // The render window must be reset too: the new topic's message list is a different one, and
+    // keeping the old start would slice an empty window
     setRenderFrom(0)
     viewportAnchor.current = { msgIndex: -1, scrollTop: 0, offset: null }
   }, [currentTopicId])
 
   /**
-   * 会话检索命中 → 滚到目标对话行并短暂高亮（数据来自侧栏搜索点「正文命中」）。
+   * Conversation search hit → scroll to the target dialogue row and briefly highlight it (data comes
+   * from clicking "content hit" in the sidebar search).
    *
-   * 定位链路：侧栏先 `handleSelectTopic` 打开会话、再写 `pendingJumpDialogueId`；
-   * 这里在完整 messages 里按 `dialogueId` 找下标（dialogue id 全局唯一，旧话题不会误命中）。
-   * - 目标行在渲染窗口之外 → 先把 renderFrom 归零再定位；
-   * - 列表里暂时没有（会话还没加载完 / 命中在更早的分页）→ 等下一次 messages 变化，
-   *   2.5s 后仍未命中则清空目标（避免切话题后重复滚动）；
-   * - 滚到位后高亮 1.8s，并回调父级清空目标。
+   * Locating flow: the sidebar calls `handleSelectTopic` to open the conversation, then writes
+   * `pendingJumpDialogueId`; here the index is found in the full messages by `dialogueId` (dialogue
+   * ids are globally unique, so an old topic can't be matched by mistake).
+   * - Target row outside the render window → reset renderFrom to zero, then locate;
+   * - Not in the list yet (conversation not fully loaded / the hit is in an earlier page) → wait for
+   *   the next messages change, and clear the target if it still isn't found after 2.5s (to avoid
+   *   repeated scrolling after a topic switch);
+   * - Once in place, highlight for 1.8s and call back to the parent to clear the target.
    */
   useEffect(() => {
     if (jumpToDialogueId == null) return
@@ -288,7 +309,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     return () => window.clearTimeout(timer)
   }, [jumpToDialogueId, messages, renderFrom, onJumpToDialogueConsumed])
 
-  // 加载更多历史消息后，保持滚动位置不跳动
+  // Keep the scroll position stable after loading more history
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -296,9 +317,10 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     const newLen = messages.length
     const prevFirstId = prevFirstIdRef.current
     const firstId = messages[0]?.id ?? null
-    // 仅当「头部出现新消息」（加载更早历史前插）时补偿滚动位置。
-    // 修复：此前长度增长一律按前插补偿——用户上滑阅读历史时，目标自动续跑向当前话题
-    // 尾部追加消息（首条 id 不变）也会强制下移阅读位置
+    // Only compensate the scroll position when "a new message appears at the head" (older history
+    // prepended). Fix: previously any length growth was treated as a prepend — while the user
+    // scrolled up reading history, goal auto-continuation appending messages to the tail of the
+    // current topic (first id unchanged) also forced the reading position down
     if (newLen > prevLen && prevLen > 0 && prevFirstId !== null && firstId !== prevFirstId) {
       const newScrollHeight = el.scrollHeight
       const delta = newScrollHeight - prevScrollHeightRef.current
@@ -316,10 +338,10 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     const nearBottom = distFromBottom <= STICK_THRESHOLD
     setAtBottom(nearBottom)
     if (nearBottom) {
-      // 用户自己滚回底部：恢复贴底跟随
+      // The user scrolled back to the bottom: restore stick-to-bottom following
       stickToBottomRef.current = true
     } else if (Date.now() >= programmaticUntilRef.current) {
-      // 用户主动上滑阅读：打断持续滚动到底部
+      // The user deliberately scrolled up to read: interrupt continuous scrolling to the bottom
       stickToBottomRef.current = false
     }
     if (!isLoadingMoreMessages && hasMoreMessages && el.scrollTop <= 40) {
@@ -334,7 +356,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     return () => el.removeEventListener('scroll', handleScroll)
   }, [handleScroll])
 
-  // 新消息 / 流式 chunk：贴底跟随滚动（用户上滑阅读时 stick=false，不打扰）
+  // New messages / streaming chunks: follow to the bottom when sticking (no disturbance when the user scrolled up, stick=false)
   useEffect(() => {
     if (!stickToBottomRef.current) return
     const el = scrollRef.current
@@ -342,12 +364,16 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     el.scrollTop = el.scrollHeight
   }, [messages, renderFrom])
 
-  /* 用户发出提问：无条件回到最新消息处。
-   *  发送就代表要接着往下看，不能因为此前上滑读过历史而停在原位；
-   *  handleSend 在追加消息之前派发 harness-send-started，这里立刻贴底，
-   *  随后 messages 变化会带着恢复的贴底开关再钉一次（覆盖消息尚未渲染的那一帧）。
-   *  同时开一个程序滚动窗口：这一跳引发的 scroll 事件不算「用户上滑打断」，
-   *  否则消息刚追加、内容变高时会被误判成离开底部而关掉贴底。 */
+  /* The user sent a question: return to the latest message unconditionally.
+   *  Sending means they want to keep reading downward, so it must not stay in place just because
+   *  they had scrolled up through history before.
+   *  handleSend dispatches harness-send-started before appending the message; this sticks to the
+   *  bottom immediately, and the subsequent messages change pins it again with the restored stick
+   *  switch (covering the frame where the message isn't rendered yet).
+   *  A programmatic scroll window is opened at the same time: the scroll event from this jump
+   *  doesn't count as "the user scrolled up and interrupted"; otherwise, right after a message is
+   *  appended and the content grows taller, it would be misjudged as leaving the bottom and the
+   *  stick would be turned off. */
   useEffect(() => {
     const handleSendStarted = (): void => {
       stickToBottomRef.current = true
@@ -360,7 +386,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     return () => window.removeEventListener('harness-send-started', handleSendStarted)
   }, [])
 
-  // 内容异步长高（图片 / mermaid 渲染等）：贴底时保持钉在底部
+  // Content grows asynchronously (image / mermaid rendering, etc.): stay pinned to the bottom while sticking
   useEffect(() => {
     const el = scrollRef.current
     const inner = contentRef.current
@@ -374,7 +400,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     return () => ro.disconnect()
   }, [])
 
-  /** 每条消息所属轮次的起点（最近一条用户消息的时间戳）：操作栏据此算「用时」 */
+  /** Start of the turn each message belongs to (timestamp of the most recent user message): the action bar uses it to compute "elapsed time" */
   const turnStartByIndex = useMemo(() => {
     const out: number[] = []
     let lastUserAt = 0
@@ -386,11 +412,14 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   }, [messages])
 
   /**
-   * 孤立提问：没有对应回复的用户消息（下一条不是助手消息，或它本身就是最后一条）。
+   * Orphan questions: user messages with no corresponding reply (the next message isn't an assistant
+   * message, or it is the last one).
    *
-   * 典型来源：发送时流失败/被中止、模型报错后放弃重试、或数据库事故后只留下提问。
-   * 这类气泡此前没有任何可操作入口，只能干看着——按 id 标记出来给它们补「编辑并重发 / 删除」。
-   * 用 id 而不是下标：渲染窗口会切片，下标只保证在这条消息上有效。
+   * Typical causes: the stream failed/was aborted while sending, retries were abandoned after a
+   * model error, or a database incident left only the question. Such bubbles previously had no
+   * actionable entry point at all — marking them by id adds "edit and resend / delete".
+   * Ids are used instead of indices: the render window slices the list, so indices are only valid
+   * for this particular message.
    */
   const orphanUserIds = useMemo(() => {
     const ids = new Set<string>()
@@ -403,21 +432,28 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   }, [messages])
 
   /**
-   * 目标续跑批次：把「同一批次的助手回复」合成一行，靠左右切换查看各轮。
+   * Goal continuation batches: merge "assistant replies of the same batch" into one row and switch
+   * between rounds with the left/right controls.
    *
-   * 背景（用户 2026-09-19）：「我想把同一个批次里面的AI回复这些轮次合并起来，使用左右点击切换，
-   * 也可以减少渲染。」
+   * Background (user, 2026-09-19): "I want to merge the AI reply rounds within the same batch and
+   * switch between them with left/right clicks, which also reduces rendering."
    *
-   * 数据形态：目标轮次驱动器（主进程 goal-driver）每轮先下发 `goalRound` 标记 chunk，渲染端把它挂成
-   * 一条 user 消息（blocks=[{type:'goalRound',round,objective}]），于是同一批次在列表里是
-   * 交替的 [助手][横幅][助手][横幅]……。轮次一多，气泡与挂载的块都线性增长。
+   * Data shape: the goal round driver (goal-driver in the main process) emits a `goalRound` marker
+   * chunk at the start of each round, and the renderer mounts it as a user message
+   * (blocks=[{type:'goalRound',round,objective}]), so the same batch appears in the list as
+   * alternating [assistant][banner][assistant][banner]…. With many rounds, bubbles and mounted
+   * blocks grow linearly.
    *
-   * 归并只认**结构化 goalRound 块**：用户输入什么都不参与判定，普通消息永远是普通气泡。
-   *  - 一段连续的「助手 + 横幅 + 助手 + 横幅 + 助手」= 一个批次，**包含开头那条助手**（它是这批
-   *    工作的第一轮，自动续跑都建立在它之上）；
-   *  - 批次渲染成一行：一个横幅（显示 第 N/M 轮 + 目标 + 左右切换）+ **当前选中那一轮的助手消息**；
-   *  - 其余轮次不挂载 —— 这正是「减少渲染」的来源；
-   *  - 默认选中最后一轮（最新）；用户手动往前翻过后不再被新轮次抢走，翻回最后一轮则恢复跟随。
+   * Merging only recognizes **structured goalRound blocks**: user input plays no part in the
+   * decision, and ordinary messages always stay ordinary bubbles.
+   *  - A run of consecutive "assistant + banner + assistant + banner + assistant" is one batch,
+   *    **including the leading assistant** (it is the first round of the batch's work and all
+   *    auto-continuation builds on it);
+   *  - A batch renders as one row: a banner (showing round N/M + objective + left/right switching)
+   *    plus **the assistant message of the currently selected round**;
+   *  - The other rounds are not mounted — this is where "reduces rendering" comes from;
+   *  - The last round (newest) is selected by default; after the user manually pages back it is no
+   *    longer taken over by new rounds, and paging back to the last round restores following.
    */
   const goalRoundBlockOf = (m: Message | undefined): Message['blocks'][number] | undefined =>
     m?.role === 'user' ? m.blocks.find((b) => b.type === 'goalRound') : undefined
@@ -434,14 +470,14 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     const rows: RenderRow[] = []
     const total = visibleMessages.length
     const isBanner = (m: Message | undefined): boolean => Boolean(goalRoundBlockOf(m))
-    /** 目标原文只从结构化 block 读取，不解析消息正文 */
+    /** The objective text is read only from the structured block, never parsed out of the message body */
     const objectiveOf = (m: Message | undefined): string => goalRoundBlockOf(m)?.objective ?? ''
 
     for (let i = 0; i < total; i += 1) {
       const message = visibleMessages[i]
       const last = rows[rows.length - 1]
 
-      // 横幅 → 助手 = 一轮，接进上一批
+      // Banner → assistant = one round, appended to the previous batch
       if (isBanner(message)) {
         const assistant = visibleMessages[i + 1]
         if (last && last.kind === 'batch' && assistant?.role === 'assistant') {
@@ -453,7 +489,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
         continue
       }
 
-      // 助手 + 后面是横幅 → 开一个新批次（这条助手是该批的第一轮）
+      // Assistant followed by a banner → start a new batch (this assistant is the batch's first round)
       if (message.role === 'assistant' && isBanner(visibleMessages[i + 1])) {
         rows.push({
           kind: 'batch',
@@ -468,8 +504,9 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
   }, [visibleMessages])
 
   /**
-   * 手动选中的轮次（批次 key → 轮次下标）。**只记「偏离最新」的选择**：翻到最后一轮就删掉这条记录，
-   * 于是新轮次到达时继续跟随；往前翻过则保持不动，不被流式输出抢走视线。
+   * Manually selected rounds (batch key → round index). **Only choices that deviate from the newest
+   * are recorded**: paging to the last round deletes the entry so new rounds keep being followed;
+   * after paging back it stays put and streaming output doesn't steal the view.
    */
   const [pinnedRound, setPinnedRound] = useState<Record<string, number>>({})
   const gotoRound = useCallback((key: string, target: number, last: number) => {
@@ -481,7 +518,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     })
   }, [])
 
-  /** 对话真实用量（harness_dialogue_usage）：按 dialogue_id 回填到各条助手消息，不用估算值 */
+  /** Real conversation usage (harness_dialogue_usage): filled into each assistant message by dialogue_id instead of estimates */
   const [usageByDialogue, setUsageByDialogue] = useState<Record<string, HarnessDialogueUsageRow>>(
     {}
   )
@@ -517,7 +554,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [])
 
-  /** 定位标尺点击：平滑滚到该条消息；跳的是最后一条时恢复贴底跟随 */
+  /** Locator click: smooth-scroll to that message; jumping to the last one restores stick-to-bottom following */
   const handleJumpToMessage = useCallback(
     (index: number) => {
       const el = scrollRef.current
@@ -535,17 +572,20 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
     [messages.length]
   )
 
-  // 流式输出时按钮常驻（光圈即「生成中」指示）；平时仅在离开底部时出现
+  // While streaming the button is always shown (the glow is the "generating" indicator); otherwise it only appears when away from the bottom
   const showScrollButton = messages.length > 0 && (!atBottom || streaming)
 
   return (
-    // harness-message-list：聊天区的样式作用域（折叠头对齐等规则挂在 Index.tsx 的 style 里）
+    // harness-message-list: style scope for the chat area (rules such as fold header alignment live in the style block in Index.tsx)
     <div className="harness-message-list relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollRef}
-        // 底部 pb-14（56px）为悬浮的「回到底部」按钮预留：按钮 30px + 距底 20px + 外圈光弧 4px = 54px，
-        // 56px 刚好容得下；比原来的 pb-20 少 24px，按钮不会盖住最后一条消息，也不会空出一大片。
-        // endRef 挪到内容容器外面，最后一行才能命中 :last-child 去掉尾部间距。
+        // The bottom pb-14 (56px) reserves room for the floating "back to bottom" button: button
+        // 30px + 20px from the bottom + 4px outer glow arc = 54px, so 56px just fits; that is 24px
+        // less than the former pb-20, so the button neither covers the last message nor leaves a
+        // large empty gap.
+        // endRef is moved outside the content container so the last row can hit :last-child and lose
+        // its trailing spacing.
         className="flex-1 overflow-y-scroll my-1 mr-1 ml-3 px-8 pt-5 pb-14 harness-scrollbar"
       >
         <div ref={contentRef} className={messages.length === 0 ? 'h-full' : 'max-w-4xl mx-auto'}>
@@ -554,13 +594,13 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
           ) : (
             <>
               {isLoadingMoreMessages && (
-                /* 更早的消息在上方，用一个气泡轮廓占位；居中转圈会让人以为「正在发消息」 */
+                /* Older messages are above, so a bubble outline placeholder is used; a centered spinner would look like "sending a message" */
                 <div className="py-2">
                   <SkeletonMessages rows={2} />
                 </div>
               )}
               {hiddenCount > 0 && (
-                /* 隐藏区恢复入口：只影响挂载，消息本身仍在内存里（见 HISTORY_RENDER_CAP） */
+                /* Entry point for restoring the hidden area: this only affects mounting; the messages themselves are still in memory (see HISTORY_RENDER_CAP) */
                 <div className="flex items-center gap-3 pb-3">
                   <span
                     className="flex-1"
@@ -589,15 +629,15 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                 </div>
               )}
               {renderRows.map((row) => {
-                /* idx 是**全局**下标：定位标尺、删除/分支都按完整 messages 数组定位，
-                   窗口切片只改变挂载范围，不改变下标语义 */
+                /* idx is a **global** index: the locator, delete and branch all locate by the full
+                   messages array; window slicing only changes the mount range, not index semantics */
                 if (row.kind === 'batch') {
                   const last = row.rounds.length - 1
                   const active = Math.min(pinnedRound[row.key] ?? last, last)
                   const round = row.rounds[active]
                   const idx = renderFrom + round.index
                   return (
-                    /* 批次占一行：横幅（带左右切换）+ 当前轮的助手消息；其余轮次不挂载 */
+                    /* A batch occupies one row: banner (with left/right switching) + the current round's assistant message; other rounds are not mounted */
                     <div
                       key={row.key}
                       data-msg-i={idx}
@@ -647,7 +687,7 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
                 const message = visibleMessages[i]
                 const idx = renderFrom + i
                 return (
-                  /* data-msg-i：定位标尺按这个索引量每条消息在正文里的位置 */
+                  /* data-msg-i: the locator measures each message's position in the body by this index */
                   <div key={message.id} data-msg-i={idx} className="harness-message-row">
                     {message.role === 'user' ? (
                       <UserMessage
@@ -692,8 +732,9 @@ const HarnessMessageArea: React.FC<HarnessMessageAreaProps> = ({
             </>
           )}
         </div>
-        {/* 滚动锚点放在内容容器外：它若留在容器内，就永远是最后一个子节点，
-            .harness-message-row:last-child 命不中，最后一行会保留 14px 尾距 */}
+        {/* The scroll anchor sits outside the content container: if it stayed inside it would always
+            be the last child, .harness-message-row:last-child would never match, and the last row
+            would keep its 14px trailing gap */}
         <div ref={messagesEndRef} />
       </div>
       <MessageLocator

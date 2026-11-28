@@ -1,11 +1,13 @@
 /**
- * MCP 资源工具的纯格式化逻辑（无 electron / i18n 依赖，可离线测试）。
+ * Pure formatting logic for the MCP resource tools (no electron / i18n dependencies, so it can be
+ * tested offline).
  *
- * 工具本身（tools/harness/mcp-resources.ts）只负责取数据与本地化文案，这里负责
- * 「服务器返回的资源记录 → 模型可读文本」以及「图片内容 → data URL」的转换。
+ * The tools themselves (tools/harness/mcp-resources.ts) only fetch data and localize the text;
+ * this module handles the conversion from "resource records returned by the server → model-readable
+ * text" and from "image content → data URL".
  */
 
-/** 一条资源记录（从 SDK 的 Resource 投影而来） */
+/** One resource record (projected from the SDK's Resource) */
 export interface McpResourceRecord {
   uri: string
   name?: string
@@ -13,7 +15,7 @@ export interface McpResourceRecord {
   mimeType?: string
 }
 
-/** 一条资源模板记录 */
+/** One resource template record */
 export interface McpResourceTemplateRecord {
   uriTemplate: string
   name?: string
@@ -21,7 +23,7 @@ export interface McpResourceTemplateRecord {
   mimeType?: string
 }
 
-/** 一条资源内容（text 或 base64 blob） */
+/** One piece of resource content (text or base64 blob) */
 export interface McpResourceContent {
   uri?: string
   mimeType?: string
@@ -29,19 +31,19 @@ export interface McpResourceContent {
   blob?: string
 }
 
-/** 资源工具需要的文案子树（由 i18n 模块按界面语言提供） */
+/** Text subtree needed by the resource tools (supplied by the i18n module per UI language) */
 export interface McpResourceTexts {
   listResources: { header: string; empty: string; item: string; nextCursor: string }
   listTemplates: { header: string; empty: string; item: string; nextCursor: string }
   read: { header: string; textPart: string; binaryPart: string; empty: string; imageNote: string }
 }
 
-/** 三个资源工具的完整文案（common + 各自子块），结构与 i18n 的 zhCNMcpToolTexts 兼容 */
+/** Full text set of the three resource tools (common + per-tool blocks), structurally compatible with the i18n zhCNMcpToolTexts */
 export interface McpToolTexts extends McpResourceTexts {
   common: { unknownServer: string; noServers: string; notSelected: string; failed: string }
 }
 
-/** 极简模板替换（`{{name}}`）：与主进程 i18n 的插值语法一致，抽出来避免依赖 electron */
+/** Minimal template substitution (`{{name}}`): same interpolation syntax as main-process i18n, extracted here to avoid an electron dependency */
 export function fill(template: string, values: Record<string, string | number>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
     const value = values[key]
@@ -50,13 +52,14 @@ export function fill(template: string, values: Record<string, string | number>):
 }
 
 /**
- * 服务器名校验：返回 null 表示可用，否则是给模型看的提示文案。
+ * Server name validation: returns null when usable, otherwise a hint text shown to the model.
  *
- * 三种情况分开说：
- *  - 一台都没连：「先去设置里连一台」；
- *  - 名字写错：列出当前已连接的服务器名；
- *  - 连上了、但不在本轮勾选范围（`allowed`）：列出本轮真正能用的服务器——
- *    勾了 A 却让模型读 B 时，别让它以为 B 挂了，要让它知道该换哪台。
+ * Three cases are handled separately:
+ *  - nothing connected: "connect a server in settings first";
+ *  - wrong name: list the currently connected server names;
+ *  - connected but not in this turn's allowed set (`allowed`): list the servers actually usable
+ *    this turn — when A is selected but the model tries to read B, don't let it think B is down;
+ *    tell it which one to use instead.
  */
 export function serverErrorMessage(
   texts: McpToolTexts,
@@ -74,15 +77,15 @@ export function serverErrorMessage(
   return null
 }
 
-/** 资源中的图片超过这个 base64 长度就不再内联（保持与工具图像持久化一致的有界性） */
+/** Images in a resource are no longer inlined beyond this base64 length (bounded like tool image persistence) */
 export const MAX_RESOURCE_IMAGE_CHARS = 1_500_000
 
-/** 能安全内联进模型消息的图片类型（与 read_image 的格式白名单一致） */
+/** Image types that can be safely inlined into model messages (same format allowlist as read_image) */
 const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 type Format = (template: string, values: Record<string, string | number>) => string
 
-/** 列表项的可选后缀：名字/mime 都没有时返回空串 */
+/** Optional suffix for a list item: empty string when neither name nor mime is present */
 function itemSuffix(name?: string, mimeType?: string): string {
   const parts: string[] = []
   if (name) parts.push(name)
@@ -90,7 +93,7 @@ function itemSuffix(name?: string, mimeType?: string): string {
   return parts.length > 0 ? ` (${parts.join(', ')})` : ''
 }
 
-/** 资源列表 → 文本 */
+/** Resource list → text */
 export function formatResourceList(
   format: Format,
   texts: McpResourceTexts,
@@ -113,7 +116,7 @@ export function formatResourceList(
   return `${header}\n\n${lines.join('\n')}${tail}`
 }
 
-/** 资源模板列表 → 文本 */
+/** Resource template list → text */
 export function formatTemplateList(
   format: Format,
   texts: McpResourceTexts,
@@ -138,16 +141,17 @@ export function formatTemplateList(
 
 export interface ReadResourceResult {
   text: string
-  /** 图片内容（data URL）：上层用「文本 + 图像」工具结果送进模型 */
+  /** Image content (data URL): the upper layer sends it to the model as a "text + image" tool result */
   images: Array<{ dataUrl: string; mimeType: string; uri: string }>
 }
 
 /**
- * 资源内容 → 文本 + 图片。
+ * Resource content → text + images.
  *
- * - text 内容原样拼接；
- * - image/* 的 blob 在长度允许时转成 data URL（走工具图像通道，模型能直接看）；
- * - 其它二进制只给类型与大小（不把 base64 灌进上下文）。
+ * - text content is concatenated as-is;
+ * - image/* blobs are converted to data URLs when length allows (via the tool image channel, so the
+ *   model can look at them directly);
+ * - other binary content reports only type and size (base64 is never poured into the context).
  */
 export function formatReadResult(
   format: Format,

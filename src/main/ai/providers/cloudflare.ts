@@ -1,9 +1,10 @@
 /**
- * Cloudflare Workers AI 实现（`POST {baseUrl}/{model}`，SSE 流式）。
+ * Cloudflare Workers AI implementation (`POST {baseUrl}/{model}`, SSE streaming).
  *
- * 与旧实现一致：只做文本对话（Workers AI 的 chat 协议不提供工具调用），
- * 账号 ID 取 `cloudflareAccountId` 或环境变量 CLOUDFLARE_ACCOUNT_ID，
- * Token 取 `cloudflareApiToken` 或 CLOUDFLARE_API_TOKEN。
+ * As in the legacy implementation, only text chat is supported (the Workers AI chat protocol does
+ * not provide tool calling). The account ID comes from `cloudflareAccountId` or the
+ * CLOUDFLARE_ACCOUNT_ID environment variable, and the token comes from `cloudflareApiToken` or
+ * CLOUDFLARE_API_TOKEN.
  */
 import { AIMessage, BaseMessage, contentToText } from '../messages'
 import {
@@ -39,7 +40,7 @@ export interface CloudflareFields {
   [key: string]: unknown
 }
 
-/** 消息数组 → Cloudflare chat messages（文本） */
+/** Message array → Cloudflare chat messages (text) */
 function toCloudflareMessages(messages: BaseMessage[]): Array<Record<string, unknown>> {
   return messages.map((message) => {
     const role =
@@ -61,7 +62,7 @@ export class ChatCloudflareWorkersAI extends BaseChatModel {
   private readonly maxTokens?: number
   private readonly timeoutMs?: number
   private readonly modelKwargs?: Record<string, unknown>
-  /** 是否使用流式请求（extra_config 可显式关闭，或流式失败时自动降级） */
+  /** Whether to use streaming requests (extra_config can disable it, or it auto-degrades on failure) */
   private readonly streaming: boolean
 
   constructor(fields: CloudflareFields) {
@@ -105,7 +106,7 @@ export class ChatCloudflareWorkersAI extends BaseChatModel {
     return body
   }
 
-  /** 处理一个流式 chunk（Cloudflare：`{response}`；少数网关给 OpenAI 形状） */
+  /** Handle one streaming chunk (Cloudflare: `{response}`; a few gateways return the OpenAI shape) */
   private handleChunk(payload: Record<string, unknown>, collector: ModelStreamCollector): void {
     if (typeof payload.response === 'string') collector.text(payload.response)
     const usage = normalizeUsage(payload.usage as Record<string, unknown> | undefined)
@@ -126,7 +127,7 @@ export class ChatCloudflareWorkersAI extends BaseChatModel {
     }
   }
 
-  /** 解析非流式 JSON 响应体（Cloudflare：{ result: { response } } 或错误体） */
+  /** Parse a non-streaming JSON response body (Cloudflare: { result: { response } } or an error body) */
   private consumeJsonBody(text: string, collector: ModelStreamCollector): number | undefined {
     collector.recordRaw(text)
     let parsed: Record<string, unknown>
@@ -135,7 +136,7 @@ export class ChatCloudflareWorkersAI extends BaseChatModel {
     } catch {
       return undefined
     }
-    // Cloudflare 的错误体：{ success: false, errors: [{ code, message }] }（有时仍是 HTTP 200）
+    // Cloudflare error body: { success: false, errors: [{ code, message }] } (sometimes still HTTP 200)
     if (parsed.success === false || Array.isArray(parsed.errors)) {
       throw providerPayloadError('cloudflare', parsed, text)
     }
@@ -144,7 +145,7 @@ export class ChatCloudflareWorkersAI extends BaseChatModel {
     return inferStatusFromErrorPayload(parsed)
   }
 
-  /** 非流式兜底 */
+  /** Non-streaming fallback */
   private async requestNonStreaming(
     messages: BaseMessage[],
     options: ModelCallOptions,

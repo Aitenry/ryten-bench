@@ -1,36 +1,41 @@
 /**
- * 对话插话队列（按话题隔离）——生成中发消息时不打断当前回合，先把消息收进队列，
- * 由用户在队列条上点「立即插话」把它并入**正在运行**的回合（工具节点边界注入模型上下文），
- * 或等当前回合自然结束后由主进程作为新一轮自动接续发出。
+ * Conversation steering queue (isolated per topic) — when a message is sent during generation the
+ * current turn is not interrupted; the message is queued first, and the user can click "steer now"
+ * on the queue item to merge it into the **running** turn (injected into the model context at a
+ * tool node boundary), or wait for the current turn to end naturally and let the main process
+ * continue it automatically as a new turn.
  *
- * 两条通道职责分明：
- * - pending：**排队中**的消息（还没进模型），可编辑/删除/插话；
- * - injections：已被点「插话」、等待在下一个工具节点边界并入模型的缓冲（FIFO）。
+ * Two channels with distinct roles:
+ * - pending: messages **waiting in the queue** (not yet in the model); editable / removable /
+ *   steerable;
+ * - injections: buffer of messages already marked "steer", waiting to be merged into the model at
+ *   the next tool node boundary (FIFO).
  *
- * 队列是内存状态（与进行中的流同生命周期）：应用重启后未发出的插话不保留。
+ * The queue is in-memory state (same lifetime as the in-flight stream): steering messages that were
+ * never sent are not retained across an app restart.
  */
 
-/** 插话携带的附件（与 HarnessOptions 的字段一致，插话发起新一轮时原样透传） */
+/** Attachments carried by a steering message (same fields as HarnessOptions; passed through as-is when steering starts a new turn) */
 export interface QueueAttachments {
   images?: string[]
   documents?: { fileName: string; filePath: string }[]
 }
 
-/** 队列条目（主进程侧完整数据，含附件原始内容） */
+/** Queue entry (full data on the main-process side, including raw attachment contents) */
 export interface QueuedMessage {
   id: string
   topicId: number
-  /** 发起这条插话的渲染进程 sender.id（投递回执与队列广播去重都用它） */
+  /** sender.id of the renderer that initiated this steering message (used for delivery receipts and queue broadcast dedupe) */
   senderId: number
   text: string
   images?: string[]
   documents?: { fileName: string; filePath: string }[]
   createdAt: number
-  /** 点过插话但本轮没等到注入边界（见 releaseHolds） */
+  /** Steer was clicked but this turn never reached an injection boundary (see releaseHolds) */
   held?: boolean
 }
 
-/** 下发给渲染进程的队列视图（不含 dataURL 正文，避免每次广播驮着几 MB 图片） */
+/** Queue view sent to the renderer (no dataURL bodies, so each broadcast doesn't carry MBs of images) */
 export interface QueuedMessageView {
   id: string
   topicId: number
@@ -38,25 +43,30 @@ export interface QueuedMessageView {
   createdAt: number
   attachments: { fileName: string; isImage: boolean }[]
   /**
-   * true = 这条点过「插话」但本轮没等到注入边界（模型已不再调用工具）。
-   * 它不进对话流也不落库，留在队列里提示「随下一次发送带出」，避免内容悄悄丢失。
+   * true = "steer" was clicked for this message but this turn never reached an injection boundary
+   * (the model stopped calling tools). It neither enters the conversation flow nor the database;
+   * it stays in the queue as a hint that it will go out with the next send, so the content isn't
+   * silently lost.
    */
   held?: boolean
 }
 
 /**
- * 一条插话被并入模型上下文。**纯注入**：既不落库、也不在对话流里新增气泡，
- * 更不会把助手输出切成两条消息——它只影响模型接下来的行为（用户明确要求）。
+ * A steering message has been merged into the model context. **Injection only**: it is neither
+ * persisted nor shown as a new bubble in the conversation flow, and it will never split the
+ * assistant output into two messages — it only affects the model's subsequent behavior (an
+ * explicit user request).
  */
 export interface ConsumedSteer {
   item: QueuedMessage
 }
 
 /**
- * 队列日志出口：默认静默。
+ * Queue logger outlet: silent by default.
  *
- * 队列本身是纯状态机（不含 electron 依赖），由 IPC 层在装配时把 electron-log 注进来——
- * 这样 `tests/` 下的 Node 回归脚本可以直接 import 这个模块跑状态断言。
+ * The queue itself is a pure state machine (no electron dependency); the IPC layer injects
+ * electron-log at assembly time — this way Node regression scripts under `tests/` can import this
+ * module directly and run state assertions.
  */
 export interface QueueLogger {
   info: (message: string) => void
@@ -65,61 +75,63 @@ export interface QueueLogger {
 
 let logger: QueueLogger = { info: () => {}, warn: () => {} }
 
-/** 注入日志出口（IPC 层注册时调用；测试不调用即为静默） */
+/** Inject the log outlet (called when the IPC layer registers; silent in tests if never called) */
 export function setHarnessQueueLogger(next: QueueLogger): void {
   logger = next
 }
 
-/** 队列变更事件（enqueue / remove / update / 消费 / 回合结束回退） */
+/** Queue change event (enqueue / remove / update / consume / turn-end rollback) */
 export interface QueueChangeEvent {
   topicId: number
   queue: QueuedMessageView[]
 }
 
-/** 插话注入事件（前端据此把该行从队列里抹掉并给一句瞬时反馈） */
+/** Steering injection event (the frontend removes that row from the queue and shows a brief toast) */
 export interface SteerConsumedEvent extends ConsumedSteer {
   topicId: number
 }
 
-/** electron-store 等外部依赖无关的纯状态容器；广播与落库由 IPC 层挂载 */
+/** Pure state container with no external dependency such as electron-store; broadcasting and persistence are mounted by the IPC layer */
 class HarnessQueueStore {
-  /** topicId → 排队中的插话（FIFO） */
+  /** topicId → steering messages waiting in the queue (FIFO) */
   private readonly pending = new Map<number, QueuedMessage[]>()
-  /** topicId → 已点「插话」、等待工具节点边界并入模型的条目（FIFO） */
+  /** topicId → entries marked "steer" that await a tool node boundary to be merged into the model (FIFO) */
   private readonly injections = new Map<number, QueuedMessage[]>()
-  /** topicId → 本轮点过插话但尚未注入的条目（回合结束仍未注入则放回排队区） */
+  /** topicId → entries marked for steering this turn but not yet injected (put back in the queue if the turn ends without injection) */
   private readonly holds = new Map<number, QueuedMessage[]>()
   private seq = 0
 
-  /** 队列变更回调（IPC 层广播 harness-queue-updated） */
+  /** Queue change callback (IPC layer broadcasts harness-queue-updated) */
   onChanged: ((event: QueueChangeEvent) => void) | null = null
-  /** 插话消费回调（IPC 层广播 harness-queue-steered） */
+  /** Steering consumption callback (IPC layer broadcasts harness-queue-steered) */
   onConsumed: ((event: SteerConsumedEvent) => void) | null = null
 
   /**
-   * 话题当前是否有回合在跑（IPC 层维护）。生成中的消息走排队，不打断当前回合；
-   * 没有回合在跑时直接发起新一轮，不排进队列。
+   * Whether the topic currently has a running turn (maintained by the IPC layer). Messages sent
+   * during generation are queued instead of interrupting the current turn; when no turn is running
+   * they start a new turn directly without entering the queue.
    *
-   * 存的是**回合 id** 而不是布尔：同一话题上的两个回合（例如用户抢跑 + 队列接续）
-   * 混在一起时，渲染端要能按 id 丢掉过期事件（见 StreamChunk.__turnId）。
+   * Stores the **turn id** rather than a boolean: when two turns on the same topic interleave
+   * (e.g. a user expedited send + queue continuation), the renderer must be able to drop stale
+   * events by id (see StreamChunk.__turnId).
    */
   private readonly turnByTopic = new Map<number, number>()
-  /** 回合 id 自增（进程内单调；只用于区分回合，不落库） */
+  /** Turn id counter (monotonic within the process; only used to distinguish turns, not persisted) */
   private turnSeq = 0
 
-  /** 开始一轮：登记话题当前的回合 id，返回它 */
+  /** Begin a turn: register the topic's current turn id and return it */
   beginTurn(topicId: number): number {
     this.turnSeq += 1
     this.turnByTopic.set(topicId, this.turnSeq)
     return this.turnSeq
   }
 
-  /** 结束一轮：只有「当前登记的仍是这一轮」才清，避免旧回合的收尾清掉新回合 */
+  /** End a turn: clear only if the currently registered turn is still this one, so an old turn's cleanup never wipes a new turn */
   endTurn(topicId: number, turnId: number): void {
     if (this.turnByTopic.get(topicId) === turnId) this.turnByTopic.delete(topicId)
   }
 
-  /** 话题当前回合 id；没有回合在跑时为 null */
+  /** Current turn id for the topic; null when no turn is running */
   currentTurnId(topicId: number): number | null {
     return this.turnByTopic.get(topicId) ?? null
   }
@@ -129,10 +141,11 @@ class HarnessQueueStore {
   }
 
   /**
-   * 清空全部队列与回合状态（账号数据空间切换时用）。
+   * Clear all queues and turn state (used when switching account data spaces).
    *
-   * topicId 是**各账号库各自的自增 id**：换库后同一个 id 可能属于另一个话题，
-   * 不清掉就会把上一个账号的排队插话/插话缓冲挂到新账号的话题上。
+   * topicId is an **auto-increment id local to each account database**: after switching databases
+   * the same id may belong to another topic; without clearing, queued steering messages / steering
+   * buffers from the previous account would be attached to topics of the new account.
    */
   reset(): void {
     this.pending.clear()
@@ -155,7 +168,7 @@ class HarnessQueueStore {
     return list
   }
 
-  /** 入队（排在队尾）；返回新条目 */
+  /** Enqueue (at the tail); returns the new entry */
   enqueue(params: {
     topicId: number
     senderId: number
@@ -179,17 +192,17 @@ class HarnessQueueStore {
     return item
   }
 
-  /** 队列视图（FIFO，供广播与查询） */
+  /** Queue view (FIFO, for broadcast and queries) */
   view(topicId: number): QueuedMessageView[] {
     return this.listOf(topicId).map(HarnessQueueStore.toView)
   }
 
-  /** 话题是否有排队消息（回合结束后判断是否自动接续） */
+  /** Whether the topic has queued messages (used after a turn ends to decide automatic continuation) */
   hasPending(topicId: number): boolean {
     return (this.pending.get(topicId)?.length ?? 0) > 0
   }
 
-  /** 摘除队首一条（回合结束后自动接续用）；没有则返回 null */
+  /** Remove one entry from the head (for automatic continuation after a turn ends); returns null if none */
   shift(topicId: number): QueuedMessage | null {
     const list = this.pending.get(topicId)
     if (!list || list.length === 0) return null
@@ -198,7 +211,7 @@ class HarnessQueueStore {
     return item
   }
 
-  /** 删除一条排队消息 */
+  /** Delete one queued message */
   remove(topicId: number, itemId: string): boolean {
     const list = this.pending.get(topicId)
     if (!list) return false
@@ -209,7 +222,7 @@ class HarnessQueueStore {
     return true
   }
 
-  /** 改写一条排队消息的文本（空白内容视为无效改写，不改） */
+  /** Rewrite the text of a queued message (blank content is treated as an invalid edit and ignored) */
   update(topicId: number, itemId: string, text: string): boolean {
     if (!text.trim()) return false
     const item = this.pending.get(topicId)?.find((it) => it.id === itemId)
@@ -220,8 +233,9 @@ class HarnessQueueStore {
   }
 
   /**
-   * 标记「立即插话」：从排队区移入待注入缓冲，并记进本轮「未注入则回退」名单。
-   * 返回被消费的条目（供 IPC 层下发 steered 事件），条目不存在返回 null。
+   * Mark "steer now": move from the queue into the pending-injection buffer and record it in this
+   * turn's "rollback if not injected" list. Returns the consumed entry (for the IPC layer to emit a
+   * steered event), or null if the entry does not exist.
    */
   steer(topicId: number, itemId: string): QueuedMessage | null {
     const list = this.pending.get(topicId)
@@ -247,15 +261,15 @@ class HarnessQueueStore {
   }
 
   /**
-   * 取出待注入的插话（工具节点边界调用一次，全部取出，FIFO）。
-   * 取空后清掉话题键，避免长会话在内存里留空数组。
+   * Take the pending steering messages (called once at each tool node boundary; all are taken,
+   * FIFO). The topic key is deleted once empty so long sessions don't leave empty arrays in memory.
    */
   takeInjections(topicId: number): QueuedMessage[] {
     const buffer = this.injections.get(topicId)
     if (!buffer || buffer.length === 0) return []
     const taken = buffer.splice(0, buffer.length)
     this.injections.delete(topicId)
-    // 已注入的条目从「未注入则回退」名单里划掉
+    // Remove injected entries from the "rollback if not injected" list
     const holds = this.holds.get(topicId)
     if (holds) {
       const takenIds = new Set(taken.map((item) => item.id))
@@ -266,17 +280,20 @@ class HarnessQueueStore {
     return taken
   }
 
-  /** 待注入条数（日志与诊断用） */
+  /** Number of pending injections (for logs and diagnostics) */
   injectionCount(topicId: number): number {
     return this.injections.get(topicId)?.length ?? 0
   }
 
   /**
-   * 回合收尾：把「点了插话但始终没等到注入边界」的条目放回排队区（标记 held）。
+   * Turn wrap-up: put entries marked "steer" that never reached an injection boundary back into the
+   * queue (flagged held).
    *
-   * 为什么需要：插话只在工具节点边界注入，模型若已进入收尾（不再调用工具）就没有边界可用。
-   * 这些内容既没落库也没进对话流，直接丢掉等于用户白打字——放回队列并标 held，
-   * 提示「随下一次发送带出」，由用户决定删掉还是留着。
+   * Why this is needed: steering is only injected at tool node boundaries; once the model has begun
+   * wrapping up (no more tool calls) there is no boundary available. Such content was neither
+   * persisted nor added to the conversation flow, so dropping it would waste the user's typing —
+   * put it back in the queue and mark it held, hinting that it goes out with the next send while
+   * leaving it to the user to delete or keep.
    */
   releaseHolds(topicId: number): void {
     const holds = this.holds.get(topicId)
@@ -294,19 +311,21 @@ class HarnessQueueStore {
       )
       this.emitChanged(topicId)
     }
-    // 缓冲里可能还留着（理论上被 take 清空，防御性清一遍）
+    // The buffer may still hold entries (theoretically emptied by take; clear defensively)
     this.injections.delete(topicId)
   }
 
-  /** 插话注入完成：下发 steered 事件（前端把该行从队列里抹掉 + 瞬时反馈） */
+  /** Injection complete: emit the steered event (the frontend removes that row from the queue + brief toast) */
   notifyConsumed(topicId: number, consumed: ConsumedSteer): void {
     this.onConsumed?.({ topicId, ...consumed })
     this.emitChanged(topicId)
   }
 
   /**
-   * 话题被删除/新建对话时清空队列（含待注入缓冲与回退名单）。
-   * 不广播：删话题路径前端已整片重置，新建对话也会走一次队列查询。
+   * Clear the queue when a topic is deleted / a new conversation is started (including the
+   * pending-injection buffer and the rollback list).
+   * No broadcast: the delete-topic path resets the whole frontend, and a new conversation performs
+   * a queue query anyway.
    */
   clear(topicId: number): void {
     this.injections.delete(topicId)
@@ -315,8 +334,9 @@ class HarnessQueueStore {
   }
 
   /**
-   * 丢弃本轮的插话（用户点了停止：这些插话随本轮作废，排队中的消息保留）。
-   * 连「未注入回退」名单一起清掉，否则随后的 releaseHolds 会把已经作废的插话又放回队列。
+   * Discard this turn's steering messages (the user clicked stop: they become void with this turn;
+   * queued messages are kept). Also clears the "rollback if not injected" list, otherwise a later
+   * releaseHolds would put the already-void steering messages back into the queue.
    */
   dropInjections(topicId: number): void {
     const dropped =
@@ -348,5 +368,5 @@ class HarnessQueueStore {
   }
 }
 
-/** 进程级单例：队列与「进行中的流」同生命周期 */
+/** Process-level singleton: the queue shares the lifetime of the in-flight stream */
 export const harnessQueue = new HarnessQueueStore()

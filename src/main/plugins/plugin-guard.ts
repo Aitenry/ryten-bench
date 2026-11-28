@@ -2,45 +2,47 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import logger from 'electron-log'
 
 /**
- * 主进程侧的**插件隔离**（最小但关键的一层）。
+ * Main-process-side **plugin isolation** (a minimal but critical layer).
  *
- * 插件主模块运行在宿主进程里，Node 的权限对它是全开的——`process.exit()` 一行就能让
- * 整个应用立刻消失，`process.abort()` 更狠（没有机会保存/清理）。真正的沙箱（子进程 +
- * IPC 代理）代价太大，但**最致命的那几个调用**可以用 `AsyncLocalStorage` 精确归因：
+ * Plugin main modules run inside the host process with full Node permissions - one
+ * `process.exit()` line makes the whole app vanish instantly, and `process.abort()` is even worse
+ * (no chance to save/clean up). A real sandbox (child process + IPC proxy) is too expensive, but
+ * **the most fatal calls** can be attributed precisely with `AsyncLocalStorage`:
  *
- * - 插件 `install()`、它注册的 IPC handler、以及它们派生出来的定时器/Promise 都带着
- *   「当前是哪个插件」的上下文；
- * - 在这些上下文里调 `process.exit` / `process.abort` / `process.kill(自己)` 会被拦住并
- *   抛出可读错误（IPC handler 里就是一次失败的调用，插件界面自己提示；install 里就是
- *   装载失败，宿主照常启动其它插件）；
- * - 上下文之外的调用（宿主自己的退出流程）原样放行。
+ * - a plugin's `install()`, the IPC handlers it registers, and the timers/Promises derived from
+ *   them all carry the "which plugin is current" context;
+ * - calls to `process.exit` / `process.abort` / `process.kill(self)` in those contexts are blocked
+ *   and throw a readable error (inside an IPC handler it is a failed call, and the plugin UI shows
+ *   it; inside install it is a load failure, and the host keeps starting other plugins);
+ * - calls outside that context (the host's own exit flow) pass through unchanged.
  *
- * 边界（不夸大）：这只挡「退出/自杀」这一类。插件仍然能读写文件、发网络请求、注册全局
- * 监听器——那是「插件信任模型」本身的问题（见 PACKAGING.md），不在这里假装解决。
+ * Boundary (no overstating): this only blocks the "exit/self-kill" class. Plugins can still read
+ * and write files, make network requests and register global listeners - that is a matter of the
+ * plugin trust model itself, not something solved here.
  */
 
 export interface PluginScope {
   id: string
-  /** 出错时能定位：install / ipc / effect / tool */
+  /** Lets errors be located: install / ipc / effect / tool */
   surface: string
-  /** 可选的通道名（IPC handler 用） */
+  /** Optional channel name (used by IPC handlers) */
   channel?: string
 }
 
 const storage = new AsyncLocalStorage<PluginScope>()
 let patched = false
 
-/** 当前是否正在执行某个插件的代码（诊断/日志用） */
+/** Whether some plugin's code is currently executing (diagnostics/logging) */
 export function currentPluginScope(): PluginScope | undefined {
   return storage.getStore()
 }
 
-/** 在指定插件的上下文里执行（同步/异步都支持；派生任务会继承上下文） */
+/** Run in the given plugin's context (sync/async both supported; derived tasks inherit the context) */
 export function withPluginScope<T>(scope: PluginScope, run: () => T): T {
   return storage.run(scope, run)
 }
 
-/** 把「插件试图退出应用」变成一个可捕获的错误，而不是真的退出 */
+/** Turn "a plugin tried to quit the app" into a catchable error instead of a real exit */
 function denied(action: string): Error {
   const scope = storage.getStore()
   const where = scope
@@ -50,8 +52,8 @@ function denied(action: string): Error {
 }
 
 /**
- * 安装进程级拦截（幂等）。必须在任何插件 main.cjs 被 require 之前调用
- * （`initPluginHost()` 的第一件事）。
+ * Install the process-level guard (idempotent). It must be called before any plugin main.cjs is
+ * required (the first thing `initPluginHost()` does).
  */
 export function installPluginProcessGuard(): void {
   if (patched) return
@@ -78,9 +80,11 @@ export function installPluginProcessGuard(): void {
   }) as typeof process.kill
 
   /**
-   * 只**记录**不接管：插件的定时器/回调里抛出的未捕获异常会带着上下文到这里。
-   * 用 `uncaughtExceptionMonitor` 而不是 `uncaughtException`——不改变 Node/Electron
-   * 原有的崩溃/报错行为，只把「是哪个插件」写进日志，避免排查时只剩一句无上下文的栈。
+   * **Record only, do not take over**: uncaught exceptions thrown from a plugin's timers/callbacks
+   * arrive here with the context. It uses `uncaughtExceptionMonitor` rather than
+   * `uncaughtException` - it does not change Node/Electron's original crash/report behavior, it
+   * only writes "which plugin it was" to the log, so diagnosis no longer ends with a stack that
+   * has no context.
    */
   process.on('uncaughtExceptionMonitor', (err) => {
     const scope = storage.getStore()

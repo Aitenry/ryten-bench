@@ -4,22 +4,24 @@ import MarkdownView from './MarkdownView'
 import { useTheme } from '@renderer/hooks/useTheme'
 
 /**
- * 资料库（Notes）文档预览弹窗的通用外壳。
+ * Shared shell for the Notes document preview modal.
  *
- * 原先只有 `DocumentPreviewModal`（知识图谱里点来源文档）在用；技能页的「查看内容」
- * 也要同一套预览体验（整窗宽、居中、同一滚动容器与 Markdown 渲染），所以把弹窗
- * 外壳抽到这里，两边复用，避免技能页再画一个小尺寸的近似弹窗。
+ * Originally only `DocumentPreviewModal` (opened from a source document in the knowledge graph)
+ * used it; the skills page's "view content" also needs the same preview experience (full window
+ * width, centered, same scroll container and Markdown rendering), so the modal shell was
+ * extracted here for both to reuse, instead of the skills page drawing a smaller lookalike.
  *
- * 只负责「看」：标题、Markdown 正文、空态、加载态；打开/关闭与数据由调用方管。
+ * Only handles "viewing": title, Markdown body, empty state, loading state; the caller owns
+ * open/close and the data.
  */
 export interface MarkdownPreviewModalProps {
   open: boolean
   onCancel: () => void
   title: string
   content?: string | null
-  /** 没有正文时的空态文案 */
+  /** Empty-state text when there is no body */
   emptyText: string
-  /** 数据还在读（技能正文按需读盘）：先显示加载态，不闪空态 */
+  /** Data is still loading (skill bodies are read from disk on demand): show the loading state first, no empty-state flash */
   loading?: boolean
 }
 

@@ -1,11 +1,12 @@
 import { getMainLanguage } from './index'
 
 /**
- * 联网工具（web_fetch / web_search）的返回文案。
+ * Result texts for the web tools (web_fetch / web_search).
  *
- * 与其它 `tool-results-*` 模块同一约定：中文是源语言，英文树用
- * `typeof zhCNWebToolTexts` 约束（缺键/多键编译期报错），插值统一 `{{name}}`。
- * 抓取到的网页正文属于外部数据，不做翻译、原样返回；这里只负责工具自身的提示语。
+ * Same convention as the other `tool-results-*` modules: Chinese is the source language and the
+ * English tree is constrained by `typeof zhCNWebToolTexts` (missing/extra keys are compile
+ * errors); interpolation is uniformly `{{name}}`. Fetched page bodies are external data, returned
+ * verbatim and never translated; only the tools' own messages live here.
  */
 export const zhCNWebToolTexts = {
   fetch: {
@@ -82,7 +83,7 @@ export const enUSWebToolTexts: typeof zhCNWebToolTexts = {
   }
 }
 
-/** 按当前界面语言取联网工具文案 */
+/** Return the web tool texts for the current UI language */
 export function getWebToolTexts(): typeof zhCNWebToolTexts {
   return getMainLanguage() === 'en-US' ? enUSWebToolTexts : zhCNWebToolTexts
 }

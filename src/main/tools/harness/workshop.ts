@@ -38,36 +38,43 @@ import type {
 } from '../../../shared/harness/workshop'
 
 /**
- * 插件工坊的 AI 工具（4 个）——「和助手对话，把插件做出来」的那条链路。
+ * The plugin workshop's AI tools (4 of them) — the "chat with the assistant and build the plugin"
+ * pipeline.
  *
- * 工具分工刻意按**工作流的四步**切，而不是把十几个动作塞进一个工具：
+ * The tools are deliberately split by the **four workflow steps** instead of squeezing a dozen
+ * actions into one tool:
  *
- * | 工具 | 语义 |
- * |------|------|
- * | `plugin_draft` | 草稿与文件（create / list / tree / read / write / remove） |
- * | `plugin_build` | 构建 + 静态体检（宿主说明符、第三方依赖、语法） |
- * | `plugin_verify` | 自动化验收（构建 + 完整检查电池：真实装载冒烟 / 样式作用域 / 宿主安全） |
- * | `plugin_publish` | 装进应用并启用 / 重新启用 / 停用 / 卸载 / 导出 zip |
+ * | Tool | Semantics |
+ * |------|-----------|
+ * | `plugin_draft` | Draft and files (create / list / tree / read / write / remove) |
+ * | `plugin_build` | Build + static health check (host specifiers, third-party deps, syntax) |
+ * | `plugin_verify` | Automated acceptance (build + full check battery: real-load smoke / style scoping / host safety) |
+ * | `plugin_publish` | Install into the app and enable / re-enable / disable / uninstall / export zip |
  *
- * 这样模型在每一步都拿到**针对那一步的诊断**：构建失败给的是 esbuild 的文件:行:列，
- * 验收失败给的是逐项 PASS/FAIL 与「建议怎么改」。把四步合成一个动作，
- * 模型就只能看到一坨混合错误，改起来全靠猜。
+ * This way the model gets **diagnostics for that step** at every stage: a build failure reports
+ * esbuild's file:line:column, and an acceptance failure reports per-item PASS/FAIL plus "how to
+ * fix it". Merging the four steps into one action would leave the model with a pile of mixed
+ * errors and make fixing a guessing game.
  *
- * 归属：工坊是 harness 自己的能力（虚拟工作区之外的第二个「写作对象」），
- * 因此走 `tools/builders.ts` 的**本地工具**注册表，而不是 `harness.tool` 贡献点
- * （那是给别的插件贡献工具的入口）。
+ * Ownership: the workshop is the harness's own capability (a second "authoring target" outside
+ * the virtual workspace), so it goes through the **local tool** registry in `tools/builders.ts`,
+ * not the `harness.tool` contribution point (which is the entry for other plugins to contribute
+ * tools).
  *
- * 挂载时机（用户口径 2026-09-29「不要在这里面选择工具才注册这些工具」）：这 4 个是**模式工具**，
- * 不进「设置 → 智能体 → 默认工具」的可选清单，也不靠用户勾选——切到**插件模式**的那一轮起自动挂载
- * （判定 = 会话的记忆作用域是 `plugin:<id>`，实现见 `shared/mcp.ts` 的 PLUGIN_MODE_TOOL_NAMES
- * 与 `ipc/harness.ts` 里按 `pluginMode` 组装工具的那两处）。
+ * Mount timing (user requirement 2026-09-29 "don't require selecting tools here before they are
+ * registered"): these 4 are **mode tools**, absent from the "Settings -> Assistant -> Default
+ * tools" picklist and never enabled by user checkboxes — they are mounted automatically from the
+ * turn that switches to **plugin mode** (detection = the session's memory scope is
+ * `plugin:<id>`; implemented in `shared/mcp.ts`'s PLUGIN_MODE_TOOL_NAMES and the two places in
+ * `ipc/harness.ts` that assemble tools by `pluginMode`).
  *
- * 同属插件模式的还有插件中心的 `plugin_release`（发布版本，见 `tools/harness/lattice.ts`）：
- * 那是「把版本发到插件中心」，与本文件的 `plugin_publish`（装进本机应用）相对，
- * 并且**要登录**才挂载（`LATTICE_MODE_TOOL_NAMES` + `effectiveMainAgentTools` 的 `signedIn`）。
+ * Also part of plugin mode is the plugin center's `plugin_release` (publish a version; see
+ * `tools/harness/lattice.ts`): that one is "publish the version to the plugin center", as opposed
+ * to this file's `plugin_publish` (install into the local app), and it is mounted only when
+ * **signed in** (`LATTICE_MODE_TOOL_NAMES` + `signedIn` in `effectiveMainAgentTools`).
  */
 
-/** 工具在设置页下拉里的兜底元数据（真正下发时由 main/i18n 按界面语言覆盖） */
+/** Fallback metadata for the settings-page dropdown (main/i18n overrides it by UI language when actually sent) */
 export const workshopToolInfos: ToolInfo[] = [
   {
     name: 'plugin_draft',
@@ -99,7 +106,7 @@ export const workshopToolInfos: ToolInfo[] = [
   }
 ]
 
-/** 工坊没接线时的统一回复（不抛错：抛错会让整轮对话崩，模型也拿不到可执行的下一步） */
+/** Unified reply when the workshop is not wired up (no throw: throwing would crash the whole turn and leave the model no actionable next step) */
 function notReady(): string | null {
   const state = workshopState()
   if (state.ready) return null
@@ -109,7 +116,7 @@ function notReady(): string | null {
   )
 }
 
-/** 草稿摘要 → 一行文本 */
+/** Draft summary -> a single line of text */
 function draftLine(item: ReturnType<typeof draftSummary>): string {
   const flags: string[] = [item.template, `v${item.version}`]
   if (item.built) flags.push('已构建')
@@ -124,7 +131,7 @@ function draftLine(item: ReturnType<typeof draftSummary>): string {
   return `- ${item.id}（${item.title}）[${flags.join('，')}] ${item.fileCount} 个文件`
 }
 
-/** 构建结果 → 给模型看的文本 */
+/** Build result -> text for the model */
 function buildText(info: WorkshopBuildInfo): string {
   if (!info.ok) {
     return (
@@ -150,7 +157,7 @@ function buildText(info: WorkshopBuildInfo): string {
   return lines.join('\n')
 }
 
-/** 发布后：插件贡献了 AI 工具时，提醒用户去启用 */
+/** After publishing: when the plugin contributes AI tools, remind the user to enable them */
 function contributionHint(report: WorkshopReport | null): string {
   const tools = (report?.main?.contributions ?? [])
     .filter((c) => c.key === 'harness.tool')
@@ -162,7 +169,7 @@ function contributionHint(report: WorkshopReport | null): string {
   )
 }
 
-/** 渲染层探针结果 → 一行可读结论（安装/验收的回复都用它） */
+/** Renderer probe result -> one readable conclusion (used by both install and verify replies) */
 function probeLine(probe: WorkshopRendererProbe): string {
   const registrations =
     probe.registrations && probe.registrations.length > 0
@@ -201,7 +208,8 @@ const createDraftTool = (): StructuredToolInterface =>
             const result = createDraftFromTemplate({
               id: input.id,
               title: input.title,
-              // 默认 full：一份骨架就含页面 + 设置页 + AI 工具（用户口径「默认是全部内容都要」）
+              // Defaults to full: a single skeleton already includes the page + settings page +
+              // AI tool (user requirement: "by default include everything")
               template: (input.template as never) ?? 'full',
               description: input.description,
               css: input.css as never,
@@ -241,7 +249,8 @@ const createDraftTool = (): StructuredToolInterface =>
             if (!input.id || !input.path) return '缺少 id 或 path'
             if (typeof input.content !== 'string') return '缺少 content'
             const file = writeFile(input.id, input.path, input.content)
-            // 带上内容指纹：同路径、同体积的不同内容也能被「防循环护栏」识别成有进展
+            // Include a content digest: different content with the same path and size is still
+            // recognized as progress by the anti-loop guard
             const contentDigest = createHash('sha1')
               .update(input.content, 'utf-8')
               .digest('hex')
@@ -263,7 +272,7 @@ const createDraftTool = (): StructuredToolInterface =>
             try {
               removedDir = dirOf(input.id)
             } catch {
-              // 未配置插件存放路径：删除本身会失败并给出可读错误
+              // No plugins path configured: the delete itself fails with a readable error
             }
             removeDraft(input.id)
             if (removedDir) clearActiveWorkspaceIfRemoved(removedDir)
@@ -336,7 +345,8 @@ const buildTool = (): StructuredToolInterface =>
         const info = await build(input.id, { dev: input.dev })
         return buildText(info)
       } catch (err) {
-        // buildDraft 本身不抛错；这里兜住补写元数据/读写文件这类意外
+        // buildDraft itself does not throw; this catches surprises such as metadata rewrite or
+        // file I/O
         return `plugin_build 失败：${(err as Error).message}`
       }
     },
@@ -366,7 +376,8 @@ const verifyTool = (): StructuredToolInterface =>
       try {
         report = await verify(input.id, { probeRenderer: input.probe })
       } catch (err) {
-        // 验收里的文件/权限/宿主意外：给模型一句可读原因，别让整轮工具调用变成框架错误
+        // File/permission/host surprises during verification: give the model a readable reason
+        // instead of turning the whole tool call into a framework error
         return `plugin_verify 失败：${(err as Error).message}`
       }
       const text = [formatReport(report)]
@@ -374,7 +385,8 @@ const verifyTool = (): StructuredToolInterface =>
         text.push('验收未通过：按上面 FAIL 项的建议改代码，然后重新 plugin_verify。')
       } else {
         text.push('验收通过：可以 plugin_publish install 装进应用并启用。')
-        // 安装前探针只能 SKIP（插件还没装），要让模型/用户知道这一项不是漏了
+        // The pre-install probe can only SKIP (the plugin is not installed yet); make sure the
+        // model/user knows this item was not missed
         if (report.renderer && report.renderer.status !== 'pass') {
           text.push(
             `说明：${probeLine(report.renderer)}。发布时会自动在真界面上复验一次，` +
@@ -421,8 +433,10 @@ const publishTool = (): StructuredToolInterface =>
       try {
         switch (input.action) {
           case 'install': {
-            // 闸门只看三份证据是否都对应**当前源码**：验收通过 + 报告指纹 + 产物指纹。
-            // 具体原因（没验收/验收没过/验收后改过源码/产物过期）由 service 给可执行说明。
+            // The gate only checks that all three pieces of evidence match the **current sources**:
+            // verification passed + report fingerprint + artifact fingerprint. The specific reason
+            // (not verified / verification failed / sources edited after verification / stale
+            // artifact) is given by the service as actionable text.
             const gate = publishGate(input.id)
             if (!gate.ready) return gate.detail
             const result = await publish(input.id)
@@ -432,7 +446,8 @@ const publishTool = (): StructuredToolInterface =>
             ]
             if (result.rendererProbe) {
               lines.push(probeLine(result.rendererProbe))
-              // 发布流程装完会立刻在真界面上复验；结论已回写最近一次验收报告
+              // The publish flow re-checks in the real UI right after installing; the conclusion has
+              // been written back to the latest verification report
               if (result.rendererProbe.status !== 'fail') {
                 lines.push('最近一次验收报告已同步为发布后复验结果（renderer.probe）。')
               }
@@ -496,7 +511,7 @@ const publishTool = (): StructuredToolInterface =>
     }
   )
 
-/** 四个工具（`tools/builders.ts` 的本地工具表按名字取用） */
+/** The four tools (the local tool table in `tools/builders.ts` looks them up by name) */
 export const workshopToolBuilders: Record<string, () => StructuredToolInterface> = {
   plugin_draft: createDraftTool,
   plugin_build: buildTool,
@@ -504,7 +519,7 @@ export const workshopToolBuilders: Record<string, () => StructuredToolInterface>
   plugin_publish: publishTool
 }
 
-/** 草稿元数据里的模板名（工具回复里用） */
+/** Template name from the draft metadata (used in tool replies) */
 export function draftTemplateOf(id: string): string {
   return metaOf(id)?.template ?? 'minimal'
 }

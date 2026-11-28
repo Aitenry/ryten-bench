@@ -1,13 +1,15 @@
 /**
- * 自研供应商 HTTP 基础设施（替代各家 SDK 的传输层）。
+ * Self-contained provider HTTP infrastructure.
  *
- * 只保留项目真正需要的部分：
- * - `fetch` 发请求（Electron 主进程 = Node 22，自带全局 fetch）；
- * - 非 2xx 统一抛 `ModelHttpError`（带 `.status`，供 model-recovery 按状态码分类重试）；
- * - SSE / NDJSON 两种流式解析（OpenAI 兼容族 / Anthropic / Gemini / Ollama 各用其一）。
+ * Only the parts the project actually needs are kept:
+ * - `fetch` sends requests (the Electron main process is Node 22, which ships a global fetch);
+ * - non-2xx responses uniformly throw `ModelHttpError` (with `.status`, so model-recovery can
+ *   classify and retry by status code);
+ * - two streaming parsers, SSE / NDJSON (the OpenAI-compatible family / Anthropic / Gemini /
+ *   Ollama each use one).
  */
 
-/** 供应商 HTTP 错误：保留状态码与响应体片段（分类与排障都要用） */
+/** Provider HTTP error: keeps the status code and a response body excerpt (needed for classification and troubleshooting alike) */
 export class ModelHttpError extends Error {
   readonly status: number
   readonly bodyText: string
@@ -23,7 +25,7 @@ export class ModelHttpError extends Error {
   }
 }
 
-/** 网络层失败（连接被拒 / DNS / TLS）：没有状态码，按可重试的网络错误处理 */
+/** Network-layer failure (connection refused / DNS / TLS): no status code, treated as a retryable network error */
 export class ModelNetworkError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message)
@@ -32,7 +34,7 @@ export class ModelNetworkError extends Error {
   }
 }
 
-/** 诊断用的响应片段长度上限（够看到网关错误页/限流报文，又不会把整段 HTML 塞进聊天） */
+/** Response excerpt length limit for diagnostics (enough to see gateway error pages/rate-limit payloads without stuffing an entire HTML page into the chat) */
 const RAW_SNIPPET_LIMIT = 800
 
 function truncate(text: string, limit = RAW_SNIPPET_LIMIT): string {
@@ -40,30 +42,31 @@ function truncate(text: string, limit = RAW_SNIPPET_LIMIT): string {
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}…` : trimmed
 }
 
-/** 空响应上下文：供应商 / 模型 / finish_reason / 原始响应片段 */
+/** Empty-response context: provider / model / finish_reason / raw response excerpt */
 export interface EmptyResponseContext {
   provider: string
   model: string
-  /** 从供应商错误报文里解析出的状态码（没有就不带，交给上层按可重试的网络错误分类） */
+  /** Status code parsed from the provider error payload (omitted when absent; the upper layer then classifies it as a retryable network error) */
   status?: number
   finishReason?: string
-  /** 原始响应片段（空响应时用来定位服务商到底返回了什么） */
+  /** Raw response excerpt (used to pin down what the service actually returned on an empty response) */
   raw?: string
   contentType?: string
-  /** 只产出了推理 / 思考内容，没有最终答复 */
+  /** Only reasoning / thinking content was produced, with no final answer */
   reasoningOnly?: boolean
-  /** 工具调用参数无法解析的数量 */
+  /** Number of tool calls whose arguments could not be parsed */
   invalidToolCalls?: number
 }
 
 /**
- * 模型调用成功返回（HTTP 2xx / 流正常结束）但**没有任何可用输出**：
- * 没有正文、没有工具调用。
+ * The model call returned successfully (HTTP 2xx / stream ended normally) but produced **no usable
+ * output at all**: no text and no tool calls.
  *
- * 为什么需要这个错误：不少网关会把限流、鉴权失败、上游 5xx 错误页用 HTTP 200
- * 返回（或直接回一个空流）。如果只是静默返回空消息，用户只会看到「模型未返回任何内容」，
- * 看不到服务商真实返回的报文，排查无从下手。这里把供应商、模型、finish_reason 与
- * 原始响应片段一并抛出，方便直接定位。
+ * Why this error exists: many gateways return rate limits, authentication failures and upstream 5xx
+ * error pages with HTTP 200 (or simply return an empty stream). Silently returning an empty message
+ * would only show the user "the model returned no content", hiding what the service actually
+ * returned and leaving nothing to troubleshoot. This throws the provider, model, finish_reason and
+ * the raw response excerpt together so the cause can be located directly.
  */
 export class ModelEmptyResponseError extends Error {
   readonly provider: string
@@ -113,7 +116,7 @@ function formatEmptyResponseMessage(context: EmptyResponseContext): string {
   return parts.join(' ')
 }
 
-/** 结构化错误码 → HTTP 状态码（只认显式 code/type，不做报文关键字猜测） */
+/** Structured error code → HTTP status code (only explicit code/type, no guessing from payload keywords) */
 function mapErrorCodeToStatus(code: string): number | undefined {
   const normalized = code.trim().toLowerCase()
   if (!normalized) return undefined
@@ -137,9 +140,9 @@ function mapErrorCodeToStatus(code: string): number | undefined {
 }
 
 /**
- * 从 HTTP 200 的错误报文里解析状态码：
- * 只读结构化的 status / statusCode / code / type（含嵌套 `error` 与 `errors[]`），
- * 不根据自由文本猜——与 model-recovery「只看状态码」的原则一致。
+ * Parse a status code out of an error payload returned with HTTP 200:
+ * only reads structured status / statusCode / code / type (including nested `error` and `errors[]`),
+ * never guessing from free text — consistent with model-recovery's "status code only" principle.
  */
 export function inferStatusFromErrorPayload(payload: unknown): number | undefined {
   const seen = new Set<unknown>()
@@ -167,7 +170,7 @@ export function inferStatusFromErrorPayload(payload: unknown): number | undefine
   return undefined
 }
 
-/** 从错误报文里取出可读信息（OpenAI / Anthropic / Cloudflare / 通用网关都兜住） */
+/** Extract a readable message from an error payload (covers OpenAI / Anthropic / Cloudflare / generic gateways) */
 export function extractProviderErrorMessage(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return ''
   const record = payload as Record<string, unknown>
@@ -193,8 +196,9 @@ export function extractProviderErrorMessage(payload: unknown): string {
 }
 
 /**
- * 供应商在 HTTP 200 里回了一个错误对象（最常见的「空响应」来源）：
- * 抛出带服务商原文与状态码的错误，而不是继续解析成空消息。
+ * The provider returned an error object inside HTTP 200 (the most common source of "empty
+ * responses"): throw an error carrying the provider's original text and status code instead of
+ * continuing to parse it into an empty message.
  */
 export function providerPayloadError(
   provider: string,
@@ -215,13 +219,16 @@ export function providerPayloadError(
 }
 
 /**
- * 流式调用失败/为空后，是否值得再用「非流式」请求试一次。
+ * After a streaming call fails or yields nothing, whether it is worth retrying once with a
+ * non-streaming request.
  *
- * 背景：Spring AI 等客户端默认发 `stream: false`，所以流式实现有问题、非流式正常的网关
- * 在它们那里能正常工作。这里对同类情况做自动降级，避免因为网关的流式缺陷直接判失败。
+ * Background: many clients default to `stream: false`, so gateways with a broken streaming
+ * implementation but working non-streaming behavior serve them fine. The same situation is
+ * degraded automatically here, so a gateway's streaming defect doesn't fail the call outright.
  *
- * 不重试的情况：用户取消、网络层失败（换非流式也一样连不上）、服务商明确报错
- * （鉴权/限流/请求被拒——换形态也解决不了）。
+ * Not retried: user cancellation, network-layer failures (a non-streaming request can't connect
+ * either), and explicit provider errors (auth/rate limit/request rejected — changing the request
+ * shape won't help).
  */
 export function shouldTryNonStreamingFallback(err: unknown): boolean {
   const candidate = err as { name?: string; status?: unknown } | undefined
@@ -232,17 +239,17 @@ export function shouldTryNonStreamingFallback(err: unknown): boolean {
   ) {
     return false
   }
-  // 网关不支持流式参数时常见的状态码；404（端点不存在）/401/403/429/5xx 不在此列
+  // Common status codes for gateways that don't support the streaming parameter; 404 (endpoint missing) / 401 / 403 / 429 / 5xx are excluded
   if (err instanceof ModelHttpError) return [400, 405, 415, 422, 501].includes(err.status)
-  // 带状态码的错误是服务商/协议层明确拒绝（限流、鉴权、过载…），换请求形态解决不了
+  // Errors carrying a status code are explicit rejections by the provider/protocol layer (rate limit, auth, overload…); changing the request shape won't fix them
   if (typeof candidate?.status === 'number') return false
-  // 协议/解析类错误（invalid JSON、流式事件解析失败等）值得换一种请求形态
+  // Protocol/parsing errors (invalid JSON, streaming event parse failures, etc.) are worth trying with a different request shape
   return true
 }
 
 /**
- * 配置类错误（缺 API Key / 缺 region 等）：挂 status=401，
- * 让 model-recovery 按「鉴权错误」直接报错，不做无意义的重试。
+ * Configuration errors (missing API key / missing region, etc.): tag them with status=401 so
+ * model-recovery reports them directly as auth errors and doesn't retry pointlessly.
  */
 export function modelConfigError(message: string): Error {
   const error = new Error(message)
@@ -251,13 +258,13 @@ export function modelConfigError(message: string): Error {
   return error
 }
 
-/** 是否为取消（用户点停止 / 图被中断） */
+/** Whether it is a cancellation (user clicked stop / graph was interrupted) */
 export function isAbortError(err: unknown): boolean {
   const candidate = err as { name?: string; code?: string } | null
   return candidate?.name === 'AbortError' || candidate?.code === 'ABORT_ERR'
 }
 
-/** 是否为超时（AbortSignal.timeout 触发的 DOMException） */
+/** Whether it is a timeout (a DOMException triggered by AbortSignal.timeout) */
 function isTimeoutError(err: unknown): boolean {
   const candidate = err as { name?: string } | null
   return candidate?.name === 'TimeoutError'
@@ -266,18 +273,19 @@ function isTimeoutError(err: unknown): boolean {
 export interface HttpRequestOptions {
   method?: string
   headers?: Record<string, string>
-  /** 已序列化好的请求体（字符串） */
+  /** Already-serialized request body (string) */
   body?: string
   signal?: AbortSignal
-  /** 乐观超时（毫秒）；不传则只受 signal 控制 */
+  /** Optimistic timeout (ms); when omitted, only signal controls it */
   timeoutMs?: number
 }
 
 /**
- * 发一次 HTTP 请求并保证 2xx；失败时抛出带状态码的错误。
+ * Send one HTTP request and ensure 2xx; on failure throws an error carrying the status code.
  *
- * 注意：超时用 `AbortSignal.any` 与原 signal 合并——超时与用户取消的语义不同，
- * 超时包装成网络错误（可重试），用户取消保持 AbortError（上层静默收尾）。
+ * Note: the timeout is merged with the original signal via `AbortSignal.any` — timeouts and user
+ * cancellation have different semantics; timeouts are wrapped as network errors (retryable) while
+ * user cancellation stays AbortError (the upper layer finishes silently).
  */
 export async function httpRequest(url: string, options: HttpRequestOptions): Promise<Response> {
   const signals: AbortSignal[] = []
@@ -316,7 +324,7 @@ export async function httpRequest(url: string, options: HttpRequestOptions): Pro
   return response
 }
 
-/** 读取响应体文本（失败不抛错） */
+/** Read the response body text (doesn't throw on failure) */
 export async function safeReadText(response: Response): Promise<string> {
   try {
     return await response.text()
@@ -325,17 +333,19 @@ export async function safeReadText(response: Response): Promise<string> {
   }
 }
 
-/** SSE 事件（`event:` 可缺省；`data:` 多行按规范用换行拼接） */
+/** SSE event (`event:` may be absent; multi-line `data:` is joined with newlines per the spec) */
 export interface SseEvent {
   event?: string
   data: string
 }
 
 /**
- * 解析 SSE 流。
- * 只支持项目实际用到的子集：`data:` / `event:` / 注释行 / 空行分派。
+ * Parse an SSE stream.
+ * Only the subset the project actually uses is supported: `data:` / `event:` / comment lines /
+ * blank-line dispatch.
  *
- * `onRawChunk` 会把解码后的原始片段交给调用方（诊断空响应用：服务商可能回 HTML 错误页）。
+ * `onRawChunk` hands the decoded raw fragment to the caller (for empty-response diagnostics: the
+ * service may return an HTML error page).
  */
 export async function* parseSseStream(
   response: Response,
@@ -365,8 +375,9 @@ export async function* parseSseStream(
   }
 
   /**
-   * 取下一行：同时兼容 `\n`、`\r\n` 和单独的 `\r`（SSE 规范允许三种行结束符，
-   * 少数网关只发 `\r`；只按 `\n` 切会把整个流当成一行，最终解析不到任何事件）。
+   * Take the next line: supports `\n`, `\r\n` and a lone `\r` (the SSE spec allows three line
+   * terminators, and a few gateways only send `\r`; splitting on `\n` alone would treat the whole
+   * stream as one line and ultimately parse no events).
    */
   const takeLine = (): string | undefined => {
     const lf = buffer.indexOf('\n')
@@ -393,7 +404,7 @@ export async function* parseSseStream(
       eventName = line.slice(6).trim()
       return undefined
     }
-    // 非标准但常见的形态：网关直接按行发裸 JSON（NDJSON），没有 `data:` 前缀
+    // Non-standard but common: the gateway sends bare JSON line by line (NDJSON) without the `data:` prefix
     if (line.startsWith('{') || line.startsWith('[')) {
       dataLines.push(line)
       return dispatch()
@@ -424,7 +435,7 @@ export async function* parseSseStream(
       }
       if (done) break
     }
-    // 流结束时处理最后一段没有换行符的内容（部分实现末尾没有空行）
+    // At end of stream, handle the final fragment that has no newline (some implementations end without a blank line)
     if (buffer.length > 0) {
       const event = processLine(buffer)
       buffer = ''
@@ -436,14 +447,15 @@ export async function* parseSseStream(
     try {
       await reader.cancel()
     } catch {
-      // 已关闭：忽略
+      // already closed: ignore
     }
   }
 }
 
 /**
- * 解析 NDJSON 流（Ollama 的 `/api/chat`）。
- * 每行一个 JSON；空行与解析失败行直接跳过（上游可能夹带心跳文本）。
+ * Parse an NDJSON stream (Ollama's `/api/chat`).
+ * One JSON per line; blank lines and lines that fail to parse are skipped (upstream may interleave
+ * heartbeat text).
  */
 export async function* parseJsonLinesStream(
   response: Response,
@@ -473,7 +485,7 @@ export async function* parseJsonLinesStream(
           try {
             yield JSON.parse(line) as unknown
           } catch {
-            // 非 JSON 行：忽略
+            // non-JSON line: ignore
           }
         }
         lineEnd = buffer.indexOf('\n')
@@ -485,19 +497,19 @@ export async function* parseJsonLinesStream(
       try {
         yield JSON.parse(tail) as unknown
       } catch {
-        // 忽略
+        // ignore
       }
     }
   } finally {
     try {
       await reader.cancel()
     } catch {
-      // 已关闭：忽略
+      // already closed: ignore
     }
   }
 }
 
-/** URL 拼接：base 末尾斜杠不敏感（`https://api.deepseek.com` + `chat/completions`） */
+/** URL joining: insensitive to a trailing slash on base (`https://api.deepseek.com` + `chat/completions`) */
 export function joinUrl(base: string, path: string): string {
   const left = base.endsWith('/') ? base.slice(0, -1) : base
   const right = path.startsWith('/') ? path.slice(1) : path

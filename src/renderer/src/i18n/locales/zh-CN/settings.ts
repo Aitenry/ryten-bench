@@ -1,4 +1,4 @@
-/* 设置模块（弹窗外壳 + 通用设置页）词条。 */
+/* Strings for the settings module (modal shell + general settings page). */
 export const zhCNSettings = {
   title: '设置',
   nav: {
@@ -25,7 +25,7 @@ export const zhCNSettings = {
     loadFailed: '（加载失败）',
     switchFail: '插件状态切换失败',
     install: '安装第三方插件',
-    /** 行内「⋯」菜单 */
+    /** Inline "⋯" menu */
     moreActions: '更多操作',
     enable: '启用',
     disable: '禁用',

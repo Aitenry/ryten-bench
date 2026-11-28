@@ -1,14 +1,14 @@
 /**
- * 联网搜索的统一契约（主进程内部，无 electron / DB 依赖）。
+ * Unified contract for web search (inside the main process, no electron / DB dependencies).
  *
- * 设计目标：新增搜索服务只加一个 adapter（实现 `SearchProvider`），
- * UI、工具、设置存储都不改；入口统一在 `registry.searchWeb()`。
+ * Design goal: adding a search service only requires one adapter (implementing `SearchProvider`);
+ * UI, tools and settings storage stay unchanged; the entry point is always `registry.searchWeb()`.
  */
 
-/** 可选的搜索服务 */
+/** Available search services */
 export type SearchProviderId = 'builtin' | 'deepseek' | 'tavily'
 
-/** 稳定的错误码（UI / 工具层负责翻成界面语言） */
+/** Stable error codes (the UI / tool layer translates them into the display language) */
 export type SearchErrorCode =
   | 'not-configured'
   | 'unauthorized'
@@ -19,21 +19,21 @@ export type SearchErrorCode =
   | 'invalid-response'
   | 'invalid-query'
 
-/** 一次搜索请求 */
+/** A single search request */
 export interface SearchRequest {
   query: string
-  /** 期望条数（1–10） */
+  /** Desired result count (1–10) */
   maxResults: number
-  /** 是否请求正文摘要 */
+  /** Whether to request content summaries */
   includeContent: boolean
 }
 
-/** 归一化后的单条结果（三个 adapter 都映射到它） */
+/** Normalized single result (all three adapters map to it) */
 export interface SearchResultItem {
   title: string
   url: string
   snippet: string
-  /** 正文摘要（仅 includeContent 且有值时） */
+  /** Content summary (only present when includeContent is set and a value exists) */
   content?: string
   siteName?: string
   publishedAt?: string
@@ -45,7 +45,7 @@ export interface SearchSuccess {
   provider: SearchProviderId
   items: SearchResultItem[]
   elapsedMs: number
-  /** 是否由默认服务失败后回退到内置搜索 */
+  /** Whether this fell back to builtin search after the default service failed */
   fallbackFrom?: SearchProviderId
 }
 
@@ -53,28 +53,28 @@ export interface SearchFailure {
   ok: false
   provider: SearchProviderId
   code: SearchErrorCode
-  /** 服务商原始错误信息（已截断；用于日志/详情，不直接展示给用户） */
+  /** Raw provider error message (truncated; used for logs/details, not shown to users directly) */
   message: string
 }
 
 export type SearchOutcome = SearchSuccess | SearchFailure
 
-/** 搜索服务适配器 */
+/** Search service adapter */
 export interface SearchProvider {
   id: SearchProviderId
-  /** 需要密钥的服务返回 true；内置搜索为 false */
+  /** true for services that require a key; false for builtin search */
   requiresKey: boolean
   search(request: SearchRequest, apiKey?: string): Promise<SearchOutcome>
 }
 
-/** 查询长度上限（与 DeepSeek 搜索接口一致） */
+/** Maximum query length (matches the DeepSeek search API) */
 export const MAX_SEARCH_QUERY_CHARS = 128
-/** 单次返回条数上限 */
+/** Maximum number of results per request */
 export const MAX_SEARCH_RESULTS = 10
-/** 单次搜索请求超时 */
+/** Timeout for a single search request */
 export const SEARCH_TIMEOUT_MS = 10_000
 
-/** 截断字符串（保持 UI/日志可读） */
+/** Truncate a string (keeps UI/logs readable) */
 export function clipText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value
   return `${value.slice(0, maxChars)}…`

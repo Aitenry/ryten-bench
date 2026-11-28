@@ -36,21 +36,26 @@ import type {
 } from '../../../../../shared/harness/workshop'
 
 /**
- * 设置 → 插件工坊。
+ * Settings -> Plugin Workshop.
  *
- * 这一页是**对话式做插件**的仪表盘：草稿列表 + 构建/验收/安装 + 逐项验收报告。
- * 界面上的取舍（沿用本仓库既有口径）：
- * - 行的主标题用草稿自己的名字（不是笼统的「插件」二字），第二行才是状态摘要；
- * - 一次功能只给一个入口：所有动作收进行尾的「⋯」菜单（构建 / 验收 / 安装 / 停用 / 卸载 /
- *   导出 / 删除），不摆一列文字按钮；
- * - **卸载**与**删除草稿**是两件事，菜单里分开；卸载走宿主的卸载通道（宿主会弹
- *   「代码 / 数据分开」的确认框），删除草稿只删工坊里的源码；
- * - 报告按「检查项」逐条列，失败项直接给出建议——用户能把这段话原样丢回给助手。
+ * This page is the dashboard for **building plugins through conversation**: draft list + build /
+ * verify / install + per-check verification report.
+ * UI choices:
+ * - The row's title is the draft's own name (not the generic word "plugin"); the second line is
+ *   the status summary;
+ * - One entry point per function: every action folds into the "..." menu at the end of the row
+ *   (build / verify / install / disable / uninstall / export / delete), no column of text buttons;
+ * - **Uninstall** and **delete draft** are two different things and are separated in the menu;
+ *   uninstall goes through the host's uninstall channel (the host shows a confirmation that
+ *   separates code and data), while deleting a draft removes only the sources in the workshop;
+ * - The report lists every check item, and failed items come with suggestions - the user can
+ *   hand that text back to the assistant as is.
  */
 interface WorkshopSettingsProps {
   /**
-   * 嵌在弹窗里用（插件仓库 →「插件工坊」弹窗）：
-   * 标题由弹窗标题提供，内页不再重复渲染 SettingsPageHeader，只保留右侧的刷新动作。
+   * Used when embedded in a modal (plugin repository -> "Plugin Workshop" modal):
+   * the title comes from the modal header, so the page no longer renders SettingsPageHeader
+   * and keeps only the refresh action on the right.
    */
   embedded?: boolean
 }
@@ -92,16 +97,17 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
     void refresh()
   }, [refresh])
 
-  // 开着工坊页 = 当前内容在插件这一侧：侧栏的模式开关要跟着切到「插件」
-  // （详见 HarnessSidebar 里 WORKSHOP_FOCUS_EVENT 的说明）
+  // An open workshop page = the current content is on the plugin side: the sidebar's mode switch
+  // must follow to "plugin" (see the WORKSHOP_FOCUS_EVENT notes in HarnessSidebar)
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('harness-workshop-focus'))
   }, [])
 
-  // 助手在对话里改了草稿/发布了插件时，这一页要跟着变（主进程广播）
+  // The assistant changed a draft / published a plugin in the conversation: this page must follow
+  // (main-process broadcast)
   useEffect(() => harnessApi.workshop.onChanged(() => void refresh()), [refresh])
 
-  /** 打开某草稿的详情抽屉（含最近一次验收报告） */
+  /** Open a draft's detail drawer (including its latest verification report) */
   const openDetail = useCallback(
     async (id: string): Promise<void> => {
       try {
@@ -115,7 +121,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
     [viewMessage]
   )
 
-  // 侧栏「插件模式」点某一行时：打开设置弹窗并直接展开那份草稿的详情
+  // Clicking a row in sidebar "plugin mode": open the settings modal and expand that draft's detail
   useEffect(() => {
     const handler = (event: Event): void => {
       const id = (event as CustomEvent<{ id?: string }>).detail?.id
@@ -126,8 +132,9 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
   }, [openDetail])
 
   /**
-   * 构建 / 验收 / 安装走共用 hook（侧栏插件行用同一份，口径不会分叉）；
-   * `run` 留在这里给停用 / 导出 / 删除 / 卸载复用（忙碌态与失败提示同一套）。
+   * Build / verify / install go through the shared hook (the sidebar plugin row uses the same one,
+   * so behavior cannot diverge); `run` stays here for disable / export / delete / uninstall reuse
+   * (same busy state and failure hints).
    */
   const {
     busyIds,
@@ -166,7 +173,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       }
     )
 
-  /** 卸载：代码与数据分开（勾选项决定要不要连数据一起删）——走宿主的卸载通道 */
+  /** Uninstall: code and data separately (the checkbox decides whether to delete data too) -
+   * goes through the host's uninstall channel */
   const handleUninstall = (draft: WorkshopDraftSummary): void => {
     let purgeData = false
     modal.confirm({
@@ -193,7 +201,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
     })
   }
 
-  /** 删除草稿（只删工坊里的源码与产物，不影响已装进应用的插件） */
+  /** Delete a draft (only the workshop sources and artifacts; plugins already installed in the
+   * app are unaffected) */
   const handleRemoveDraft = (draft: WorkshopDraftSummary): void => {
     modal.confirm({
       title: t('workshopSettings.remove.title', { name: draft.title }),
@@ -203,22 +212,26 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       cancelText: t('common.action.cancel'),
       onOk: async () => {
         const removed = await runAction(draft.id, () => harnessApi.workshop.remove(draft.id))
-        // 只有真的删掉了才收起抽屉：失败时把「还在」留在眼前，别让人以为删成功了
+        // Collapse the drawer only when the deletion really happened: on failure keep "still there"
+        // visible so nobody thinks it succeeded
         if (removed) setDetail(null)
       }
     })
   }
 
-  /** 新建完成：刷新列表并直接展开它的详情（接着就能构建/验收/安装） */
+  /** Creation done: refresh the list and expand its detail right away (so build / verify /
+   * install can follow) */
   const handleCreated = async (createdId: string): Promise<void> => {
     await refresh()
     await openDetail(createdId)
   }
 
   /**
-   * 配置**插件存放路径**（所有插件的源码根目录；首次启动已按安装目录预置）。
+   * Configure the **plugin storage path** (the source root for all plugins; preset from the
+   * install directory on first launch).
    *
-   * 已经放着的旧草稿会被搬过来（主进程做，用户不用管）；取消不是失败，不提示。
+   * Existing old drafts are moved over for you (done by the main process); canceling is not a
+   * failure and shows no hint.
    */
   const handlePickRoot = async (): Promise<void> => {
     setPickingRoot(true)
@@ -248,7 +261,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
     }
   }
 
-  /** 行的说明行：id · 模板 · 版本 · 文件数（用草稿自己的 id，不写笼统的「插件」） */
+  /** The row's description line: id · template · version · file count (the draft's own id, not
+   * the generic word "plugin") */
   const statusText = (draft: WorkshopDraftSummary): string =>
     [
       draft.id,
@@ -342,7 +356,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
   return (
     <div>
       {embedded ? (
-        /* 弹窗内嵌：标题在弹窗标题栏，这里只留刷新动作（否则会和弹窗右上角的关闭按钮打架） */
+        /* Embedded in a modal: the title lives in the modal header, so only the refresh action
+           stays here (otherwise it fights the close button in the modal's top-right) */
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
           <Button size="small" icon={<RiRefreshLine size={14} />} onClick={() => void refresh()}>
             {t('common.action.refresh')}
@@ -366,14 +381,16 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
         </div>
       )}
 
-      {/* 插件存放路径：所有插件源码的根目录。首次启动已按安装目录预置，用户可改（改地址会迁数据） */}
+      {/* Plugin storage path: the source root for all plugins. Preset from the install directory
+          on first launch; the user can change it (changing it migrates data) */}
       <SettingsSection
         title={t('workshopSettings.root.title')}
         icon={<RiFolderOpenLine size={14} />}
       >
         <SettingRow
           title={pluginsPath || t('workshopSettings.root.rowEmpty')}
-          /* 说明只有一句、两种状态共用：没配时不写劝导式的段落（用户口径 2026-09-27） */
+          /* The description is a single sentence shared by both states: when unconfigured, no
+             persuasive paragraph (user wording 2026-09-27) */
           description={t('workshopSettings.root.rowDesc')}
           control={
             <Button size="small" loading={pickingRoot} onClick={() => void handlePickRoot()}>
@@ -386,10 +403,12 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       <SettingsSection
         title={t('workshopSettings.list.title')}
         icon={<RiFileList3Line size={14} />}
-        /* 这里刻意**不写**工坊自己的内部目录（userData/...，用户口径：不要在设置页显示这个目录）；
-           要显示的是用户配置的插件存放路径，见上面那一行 */
+        /* The workshop's own internal directory is deliberately **not** shown here (userData/...,
+           per the user: do not display this directory on the settings page); what is shown is the
+           user-configured plugin storage path, see the row above */
         extra={
-          /* 没配存放路径时点不出新建（配置入口就在下面的空态里，弹窗里刻意不放选择器） */
+          /* With no storage path configured, creation cannot be clicked (the configuration entry
+             is in the empty state below; the modal deliberately has no picker) */
           <Button
             size="small"
             icon={<RiAddLine size={14} />}
@@ -406,9 +425,10 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
             <SkeletonSettingRows rows={3} />
           </div>
         ) : draftCount === 0 ? (
-          /* 空态两种情形只差一句话（没配路径 / 配了还没插件），样式与侧栏空态同一套：
-             一行灰字居中，不摆说明段落，也不再多给一个「选择文件夹」入口——
-             配路径只有上面那一行的按钮（一个功能一个入口） */
+          /* The two empty states differ by one sentence only (no path / path set but no plugins
+             yet); same style as the sidebar empty state: one centered gray line, no explanatory
+             paragraph, and no extra "Choose folder" entry - the only way to configure the path is
+             the button in the row above (one entry point per function) */
           <div style={{ padding: '28px 0', textAlign: 'center' }}>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -495,7 +515,7 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
         )}
       </SettingsSection>
 
-      {/* ── 草稿详情抽屉：文件 + 验收报告 ── */}
+      {/* ── Draft detail drawer: files + verification report ── */}
       <Drawer
         open={detail !== null}
         onClose={() => setDetail(null)}
@@ -545,7 +565,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       >
         {detail && (
           <div className="flex flex-col" style={{ gap: 16 }}>
-            {/* 源码位置（就是「插件存放路径」下的那个子目录；路径本身在上面那一段配置） */}
+            {/* Source location (the subdirectory under "plugin storage path"; the path itself is
+                configured in the section above) */}
             <div
               style={{
                 fontSize: 12,
@@ -556,7 +577,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
               {detail.dir}
             </div>
 
-            {/* 验收报告：逐项结论（失败项带建议，可直接丢回给助手） */}
+            {/* Verification report: per-check conclusions (failed items carry suggestions that
+                can be handed back to the assistant as is) */}
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
                 {t('workshopSettings.report.title')}
@@ -598,7 +620,8 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
               )}
             </div>
 
-            {/* 文件：点开只读预览（编辑器不在这里——改代码是助手的事） */}
+            {/* Files: click to preview read-only (no editor here - editing code is the
+                assistant's job) */}
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
                 {t('workshopSettings.filesSection', { count: detail.files.length })}
@@ -654,12 +677,14 @@ const WorkshopSettings: React.FC<WorkshopSettingsProps> = ({ embedded = false })
       </Drawer>
 
       {/*
-        ── 新建草稿 ──
-        只问 id 与展示名：**不再让用户挑模板**（2026-09-27 用户口径「默认是全部内容都要」）——
-        生成的骨架里页面 / 设置页 / AI 工具 / 事件推送 / 卸载清数据都齐了，
-        助手按需要删掉用不上的部分即可。
+        ── New draft ──
+        Only asks for id and display name: **the user no longer picks a template**
+        (user wording 2026-09-27: "the default is everything") - the generated skeleton already
+        includes pages / settings page / AI tools / event push / uninstall data cleanup, and the
+        assistant can delete whatever it does not need.
       */}
-      {/* 新建草稿：与侧栏的 ＋ 共用同一个弹窗组件（只问 id 与展示名，模板固定 full） */}
+      {/* New draft: shares the same modal component as the sidebar's + (asks only for id and
+          display name; template is fixed to full) */}
       <NewDraftModal
         open={creating}
         onClose={() => setCreating(false)}

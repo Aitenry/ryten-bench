@@ -1,8 +1,8 @@
 import type { notesZhCN } from '../zh-CN/notes'
 
-/** `typeof notesZhCN` 约束：与中文源语言逐键对齐，缺译/多键在编译期即报错 */
+/** `typeof notesZhCN` constraint: keys align one-to-one with the Chinese source language, so a missing or extra key fails at compile time */
 export const notesEnUS: typeof notesZhCN = {
-  /* ── notes（原 locales/en-US/home.ts） ── */
+  /* ── notes (formerly locales/en-US/home.ts) ── */
   /* Notes module (notes dashboard / document tree / document & todo editors / preview modals).
      Keep key names identical to the zh-CN source of truth. */
   notes: {
@@ -234,10 +234,12 @@ export const notesEnUS: typeof notesZhCN = {
     }
   },
 
-  /* ── graph（原 locales/en-US/graph.ts） ── */
-  /* 关系类型在画布 tooltip 里与头尾实体名直接拼接（`头 + 标签 + 尾`，见 GraphCanvas 的 edge
-     formatter），中文原样拼接即可，英文单词之间需要空格，否则会渲染成 "Alicepart ofBob"。
-     这一层空格写在词条值里，不改拼接逻辑。 */
+  /* ── graph (formerly locales/en-US/graph.ts) ── */
+  /* Relationship types are concatenated directly with the source and target entity names in the
+     canvas tooltip (`head + label + tail`, see the edge formatter in GraphCanvas). Chinese can be
+     concatenated as-is, but English words need spaces between them or it renders as
+     "Alicepart ofBob". Those spaces live in the entry values, so the concatenation logic is not
+     changed. */
   graph: {
     entityType: {
       person: 'Person',
@@ -350,7 +352,7 @@ export const notesEnUS: typeof notesZhCN = {
     }
   },
 
-  /* ── graphSettings（原 locales/en-US/graphSettings.ts） ── */
+  /* ── graphSettings (formerly locales/en-US/graphSettings.ts) ── */
   graphSettings: {
     pageTitle: 'Graph building',
     pageDescription: 'Configure knowledge graph building parameters and default models',

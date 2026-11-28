@@ -13,7 +13,7 @@ import { remapWorkspacePathsUnderRoot } from '../storage/workspace-refs'
 import { getAllWorkspaces } from '../database/mapper/harness/harness'
 import { isUserSelectedRoot, workspacePathKey } from '../workspace/selected-roots'
 
-/** 当前活动工作区（设置已落盘后读取；未配置时为 null/空串） */
+/** Current active workspace (read after settings are persisted; null/empty string when not configured) */
 function workspaceChangedPayload(): AppWorkspaceChangedPayload {
   const harness = settingsStore.get('harness') as
     { activeWorkspaceId?: number; workspacePath?: string } | undefined
@@ -24,12 +24,14 @@ function workspaceChangedPayload(): AppWorkspaceChangedPayload {
 }
 
 /**
- * 工作区根 / 活动工作区 ID 的信任校验（安全审计 S03）。
+ * Trust validation for the workspace root / active workspace id (security audit S03).
  *
- * 渲染层可以调用 `system-settings-update` 改 `harness.workspacePath`，而所有文件类 IPC
- * 都拿这个值当 `assertInsideWorkspace` 的根——一旦被改成 `C:\` 就能读写任意文件。
- * 因此这里把它收敛为：目录必须是「用户经系统对话框亲手选过」或已登记的工作区行；
- * `activeWorkspaceId` 必须对应真实工作区行。清空（切走/删除工作区）始终允许。
+ * The renderer can call `system-settings-update` to change `harness.workspacePath`, and every
+ * file-related IPC uses that value as the root of `assertInsideWorkspace` — once it is changed to
+ * `C:\` arbitrary files can be read and written. So this narrows it down to: the directory must be
+ * one the **user picked by hand through a system dialog** or an already registered workspace row;
+ * `activeWorkspaceId` must correspond to a real workspace row. Clearing (switching away / deleting
+ * a workspace) is always allowed.
  */
 async function validateWorkspacePatch(
   next: HarnessSettings,
@@ -52,7 +54,7 @@ async function validateWorkspacePatch(
             (row) => workspacePathKey(row.path) === workspacePathKey(nextPath)
           )
         } catch (err) {
-          // 数据库不可用时按拒绝处理（fail closed），避免校验被绕过
+          // Treat it as rejected when the database is unavailable (fail closed) so validation cannot be bypassed
           logger.warn('[Settings] Workspace path validation failed (database unavailable):', err)
         }
       }
@@ -80,14 +82,15 @@ async function validateWorkspacePatch(
   }
 }
 
-/** 系统设置 IPC（锁屏走专用通道，见 ipc/lock.ts：摘要不能经通用设置通道下发/改写） */
+/** System settings IPC (lock screen uses a dedicated channel, see ipc/lock.ts: the digest must not be sent or rewritten through the generic settings channel) */
 export function registerSettingsIpc(): void {
   ipcMain.handle('system-settings-get-all', async () => {
     try {
       await awaitInitialized()
       const all = settingsStore.store
-      // 不暴露 provider-keystore 内部数据给前端；
-      // 锁屏只给「开关 + 自动锁屏时长」——解锁码摘要留在主进程（见 ipc/lock.ts）
+      // Do not expose provider-keystore internal data to the frontend;
+      // lock only exposes "switch + auto-lock duration" — the unlock code digest stays in the main
+      // process (see ipc/lock.ts)
       return {
         ip: all.ip,
         lock: getPublicLockSettings(),
@@ -111,8 +114,9 @@ export function registerSettingsIpc(): void {
 
   ipcMain.handle('system-settings-update', async (_event, updates: Partial<SystemSettings>) => {
     try {
-      // 键白名单（修复：此前任意顶层键/类型直接落盘——拼错键被永久持久化，
-      // 或把 lock/harness/graph 整键写成非对象,下游读取无兜底）
+      // Key whitelist (fix: previously any top-level key/type was persisted directly — a typo'd
+      // key was stored forever, or a whole lock/harness/graph key could be written as a non-object
+      // with no fallback downstream)
       const ALLOWED_KEYS: Array<keyof SystemSettings> = [
         'ip',
         'graph',
@@ -129,15 +133,19 @@ export function registerSettingsIpc(): void {
       ]
       const nextUpdates: Partial<SystemSettings> = { ...updates }
 
-      // 锁屏**不走通用设置通道**：走这里等于允许渲染层随意改 `lock.code`（原实现就是如此，
-      // 改密码时连原密码都不必知道）。开关/自动锁屏/改码各有专用通道（见 ipc/lock.ts）。
+      // Lock screen does **not go through the generic settings channel**: allowing it here would
+      // let the renderer change `lock.code` freely (as the original implementation did, without
+      // even knowing the old code when changing the password). Toggle / auto-lock / code change
+      // each have a dedicated channel (see ipc/lock.ts).
       if ('lock' in nextUpdates) {
         logger.warn('[Settings] Rejected lock settings through generic update channel')
         delete nextUpdates.lock
       }
 
-      // 存储路径（记忆 / 插件 / 技能）变更：先把旧目录的数据迁到新目录，成功了才落设置。
-      // 失败时抛错、设置保持原值——绝不出现「设置指向新目录，数据还在旧目录」。
+      // Storage path (memory / plugins / skills) changes: migrate the old directory's data to the
+      // new one first, and only persist the settings on success. On failure it throws and the
+      // settings keep their old values — never "settings point at the new directory while the data
+      // is still in the old one".
       let previousHarness: HarnessSettings | undefined
       let nextHarness: HarnessSettings | undefined
       if (
@@ -164,7 +172,7 @@ export function registerSettingsIpc(): void {
           logger.warn(`[Settings] Rejected unknown setting key: ${key}`)
           continue
         }
-        // 对于对象类型的设置（如 harness），与现有值合并而非替换
+        // For object-valued settings (e.g. harness), merge with the existing value instead of replacing it
         if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
           const existing = settingsStore.get(key as keyof SystemSettings) as
             Record<string, unknown> | undefined
@@ -174,14 +182,16 @@ export function registerSettingsIpc(): void {
         }
       }
 
-      // 插件存放路径变了：运行时注入的根目录要立即跟着换（不重启）。
-      // 设置页本身不走这条通道（用 workshop-set-root），但探针/外部调用可能直接写设置。
+      // The plugin storage path changed: the runtime-injected root must switch immediately
+      // (without a restart). The settings page itself does not go through this channel (it uses
+      // workshop-set-root), but probes/external calls may write the setting directly.
       if (previousHarness && nextHarness) {
         const beforePlugins = storagePathOf(previousHarness, 'plugins')
         const afterPlugins = storagePathOf(nextHarness, 'plugins')
         if (!isSamePath(beforePlugins, afterPlugins)) {
-          // 插件源码目录整体换了：旧插件工作区行 / 活动工作区也跟着换到新根下，
-          // 否则旧会话会一直指着已经不存在的目录。
+          // The plugin source directory moved as a whole: remap the old plugin workspace rows /
+          // active workspace to the new root, otherwise old sessions keep pointing at a directory
+          // that no longer exists.
           await remapWorkspacePathsUnderRoot(beforePlugins, afterPlugins)
           configurePluginsRoot(afterPlugins)
           logger.info(
@@ -189,13 +199,15 @@ export function registerSettingsIpc(): void {
           )
         }
       }
-      // 托盘设置变化时即时同步（关闭行为 / 菜单勾选态）；语言变化时同步托盘提示文案
+      // Sync the tray immediately when tray settings change (close behavior / menu check state);
+      // refresh the tray hint copy when the language changes
       if ('tray' in updates || 'language' in updates) {
         syncTrayState()
       }
-      // 工作区切换（新建 / 选择 / 重建）后通知订阅方（事件总线）：工作区文件监听的
-      // 换根动作属于 AI 助手（`src/main/system/harness.ts`），core 只负责在设置落盘后发事件；
-      // 第三方插件也可以订阅同一个事件（见 src/main/plugins/app-hooks.ts）
+      // After a workspace switch (create / select / rebuild) notify subscribers (event bus): the
+      // workspace file watcher's root switch belongs to the AI assistant
+      // (`src/main/system/harness.ts`); core only emits the event after the settings are persisted.
+      // Third-party plugins can subscribe to the same event (see src/main/plugins/app-hooks.ts)
       if ('harness' in updates) {
         emitAppEvent(APP_EVENT_WORKSPACE_CHANGED, workspaceChangedPayload())
       }

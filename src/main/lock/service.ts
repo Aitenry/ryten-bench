@@ -13,29 +13,34 @@ import { DEFAULT_AUTO_LOCK_MINUTES, DEFAULT_LOCK_CODE, isAutoLockMinutes } from 
 import { hashLockCode, isLockCode, verifyLockCode } from './credentials'
 
 /**
- * 锁屏状态机（主进程是**唯一真源**）。
+ * Lock-screen state machine (the main process is the **single source of truth**).
  *
- * 旧实现的三个致命问题，也是「这个功能护不住数据」的根因：
- *  1. `locked` 只是渲染层的一个 `useState`：按 Ctrl+R 刷新、或渲染进程崩溃后主窗口重建，
- *     锁屏就消失了，内容原样露出来；
- *  2. 解锁码摘要通过 IPC 下发给渲染层、校验也在渲染层 —— 摘要可被读走，6 位数字的
- *     MD5 用普通显卡几秒就能爆破；
- *  3. 只有「按 Esc」这一个入口，人离开座位时永远不会锁。
+ * The three fatal problems of the old implementation, and the root cause of "this feature cannot
+ * protect the data":
+ *  1. `locked` was only a renderer `useState`: pressing Ctrl+R to reload, or the main window being
+ *     recreated after a renderer crash, made the lock disappear and content was exposed as-is;
+ *  2. the unlock-code hash was sent to the renderer over IPC and verification happened there too —
+ *     the hash could be read out, and the MD5 of a 6-digit number falls to a plain GPU in seconds;
+ *  3. the only entry point was "press Esc", so leaving the desk never locked anything.
  *
- * 现在：
- *  - `locked` 由主进程持有；窗口每次 `did-finish-load` 都会收到当前状态，刷新/重建都不解锁；
- *  - 校验在主进程（加盐 scrypt + 定时恒定延迟），摘要永不出主进程；连续失败按指数退避；
- *  - 空闲自动锁屏（powerMonitor.getSystemIdleTime）、最小化/隐藏、系统锁屏/休眠都会立刻锁；
- *  - 锁屏期间开启窗口级防截屏，截屏/录屏/共享只看到黑块。
+ * Now:
+ *  - `locked` is held by the main process; the window receives the current state on every
+ *    `did-finish-load`, so reload/recreate never unlocks;
+ *  - verification runs in the main process (salted scrypt + a fixed minimum latency); the hash never
+ *    leaves the main process; consecutive failures back off exponentially;
+ *  - idle auto-lock (`powerMonitor.getSystemIdleTime`), minimize/hide, and system lock/suspend lock
+ *    immediately;
+ *  - while locked, window-level content protection is on: screenshots/recordings/shares show a black
+ *    rectangle.
  */
 
-/** 失败几次以内不等待（再往上开始指数退避） */
+/** How many failures are free before waiting (exponential backoff starts above that) */
 const FREE_ATTEMPTS = 3
-/** 退避上限 5 分钟 */
+/** Backoff ceiling of 5 minutes */
 const MAX_RETRY_DELAY_MS = 5 * 60_000
-/** 哪怕校验失败得再快，单次 IPC 也至少占用这么久，压低自动化爆破速率 */
+/** Even when verification fails fast, a single IPC call occupies at least this long, lowering automated brute-force rates */
 const MIN_VERIFY_MS = 180
-/** 空闲检查周期（秒级精度足够，太密只是白耗电） */
+/** Idle check interval (second-level precision is enough; a tighter loop only wastes power) */
 const IDLE_TICK_MS = 15_000
 
 let locked = false
@@ -48,13 +53,13 @@ let defaultCodeProbe: Promise<void> | null = null
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** 读取落盘的 lock 对象（设置文件可能被手改成字符串/数组，统一兜底成空对象） */
+/** Reads the persisted lock object (the settings file may have been hand-edited into a string/array; fall back to an empty object) */
 function readLockObject(): Partial<Lock> {
   const raw = settingsStore.get('lock')
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Partial<Lock>) : {}
 }
 
-/** 读盘并对字段做兜底（设置文件可能来自旧版本，也可能被手改坏） */
+/** Reads from disk and falls back per field (the settings file may come from an older version or have been corrupted by hand) */
 function readStoredLock(): { code: string; view: boolean; autoLockMinutes: number } {
   const raw = readLockObject()
   const code = typeof raw.code === 'string' ? raw.code : ''
@@ -65,13 +70,13 @@ function readStoredLock(): { code: string; view: boolean; autoLockMinutes: numbe
   return { code, view, autoLockMinutes }
 }
 
-/** 合并写回（保留其它字段，绝不整键覆盖） */
+/** Merge write-back (keep other fields, never overwrite the whole key) */
 function writeStoredLock(patch: Partial<Lock>): void {
   const raw = { view: false, ...readLockObject() }
   settingsStore.set('lock', { ...raw, ...patch })
 }
 
-/** 主进程持有的锁屏快照（渲染层通过 `lock-screen-state` / `lock-screen-changed` 拿到它） */
+/** Lock-screen snapshot held by the main process (the renderer gets it via `lock-screen-state` / `lock-screen-changed`) */
 export function getLockScreenSnapshot(): LockScreenSnapshot {
   const lock = readStoredLock()
   return {
@@ -83,18 +88,19 @@ export function getLockScreenSnapshot(): LockScreenSnapshot {
   }
 }
 
-/** 通用设置通道只允许看到「开关 + 自动锁屏」，解锁码摘要不出主进程 */
+/** The general settings channel may only see "switch + auto-lock"; the unlock-code hash never leaves the main process */
 export function getPublicLockSettings(): { view: boolean; autoLockMinutes: number } {
   const lock = readStoredLock()
   return { view: lock.view, autoLockMinutes: lock.autoLockMinutes }
 }
 
 /**
- * 启动流程写完配置后刷新一次快照。
+ * Refreshes the snapshot once after the startup flow has written the config.
  *
- * 为什么需要：`startLockScreenWatcher()` 在 app ready 时就启动，而锁屏配置的首次落盘
- * 发生在其后的初始化任务里（`loadConfig`）。早读时配置还不存在，`usingDefaultCode`
- * 会停在 false，设置页的「仍是初始密码」提示就永远不出现。配置落盘后再探测一次。
+ * Why needed: `startLockScreenWatcher()` starts as soon as the app is ready, but the lock config is
+ * first persisted later by an initialization task (`loadConfig`). Reading it early finds no config,
+ * so `usingDefaultCode` stays false and the settings page's "still using the initial password" hint
+ * would never appear. Probe again once the config is on disk.
  */
 export function refreshLockScreenState(): void {
   probeDefaultCode()
@@ -113,11 +119,12 @@ function broadcast(): void {
 }
 
 /**
- * 锁屏期间的窗口级防截屏。
+ * Window-level content protection while locked.
  *
- * Windows 走 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`、macOS 走
- * `NSWindowSharingNone`：截图 / 录屏 / 视频会议共享里这个窗口是黑块。
- * 解锁后立刻恢复，不影响用户自己截屏。
+ * Windows uses `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, macOS uses
+ * `NSWindowSharingNone`: the window is a black rectangle in screenshots / recordings /
+ * video-conference shares. Restored immediately on unlock so the user's own screenshots are
+ * unaffected.
  */
 function applyContentProtection(on: boolean): void {
   const win = getMainWindow()
@@ -125,26 +132,26 @@ function applyContentProtection(on: boolean): void {
   try {
     win.setContentProtection(on)
   } catch (error) {
-    // Linux / 老版本 Electron 可能不支持：锁屏界面本身仍然生效，只是少了这层保护
+    // Linux / older Electron may not support this: the lock screen itself still works, just without this layer
     logger.debug('[LockScreen] setContentProtection unavailable:', error)
   }
 }
 
-/** 进入锁屏；返回是否真的锁上了（未启用 / 没有解锁码时不动） */
+/** Enters the lock screen; returns whether it actually locked (does nothing when disabled / no unlock code) */
 export function lockNow(reason: string): boolean {
   const lock = readStoredLock()
   if (locked) return false
-  // 没有解锁码时绝不锁屏：宁可 Esc 没反应，也不能把人锁在一个进不去的界面里
+  // Never lock without an unlock code: better that Esc does nothing than locking someone into an inaccessible screen
   if (!lock.view || !lock.code) return false
 
   locked = true
   const win = getMainWindow()
   if (win && !win.isDestroyed()) {
-    // 锁屏前把开发者工具收掉：它开着时页面 DOM 仍然可读，锁屏就形同虚设
+    // Close the devtools before locking: while open, the page DOM stays readable and the lock is useless
     try {
       win.webContents.closeDevTools()
     } catch {
-      // 没开或平台不支持：忽略
+      // Not open or unsupported on this platform: ignore
     }
   }
   applyContentProtection(true)
@@ -153,7 +160,7 @@ export function lockNow(reason: string): boolean {
   return true
 }
 
-/** 连续失败后的等待时长：前 3 次不等待，之后 5s → 10s → 20s … 最多 5 分钟 */
+/** Wait after consecutive failures: no wait for the first 3, then 5s → 10s → 20s … up to 5 minutes */
 function throttleDelayMs(attempts: number): number {
   if (attempts <= FREE_ATTEMPTS) return 0
   const exponent = Math.min(attempts - FREE_ATTEMPTS - 1, 6)
@@ -165,10 +172,11 @@ function attemptsLeft(attempts: number): number {
 }
 
 /**
- * 校验解锁码（渲染层唯一能做的解锁入口）。
+ * Verifies the unlock code (the only unlock entry point the renderer has).
  *
- * 无论成功失败都至少耗时 `MIN_VERIFY_MS`：6 位数字空间只有 100 万，若不限速，
- * 脚本跑一遍 UI 比爆破文件还快。配合指数退避，在线尝试变得不可行。
+ * It takes at least `MIN_VERIFY_MS` whether it succeeds or fails: the 6-digit space is only a
+ * million values, and without rate limiting a script driving the UI would be faster than
+ * brute-forcing the file. Combined with exponential backoff, online attempts become infeasible.
  */
 export async function unlockWithCode(code: string): Promise<LockUnlockResult> {
   if (!locked) return { ok: true }
@@ -216,7 +224,7 @@ export async function unlockWithCode(code: string): Promise<LockUnlockResult> {
     }
   }
 
-  // 旧 MD5 摘要：校验成功后原地升级为加盐 scrypt（升级失败不影响本次解锁）
+  // Legacy MD5 hash: upgrade it in place to salted scrypt after a successful verification (an upgrade failure does not affect this unlock)
   if (legacy) {
     try {
       writeStoredLock({ code: await hashLockCode(normalized) })
@@ -236,14 +244,14 @@ export async function unlockWithCode(code: string): Promise<LockUnlockResult> {
   return { ok: true }
 }
 
-/** 设置页的开关 / 自动锁屏时长（两者都可以通过通用设置通道之外的专用通道修改） */
+/** Settings-page switch / auto-lock duration (both can be changed through dedicated channels besides the general settings channel) */
 export function configureLock(patch: {
   enabled?: boolean
   autoLockMinutes?: number
 }): LockScreenSnapshot {
   const next: Partial<Lock> = {}
   if (typeof patch.enabled === 'boolean') {
-    // 没有解锁码时不允许启用：否则锁屏 = 进不去的界面
+    // Do not allow enabling without an unlock code: otherwise the lock screen is a screen you cannot get into
     next.view = patch.enabled && Boolean(readStoredLock().code)
   }
   if (patch.autoLockMinutes !== undefined && isAutoLockMinutes(patch.autoLockMinutes)) {
@@ -251,7 +259,7 @@ export function configureLock(patch: {
   }
   if (Object.keys(next).length > 0) writeStoredLock(next)
 
-  // 用户开启锁屏时重新确认一次「是不是还在用 123456」，设置页据此显示警告
+  // Re-check "still using 123456" when the user enables the lock screen; the settings page shows a warning based on it
   if (next.view === true) probeDefaultCode()
 
   if (next.view === false && locked) {
@@ -263,7 +271,7 @@ export function configureLock(patch: {
   return getLockScreenSnapshot()
 }
 
-/** 修改解锁码：旧码在主进程校验，摘要永不下发 */
+/** Changes the unlock code: the old code is verified in the main process and the hash is never sent out */
 export async function changeLockCode(
   oldCode: string,
   newCode: string
@@ -272,7 +280,7 @@ export async function changeLockCode(
 
   const lock = readStoredLock()
   if (!lock.code) {
-    // 从未设置过：允许直接设新码（此时没有「原密码」可言）
+    // Never set before: allow setting a new code directly (there is no "original password" to speak of)
     writeStoredLock({ code: await hashLockCode(newCode) })
     usingDefaultCode = newCode === DEFAULT_LOCK_CODE
     broadcast()
@@ -292,13 +300,13 @@ export async function changeLockCode(
     return { ok: false, reason: 'unavailable' }
   }
   usingDefaultCode = newCode === DEFAULT_LOCK_CODE
-  // 修改密码不改变「是否锁屏」，但 usingDefaultCode 可能变了，仍广播一次让设置页刷新提示
+  // Changing the password does not change whether the screen is locked, but usingDefaultCode may have changed, so broadcast once to refresh the settings-page hint
   broadcast()
   logger.info('[LockScreen] Code changed')
   return { ok: true }
 }
 
-/** 探测当前摘要是不是出厂默认码（只有设置页的提示需要它；结果缓存，改码时重算） */
+/** Probes whether the current hash is the factory-default code (only the settings-page hint needs it; cached, recomputed when the code changes) */
 function probeDefaultCode(): void {
   if (defaultCodeProbe) return
   defaultCodeProbe = (async () => {
@@ -308,7 +316,7 @@ function probeDefaultCode(): void {
       return
     }
     const { matched } = await verifyLockCode(DEFAULT_LOCK_CODE, lock.code)
-    // 探测期间用户可能刚好改了码：只有摘要没变才采信这次结果，避免旧结果覆盖新状态
+    // The user may change the code during the probe: only trust this result if the hash is unchanged, so a stale result does not overwrite the new state
     if (readStoredLock().code !== lock.code) return
     usingDefaultCode = matched
     broadcast()
@@ -328,40 +336,42 @@ function checkIdleLock(): void {
     const idleSeconds = powerMonitor.getSystemIdleTime()
     if (idleSeconds >= lock.autoLockMinutes * 60) lockNow('idle')
   } catch (error) {
-    // 个别平台 / 无桌面会话拿不到空闲时间：自动锁屏降级为关闭，不影响手动锁屏
+    // Some platforms / headless sessions cannot read idle time: auto-lock degrades to off, manual locking is unaffected
     logger.debug('[LockScreen] getSystemIdleTime unavailable:', error)
   }
 }
 
 /**
- * 启动锁屏（应用每次启动调用一次，且在窗口创建之前）。
+ * Locks at startup (called once per app launch, before the window is created).
  *
- * 为什么必须有：`locked` 只是主进程的内存态，进程一退出就归零——旧行为下
- * 「锁着屏 → 托盘退出 / 关掉应用 → 重新打开」就能直接看到全部内容，这个锁屏
- * 被一步操作就绕过了，等于没有。只要用户启用了锁屏且存在解锁码，每次启动的
- * 第一帧就应该是锁屏界面。
+ * Why required: `locked` is only main-process memory and resets when the process exits — with the
+ * old behavior "locked → quit from the tray / close the app → reopen" exposed everything, so a
+ * single action bypassed the lock and it might as well not exist. As long as the user has enabled
+ * the lock screen and an unlock code exists, the first frame of every launch should be the lock
+ * screen.
  *
- * 放在窗口创建之前调用：主窗口 `attachLockScreen` 在首次 `did-finish-load`
- * 补发的快照已经是 `locked=true`，界面不会先闪一下正文再被蒙层盖住。
+ * Called before the window is created: the snapshot re-sent by the main window's `attachLockScreen`
+ * on the first `did-finish-load` is already `locked=true`, so the UI never flashes the content
+ * before the overlay covers it.
  */
 export function lockOnStartup(): boolean {
   return lockNow('startup')
 }
 
-/** 启动自动锁屏监听（幂等；registerLockIpc 在 app ready 后调用一次） */
+/** Starts the auto-lock watcher (idempotent; registerLockIpc calls it once after the app is ready) */
 export function startLockScreenWatcher(): void {
   if (watcherStarted) return
   watcherStarted = true
 
   probeDefaultCode()
-  // 每次启动都先锁上：否则「退出应用再打开」就是绕过锁屏的捷径
+  // Lock on every launch: otherwise "quit the app and reopen it" is a shortcut around the lock screen
   lockOnStartup()
 
   idleTimer = setInterval(checkIdleLock, IDLE_TICK_MS)
-  // 不阻止进程退出
+  // Do not keep the process alive
   idleTimer.unref?.()
 
-  // 系统锁屏 / 休眠：用户离开的明确信号，立即锁
+  // System lock / suspend: clear signals that the user left, lock immediately
   try {
     powerMonitor.on('lock-screen', () => lockNow('system-lock'))
     powerMonitor.on('suspend', () => lockNow('suspend'))
@@ -370,7 +380,7 @@ export function startLockScreenWatcher(): void {
   }
 }
 
-/** 锁屏期间屏蔽刷新 / 开发者工具快捷键（内容已在 DOM 里，不能靠 UI 挡住绕过） */
+/** Blocks reload / devtools shortcuts while locked (the content is already in the DOM, so the UI cannot be the only defense) */
 function isBlockedShortcut(input: Electron.Input): boolean {
   if (input.type !== 'keyDown' && input.type !== 'rawKeyDown') return false
   const key = (input.key || '').toLowerCase()
@@ -383,10 +393,11 @@ function isBlockedShortcut(input: Electron.Input): boolean {
 }
 
 /**
- * 把主窗口接到锁屏状态机上（窗口重建时会重新接一次）：
- * - 每次页面加载完成都补发当前状态 —— 刷新 / 崩溃自愈后仍然是锁屏；
- * - 最小化、隐藏到托盘时立刻锁；
- * - 锁屏期间拦截刷新与开发者工具快捷键。
+ * Wires the main window into the lock-screen state machine (rewired when the window is recreated):
+ * - re-send the current state whenever a page finishes loading — a reload / crash recovery is still
+ *   locked;
+ * - lock immediately on minimize or hide-to-tray;
+ * - block reload and devtools shortcuts while locked.
  */
 export function attachLockScreen(win: BrowserWindow): void {
   applyContentProtection(locked)
@@ -407,15 +418,16 @@ export function attachLockScreen(win: BrowserWindow): void {
     if (isBlockedShortcut(input)) event.preventDefault()
   })
 
-  // 开发态 F12 由 electron-toolkit 的快捷键助手直接打开 DevTools（它的 before-input-event
-  // 比我们早注册，拦不住）。锁屏期间 DevTools 一开就关：DOM 里的文字虽然被 CSS 模糊，
-  // Elements 面板仍然能读到，不能留这个后门。
+  // In dev, F12 opens DevTools directly through electron-toolkit's shortcut helper (its
+  // before-input-event is registered earlier than ours, so we cannot intercept it). While locked,
+  // close DevTools as soon as it opens: the text in the DOM is CSS-blurred, but the Elements panel
+  // can still read it, so this backdoor must not stay open.
   win.webContents.on('devtools-opened', () => {
     if (!locked) return
     try {
       win.webContents.closeDevTools()
     } catch {
-      // 忽略
+      // Ignore
     }
   })
 }

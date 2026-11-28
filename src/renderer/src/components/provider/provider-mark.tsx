@@ -3,29 +3,36 @@ import { useTheme } from '@renderer/hooks/useTheme'
 import { getProviderColor, getProviderMonogram } from '@renderer/utils/providerMeta'
 
 /**
- * 供应商「首字母」徽章：没有品牌图标的供应商（尤其自定义端点）的统一标识。
+ * Provider "initial" badge: the unified mark for providers without a brand icon
+ * (custom endpoints in particular).
  *
- * 2026-11-27 用户口径（附输入栏截图）：「自定义的供应商端点的 logo 不好看」。
- * 旧方案是 14px 描边小方块 + 8px 等宽双字母，在 26px 触发条里像一枚键帽/占位符：
- * 描边吃掉 2px、字太小、灰底灰字没有识别度。
+ * 2026-11-27 user feedback (with an input-bar screenshot): "the logo of a custom provider
+ * endpoint looks bad". The old approach was a 14px stroked square with 8px monospace
+ * two-letter text, which looked like a keycap/placeholder inside the 26px trigger row:
+ * the stroke ate 2px, the text was too small, and grey-on-grey had no recognizability.
  *
- * 现在按「应用图标」的思路做单字母头像：
- * - 无描边、字母占满视觉中心，尺寸由调用方给（输入栏 16px，设置/菜单同尺寸）；
- * - 底色由品牌色按主题调制：暗色向墨色压、亮色向纸白提，字母取同色相的浅/深一阶；
- * - 单字母（不是双字母）：14~16px 下双字母必然挤成一团，首字母已足够区分，全名在设置页/菜单里；
- * - 颜色不在这里发明品牌色：收录过的品牌只从 providerMeta 取色；未收录的自定义端点用应用主色的
- *   低饱和阶（中性灰在暗色里像占位符、在亮色里像键帽；主色阶既能当 logo，也不像随机品牌色那样抢眼）。
+ * It is now a single-letter avatar built like an app icon:
+ * - no stroke, the letter fills the visual center, and the size comes from the caller
+ *   (16px in the input bar, the same size in settings/menus);
+ * - the background is the brand color modulated per theme: pressed toward ink in dark mode,
+ *   toward paper in light mode; the letter is one lighter/darker step of the same hue;
+ * - a single letter (not two): at 14~16px two letters inevitably cram together, the initial
+ *   already distinguishes providers, and the full name is in the settings page/menu;
+ * - brand colors are not invented here: catalogued brands take their color from providerMeta;
+ *   uncatalogued custom endpoints use a desaturated step of the app primary color (neutral
+ *   grey reads as a placeholder in dark mode and a keycap in light mode; a primary step still
+ *   works as a logo without being as loud as a random brand color).
  */
 const MONO_FONT = "ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"
 
-/** 自定义端点（无品牌色）的基色：应用主色的亮一档，和权限盾牌 / 主按钮同一色系 */
+/** Base color for custom endpoints (no brand color): one step lighter than the app primary, the same family as the permission shield / primary button */
 const CUSTOM_ENDPOINT_BASE = '#5b73ff'
 
 interface ProviderMarkProps {
   providerType: string
-  /** 徽章边长（px）；字重与圆角随尺寸微调 */
+  /** Badge edge length (px); font weight and corner radius are tuned with the size */
   size?: number
-  /** 指定品牌色；缺省按 providerType + 当前主题从 providerMeta 取，未收录时落主色阶 */
+  /** Explicit brand color; defaults to providerType + current theme from providerMeta, falling back to the primary scale when unknown */
   color?: string
 }
 

@@ -1,51 +1,55 @@
 /**
- * `run_code`（PTC：programmatic tool calling）执行核心。
+ * `run_code` (PTC: programmatic tool calling) execution core.
  *
- * 模型写一段 **JavaScript**，在 `node:vm` 隔离上下文里运行；代码通过注入的
- * `tools` 对象以 `await tools.read_file({ file_path: '/x' })` 的形式调用**只读工具**，
- * 一次调用就能做循环/过滤/聚合，省掉来回多轮工具调用。
+ * The model writes **JavaScript** that runs in an isolated `node:vm` context; through the injected
+ * `tools` object it calls **read-only tools** as `await tools.read_file({ file_path: '/x' })`, so a
+ * single call can loop/filter/aggregate and skip many back-and-forth tool rounds.
  *
- * 安全边界（重要）：`node:vm` **不是安全边界**（上下文逃逸是已知问题）。因此：
- * - 工具层只在 `danger-full-access` 档放行 `run_code`（与持久终端同一规则）；
- * - 桥接只暴露只读工具（`tools` 里没有写/执行类工具）；
- * - 有同步时限（防死循环）、整体时限、输出/日志上限与工具调用上限。
+ * Security boundary (important): `node:vm` is **not a security boundary** (context escapes are a
+ * known issue). Therefore:
+ * - the tool layer only allows `run_code` in the `danger-full-access` mode (same rule as the
+ *   persistent terminal);
+ * - the bridge exposes read-only tools only (`tools` contains no write/execute tools);
+ * - there is a synchronous time limit (against infinite loops), an overall time limit,
+ *   output/log caps and a tool-call cap.
  *
- * 本模块只依赖 node 内置模块（`vm`），可被离线测试直接驱动。
+ * This module depends only on the built-in `vm` module and can be driven directly by offline
+ * tests.
  */
 import * as vm from 'node:vm'
 
-/** 单次 run_code 的代码长度上限 */
+/** Code length cap for a single run_code */
 export const RUN_CODE_MAX_CHARS = 20_000
-/** 整体执行时限（含异步等待） */
+/** Overall execution time limit (including async waits) */
 export const RUN_CODE_TIMEOUT_MS = 120_000
-/** 同步代码时限（防 `while(true){}` 把主线程卡死） */
+/** Synchronous code time limit (stops `while(true){}` from freezing the main thread) */
 export const RUN_CODE_SYNC_TIMEOUT_MS = 5_000
-/** 返回值序列化后的上限 */
+/** Cap on the serialized return value */
 export const RUN_CODE_RESULT_MAX_CHARS = 50_000
-/** 日志总上限 */
+/** Total log cap */
 export const RUN_CODE_LOG_MAX_CHARS = 20_000
-/** 单次执行的工具调用上限（防止无限循环打爆工具/网络） */
+/** Tool-call cap per execution (stops infinite loops from hammering tools/network) */
 export const RUN_CODE_MAX_TOOL_CALLS = 200
 
-/** 桥接给沙箱的工具：参数对象进，任意值出（工具层负责校验） */
+/** Tools bridged into the sandbox: takes an args object, returns any value (tool layer validates) */
 export type RunCodeBridge = Record<string, (args: Record<string, unknown>) => Promise<unknown> | unknown>
 
 export interface RunCodeOutput {
   ok: boolean
-  /** console.* 收集（已按上限截断） */
+  /** Captured console.* output (already truncated to the cap) */
   logs: string
-  /** 返回值序列化（JSON 优先，已按上限截断） */
+  /** Serialized return value (JSON preferred, already truncated to the cap) */
   result: string
-  /** 失败原因（用户可读；已去掉宿主路径栈） */
+  /** Failure reason (user-readable; host path stack removed) */
   error?: string
-  /** 整体超时（异步一直不结束 / 同步超时） */
+  /** Overall timeout (async never finishes / synchronous timeout) */
   timedOut: boolean
-  /** 代码长度/语法等前置校验失败 */
+  /** Pre-check failure such as empty or too-long code */
   failure?: 'empty' | 'too-long'
   durationMs: number
-  /** 实际发生的工具调用次数 */
+  /** Number of tool calls actually made */
   toolCalls: number
-  /** 返回值是否被截断 */
+  /** Whether the return value was truncated */
   truncated: boolean
 }
 
@@ -59,7 +63,7 @@ export interface ExecuteRunCodeOptions {
   maxToolCalls?: number
 }
 
-/** 把任意值转成可展示文本（处理循环引用/大对象） */
+/** Turn any value into displayable text (handles circular references / big objects) */
 export function serializeValue(value: unknown, maxChars: number): { text: string; truncated: boolean } {
   if (value === undefined) return { text: '', truncated: false }
   let text: string
@@ -77,7 +81,7 @@ export function serializeValue(value: unknown, maxChars: number): { text: string
   return { text: text.slice(0, maxChars), truncated: true }
 }
 
-/** 把 console 参数转成一行文本 */
+/** Turn console arguments into one line of text */
 function formatConsoleArgs(args: unknown[]): string {
   return args
     .map((arg) => {
@@ -91,7 +95,7 @@ function formatConsoleArgs(args: unknown[]): string {
     .join(' ')
 }
 
-/** 提取错误信息（只要 message + 首行栈，不带宿主绝对路径细节） */
+/** Extract error info (message plus the first stack frame, no host absolute-path details) */
 function errorText(error: unknown): string {
   if (error instanceof Error) {
     const firstFrame = (error.stack ?? '').split('\n').find((line) => line.includes('run_code.js'))
@@ -101,10 +105,10 @@ function errorText(error: unknown): string {
 }
 
 /**
- * 执行一段模型写的 JS。
+ * Execute a snippet of model-written JS.
  *
- * 约定：代码体直接写语句，最后用 `return` 返回结果；整个代码体被包成 async IIFE，
- * 因此可以 `await` 工具调用。
+ * Convention: write statements directly in the body and `return` the result at the end; the whole
+ * body is wrapped in an async IIFE so tool calls can be awaited.
  */
 export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<RunCodeOutput> {
   const startedAt = Date.now()
@@ -140,7 +144,7 @@ export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<Ru
     }
   }
 
-  // ── 日志收集（有上限，超出后只记丢弃量） ──────────────────────────
+  // ── Log collection (capped; once exceeded only the drop is recorded) ───────────────
   const logLines: string[] = []
   let logChars = 0
   let logsTruncated = false
@@ -158,7 +162,7 @@ export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<Ru
     logLines.push(line)
   }
 
-  // ── 工具桥（闭合后拒绝再调用；有调用次数上限） ────────────────────
+  // ── Tool bridge (rejects calls after close; tool-call cap) ──────────────────────────
   let closed = false
   let toolCalls = 0
   const bridge: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {}
@@ -182,7 +186,7 @@ export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<Ru
       debug: capture('debug')
     },
     tools: bridge,
-    // 允许有限等待（仍受整体时限约束）
+    // Allow bounded waiting (still subject to the overall time limit)
     setTimeout: (fn: () => void, ms?: number) =>
       setTimeout(fn, Math.max(0, Math.min(Number(ms) || 0, 5_000))),
     clearTimeout
@@ -199,8 +203,8 @@ export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<Ru
     result = await Promise.race([
       pending,
       new Promise<never>((_resolve, reject) => {
-        // 不能 unref：这个定时器是超时判定的唯一依据，unref 后事件循环一空
-        // 进程会带着未结算的 top-level await 直接退出（Node exit 13）
+        // Do not unref: this timer is the only basis for timeout detection; after unref, once the
+        // event loop drains the process exits with an unsettled top-level await (Node exit 13)
         timeoutTimer = setTimeout(() => reject(new Error('run_code: timeout')), timeoutMs)
       })
     ])
@@ -209,7 +213,8 @@ export async function executeRunCode(options: ExecuteRunCodeOptions): Promise<Ru
     if (/timeout|timed out/i.test(message)) timedOut = true
     else errorMessage = message
   } finally {
-    // 结果先到时要清掉超时定时器，否则它会白占一个事件循环句柄（最长 2 分钟）
+    // If the result arrives first, clear the timeout timer or it holds an event-loop handle for
+    // up to 2 minutes
     if (timeoutTimer) clearTimeout(timeoutTimer)
     closed = true
   }

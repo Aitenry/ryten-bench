@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm'
 import { withOrm } from '../../orm'
 import { team_board } from '../../schema'
 
-/** Agent Teams 任务板持久化（每话题一行 JSON 快照；见 schema/harness/team-board.ts） */
+/** Agent Teams task board persistence (one JSON snapshot row per topic; see schema/harness/team-board.ts) */
 
 export type TeamBoardRow = typeof team_board.$inferSelect
 
@@ -10,11 +10,11 @@ export interface TeamBoardSnapshotInput {
   topic_id: number
   revision: number
   counter: number
-  /** JSON：TeamTask[]（含 deleted tombstone） */
+  /** JSON: TeamTask[] (with deleted tombstones) */
   tasks: string
 }
 
-/** 读取话题任务板快照（无则 null） */
+/** Read the topic's task board snapshot (null if absent) */
 export async function getTeamBoard(topicId: number): Promise<TeamBoardRow | null> {
   return withOrm('getTeamBoard', async (db) => {
     const rows = await db.select().from(team_board).where(eq(team_board.topic_id, topicId)).limit(1)
@@ -22,7 +22,7 @@ export async function getTeamBoard(topicId: number): Promise<TeamBoardRow | null
   })
 }
 
-/** 覆盖写话题任务板快照（不存在则插入） */
+/** Overwrite the topic's task board snapshot (insert if absent) */
 export async function upsertTeamBoard(input: TeamBoardSnapshotInput): Promise<void> {
   await withOrm('upsertTeamBoard', async (db) => {
     await db
@@ -40,7 +40,7 @@ export async function upsertTeamBoard(input: TeamBoardSnapshotInput): Promise<vo
   })
 }
 
-/** 删除话题任务板（话题删除时清理；外键级联是主路径） */
+/** Delete the topic's task board (cleanup on topic deletion; the foreign-key cascade is the main path) */
 export async function deleteTeamBoard(topicId: number): Promise<void> {
   await withOrm('deleteTeamBoard', async (db) => {
     await db.delete(team_board).where(eq(team_board.topic_id, topicId))

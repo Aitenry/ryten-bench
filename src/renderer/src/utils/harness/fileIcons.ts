@@ -26,21 +26,22 @@ import {
 import { getLanguageId } from './fileLang'
 
 /**
- * 文件类型图标：资源管理器与页签共用。
+ * File-type icons: shared by the file explorer and tabs.
  *
- * 之前所有文件都是同一个通用文件图标——「看不出这是什么文件」。
- * 这里按语言/用途给图标与**克制的**强调色：图标着色、文件名保持正文色，
- * 不铺一整套彩虹（用户明确不要花哨）。
+ * Previously every file used the same generic file icon, so you couldn't tell what a file was.
+ * Here icons and **restrained** accent colors are assigned by language/purpose: the icon is
+ * tinted and the filename keeps the body color, with no full rainbow (users explicitly asked for
+ * nothing flashy).
  *
- * 找不到匹配的按纯文本图标处理，绝不因为扩展名奇怪就报错。
+ * Anything unmatched falls back to the plain-text icon; an odd extension never throws.
  */
 export interface FileIconSpec {
   Icon: RemixiconComponentType
-  /** 图标色（深浅色各一套，保证在两种底色上都够对比度） */
+  /** Icon color (one each for light and dark, so contrast holds on both backgrounds) */
   color: string
 }
 
-/** 按扩展名/文件名直接指定的特例（优先于语言判定） */
+/** Special cases keyed directly by extension/file name (take priority over language detection) */
 const SPECIAL: Record<string, { icon: FileIconSpec['Icon']; light: string; dark: string }> = {
   'package.json': { icon: RiSettings3Line, light: '#b3452f', dark: '#e08a70' },
   'package-lock.json': { icon: RiSettings3Line, light: '#8a8f96', dark: '#8b9098' },
@@ -54,7 +55,7 @@ const SPECIAL: Record<string, { icon: FileIconSpec['Icon']; light: string; dark:
   readme: { icon: RiFileTextLine, light: '#2f5f8f', dark: '#8ab4d8' }
 }
 
-/** 语言标识 → 图标与颜色 */
+/** Language id → icon and colors */
 const BY_LANGUAGE: Record<string, { icon: FileIconSpec['Icon']; light: string; dark: string }> = {
   javascript: { icon: RiJavascriptFill, light: '#b58900', dark: '#e0c46c' },
   typescript: { icon: RiJavascriptFill, light: '#2f6f9f', dark: '#7fb2e5' },
@@ -85,7 +86,7 @@ const BY_LANGUAGE: Record<string, { icon: FileIconSpec['Icon']; light: string; d
   plaintext: { icon: RiFileTextLine, light: '#8a8f96', dark: '#8b9098' }
 }
 
-/** 图片 / 压缩包 / 文档等按扩展名兜底（不属于任何语言包） */
+/** Extension fallback for images / archives / documents etc. (not part of any language package) */
 const BY_EXT: Record<string, { icon: FileIconSpec['Icon']; light: string; dark: string }> = {
   png: { icon: RiImageLine, light: '#a06a4a', dark: '#e0a884' },
   jpg: { icon: RiImageLine, light: '#a06a4a', dark: '#e0a884' },
@@ -109,7 +110,7 @@ const BY_EXT: Record<string, { icon: FileIconSpec['Icon']; light: string; dark: 
   txt: { icon: RiFileTextLine, light: '#8a8f96', dark: '#8b9098' }
 }
 
-/** 取某路径的图标与颜色 */
+/** Get the icon and color for a path */
 export function getFileIcon(filePath: string, isDarkMode: boolean): FileIconSpec {
   const name = (filePath.split(/[\\/]/).pop() ?? '').toLowerCase()
   const ext = name.includes('.') ? name.split('.').pop()! : ''

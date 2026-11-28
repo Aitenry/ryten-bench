@@ -7,23 +7,24 @@ import { createItem, deleteItem, listItems, updateItem } from './db/mapper'
 import type { MainPluginContext } from './context'
 
 /**
- * ${vars.title} 的主进程通道（前缀 `plugin:${vars.id}:`，否则装载期就抛）。
+ * Main-process channels for ${vars.title} (prefixed with `plugin:${vars.id}:`, otherwise loading
+ * throws).
  *
- * 分工：**数据进数据库**（./db/*，能查询、能被 AI 工具读），**设置进 JSON**
- * （userData/plugin-state/${vars.id}.json——它是配置，不值得为它建表）。
- * 数据一变就推 `plugin:${vars.id}:items-changed`，开着的页面实时刷新。
+ * Split: **data goes into the database** (./db/*, queryable and readable by AI tools), **settings go
+ * into JSON** (userData/plugin-state/${vars.id}.json - it is configuration, not worth a table).
+ * Push `plugin:${vars.id}:items-changed` whenever data changes so open pages refresh live.
  */
 
-/** 主进程 → 渲染层：记录变了（只有发送方，必须在 install 里 registerEvent 声明） */
+/** Main process -> renderer: records changed (send-only; must be declared via registerEvent in install) */
 export const ITEMS_CHANGED = 'plugin:${vars.id}:items-changed'
 
 const SETTINGS_FILE = (): string =>
   path.join(app.getPath('userData'), 'plugin-state', '${vars.id}.json')
 
-const DEFAULT_SETTINGS: ${vars.pascal}Settings = { enabled: true, note: '' }
+const DEFAULT_SETTINGS: ${vars.pascal}Settings = { hideDone: false, note: '' }
 let settings: ${vars.pascal}Settings = { ...DEFAULT_SETTINGS }
 
-/** 读设置（首次运行没有文件 → 默认值） */
+/** Read settings (no file on first run -> defaults) */
 function loadSettings(): void {
   try {
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf-8')) as Partial<${vars.pascal}Settings>
@@ -33,21 +34,21 @@ function loadSettings(): void {
   }
 }
 
-/** 写设置（目录不存在就建：数据放 userData，别写用户的工作区） */
+/** Write settings (create the directory if missing: data belongs in userData, not the user's workspace) */
 function saveSettings(): void {
   const file = SETTINGS_FILE()
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify(settings, null, 2), 'utf-8')
 }
 
-/** 数据变了推给所有窗口（宿主 safe-send：向已失效的渲染帧发送不抛错） */
+/** Push a data change to all windows (host safe-send: sending to a stale renderer frame does not throw) */
 export function broadcastItemsChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     safeSend(win.webContents, ITEMS_CHANGED, { at: Date.now() })
   }
 }
 
-/** 通道表（install 里交给 ctx.registerIpc；停用时随 ctx.dispose 一并摘除） */
+/** Channel table (handed to ctx.registerIpc in install; removed together with ctx.dispose on disable) */
 export function createIpcHandlers(): Record<string, (...args: never[]) => unknown> {
   loadSettings()
   return {
@@ -74,7 +75,7 @@ export function createIpcHandlers(): Record<string, (...args: never[]) => unknow
     'plugin:${vars.id}:settings-set': (patch: Partial<${vars.pascal}Settings>) => {
       settings = {
         ...settings,
-        enabled: typeof patch?.enabled === 'boolean' ? patch.enabled : settings.enabled,
+        hideDone: typeof patch?.hideDone === 'boolean' ? patch.hideDone : settings.hideDone,
         note: typeof patch?.note === 'string' ? patch.note : settings.note
       }
       saveSettings()
@@ -84,12 +85,12 @@ export function createIpcHandlers(): Record<string, (...args: never[]) => unknow
   }
 }
 
-/** 设置文件路径（清数据时用） */
+/** Settings file path (used when clearing data) */
 export function settingsFilePath(): string {
   return SETTINGS_FILE()
 }
 
-/** 装载期间把设置读进来，并保证首次运行就落一份文件（放进 ctx.effect：停用即回滚） */
+/** Load settings during install and make sure a file is written on first run (inside ctx.effect: rolled back on disable) */
 export function initSettings(ctx: MainPluginContext): void {
   ctx.effect(() => {
     loadSettings()

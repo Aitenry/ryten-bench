@@ -1,9 +1,11 @@
 /**
- * 新建 / 编辑定时任务弹窗（侧边栏「定时任务」页）。
+ * Create / edit schedule modal (the "Schedules" page in the sidebar).
  *
- * 目标可以在三种模式（对话 / 工作 / 插件）下任选一条已有会话，或选「新会话」每次触发都开一条；
- * 目标与「当前界面停在哪个模式」无关。提示词下面还能选本轮启用的工具 / 技能 / MCP
- * （不选 = 跟随会话/默认；技能与 MCP 默认不启用）。
+ * The target can be any existing conversation in any of the three modes (chat / work / plugin),
+ * or "new conversation" to open a fresh one on every trigger; the target is unrelated to which
+ * mode the current UI is in. Below the prompt you can also pick the tools / skills / MCP servers
+ * enabled for this run (nothing selected = follow the conversation / defaults; skills and MCP are
+ * disabled by default).
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import {
@@ -52,7 +54,7 @@ interface WorkspaceLite {
 
 interface Props {
   open: boolean
-  /** null = 新建 */
+  /** null = create new */
   task: ScheduleView | null
   onClose: () => void
   onSaved: () => void
@@ -60,7 +62,7 @@ interface Props {
 
 const NEW_SESSION = '__new__'
 
-/** agentConfig → 三个选择控件的值（null 显示为空；保存时空数组回到 null） */
+/** agentConfig → values for the three select controls (null renders empty; [] becomes null on save) */
 function selectionToArrays(selection: AgentSelectionView | null | undefined): {
   tools: string[]
   skills: string[]
@@ -73,7 +75,7 @@ function selectionToArrays(selection: AgentSelectionView | null | undefined): {
   }
 }
 
-/** 选择控件值 → agentConfig（三项都空 = null，表示跟随会话/默认） */
+/** Select control values → agentConfig (all three empty = null, meaning follow the conversation / defaults) */
 function arraysToSelection(
   tools: string[],
   skills: string[],
@@ -92,17 +94,17 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const { message } = App.useApp()
   const { token } = theme.useToken()
 
-  // 规则
+  // Rule
   const [mode, setMode] = useState<Mode>('work')
   const [whenMode, setWhenMode] = useState<'daily' | 'every' | 'once'>('daily')
   const [timeText, setTimeText] = useState('09:00')
   const [minutes, setMinutes] = useState<number>(30)
   const [onceAt, setOnceAt] = useState<Dayjs | null>(dayjs().add(1, 'hour').startOf('minute'))
-  // 目标
+  // Target
   const [topicId, setTopicId] = useState<number | null>(null)
   const [targetWorkspaceId, setTargetWorkspaceId] = useState<number | null>(null)
   const [targetMemoryScope, setTargetMemoryScope] = useState<string | null>(null)
-  // 任务级选择
+  // Task-level selection
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
@@ -111,10 +113,10 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   >([])
   const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([])
   const [mcpOptions, setMcpOptions] = useState<{ label: string; value: string }[]>([])
-  // 标题 / 提示词
+  // Title / prompt
   const [title, setTitle] = useState('')
   const [promptText, setPromptText] = useState('')
-  // 目录
+  // Catalogs
   const [topics, setTopics] = useState<TopicOption[]>([])
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([])
   const [chatRootId, setChatRootId] = useState<number | null>(null)
@@ -125,7 +127,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // 打开时载入目录 + 按任务预填
+  // Load catalogs and prefill from the task when opening
   useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -150,7 +152,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
           name: row.name,
           kind: row.kind ?? 'user'
         }))
-        // 补齐对话根工作区（kind 可能是 chat）与插件工作区（可能不在工作区列表里）
+        // Add missing chat root workspaces (kind may be chat) and plugin workspaces (may be
+        // absent from the workspace list)
         for (const id of chatIds) {
           if (!wsList.some((w) => w.id === id)) {
             wsList.push({ id, name: t('schedulesPage.modeChat'), kind: 'chat' })
@@ -174,7 +177,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
           (tools as { name: string; label?: string; source?: ToolSourceKind }[]).map((tool) => ({
             value: tool.name,
             label: tool.label || tool.name,
-            // 行尾来源标签：系统 / 插件 / MCP
+            // Source tag at the end of the row: system / plugin / MCP
             source: tool.source
           }))
         )
@@ -195,7 +198,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
           }))
         )
 
-        // 话题按工作区拉取（对话模式用 chat 工作区列表）
+        // Fetch topics per workspace (chat mode uses the chat workspace list)
         const targetWorkspaceIds = Array.from(
           new Set(wsList.map((workspace) => workspace.id))
         )
@@ -224,10 +227,11 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         setTopics(flat)
         setCatalogLoading(false)
 
-        // 预填：编辑用任务上的目标，找不到时推断所属模式
+        // Prefill: on edit use the task's target, inferring the owning mode when not found
         const selectionArrays = selectionToArrays(task?.agentConfig)
-        // 旧数据里的 `mcp`（全选标记）迁成「当前所有服务器」的分组值；web_fetch / web_search
-        // 归一到 `web-tools` 分组项（网页抓取与搜索已合并）。
+        // Legacy `mcp` (select-all marker) in old data migrates to the group value for "all
+        // current servers"; web_fetch / web_search normalize to the `web-tools` group entry
+        // (web fetch and search are merged).
         const migratedTools = selectionArrays.tools.flatMap((name) =>
           name === MCP_TOOL_GROUP ? mcpServerValues : [name]
         )
@@ -258,7 +262,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     }
   }, [open, task, t])
 
-  // 新建：每次打开重置表单（编辑由上面的预填负责）
+  // Create: reset the form on every open (edit is prefilled by the effect above)
   useEffect(() => {
     if (!open || task) return
     setMode('work')
@@ -291,7 +295,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     [draftNames, pluginWorkspaces, workspaces]
   )
 
-  // 新建任务：等目录载入后给「新的会话」补一个默认目标工作区
+  // New task: give "new conversation" a default target workspace once the catalogs load
   useEffect(() => {
     if (!open || task || catalogLoading || targetWorkspaceId != null) return
     if (mode === 'chat') setTargetWorkspaceId(chatRootId)
@@ -300,7 +304,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
       setTargetWorkspaceId(first?.workspaceId ?? null)
       setTargetMemoryScope(first ? `plugin:${first.draftId}` : null)
     } else setTargetWorkspaceId(workWorkspaces[0]?.id ?? null)
-    // workWorkspaces / pluginWorkspaces 由目录载入后才有值，这里只需在它们变化时补一次
+    // workWorkspaces / pluginWorkspaces only have values after the catalogs load, so this only
+    // needs to fill in once when they change
   }, [
     catalogLoading,
     chatRootId,
@@ -314,7 +319,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
   const isNewSession = topicId == null
   const selectValue = topicId == null ? NEW_SESSION : String(topicId)
 
-  // 切模式：清掉不属于该模式的选择，新会话默认落到该模式的工作区
+  // Switching mode: clear selections that do not belong to that mode; a new conversation defaults
+  // to a workspace of that mode
   const handleModeChange = (next: Mode): void => {
     setMode(next)
     setTopicId(null)
@@ -337,7 +343,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     }
   }
 
-  // 规则与模式无关：单独按当前规则控件算（避免上面 Mode 变量混淆）
+  // The rule is independent of the mode: compute it from the current rule controls alone (to avoid
+  // confusion with the Mode variable above)
   const currentWhen = useMemo<ScheduleWhenView | null>(() => {
     if (whenMode === 'daily') {
       return /^\d{2}:\d{2}$/.test(timeText) ? { kind: 'daily', time: timeText } : null
@@ -425,7 +432,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     }
   }
 
-  // 编辑预填标题/提示词/规则模式
+  // Prefill title / prompt / rule mode when editing
   useEffect(() => {
     if (!open) return
     if (task) {
@@ -452,7 +459,8 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
     [t, topicsOfMode]
   )
 
-  // 字段纵向排布：每个 label 在控件上方（用户口径：label 与选项上下排列）
+  // Vertical field layout: each label sits above its control (per the user's request: label and
+  // options stacked)
   const fieldStyle: React.CSSProperties = { marginTop: 14 }
   const labelStyle: React.CSSProperties = {
     fontSize: 12,
@@ -481,10 +489,10 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
       cancelText={t('schedulesPage.cancel')}
       onOk={() => void handleSave()}
       destroyOnHidden
-      /* 字段较多：弹窗内容区固定限高（与智能体 / MCP / 模型等表单弹窗同款 560px），
-         只有表单区滚动，标题和按钮栏始终留在屏幕内；矮窗口再用视口高度兜底。
-         右侧 6px 是滑块槽，滑块不压着输入框（与插件设置弹窗同一口径，
-         用户 2026-11-27） */
+      /* Many fields: the modal body has a fixed max height (560px) so only the form area scrolls
+         and the title and button bar always stay on screen; short windows fall back to the
+         viewport height. The 6px on the right is the scrollbar gutter, so the scrollbar does not
+         cover the inputs. */
       styles={{
         body: { maxHeight: 'min(560px, calc(100vh - 220px))', overflowY: 'auto' }
       }}
@@ -494,7 +502,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
         {t('schedulesPage.editorDesc')}
       </div>
 
-      {/* 名称：表单第一项，必填 */}
+      {/* Name: first form field, required */}
       <div style={fieldStyle}>
         <div style={labelStyle}>
           {t('schedulesPage.fieldTitle')}
@@ -650,7 +658,7 @@ const ScheduleEditorModal: React.FC<Props> = ({ open, task, onClose, onSaved }) 
           options={toolOptions}
           placeholder={t('schedulesPage.toolsPlaceholder')}
           optionFilterProp="label"
-          // 名称最右边标「系统 / 插件 / MCP」
+          // Tag "system / plugin / MCP" at the far right of the name
           optionRender={(option) => (
             <div className="ryt-tool-option">
               <span className="ryt-tool-option__label">{option.label}</span>

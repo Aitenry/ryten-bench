@@ -8,9 +8,10 @@ import type { ServiceContext } from './llm-invoke'
 const relationParser = StructuredOutputParser.fromZodSchema(RelationsArraySchema)
 
 /**
- * 增量跨块关系补全（按 chunk 顺序推进）
- * 每次只比较当前 chunk 实体(A组) 与已处理的前序 chunk 实体(B组)之间的关系
- * 上下文窗口可控，同时产生更多批次实现渐进式进度展示
+ * Incremental cross-chunk relation completion, advancing in chunk order.
+ * Each pass compares only the relations between the current chunk's entities (group A) and the
+ * entities of the already processed preceding chunks (group B).
+ * This keeps the context window bounded and yields more batches for progressive progress display.
  */
 export async function extractIncrementalCrossChunkRelations(
   ctx: ServiceContext,

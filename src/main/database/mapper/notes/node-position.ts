@@ -3,10 +3,10 @@ import logger from 'electron-log'
 import { withOrm, type Orm } from '../../orm'
 import { node_positions } from '../../schema'
 
-/** 画布节点坐标行（字段由 schema 推导） */
+/** Canvas node position row (fields inferred from schema) */
 export type NodePosition = typeof node_positions.$inferSelect
 
-/** 单条 upsert（node_id 主键冲突时覆盖 x/y 与 updated_at），时间一律走数据库时钟 */
+/** Upsert a single row (overwrites x/y and updated_at on a node_id primary-key conflict); timestamps always use the database clock */
 async function upsertPosition(
   db: Orm,
   pos: { node_id: string; x: number; y: number }
@@ -20,7 +20,7 @@ async function upsertPosition(
     })
 }
 
-// --- 获取所有节点位置 ---
+// --- Get all node positions ---
 async function getAllNodePositions(): Promise<NodePosition[]> {
   return withOrm('getAllNodePositions', async (db) => {
     const rows = await db.select().from(node_positions)
@@ -29,7 +29,7 @@ async function getAllNodePositions(): Promise<NodePosition[]> {
   })
 }
 
-// --- 保存单个节点位置（upsert） ---
+// --- Save a single node position (upsert) ---
 async function saveNodePosition(nodeId: string, x: number, y: number): Promise<void> {
   await withOrm('saveNodePosition', async (db) => {
     await upsertPosition(db, { node_id: nodeId, x, y })
@@ -37,12 +37,12 @@ async function saveNodePosition(nodeId: string, x: number, y: number): Promise<v
   })
 }
 
-// --- 批量保存节点位置 ---
+// --- Save node positions in bulk ---
 async function saveNodePositions(
   positions: { node_id: string; x: number; y: number }[]
 ): Promise<void> {
   await withOrm('saveNodePositions', async (db) => {
-    // 单事务批量写入（修复：N 条独立 INSERT 无事务,中断即半写）
+    // Bulk write in a single transaction (fix: N independent INSERTs without a transaction left a partial write on interruption)
     await db.transaction(async (tx) => {
       for (const pos of positions) {
         await upsertPosition(tx, pos)
@@ -52,7 +52,7 @@ async function saveNodePositions(
   })
 }
 
-// --- 删除单个节点位置 ---
+// --- Delete a single node position ---
 async function deleteNodePosition(nodeId: string): Promise<boolean> {
   return withOrm('deleteNodePosition', async (db) => {
     const deleted = await db

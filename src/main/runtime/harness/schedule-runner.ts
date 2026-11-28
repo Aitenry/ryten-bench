@@ -1,33 +1,36 @@
 /**
- * 定时任务执行器（主进程定时器 + 可注入的「起一轮」回调）。
+ * Schedule runner (main-process timer plus an injectable "start a turn" callback).
  *
- * 设计取舍：
- * - **执行入口注入**：真正起一轮对话的是 IPC 侧的 `runHarnessTurn`（它需要窗口 sender /
- *   流事件管线），runner 只负责「到点了叫一下」，因此 `drive` 由装配层注入，runner 本身
- *   可以在离线测试里用假 drive 验证调度逻辑；
- * - **单飞**：同一任务不会并发执行；同一话题已有回合在跑时，drive 返回 cancelled，
- *   任务按新时间重新排期（不丢、不堆积）；
- * - **错过即跳过**：应用关着错过多次触发时，不在启动瞬间补跑，下一次从「现在」重新计算
- *   （与 DSH 的 scheduler 行为一致：补跑会瞬间刷屏，且旧提醒往往已无意义）。
+ * Design tradeoffs:
+ * - **Injected execution entry**: what actually starts a turn is `runHarnessTurn` on the IPC side
+ *   (it needs the window sender / stream event pipeline), so the runner only "nudges at the right
+ *   time"; `drive` is injected by the wiring layer and the runner itself can be verified offline
+ *   with a fake drive;
+ * - **Single flight**: the same task never runs concurrently; when the topic already has a turn
+ *   running, drive returns cancelled and the task is rescheduled for its new time (nothing lost,
+ *   no pile-up);
+ * - **Skip what was missed**: when several triggers were missed while the app was closed, nothing
+ *   is caught up at startup; the next run is computed from "now" (catching up would flood the
+ *   screen at once and old reminders are usually meaningless).
  */
 import logger from 'electron-log'
 import { nextRunAfterRun, selectDueTaskIds } from './schedule-core'
 import { scheduleStore, type ScheduleStore } from './schedule-store'
 import type { ScheduledTask } from './schedule-types'
 
-/** 一次触发请求 */
+/** One trigger request */
 export interface ScheduledTurnRequest {
   task: ScheduledTask
-  /** 交给模型作为用户消息的文本（含调度说明） */
+  /** Text handed to the model as the user message (including the schedule note) */
   question: string
 }
 
-/** 起一轮对话；返回 cancelled=true 表示本轮没跑（例如该话题已有回合在跑） */
+/** Start a turn; cancelled=true means it did not run (e.g. the topic already has a turn running) */
 export type ScheduleDriveFn = (
   request: ScheduledTurnRequest
 ) => Promise<{ cancelled?: boolean } | void>
 
-/** 默认的投递文案（英文；装配层可注入本地化版本） */
+/** Default delivery text (English; the wiring layer can inject a localized version) */
 export function defaultScheduleQuestion(task: ScheduledTask): string {
   return [
     `[Scheduled task: ${task.title}]`,
@@ -39,11 +42,11 @@ export function defaultScheduleQuestion(task: ScheduledTask): string {
 
 export interface ScheduleRunnerOptions {
   store: ScheduleStore
-  /** 覆盖投递文案（本地化用） */
+  /** Override the delivery text (for localization) */
   buildQuestion?: (task: ScheduledTask) => string
 }
 
-/** 一次 tick 最多执行的任务数（避免启动瞬间连开多轮） */
+/** Max tasks executed per tick (avoids starting several rounds at once on startup) */
 const MAX_TASKS_PER_TICK = 3
 
 export class ScheduleRunner {
@@ -51,7 +54,7 @@ export class ScheduleRunner {
   private buildQuestion: (task: ScheduledTask) => string
   private drive: ScheduleDriveFn | null = null
   private timer: NodeJS.Timeout | null = null
-  /** 正在执行的任务 id（单飞） */
+  /** Ids of tasks currently executing (single flight) */
   private readonly running = new Set<string>()
 
   constructor(options: ScheduleRunnerOptions) {
@@ -59,31 +62,32 @@ export class ScheduleRunner {
     this.buildQuestion = options.buildQuestion ?? defaultScheduleQuestion
   }
 
-  /** 注入/撤销「起一轮」的实现（IPC 装配时注入；停用时撤销） */
+  /** Inject/revoke the "start a turn" implementation (injected by IPC wiring; revoked on teardown) */
   configureDrive(drive?: ScheduleDriveFn): void {
     this.drive = drive ?? null
   }
 
-  /** 注入投递文案构造器（装配时传本地化版本；不传则用默认英文） */
+  /** Inject the delivery text builder (localized version at wiring time; defaults to English) */
   configureQuestionBuilder(builder?: (task: ScheduledTask) => string): void {
     this.buildQuestion = builder ?? defaultScheduleQuestion
   }
 
-  /** 启动周期检查（默认 20 秒；重复调用幂等） */
+  /** Start the periodic check (20s by default; idempotent) */
   start(intervalMs = 20_000): void {
     if (this.timer) return
     this.timer = setInterval(() => {
-      // tick 自身按任务隔离失败，这里只兜底「读任务列表/调度计算」级别的异常：
-      // 必须留日志，否则定时任务整体停摆时用户在设置页和日志里都看不到原因。
+      // tick isolates failures per task, so this only catches "list tasks / compute schedule"
+      // level errors: log them, otherwise a fully stalled scheduler leaves the user with no clue
+      // in the settings page or the logs.
       void this.tick().catch((err) => {
         logger.error('[Schedule] Tick failed:', err)
       })
     }, intervalMs)
-    // 定时器不单独维持进程存活（应用退出时不能被它拖住）
+    // The timer must not keep the process alive by itself (it must not hold up app exit)
     this.timer.unref?.()
   }
 
-  /** 停止周期检查（装配卸载时调用） */
+  /** Stop the periodic check (called on teardown) */
   stop(): void {
     if (!this.timer) return
     clearInterval(this.timer)
@@ -91,9 +95,10 @@ export class ScheduleRunner {
   }
 
   /**
-   * 检查并执行到期任务，返回本轮实际执行的任务数。
+   * Check and execute due tasks; returns how many were actually executed this round.
    *
-   * 可重复调用（手动触发 / 测试）；执行失败只影响该任务，记 failed 并照常排下一次。
+   * Safe to call repeatedly (manual trigger / tests); a failure only affects that task, which is
+   * recorded as failed while the next run is still scheduled.
    */
   async tick(now = new Date()): Promise<number> {
     const drive = this.drive
@@ -122,7 +127,8 @@ export class ScheduleRunner {
         this.running.delete(task.id)
       }
 
-      // 下一次触发：一次性任务执行完即停用；其余从「现在」重新计算（错过的不补跑）
+      // Next trigger: a one-off task is disabled after running; others recompute from "now"
+      // (missed triggers are not caught up)
       const nextRunAt = nextRunAfterRun(task.when, now)
       try {
         await this.store.markRun(task.id, {
@@ -132,7 +138,8 @@ export class ScheduleRunner {
           enabled: status === 'cancelled' ? true : nextRunAt !== null
         })
       } catch (err) {
-        // 记录失败不影响本轮已执行的对话，但排期没更新会让任务重复触发/不再触发，必须留痕
+        // A recording failure does not undo the turn just executed, but a stale schedule would
+        // re-trigger or stop triggering, so it must be logged
         logger.warn(`[Schedule] Failed to record run for task #${task.id}:`, err)
       }
       executed += 1
@@ -141,5 +148,5 @@ export class ScheduleRunner {
   }
 }
 
-/** 进程级单例：系统装配时 start/stop，IPC 层注入 drive 与本地化文案 */
+/** Process-level singleton: started/stopped by system wiring; IPC injects drive and localized texts */
 export const scheduleRunner = new ScheduleRunner({ store: scheduleStore })

@@ -4,49 +4,66 @@ import { RiArrowDownWideLine, RiArrowUpWideLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 
 /**
- * 折叠内容框：**固定高度（超出内滚）+ 可选的展开全部 + 可打断的贴底跟随**。
+ * Folded content box: **fixed height (scrolls internally when overflowing) + optional expand-all
+ * + interruptible stick-to-bottom following**.
  *
- * 用户 2026-09-19 要求（原话）：「默认固定高度，可以展开全部。在流式的时候可以滚动到底部流式加载，
- * 可以打断滚动底部，当在底部时，可以继续加载。需要确保固定的高度不能遮挡思考内容。」
- * 随后补充：「这个（折叠段的内容）也要这样」——所以这不是思考专属：思考过程、
- * 任务段、工具输出、子代理输出都走同一个框，行为完全一致。
- * （前期探索段 2026-09-25 起不再折叠，也就不再用这个框：只有任务段折叠。）
+ * The user requirement of 2026-09-19 (verbatim): "Default to a fixed height with the option to
+ * expand everything. While streaming it should scroll to the bottom to stream-load, and the
+ * scroll-to-bottom can be interrupted; when at the bottom, loading can continue. Make sure the
+ * fixed height does not cover the thinking content." A follow-up added: "This (the content of the
+ * folded segment) should work the same way" — so this is not thinking-specific: thinking process,
+ * task segments, tool output and subagent output all use the same box with identical behavior.
+ * (Since 2026-09-25 the early exploration segment is no longer folded, so it no longer uses this
+ * box: only task segments fold.)
  *
- * 「展开全部」现在**按用途显式开关**（用户 2026-09-23：「思考内容不需要，下方的展开全部内容，
- * 就是不需要这个按钮了」）：思考框（`thinking` / `thinking-nested`，以及已有各自展开入口的工具、
- * 子代理输出）传 `expandable={false}`，框下不摆任何按钮，长内容就在固定高度里内滚；只有任务段
- * 内容仍默认带这个控件。开关一律写在调用点：一个框要不要按钮是它的语义，不靠外面记。
+ * "Expand all" is now an **explicit per-use switch** (user 2026-09-23: "Thinking content doesn't
+ * need it; the expand-all below the content — that button isn't needed"): thinking boxes
+ * (`thinking` / `thinking-nested`, plus tools and subagent output that already have their own
+ * expand entry points) pass `expandable={false}`, so no button is rendered below the box and long
+ * content just scrolls inside the fixed height; only task segment content still carries this
+ * control by default. The switch always lives at the call site: whether a box needs a button is
+ * part of its semantics, not something tracked from outside.
  *
- * 改造前是两处各自为政的实现，正是那几句话指向的毛病：
- *  - 内容框写死 `max-h-64 overflow-y-auto`，长内容只能在 256px 的窗口里来回滚，没有「一次看全」；
- *  - 贴底跟随是 AssistantMessage 里一个**无差别**的 effect：流式中每来一个 chunk 就把所有滚动容器
- *    `scrollTop = scrollHeight`。它不判断用户是不是正在往上读——刚想回看前几行就被拽回底部
- *    （＝用户说的「可以打断」要去掉的行为）；也不判断是否已经在底部，纯靠无脑赋值。
+ * Before this change there were two separate implementations, exactly the problems those
+ * statements point at:
+ *  - the content box hard-coded `max-h-64 overflow-y-auto`, so long content could only be scrolled
+ *    back and forth within a 256px window — no "see it all at once";
+ *  - stick-to-bottom was an **indiscriminate** effect inside AssistantMessage: on every streaming
+ *    chunk it set `scrollTop = scrollHeight` on all scroll containers. It did not check whether
+ *    the user was reading upwards — someone who just wanted to look back a few lines was yanked
+ *    to the bottom (the behavior the user's "can be interrupted" removes); nor did it check
+ *    whether the container was already at the bottom, it just assigned blindly.
  *
- * 三条要求逐一落实：
- *  1. 固定高度：默认 `maxHeight` 封顶、超出内滚（流式时消息高度不再随内容一路长高）；点展开图标
- *     放开上限，看全文；再点收起图标回到固定高度并钉回最新一行；
- *  2. 贴底跟随：**只在流式时**、且用户**在底部**时才跟（每个 chunk 跟一次）；上滑即打断，滚回底部
- *     自动恢复——不是「关掉了跟随」，而是「以用户的位置为准」；
- *  3. 不遮挡：框里只有内容本身，展开/收起控件放在框**外面**（下方右对齐），任何控件都不压文字。
+ * The three requirements, one by one:
+ *  1. Fixed height: capped by `maxHeight` by default, scrolling internally when overflowing
+ *     (while streaming the message no longer grows with content); clicking the expand icon lifts
+ *     the cap to show the whole text; clicking collapse again returns to the fixed height and
+ *     pins to the latest line;
+ *  2. Stick-to-bottom: follows only **while streaming** and only when the user **is at the
+ *     bottom** (once per chunk); scrolling up interrupts it, and scrolling back to the bottom
+ *     resumes it automatically — not "following is turned off" but "the user's position wins";
+ *  3. No occlusion: the box contains only the content itself; the expand/collapse control sits
+ *     **outside** the box (below, right-aligned), so no control ever covers the text.
  */
 
-/** 判定「在底部」的容差（px）：与聊天区的 STICK_THRESHOLD 同量级 */
+/** Tolerance for "at the bottom" (px): same order as the chat area's STICK_THRESHOLD */
 const NEAR_BOTTOM = 12
 
-/** 展开/收起图标尺寸（px）：与消息区其它小图标同档 */
+/** Expand/collapse icon size (px): matches the other small icons in the message area */
 const TOGGLE_ICON_SIZE = 16
 
 /**
- * 「展开全部 / 收起」的图标（用户 2026-09-19 指定）：
- * **折起 = ri-arrow-down-wide-line，展开 = ri-arrow-up-wide-line，且必须居中**。
- * 用固定尺寸的 flex 盒包住字形，横向纵向都居中（行内 svg 会落在文字基线上、看着偏上）。
+ * "Expand all / collapse" icon (specified by the user on 2026-09-19):
+ * **folded = ri-arrow-down-wide-line, expanded = ri-arrow-up-wide-line, and it must be centered**.
+ * A fixed-size flex box wraps the glyph and centers it both horizontally and vertically (an inline
+ * svg rests on the text baseline and looks shifted upward).
  */
 const FoldToggleIcon: React.FC<{ expanded: boolean }> = ({ expanded }) => (
   <span
     data-fold-toggle-icon={expanded ? 'up' : 'down'}
-    // 居中用内联样式而不是工具类：这是控件自身的几何，不该依赖 Tailwind 是否在场
-    // （jsdom 里没有 Tailwind，用 class 的话计算样式是 inline，测不出来也说不准）
+    // Center with inline styles rather than utility classes: this is the control's own geometry
+    // and should not depend on whether Tailwind is present
+    // (jsdom has no Tailwind, so class-based computed styles are inline and cannot be tested reliably)
     style={{
       display: 'flex',
       alignItems: 'center',
@@ -66,32 +83,34 @@ const FoldToggleIcon: React.FC<{ expanded: boolean }> = ({ expanded }) => (
 
 interface FoldBodyProps {
   children: React.ReactNode
-  /** 固定高度上限（px）：思考 256、子智能体内层 192、段内容 320 */
+  /** Fixed height cap (px): 256 for thinking, 192 for nested subagent content, 320 for segment content */
   maxHeight?: number
   /**
-   * 是否提供「展开全部 / 收起」（默认提供）。
+   * Whether to offer "expand all / collapse" (offered by default).
    *
-   * **思考框必须传 false**（用户 2026-09-23：「思考内容不需要，下方的展开全部内容，就是不需要
-   * 这个按钮了」）；工具/子代理输出早已是 false（它们各有自己的展开入口）；只有任务段内容走默认。
+   * **Thinking boxes must pass false** (user 2026-09-23: "Thinking content doesn't need it; the
+   * expand-all below the content — that button isn't needed"); tool/subagent output already
+   * passes false (they have their own expand entries); only task segment content uses the default.
    */
   expandable?: boolean
-  /** 是否正在流式：false（历史消息）时完全不接管滚动，打开就从第一行读起 */
+  /** Whether streaming: when false (historical messages) scrolling is not managed at all, and the box opens at the first line */
   streaming?: boolean
-  /** 贴底跟随的触发信号：流式时传 `message.lastChunkAt`（每个 chunk 变一次） */
+  /** Trigger signal for stick-to-bottom: pass `message.lastChunkAt` while streaming (changes once per chunk) */
   followSignal?: number
-  /** 额外类名（各处内边距/字号不同：px-1.5、ml-2 pl-2、text-sm/text-xs…） */
+  /** Extra class names (padding/font size differ per call site: px-1.5, ml-2 pl-2, text-sm/text-xs…) */
   className?: string
-  /** 左侧强调线颜色：思考块用它区分「思考 / 正文」；段内容与工具输出不传 */
+  /** Left accent border color: the thinking block uses it to distinguish "thinking / body"; segment content and tool output do not pass it */
   borderColor?: string
   /**
-   * 用途标记（落在 `data-fold-body` 上）：同一条消息里会同时存在多个内容框
-   * （段内容 + 思考 + 工具 + 子代理），回归工装需要稳定锚点区分它们。
+   * Usage marker (written to `data-fold-body`): several content boxes coexist in one message
+   * (segment content + thinking + tool + subagent), and regression fixtures need stable anchors
+   * to tell them apart.
    */
   kind?:
     | 'thinking'
     | 'thinking-nested'
     | 'segment'
-    /** 同名工具组的组内容（连读十次文件也只在固定高度里滚） */
+    /** Content of a same-name tool run (reading the same file ten times still scrolls inside the fixed height) */
     | 'tool-run'
     | 'tool'
     | 'tool-nested'
@@ -112,18 +131,19 @@ const FoldBody: React.FC<FoldBodyProps> = ({
   const { t } = useTranslation()
   const { token } = theme.useToken()
   const boxRef = useRef<HTMLDivElement>(null)
-  /** 是否跟随底部：用户上滑即置 false，滚回底部自动置回 true */
+  /** Whether to follow the bottom: set false when the user scrolls up, back to true when scrolled to the bottom */
   const stickRef = useRef(true)
   const [expanded, setExpanded] = useState(false)
-  /** 内容是否超过固定高度：只有真能展开时才摆控件，不摆没用的控件 */
+  /** Whether content exceeds the fixed height: only render the control when it can actually expand; no useless controls */
   const [overflow, setOverflow] = useState(false)
 
   /**
-   * 量一次框高并（贴底时）跟上最新一行。
+   * Measure the box height once and (when sticking) follow the latest line.
    *
-   * 触发点是「来了新 chunk」与「展开态/上限变化」，**不是每次渲染**：一条上百块的消息里每个框都
-   * 逐渲染读 `scrollHeight` 会强制同步布局，是此前明确修过的卡顿来源。流式期间 `followSignal`
-   * 与内容同频，足够。
+   * Triggers are "a new chunk arrived" and "expanded state / cap changed", **not every render**:
+   * in a message with hundreds of chunks, reading `scrollHeight` on every render forces a
+   * synchronous layout, a documented source of jank that was fixed earlier. While streaming,
+   * `followSignal` fires in step with the content, which is enough.
    */
   useLayoutEffect(() => {
     const el = boxRef.current
@@ -133,14 +153,14 @@ const FoldBody: React.FC<FoldBodyProps> = ({
     if (streaming && stickRef.current) el.scrollTop = el.scrollHeight
   }, [followSignal, expanded, maxHeight, streaming])
 
-  /** 用户滚动：到底部恢复跟随、上滑打断（回到底部会再次自动恢复，不需要额外开关） */
+  /** User scroll: resume following at the bottom, interrupt when scrolling up (returning to the bottom resumes automatically; no extra switch needed) */
   const handleScroll = useCallback(() => {
     const el = boxRef.current
     if (!el) return
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM
   }, [])
 
-  /** 收起回固定高度时钉到最新一行：展开着读完前面再收起，不该只看到开头 */
+  /** When collapsing back to the fixed height, pin to the latest line: after reading the beginning while expanded, collapsing should not leave the user at the start */
   const handleToggle = useCallback(() => {
     setExpanded((prev) => {
       if (prev) {
@@ -167,12 +187,15 @@ const FoldBody: React.FC<FoldBodyProps> = ({
       >
         {children}
       </div>
-      {/* 控件在框外：固定高度只滚内容，展开/收起的按钮绝不压住内容。
-          按钮内容就是图标本身（用户 2026-09-19：「展开全部这个内容要换图标」），
-          文字标签退到 title/aria-label 里，可访问性不受影响。
-          **水平垂直都居中**（用户 2026-09-19 第二轮：「没有水平垂直居中」）：
-          外行、按钮、图标三层各自居中，且都用内联样式——这是控件自身的几何，
-          不该依赖 Tailwind 是否在场（jsdom 里没有 Tailwind，用 class 测不出也说不准）。 */}
+      {/* The control sits outside the box: the fixed height only scrolls the content, so the
+          expand/collapse button never covers it. The button content is the icon itself (user
+          2026-09-19: "The expand-all content should switch to an icon"), and the text label moves
+          to title/aria-label so accessibility is unaffected.
+          **Centered both horizontally and vertically** (user 2026-09-19, second round: "it isn't
+          centered horizontally and vertically"): the outer row, the button and the icon are each
+          centered, all with inline styles — this is the control's own geometry and should not
+          depend on whether Tailwind is present (jsdom has no Tailwind, so class-based styles
+          cannot be tested reliably). */}
       {expandable && (overflow || expanded) ? (
         <div
           data-fold-toggle

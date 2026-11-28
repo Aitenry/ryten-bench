@@ -1,11 +1,14 @@
 /**
- * `propose_action`：在回答下方渲染可点选的动作卡，用户点选即作为下一条消息回传。
+ * `propose_action`: renders clickable action cards under the reply; clicking one sends it back as
+ * the next user message.
  *
- * 对照 DSH 的 `propose_action`。工具本身无副作用：它只把动作清单回给渲染层（随工具入参
- * 落库），并给模型一段「已展示、等用户点选」的确认文本，避免模型自行继续执行或重复追问。
+ * The tool itself has no side effects: it only returns the action list to the renderer (persisted
+ * with the tool input) and gives the model a "already displayed, waiting for the user to click"
+ * confirmation text, so the model neither continues on its own nor asks again.
  *
- * 渲染侧的点击通过 `harness-propose-action` 窗口事件交给会话发送逻辑
- * （见 `useHarnessHandlers`），与手动发送走同一条路径（含生成中入队）。
+ * Renderer-side clicks are handed to the session send logic through the `harness-propose-action`
+ * window event (see `useHarnessHandlers`) and take the same path as a manual send (including
+ * queueing while generating).
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -20,7 +23,7 @@ import {
   normalizeProposedActions
 } from './propose-action-core'
 
-/** 构造 propose_action 工具 */
+/** Build the propose_action tool */
 export function buildProposeActionTool(): StructuredToolInterface {
   return tool(
     async ({ question, actions }) => {

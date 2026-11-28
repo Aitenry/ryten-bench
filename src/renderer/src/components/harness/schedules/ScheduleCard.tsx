@@ -1,9 +1,10 @@
 /**
- * 定时任务卡片（侧边栏「定时任务」页）。
+ * Schedule card (the "Schedules" page in the sidebar).
  *
- * 版式对齐设计稿：标题 + 状态 pill，**所有操作图标收在右上角 `⋯` 之前**
- * （暂停/恢复、编辑、删除依次排列），底部不放操作；正文依次是规则与下次触发、
- * 会话 tag 与上次执行、提示词摘要（2 行截断）。
+ * Layout matches the design: title + status pill, **all action icons grouped before the `⋯` in
+ * the top-right corner** (pause/resume, edit, delete in that order), no actions at the bottom;
+ * the body then shows the rule and next trigger, the conversation tag and last run, and a prompt
+ * excerpt (clamped to 2 lines).
  */
 import React from 'react'
 import { Button, Dropdown, Tooltip, theme } from 'antd'

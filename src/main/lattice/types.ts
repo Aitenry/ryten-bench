@@ -1,18 +1,21 @@
 /**
- * Lattice 插件中心（平台用户面 `/v1/hub`）在 main / preload / renderer 之间的共享类型。
+ * Shared types for the Lattice plugin hub (platform user-facing `/v1/hub`) between main / preload /
+ * renderer.
  *
- * 边界：本文件被三端 import，因此**不得**引入 electron / node / React 依赖——
- * preload 与渲染层都要能直接打包。契约见 `.dev/ryten-lattice-contract.md` 第 2、3 节；
- * 平台权威契约见 `lattice/platform/docs/Lattice-平台接口文档.md` §12。
+ * Boundary: this file is imported by all three sides, so it must **not** pull in electron / node /
+ * React dependencies — both the preload and the renderer layer must bundle it directly.
  */
 
 /**
- * 登录用户（`/v1/auth/login`、`/v1/auth/refresh` 的 `user` 与 `/v1/me` 归一后的形状）。
+ * Signed-in user (the normalized shape of `user` from `/v1/auth/login`, `/v1/auth/refresh` and
+ * `/v1/me`).
  *
- * `avatar` 是平台 v0.8 起的个人头像（`users.avatar`）：`null` = 无头像（界面回退用户名
- * 首字母），非空 = `https://` URL 或 `data:image/(png|jpeg|webp|gif);base64,...`。
- * 字段整体可缺省：**旧平台**（avatar 上线前的节点）不返回它，旧主进程也会把它省略，
- * 渲染层一律按 `null` 处理（不报错、不显示破图）。
+ * `avatar` is the personal avatar introduced in platform v0.8 (`users.avatar`): `null` = no avatar
+ * (the UI falls back to the first letter of the username), non-empty = an `https://` URL or
+ * `data:image/(png|jpeg|webp|gif);base64,...`.
+ * The field as a whole may be absent: **older platforms** (nodes from before avatars) do not return
+ * it, and older main processes omit it too; the renderer always treats it as `null` (no error, no
+ * broken image).
  */
 export interface LatticeUser {
   id: string
@@ -22,11 +25,15 @@ export interface LatticeUser {
 }
 
 /**
- * 归一化平台 / 会话文件里的 `avatar` 原始值，区分「明确没有头像」和「旧版没有这个字段」：
- * - 非空字符串 → 去掉首尾空白后原样返回（形态校验交给渲染层，坏值按首字母回退）；
- * - 空串 / `null` → `null`（平台明确表示无头像，或用户清空头像）；
- * - 其它（字段缺失 / 非法类型）→ `undefined`（旧平台 / 旧主进程没有该字段，
- *   身份校正时保留已有缓存值，不要把头像误清空）。
+ * Normalizes the raw `avatar` value from the platform / session file, distinguishing "explicitly no
+ * avatar" from "the old version has no such field":
+ * - non-empty string → returned as-is after trimming (shape validation is left to the renderer;
+ *   a bad value falls back to the initial letter);
+ * - empty string / `null` → `null` (the platform explicitly says there is no avatar, or the user
+ *   cleared it);
+ * - anything else (missing field / invalid type) → `undefined` (old platforms / old main processes
+ *   lack the field; identity correction keeps the existing cached value instead of clearing the
+ *   avatar by mistake).
  */
 export function normalizeLatticeAvatar(raw: unknown): string | null | undefined {
   if (typeof raw === 'string') {
@@ -37,46 +44,47 @@ export function normalizeLatticeAvatar(raw: unknown): string | null | undefined 
   return undefined
 }
 
-/** 最近一次同步的摘要（设置卡 / 状态条展示） */
+/** Summary of the most recent sync (shown in the settings card / status bar) */
 export interface LatticeSyncSummary {
   at?: number
   pushed?: number
   pulled?: number
-  /** 推送/拉取的业务数据条数（同步状态条展示） */
+  /** Number of business data rows pushed/pulled (shown in the sync status bar) */
   pushedRows?: number
   pulledRows?: number
   conflicts?: number
-  /** 最近一次同步自动补齐（换机/重装后重新安装缺失插件）成功的数量 */
+  /** Number of plugins successfully auto-restored by the most recent sync (reinstalling missing plugins after a machine change/reinstall) */
   autoInstalled?: number
-  /** 最近一次同步自动补齐失败的数量（失败原因在同步详情里，不静默） */
+  /** Number of plugins the most recent sync failed to auto-restore (reasons live in sync details, never silent) */
   autoInstallFailed?: number
-  /** 最近一次同步发现的「平台已删除」安装记录数量（本地数据保留，标记 orphaned） */
+  /** Number of "deleted from the platform" install records found by the most recent sync (local data kept, marked orphaned) */
   orphaned?: number
   error?: string
 }
 
-/** 插件中心当前状态（`lattice:status` 的返回，也是 `lattice:state-changed` 的载荷） */
+/** Current plugin hub status (return of `lattice:status`, also the payload of `lattice:state-changed`) */
 export interface LatticeStatus {
-  /** 是否已配置基址：默认指向 dev 节点，因此为 true */
+  /** Whether a base URL is configured: it defaults to the dev node, so this is true */
   configured: boolean
   baseUrl: string
   loggedIn: boolean
   user?: LatticeUser
   role?: string
-  /** access token 过期时间（毫秒时间戳；仅内存态，重启后由 refresh 重新取） */
+  /** access token expiry (millisecond timestamp; in-memory only — refreshed again after restart) */
   expiresAt?: number
   lastError?: string
   sync?: LatticeSyncSummary
   /**
-   * 「缺失插件自动补齐」开关当前值（默认 **开启**）。
+   * Current value of the "auto-restore missing plugins" switch (default **on**).
    *
-   * 开启时每次 pull 会把「平台有安装记录、本机没有插件包」的插件自动重新安装
-   * （换机/重装/用户手动删目录后的恢复）；关闭时只在同步结果的 `pending` 里列出。
+   * When on, every pull automatically reinstalls plugins that "have a platform install record but
+   * no local package" (recovery after a machine change/reinstall/user deleting the directory); when
+   * off, they are only listed in the sync result's `pending`.
    */
   autoInstallMissing?: boolean
 }
 
-/** 目录页的一条插件（平台字段原样 + 调用者视角的安装态） */
+/** One plugin in the catalog page (platform fields as-is + install state from the caller's perspective) */
 export interface HubEntry {
   plugin_id: string
   name: string
@@ -94,11 +102,11 @@ export interface HubEntry {
   installed_version?: string
   update_available: boolean
   install_enabled?: boolean
-  /** 最新版本是否带源码包（v2 §1.5；旧平台不返回时按 false 处理） */
+  /** Whether the latest version ships a source package (old platforms that do not return it count as false) */
   has_source?: boolean
 }
 
-/** 详情页里的一个发布版本 */
+/** One published version in the detail page */
 export interface HubVersion {
   version: string
   asset_name: string
@@ -108,14 +116,14 @@ export interface HubVersion {
   manifest: unknown
   downloads: number
   published_at?: string
-  /** 该版本是否带源码包（v2 §1.5） */
+  /** Whether this version ships a source package */
   has_source?: boolean
   source_asset_name?: string
   source_size?: number
   source_sha256?: string
 }
 
-/** 详情（目录字段 + readme + 版本清单 + 调用者的安装记录） */
+/** Detail (catalog fields + readme + version list + the caller's install record) */
 export interface HubDetail extends HubEntry {
   readme: string
   versions: HubVersion[]
@@ -127,7 +135,7 @@ export interface HubDetail extends HubEntry {
   } | null
 }
 
-/** 目录分页结果 */
+/** Catalog pagination result */
 export interface HubListResult {
   items: HubEntry[]
   total: number
@@ -135,7 +143,7 @@ export interface HubListResult {
   page_size: number
 }
 
-/** 目录查询参数（渲染层用驼峰，IPC 层转平台下划线） */
+/** Catalog query parameters (camelCase for the renderer; the IPC layer converts to platform snake_case) */
 export interface LatticeListQuery {
   q?: string
   category?: string
@@ -144,7 +152,7 @@ export interface LatticeListQuery {
   pageSize?: number
 }
 
-/** 本机已安装插件视图（`lattice:hub-installs` 返回的一项） */
+/** Locally installed plugin view (one item returned by `lattice:hub-installs`) */
 export interface LatticeInstallSummary {
   plugin_id: string
   version?: string
@@ -153,104 +161,108 @@ export interface LatticeInstallSummary {
   updated_at?: string
 }
 
-/** 同步方向 */
+/** Sync direction */
 export type LatticeSyncDirection = 'push' | 'pull' | 'both'
 
-/** `lattice:sync` 的入参：`{direction?, installMissing?}`；也接受裸字符串（兼容旧渲染层） */
+/** Input of `lattice:sync`: `{direction?, installMissing?}`; a bare string is also accepted (old renderer compatibility) */
 export interface LatticeSyncOptions {
   direction?: LatticeSyncDirection
   /**
-   * pull 时是否自动补齐「平台有安装记录、本机没有插件包」的插件。
+   * Whether pull should auto-restore plugins that "have a platform install record but no local
+   * package".
    *
-   * 省略 = 使用持久化设置项（`lattice-settings.json` 的 `autoInstallMissing`，默认 **开启**）；
-   * 显式传 `false` 用于「只看待安装列表、不自动安装」。自动补齐失败会进 `autoInstall.failed`，
-   * 不会中断其它插件，也不会把同步整体判失败。
+   * Omitted = use the persisted setting (`autoInstallMissing` in `lattice-settings.json`, default
+   * **on**); an explicit `false` means "only show the pending list, do not auto-install".
+   * Auto-restore failures go into `autoInstall.failed`, do not interrupt other plugins, and do not
+   * fail the whole sync.
    */
   installMissing?: boolean
   /**
-   * 后台自动 pull：没有数据变化时界面不弹「同步完成」提示（状态条仍更新）。
-   * 用户手动同步不要传。
+   * Background automatic pull: when nothing changed, the UI shows no "sync complete" toast (the
+   * status bar still updates). Do not pass this for user-triggered syncs.
    */
   silent?: boolean
 }
 
 export type LatticeSyncInput = LatticeSyncOptions | LatticeSyncDirection
 
-/** 自动补齐成功的一个插件 */
+/** One plugin successfully auto-restored */
 export interface LatticeSyncAutoInstallItem {
   plugin_id: string
   version?: string
-  /** 安装时一并恢复的源码目录（该版本无源码包 / 源码下载失败时缺省） */
+  /** Source directory restored alongside the install (absent when the version has no source package / source download failed) */
   sourcePath?: string
-  /** 源码下载失败的可读原因（安装本身成功） */
+  /** Readable reason the source download failed (the install itself succeeded) */
   sourceError?: string
 }
 
-/** 自动补齐失败的一个插件（换机恢复时版本已被平台删除 / 网络失败等，逐个可见） */
+/** One plugin that failed to auto-restore (version removed from the platform during machine-change recovery / network failure, etc.; each is visible) */
 export interface LatticeSyncAutoInstallFailure {
   plugin_id: string
-  /** 尝试恢复的版本（= 平台安装记录里的版本；缺省表示 latest） */
+  /** Version attempted for the restore (= the version in the platform install record; absent means latest) */
   version?: string
   error: string
 }
 
-/** 一次 pull 里自动补齐的结果汇总（同步详情的「自动补齐」区块） */
+/** Summary of auto-restore in one pull (the "auto-restore" section of sync details) */
 export interface LatticeSyncAutoInstallResult {
-  /** 本次尝试自动安装的插件数（= installed.length + failed.length） */
+  /** Number of plugins this run attempted to auto-install (= installed.length + failed.length) */
   attempted: number
   installed: LatticeSyncAutoInstallItem[]
   failed: LatticeSyncAutoInstallFailure[]
 }
 
-/** 安装记录在平台已不存在的原因：整个插件被删除 / 仅某接口 404（平台版本差异） */
+/** Why an install record no longer exists on the platform: the whole plugin was deleted / only one API returned 404 (platform version difference) */
 export type LatticeSyncOrphanReason = 'plugin_deleted' | 'not_found'
 
 /**
- * 一条「孤儿」安装记录：平台已删除该插件（push 410/404 或 pull 列表里 plugin=null）。
+ * One "orphaned" install record: the plugin was deleted from the platform (push 410/404 or
+ * plugin=null in the pull list).
  *
- * 处理口径：**保留本地插件目录与 plugin-state 数据**（不自动删除用户数据），只做标记，
- * 并在同步详情里可见；插件重新出现在平台上或 push 成功后标记自动消除。
+ * Handling: **keep the local plugin directory and plugin-state data** (never auto-delete user
+ * data), only add a marker, and make it visible in sync details; the marker clears automatically
+ * once the plugin reappears on the platform or the push succeeds.
  */
 export interface LatticeSyncOrphanedItem {
   plugin_id: string
   version?: string
   reason: LatticeSyncOrphanReason
-  /** 首次标记时间（毫秒时间戳） */
+  /** First marking time (millisecond timestamp) */
   at: number
-  /** 平台/客户端给的可读原因（排障用） */
+  /** Readable reason from the platform/client (for troubleshooting) */
   error?: string
 }
 
-/** 一次同步的结果（`lattice:sync` 返回、`lattice:sync-state` 载荷） */
+/** Result of one sync (return of `lattice:sync`, payload of `lattice:sync-state`) */
 export interface LatticeSyncResult {
   at: number
-  /** 推送/拉取的**插件**数 */
+  /** Number of **plugins** pushed/pulled */
   pushed: number
   pulled: number
-  /** 推送/拉取的**业务数据条数**（插件通过 count() 统计；无 count 的插件计 0） */
+  /** Number of **business data rows** pushed/pulled (counted by plugins via count(); plugins without count count as 0) */
   pushedRows?: number
   pulledRows?: number
   conflicts: number
-  /** 后台自动 pull（非用户手动触发）：没有数据变化时界面不弹提示 */
+  /** Background automatic pull (not user-triggered): no toast is shown when nothing changed */
   silent?: boolean
   error?: string
-  /** 云端有安装记录、但本机没有插件包而**未自动安装**的插件 id（自动补齐关闭/不可用时） */
+  /** Plugin ids that have a cloud install record but no local package and were **not auto-installed** (auto-restore off/unavailable) */
   pending?: string[]
-  /** 自动补齐结果（pull 时；没开启或没有缺失插件时缺省） */
+  /** Auto-restore result (during pull; absent when not enabled or nothing was missing) */
   autoInstall?: LatticeSyncAutoInstallResult
-  /** 当前仍未解决的「平台已删除」安装记录（保留本地数据，只做标记） */
+  /** Install records still marked "deleted from the platform" (local data kept, only marked) */
   orphaned?: LatticeSyncOrphanedItem[]
 }
 
-/** `lattice:sync-details` 返回：同步详情弹窗的数据（自动补齐失败 / 冲突 / 孤儿记录） */
+/** Return of `lattice:sync-details`: data for the sync details dialog (auto-restore failures / conflicts / orphaned records) */
 export interface LatticeSyncDetails {
-  /** 最近一次同步（含 autoInstall / orphaned 明细；冷启动从缓存恢复） */
+  /** Most recent sync (including autoInstall / orphaned details; restored from cache on cold start) */
   last: LatticeSyncResult | null
   conflicts: LatticeSyncConflict[]
   orphaned: LatticeSyncOrphanedItem[]
 }
 
-/** `lattice:set-auto-install-missing` 返回：开关落盘后的状态 */
+/** Return of `lattice:set-auto-install-missing`: state after the switch was persisted */
 export interface LatticeAutoInstallSettingResult {
   ok: boolean
   enabled: boolean
@@ -258,27 +270,28 @@ export interface LatticeAutoInstallSettingResult {
   error?: string
 }
 
-/** 未解决的插件数据冲突（`data_rev` 不一致；由「解决冲突」弹窗让用户显式选择用哪边） */
+/** Unresolved plugin data conflict (mismatched `data_rev`; the "resolve conflict" dialog lets the user explicitly pick a side) */
 export interface LatticeSyncConflict {
   plugin_id: string
   local_rev: number
   server_rev: number
-  /** 冲突当时的本机数据快照（用于预览/用本机覆盖） */
+  /** Local data snapshot at conflict time (for preview / use local) */
   local_data?: unknown
-  /** 打开弹窗时补拉的云端数据快照（用于预览） */
+  /** Cloud data snapshot fetched when the dialog opens (for preview) */
   server_data?: unknown
   /**
-   * 该插件是否支持**基于 merge base 的三方合并**。
+   * Whether this plugin supports **merge-base three-way merging**.
    *
-   * 只有插件明确声明 `mergeBase: true` 才为 true；旧版插件的 `merge()` 是无条件并集，
-   * 会把本机删除/修改过的行回填，因此界面不应显示「合并两边」。
+   * True only when the plugin explicitly declares `mergeBase: true`; the `merge()` of older plugins
+   * is an unconditional union and would bring back rows deleted/edited locally, so the UI should not
+   * show "merge both" for them.
    */
   merge_supported?: boolean
   /**
-   * 冲突来源：
-   * - `diverged`：本机有未同步改动，云端 rev 也前进了（真正的分叉）；
-   * - `rev`：旧口径的 push/pull rev 冲突；
-   * - `no-base`：缺少合并基线（升级后第一次），需要先同步一次。
+   * Conflict source:
+   * - `diverged`: local has unsynced changes and the cloud rev advanced too (a real fork);
+   * - `rev`: a rev conflict from the old push/pull semantics;
+   * - `no-base`: the merge base is missing (first time after an upgrade), a sync is needed first.
    */
   reason?: 'diverged' | 'no-base' | 'rev'
   at: number
@@ -289,80 +302,83 @@ export type LatticeResolveConflictStrategy = 'local' | 'cloud' | 'merge'
 export type LatticeResolveConflictResult =
   | {
       ok: true
-      /** 合并策略的结果摘要（只在使用「合并两边」时有值） */
+      /** Result summary of the merge strategy (only set when "merge both" is used) */
       summary?: string
-      /** 合并策略新加进来的数据条数 */
+      /** Number of data rows newly added by the merge strategy */
       rows?: number
     }
   | { ok: false; error: string }
 
 /**
- * 「合并云端数据」：逐插件按 **merge base** 做 git 式快进 / 冲突（不再无条件并集）。
+ * "Merge cloud data": per-plugin git-style fast-forward / conflict based on the **merge base**
+ * (no more unconditional unions).
  *
- * 界面提示按 `merged / rows / failed / conflicts` 拼一句话（和「同步完成」同构）；
- * **不再**把 `summaries` 里每个插件的自述直接拼进 toast。
+ * The UI builds one sentence from `merged / rows / failed / conflicts` (same shape as "sync
+ * complete"); the per-plugin summaries in `summaries` are **no longer** concatenated into the toast.
  */
 export interface LatticeMergeDataResult {
   ok: boolean
-  /** 实际完成对齐（push + pull）的插件数 */
+  /** Number of plugins actually aligned (push + pull) */
   merged?: number
-  /** 其中「把本机更新推上去」的插件数（删除/修改是走这条，不会被云端回填） */
+  /** Number of those where "local updates were pushed" (deletions/edits go this way and are not restored by the cloud) */
   pushed?: number
-  /** 其中「把云端更新拉下来」的插件数（只有本机无未同步改动时才会发生） */
+  /** Number of those where "cloud updates were pulled" (only happens when local has no unsynced changes) */
   pulled?: number
-  /** 本次真正同步的业务数据条数（插件 count() 统计，push + pull） */
+  /** Number of business data rows actually synced this time (counted by the plugin's count(), push + pull) */
   rows?: number
-  /** 失败的插件数；失败按插件隔离，不影响其它插件 */
+  /** Number of failed plugins; failures are isolated per plugin and do not affect others */
   failed?: number
-  /** 两边都有改动、已记为冲突的插件数（需要用户显式选择，不会自动覆盖） */
+  /** Number of plugins where both sides changed and a conflict was recorded (needs an explicit user choice, no auto-overwrite) */
   conflicts?: number
-  /** 缺少合并基线 / 本机快照读不到而跳过的插件数（先同步一次即可） */
+  /** Number of plugins skipped due to a missing merge base / unreadable local snapshot (a sync first fixes it) */
   blocked?: number
   /**
-   * 一个插件都没动、也没有失败/冲突：没装快照插件，或云端没有它们的快照。
-   * 不算错误，界面用「没有可合并的数据」提示。
+   * No plugin moved and no failure/conflict: no snapshot plugins installed, or the cloud has no
+   * snapshots for them. Not an error; the UI says "no data to merge".
    */
   empty?: boolean
-  /** 每个插件的处理摘要（逐插件明细用，不再直接进 toast） */
+  /** Per-plugin processing summary (for per-plugin details, no longer sent straight to the toast) */
   summaries?: string[]
-  /** 失败插件的「id: 原因」，逐条拼接；给日志 / 详情用，不直接展示 */
+  /** "id: reason" of failing plugins, joined one by one; for logs / details, not shown directly */
   error?: string
 }
 
-/** 上传阶段进度（`lattice:upload-progress` 载荷） */
+/** Upload phase progress (`lattice:upload-progress` payload) */
 export interface LatticeUploadProgress {
   phase: 'zip' | 'meta' | 'upload'
   sent: number
   total: number
 }
 
-/** 登录入参。`baseUrl` 省略时使用当前基址（设置项 / RB_LATTICE_URL / 默认值） */
+/** Login input. When `baseUrl` is omitted the current base URL is used (setting / RB_LATTICE_URL / default) */
 export interface LatticeLoginInput {
   baseUrl?: string
   username: string
   password: string
 }
 
-/** 登录结果：失败不抛错，返回 `{ok:false,error}` 由界面展示平台 message */
+/** Login result: failures are not thrown; `{ok:false,error}` is returned for the UI to show the platform message */
 export type LatticeLoginResult =
   | {
       ok: true
       user: LatticeUser
       role?: string
       /**
-       * 换号成功，数据空间已**原地切换**（不重启应用）：主窗口会在几十毫秒后整页刷新，
-       * 刷新后即按新账号的数据/云端快照运行，界面不需要自己处理后续。
+       * Account switch succeeded and the data space was **switched in place** (no app restart): the
+       * main window reloads entirely a few tens of milliseconds later, and afterwards runs on the
+       * new account's data/cloud snapshots; the UI need not handle any follow-up itself.
        */
       switching?: boolean
       /**
-       * 换号成功，但本机数据空间需要**重启应用**才能切换（代价最小的回退路径）：
-       * 只会在初始化尚未完成或原地切换失败时出现，应用会在几百毫秒后自动重启。
+       * Account switch succeeded, but the local data space requires an **app restart** to switch
+       * (the cheapest fallback path): only happens when initialization has not finished or the
+       * in-place switch failed; the app restarts automatically a few hundred milliseconds later.
        */
       restarting?: boolean
     }
   | { ok: false; error: string }
 
-/** 上传结果。用户取消选择框不是失败（`canceled:true`） */
+/** Upload result. The user canceling the picker is not a failure (`canceled:true`) */
 export type LatticeUploadResult =
   | { ok: true; canceled: true }
   | {
@@ -370,19 +386,20 @@ export type LatticeUploadResult =
       plugin_id: string
       version: string
       /**
-       * 平台的最终状态：`published` = 已发布；`review` = 已提交，等待管理员审核。
+       * Final platform status: `published` = published; `review` = submitted, awaiting admin review.
        *
-       * 平台自 2026-11-23 起默认送审（审核通过前对其他用户不可见），所以“上传成功”
-       * 不再等于“已发布”——界面必须按这个字段选择提示文案，不能把 review 当失败。
-       * 旧平台不返回时视为 `published`。
+       * The platform sends uploads to review by default since 2026-11-23 (invisible to other users
+       * until approved), so "upload succeeded" no longer equals "published" — the UI must choose its
+       * message from this field and must not treat review as a failure. When an old platform does
+       * not return it, treat it as `published`.
        */
       status?: 'published' | 'review'
-      /** 本次是否真的上传了源码包（没有源码 / 平台未给上传地址时为 false） */
+      /** Whether a source package was actually uploaded this time (false when there is no source / the platform gave no upload URL) */
       sourceUploaded?: boolean
     }
   | { ok: false; error: string }
 
-/** 下载安装结果：失败不抛到渲染层，返回 `{ok:false,error}` */
+/** Download/install result: failures are not thrown to the renderer; `{ok:false,error}` is returned */
 export type LatticeInstallResult =
   | {
       ok: true
@@ -390,108 +407,113 @@ export type LatticeInstallResult =
       name: string
       version: string
       /**
-       * 安装时自动下载并解压的源码目录（v2 §2）。
+       * Source directory downloaded and unpacked automatically during install.
        *
-       * 目录优先级：用户配置的「插件存放路径」`<pluginsPath>/<id>/`（= workshop 草稿目录，
-       * 插件模式侧栏能看到、能和模型对话修改）→ 未配置时回退
-       * `userData/plugin-sources/<id>/<version>/`。
+       * Directory priority: the user-configured "plugin storage path" `<pluginsPath>/<id>/` (= the
+       * workshop draft directory, visible in the plugin-mode sidebar and editable through model
+       * conversations) → when not configured, fall back to
+       * `userData/plugin-sources/<id>/<version>/`.
        */
       sourcePath?: string
       sourceVersion?: string
-      /** 源码落在哪类目录：pluginsPath = 用户插件存放路径；userData = 应用数据目录回退 */
+      /** Which kind of directory the source landed in: pluginsPath = user plugin storage path; userData = app data directory fallback */
       sourceManaged?: LatticeSourceManaged
-      /** 源码下载/解压失败的可读原因（**不影响安装成功**，本地插件包已经装好） */
+      /** Readable reason the source download/unpack failed (**does not affect a successful install**; the local package is already installed) */
       sourceError?: string
-      /** 覆盖本机已有源码前留的备份目录（源码曾在本机被修改过时才有） */
+      /** Backup directory kept before overwriting existing local source (only when the source had been modified locally) */
       sourceBackupPath?: string
     }
   | { ok: false; error: string }
 
-/** 源码在本机的落地位置（`lattice:source-path` / 安装结果的 `sourceManaged`） */
+/** Where the source lands locally (`lattice:source-path` / the install result's `sourceManaged`) */
 export type LatticeSourceManaged = 'pluginsPath' | 'userData'
 
-/** `lattice:source-path` 返回：当前可编辑的源码目录 */
+/** Return of `lattice:source-path`: the currently editable source directory */
 export interface LatticeSourcePathResult {
   path: string | null
   version?: string
   /**
-   * 源码目录种类：
-   * - `pluginsPath` = 用户配置的插件存放路径（workshop 草稿目录，插件模式可开对话）；
-   * - `userData` = 应用数据目录回退（未配置插件存放路径时）；
-   * 没有源码时整个字段缺省。
+   * Source directory kind:
+   * - `pluginsPath` = the user-configured plugin storage path (workshop draft directory, plugin mode
+   *   can open conversations);
+   * - `userData` = app data directory fallback (when no plugin storage path is configured);
+   * the whole field is absent when there is no source.
    */
   managed?: LatticeSourceManaged
 }
 
-/** `lattice:local-source-path` 返回：本机已安装插件包目录（`userData/plugins/<id>`，本地安装后发布用） */
+/** Return of `lattice:local-source-path`: the locally installed plugin package directory (`userData/plugins/<id>`, for publishing after a local install) */
 export interface LatticeLocalSourcePathResult {
   path: string | null
   version?: string
 }
 
 /**
- * `lattice:open-source` 返回（v2 §2 + Lead 2026-11-21 补充）：
- * - 成功开对话：`{ok:true,workspaceId,topicId?}`（工作区=插件源码目录，话题=插件会话）；
- * - 无法可靠切换插件模式时回退文件管理器：`{ok:true,opened:'folder',path}`（不假装开了对话）；
- * - 失败：`{ok:false,error}`。
+ * Return of `lattice:open-source`:
+ * - conversation opened successfully: `{ok:true,workspaceId,topicId?}` (workspace = plugin source
+ *   directory, topic = plugin conversation);
+ * - when the plugin mode cannot be switched reliably, fall back to the file manager:
+ *   `{ok:true,opened:'folder',path}` (never pretend a conversation was opened);
+ * - failure: `{ok:false,error}`.
  */
 export type LatticeOpenSourceResult =
   | {
       ok: true
       workspaceId: number
       topicId?: number
-      /** 'conversation' = 真的建/复用了插件工作区并开了一条插件会话 */
+      /** 'conversation' = really created/reused the plugin workspace and opened a plugin conversation */
       mode?: 'conversation'
-      /** 对话使用的工作目录（= 插件源码目录） */
+      /** Working directory used by the conversation (= plugin source directory) */
       path?: string
     }
   | { ok: true; opened: 'folder'; path?: string }
   | { ok: false; error: string }
 
-/** `lattice:republish` 入参 */
+/** Input of `lattice:republish` */
 export interface LatticeRepublishInput {
   pluginId: string
-  /** 新版本号（必填 semver；必须大于平台当前最新版本，服务端 409 会转成可读错误） */
+  /** New version number (required semver; must be greater than the platform's current latest version; a server 409 becomes a readable error) */
   version: string
   changelog?: string
-  /** 源码目录；缺省 = sourcePath，再缺省 = localSourcePath（userData/plugins/<id>） */
+  /** Source directory; absent = sourcePath, then absent = localSourcePath (userData/plugins/<id>)) */
   sourceDir?: string
 }
 
-/** `lattice:republish` 返回：安装包 = 源码目录整包 zip，源码包 = 同一份字节 */
+/** Return of `lattice:republish`: the install package = whole source directory zip, source package = the same bytes */
 export type LatticeRepublishResult =
   | {
       ok: true
       plugin_id: string
       version: string
-      /** 平台最终状态：已发布 / 等待管理员审核（平台自 2026-11-23 起默认送审） */
+      /** Final platform status: published / awaiting admin review (the platform sends uploads to review by default since 2026-11-23) */
       status?: 'published' | 'review'
       sourcePath?: string
     }
   | { ok: false; error: string }
 
-/** 下载类型：安装包 / 源码包 */
+/** Download kind: install package / source package */
 export type LatticeDownloadAssetKind = 'package' | 'source'
 
-/** `lattice:download-asset` 返回：弹保存框下载；用户取消不是失败（canceled=true，savedPath 为空串） */
+/** Return of `lattice:download-asset`: downloads via a save dialog; user cancel is not a failure (canceled=true, savedPath is an empty string) */
 export type LatticeDownloadAssetResult =
   { ok: true; savedPath: string; canceled?: boolean } | { ok: false; error: string }
 
-/** 本地目录批量导入：一个成功发布的插件 */
+/** Local directory batch import: one successfully published plugin */
 export interface LatticeImportLocalItem {
   plugin_id: string
   version: string
 }
 
-/** 本地目录批量导入：一个被跳过的插件目录（reason 是平台/校验给的可读原因） */
+/** Local directory batch import: one skipped plugin directory (reason is a readable reason from the platform/validation) */
 export interface LatticeImportLocalSkipped {
   dir: string
   reason: string
 }
 
 /**
- * `lattice:import-local-dir` 返回：弹目录选择框 → 扫描直接子目录（也支持所选目录本身是单个插件）
- * 中带 `plugin.json` 的插件 → 逐个发布到平台（安装包 + 源码同包上传）。
+ * Return of `lattice:import-local-dir`: show a directory picker → scan direct subdirectories (also
+ * supports the selected directory itself being a single plugin) for plugins with `plugin.json` →
+ * publish each to the platform (install package + source uploaded as one package).
  */
 export type LatticeImportLocalDirResult =
   | {
@@ -499,34 +521,34 @@ export type LatticeImportLocalDirResult =
       canceled?: boolean
       imported: LatticeImportLocalItem[]
       skipped: LatticeImportLocalSkipped[]
-      /** 本次扫描的根目录（UI 可提示"设为插件存放路径"） */
+      /** Root directory scanned this time (the UI can suggest "set as plugin storage path") */
       root?: string
     }
   | { ok: false; error: string }
 
-/** 显式设置「插件存放路径」（立即生效；插件中心导入本地目录后使用） */
+/** Explicitly sets the "plugin storage path" (takes effect immediately; used after importing local directories in the plugin hub) */
 export type LatticeSetPluginRootResult = { ok: true; dir: string } | { ok: false; error: string }
 
-/** 基址设置结果 */
+/** Base URL setting result */
 export interface LatticeSetBaseUrlResult {
   ok: boolean
   status: LatticeStatus
   error?: string
-  /** 数据空间已原地切回 anonymous，主窗口即将整页刷新 */
+  /** The data space was switched back to anonymous in place; the main window is about to reload entirely */
   switching?: boolean
-  /** 原地切换不可用，应用即将重启 */
+  /** In-place switching is unavailable; the app is about to restart */
   restarting?: boolean
 }
 
-/** `lattice:me` 返回 */
+/** Return of `lattice:me` */
 export interface LatticeMeResult {
   user: LatticeUser
   role: string
 }
 
-// ---------- 平台 API 记录类型（main 内部使用，preload 不直接用） ----------
+// ---------- Platform API record types (main-internal, not used directly by preload) ----------
 
-/** `GET /v1/hub/installs?include_data=1` 里的一项 */
+/** One item in `GET /v1/hub/installs?include_data=1` */
 export interface LatticeRemoteInstall {
   plugin_id: string
   version?: string
@@ -539,29 +561,31 @@ export interface LatticeRemoteInstall {
     name?: string
     icon?: string
     latest_version?: string
-    /** 插件状态（平台对已下架插件返回 `removed`；老平台可能不返回） */
+    /** Plugin status (the platform returns `removed` for delisted plugins; old platforms may not return it) */
     status?: string
   } | null
   /**
-   * 平台安装记录指向的插件已删除：平台明确返回 `plugin:null`，或 `plugin.status==='removed'`
-   * （平台是软删：插件行仍在，`status=removed`）。老平台两者都没有时保持 false，避免误标。
+   * The plugin the platform install record points to has been deleted: the platform explicitly
+   * returns `plugin:null`, or `plugin.status==='removed'` (a soft delete: the plugin row still
+   * exists with `status=removed`). When an old platform has neither, keep this false to avoid
+   * mislabeling.
    */
   plugin_deleted?: boolean
   data?: unknown
 }
 
-/** `PUT /v1/hub/installs/{plugin_id}` 的请求体 */
+/** Request body of `PUT /v1/hub/installs/{plugin_id}` */
 export interface LatticeInstallPutBody {
   version?: string
   enabled?: boolean
   data?: unknown
-  /** 提交 data 时必填：客户端上次看到的数据版本号（新记录填 0） */
+  /** Required when sending data: the data version the client last saw (use 0 for a new record) */
   data_rev?: number
   device_id?: string
   force?: boolean
 }
 
-/** IPC 通道名（main 注册 / preload 调用共用一份常量，避免字符串漂移） */
+/** IPC channel names (one shared constant used by main registration / preload calls, avoiding string drift) */
 export const LATTICE_IPC = {
   status: 'lattice:status',
   login: 'lattice:login',
@@ -571,35 +595,35 @@ export const LATTICE_IPC = {
   hubList: 'lattice:hub-list',
   hubDetail: 'lattice:hub-detail',
   hubPickUpload: 'lattice:hub-pick-upload',
-  /** 直接发布本机已安装插件（安装包 + 源码，不弹目录选择框） */
+  /** Publish a locally installed plugin directly (install package + source, no directory picker) */
   hubPublishInstalled: 'lattice:hub-publish-installed',
   hubUpload: 'lattice:hub-upload',
   hubPickUploadZip: 'lattice:hub-pick-upload-zip',
-  /** 选「安装包目录 + 源码目录」两个目录后发布（源码与安装包是两份不同的 zip） */
+  /** Pick two directories — "install package directory + source directory" — then publish (the source and package are two different zips) */
   hubPickUploadWithSource: 'lattice:hub-pick-upload-with-source',
   hubInstall: 'lattice:hub-install',
   hubInstalls: 'lattice:hub-installs',
-  /** 当前源码目录（path/version/managed） */
+  /** Current source directory (path/version/managed) */
   sourcePath: 'lattice:source-path',
-  /** 本机已安装插件包目录（userData/plugins/<id>） */
+  /** Locally installed plugin package directory (userData/plugins/<id>) */
   localSourcePath: 'lattice:local-source-path',
-  /** 在对话中修改源码：建/复用插件工作区并开插件会话，失败回退文件管理器 */
+  /** Edit the source in a conversation: create/reuse the plugin workspace and open a plugin conversation, falling back to the file manager on failure */
   openSource: 'lattice:open-source',
-  /** 重新发布新版本（安装包 + 源码同包上传） */
+  /** Republish a new version (install package + source uploaded as one package) */
   republish: 'lattice:republish',
-  /** 下载安装包 / 源码包到本机（弹保存框） */
+  /** Download the install package / source package to this machine (save dialog) */
   downloadAsset: 'lattice:download-asset',
-  /** 弹目录选择框，把本地插件源码目录批量发布到平台 */
+  /** Show a directory picker and batch-publish local plugin source directories to the platform */
   importLocalDir: 'lattice:import-local-dir',
   setPluginRoot: 'lattice:set-plugin-root',
   sync: 'lattice:sync',
   syncConflicts: 'lattice:sync-conflicts',
-  /** 同步详情：最近一次同步的自动补齐/孤儿记录明细（失败可查看原因） */
+  /** Sync details: auto-restore/orphaned record details of the most recent sync (failures can be inspected) */
   syncDetails: 'lattice:sync-details',
   resolveConflict: 'lattice:resolve-conflict',
-  /** 逐个已安装插件把云端快照合并进本机（非破坏性并集），再推回云端 */
+  /** Per installed plugin, merge the cloud snapshot into local data (non-destructive union) and push it back to the cloud */
   mergeData: 'lattice:merge-data',
-  /** 缺失插件自动补齐开关（持久化设置；默认开启） */
+  /** Auto-restore missing plugins switch (persisted setting; on by default) */
   setAutoInstallMissing: 'lattice:set-auto-install-missing',
   stateChanged: 'lattice:state-changed',
   uploadProgress: 'lattice:upload-progress',

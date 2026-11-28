@@ -3,31 +3,38 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 /**
- * drizzle-kit 配置（仅开发期使用，不进打包产物）。
+ * drizzle-kit config (development only, not part of the packaged output).
  *
- * - schema：TS schema 是结构的单一真源，改完执行 `pnpm drizzle-kit generate` 产出增量 SQL。
- *   数组里既列 core 的 schema 目录，也列**系统功能**（AI 助手 / 资料库，位于
- *   `src/main/database/schema/{harness,notes}`）的 schema 文件——drizzle-kit 不解析
- *   tsconfig paths，它们的 schema 只能用相对路径被 core re-export
- *   （见 database/schema/index.ts），这里显式列出是为了让 drizzle-kit 的 TS 入口
- *   发现逻辑不依赖目录遍历顺序。
- *   **第三方插件（task-planner / music-player）不在这里**：它们的表由插件自己建（各自 ddl.ts），
- *   迁移链上只保证「不生成 DROP」（见 drizzle/ 里那条迁移的注释）。
- * - out：迁移 SQL 与快照目录，随 extraResources 进安装包（database/drizzle），启动时由迁移器应用。
- * - dbCredentials：只在 `push` / `pull` / `studio` 这类**需要连库**的命令用到。
+ * - schema: the TS schema is the single source of truth for the structure; after changing it run
+ *   `pnpm drizzle-kit generate` to produce incremental SQL.
+ *   The array lists both the core schema directory and the schema files of **system features**
+ *   (AI assistant / knowledge base, under `src/main/database/schema/{harness,notes}`) — drizzle-kit
+ *   does not resolve tsconfig paths, so their schemas can only be re-exported by core through
+ *   relative paths (see database/schema/index.ts); listing them explicitly here keeps drizzle-kit's
+ *   TS entry discovery independent of directory traversal order.
+ *   **Third-party plugins (task-planner / music-player) are not listed here**: their tables are
+ *   created by the plugins themselves (each has its own ddl.ts), and the migration chain only
+ *   guarantees that no DROP is generated (see the comment on that migration in drizzle/).
+ * - out: migration SQL and snapshot directory, shipped into the installer via extraResources
+ *   (database/drizzle) and applied in order at startup by the migrator.
+ * - dbCredentials: only used by commands that **need a database connection**, such as `push` /
+ *   `pull` / `studio`.
  *
- * ⚠️ 绝对不要把它指向应用正在使用的数据目录（`app.getPath('userData')/RytenBenchDB`）。
- * PGlite 是嵌入式 Postgres，**没有跨进程锁**：两个进程同时打开同一个数据目录会各自
- * 往同一份 pg_wal / pg_control 写，直接写出撕裂的检查点记录——2026-09-18 那次
- * 「Failed query: CREATE SCHEMA IF NOT EXISTS "drizzle"」正是这么来的（坏库诊断出
- * `invalid xl_info in checkpoint record` / `PANIC: could not locate a valid checkpoint record`，
- * 恢复过程见 docs/database-pglite-recovery.md）。
- * 因此默认给一个**独立的草稿目录**；确需连真实库时显式传 DRIZZLE_DB_DIR，并先退出应用：
+ * ⚠️ Never point this at the data directory the app is using
+ * (`app.getPath('userData')/RytenBenchDB`). PGlite is embedded Postgres and has **no
+ * cross-process lock**: two processes opening the same data directory at once each write to the
+ * same pg_wal / pg_control, producing torn checkpoint records — the 2026-09-18
+ * "Failed query: CREATE SCHEMA IF NOT EXISTS "drizzle"" incident came from exactly this (the
+ * corrupt database diagnosed `invalid xl_info in checkpoint record` /
+ * `PANIC: could not locate a valid checkpoint record`).
+ * So by default a **separate scratch directory** is provided; when you really need to connect to
+ * the real database, pass DRIZZLE_DB_DIR explicitly and quit the app first:
  *
  *   DRIZZLE_DB_DIR="C:\Users\<you>\AppData\Roaming\ryten-bench\RytenBenchDB" pnpm drizzle-kit studio
  *
- * 注意目录随环境不同（见 `src/main/environment/`）：发布版是 `...\Roaming\ryten-bench\RytenBenchDB`，
- * `pnpm dev` / `electron .` 写的是 `...\Roaming\ryten-bench-dev\RytenBenchDB`，别连错那一个。
+ * Note the directory differs per environment (see `src/main/environment/`): the release build uses
+ * `...\Roaming\ryten-bench\RytenBenchDB`, while `pnpm dev` / `electron .` writes to
+ * `...\Roaming\ryten-bench-dev\RytenBenchDB` — don't connect to the wrong one.
  */
 export default defineConfig({
   dialect: 'postgresql',
@@ -47,7 +54,7 @@ export default defineConfig({
   ],
   out: './drizzle',
   dbCredentials: {
-    // 草稿库：与本机应用数据目录完全隔离（默认落在系统临时目录下）
+    // Scratch database: fully isolated from the local app data directory (defaults to the system temp dir)
     url: process.env.DRIZZLE_DB_DIR ?? join(tmpdir(), 'ryten-bench-drizzle-scratch')
   },
   introspect: { casing: 'preserve' },

@@ -8,34 +8,36 @@ import { readExternalManifest } from './lifecycle'
 import { clearInstallRemoved } from './store'
 
 /**
- * **插件包安装内核**：一个已经落盘的「包目录」→ `userData/plugins/<id>/`。
+ * **Plugin package install kernel**: an already-staged "package directory" -> `userData/plugins/<id>/`.
  *
- * 三条安装来源共用它，保证校验、覆盖、清理的语义只有一份：
- * - 从插件中心下载的包（见 `../lattice/hub.ts`）；
- * - 从本地压缩包（用户自己打的 zip，见 `local-install.ts`）；
- * - 从本地文件夹（构建产物目录 `dist/<id>`，同上）。
+ * Three install sources share it, so validation, overwrite and cleanup semantics exist only once:
+ * - packages downloaded from the plugin center (see `../lattice/hub.ts`);
+ * - local zip archives (user-made zips, see `local-install.ts`);
+ * - local folders (build output directories `dist/<id>`, same as above).
  *
- * 「包目录」= 含 `plugin.json` 的目录（压缩包解压出来的、或用户直接选的）。
- * 约定与校验：
- * - `plugin.json` 必须字段齐备（`isValidManifest`）；
- * - `entry.main` / `entry.renderer` 指向的文件必须真的在包里（缺入口的包装了也白装）；
- * - 升级（同 id 已装）时删掉旧版本里多出来的文件，避免旧哈希 chunk 与新入口混装。
+ * "Package directory" = a directory containing `plugin.json` (extracted from a zip, or picked
+ * directly by the user). Conventions and validation:
+ * - `plugin.json` must have complete fields (`isValidManifest`);
+ * - the files pointed to by `entry.main` / `entry.renderer` must really be in the package (a
+ *   package missing entries is useless even if installed);
+ * - on upgrade (same id already installed) delete files that only existed in the old version, to
+ *   avoid mixing old hashed chunks with the new entry.
  */
 
-/** 安装结果（面板据此提示「已安装 / 已升级」，工装据此断言） */
+/** Install result (the panel uses it to say "installed / upgraded"; tooling asserts on it) */
 export interface InstalledPackageInfo {
   id: string
   name: string
   version: string
-  /** true = 覆盖了同 id 的既有安装 */
+  /** true = overwrote an existing install with the same id */
   upgraded: boolean
-  /** 最终落地的目录（userData/plugins/<id>） */
+  /** Final destination directory (userData/plugins/<id>) */
   dest: string
-  /** 本次拷进去的文件数 */
+  /** Number of files copied this time */
   files: number
 }
 
-/** 压缩工具产出的噪音条目（macOS / Windows / 编辑器），静默忽略 */
+/** Noise entries produced by archivers (macOS / Windows / editors), silently ignored */
 const NOISE_NAMES: ReadonlySet<string> = new Set([
   '.DS_Store',
   'Thumbs.db',
@@ -51,13 +53,16 @@ function isNoise(relPath: string): boolean {
 }
 
 /**
- * 解压 zip 到临时目录（**宽松**：允许子目录与「压缩整个文件夹」多出来的一层前缀）。
+ * Extract a zip to a temp directory (**lenient**: subdirectories and the extra top-level prefix of
+ * "compress the whole folder" are allowed).
  *
- * 与旧实现的区别（本地安装功能引入）：旧实现要求「平铺、无任何 `/`」，而用户在
- * Windows 上右键「压缩整个文件夹」得到的 zip 顶层一定带一层目录名——那是最常见的
- * 本地打包方式，按旧口径会被判成「非法路径」，用户完全不知道自己做错了什么。
- * 现在：剥掉唯一的顶层前缀、忽略噪音条目、允许子目录，但**仍然拒绝**绝对路径与 `..`
- * （目录穿越是安全问题，不能因为好用而放松）。
+ * Difference from the old implementation (introduced with local install): the old one required
+ * "flat, no `/` at all", while the zip a user gets from Windows' right-click "compress whole
+ * folder" always has a top-level directory name - the most common local packaging form - and was
+ * rejected as "invalid path" under the old rule, leaving the user with no idea what they did
+ * wrong. Now: strip the single top-level prefix, ignore noise entries, allow subdirectories, but
+ * **still reject** absolute paths and `..` (path traversal is a security issue and must not be
+ * relaxed for convenience).
  */
 export async function extractZipToTemp(zipPath: string): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ryten-plugin-'))
@@ -66,7 +71,7 @@ export async function extractZipToTemp(zipPath: string): Promise<string> {
   const entries: { rel: string; file: JSZip.JSZipObject }[] = []
   for (const [rawName, file] of Object.entries(zip.files)) {
     if (file.dir) continue
-    // 压缩工具可能写反斜杠；统一成正斜杠再判定
+    // Archivers may write backslashes; normalize to forward slashes before validating
     const name = rawName.replace(/\\/g, '/')
     if (isNoise(name)) continue
     if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) {
@@ -86,7 +91,8 @@ export async function extractZipToTemp(zipPath: string): Promise<string> {
     throw new Error('插件压缩包是空的（没有任何文件）')
   }
 
-  // 「压缩整个文件夹」的包：所有文件共享同一个顶层目录名、且根目录没有 plugin.json → 剥掉这一层
+  // "Compress the whole folder" packages: all files share one top-level directory name and there
+  // is no plugin.json at the root -> strip that level
   const tops = new Set(entries.map((e) => e.rel.split('/')[0]))
   const hasRootManifest = entries.some((e) => e.rel === 'plugin.json')
   const prefix = !hasRootManifest && tops.size === 1 ? `${[...tops][0]}/` : ''
@@ -106,7 +112,7 @@ export async function extractZipToTemp(zipPath: string): Promise<string> {
   return dir
 }
 
-/** 目录下所有文件的相对路径（posix 分隔符），用于「升级时删掉旧版本多出来的文件」 */
+/** Relative paths of all files under a directory (posix separators), used to "delete files that only existed in the old version on upgrade" */
 function listFilesRel(dir: string, prefix = ''): string[] {
   const out: string[] = []
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -122,10 +128,12 @@ function listFilesRel(dir: string, prefix = ''): string[] {
 }
 
 /**
- * 把用户选的目录解析成「包目录」。
+ * Resolve the directory picked by the user into a "package directory".
  *
- * 允许两种选法：直接选插件包目录（含 `plugin.json`），或选它上一级（例如 `dist/`，
- * 里面只有一个插件包时自动下钻一层）。带源码的仓库目录会给出明确提示——源码要先构建。
+ * Two selection forms are allowed: pick the plugin package directory directly (containing
+ * `plugin.json`), or pick its parent (e.g. `dist/`, descending one level automatically when it
+ * contains exactly one plugin package). A source repository directory gets an explicit message -
+ * source must be built first.
  */
 export function resolvePackageRoot(dir: string): string {
   if (fs.existsSync(path.join(dir, 'plugin.json'))) return dir
@@ -148,10 +156,11 @@ export function resolvePackageRoot(dir: string): string {
 }
 
 /**
- * 安装（或升级）一个已经落盘的插件包目录。
+ * Install (or upgrade) an already-staged plugin package directory.
  *
- * @param sourceDir 含 `plugin.json` 的目录
- * @param opts.expectId 期望的 id（从索引安装时用：索引说装 A，包里却是 B → 拒绝）
+ * @param sourceDir Directory containing `plugin.json`
+ * @param opts.expectId Expected id (used when installing from an index: the index says install A
+ * but the package is B -> reject)
  */
 export function installPackageDir(
   sourceDir: string,
@@ -183,7 +192,7 @@ export function installPackageDir(
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.copyFileSync(path.join(sourceDir, rel), target)
   }
-  // 升级：旧版本里多出来的文件（主要是旧哈希的 chunk）删掉，避免新旧混装
+  // Upgrade: delete files that only existed in the old version (mainly old-hash chunks), avoiding mixing old and new
   if (upgraded) {
     const incoming = new Set(files)
     for (const rel of listFilesRel(dest)) {
@@ -191,7 +200,8 @@ export function installPackageDir(
     }
   }
   invalidateInstalledPluginIds()
-  // 用户重新装回来了：清掉「显式卸载」标记，否则插件中心的换机自动补齐会一直跳过它
+  // The user installed it again: clear the "explicitly uninstalled" mark, otherwise the plugin
+  // center's new-machine auto-backfill keeps skipping it
   clearInstallRemoved(manifest.id)
   logger.info(
     `[Plugins] ${upgraded ? 'Upgraded' : 'Installed'} '${manifest.id}' v${manifest.version} (${files.length} files) -> ${dest}`

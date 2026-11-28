@@ -7,19 +7,22 @@ import { getAllTopicsPaginated } from '../../database/mapper/harness/harness'
 import { listEnabledSubAgents } from './subagents'
 
 /**
- * 预加载缓存：加载页阶段预取 Harness 界面所需数据（子代理定义 + 话题首页）。
+ * Preload cache: prefetch the data the Harness UI needs during the loading screen (sub-agent
+ * definitions + first topic page).
  *
- * 归属说明（本轮迁移）：模型 Provider 的三项缓存（enabled / default）属 core 的
- * provider-* 通道，已挪到 `src/main/provider/cache.ts`；子代理定义缓存在本轮收进
- * `services/harness/subagents.ts`（写配置与读配置只有一个入口），这里只在预取时
- * 调一次服务并顺手把 provider 缓存写进 core。
+ * Ownership notes (from this migration): the three model-provider caches (enabled / default)
+ * belong to core's provider-* channels and moved to `src/main/provider/cache.ts`; the sub-agent
+ * definition cache now lives in `services/harness/subagents.ts` (one entry point for writing and
+ * reading config), so this module only calls the service once during prefetch and writes the
+ * provider caches into core along the way.
  */
 
 /**
- * 话题数据不再全量缓存，前端使用分页查询。
- * 保留这个空实现是为了让话题 CRUD 后的调用点保持统一（以后若恢复缓存只需改这里）。
+ * Topic data is no longer cached in full; the frontend uses paginated queries.
+ * This empty implementation is kept so call sites after topic CRUD stay uniform (restoring the
+ * cache later only requires changing this file).
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-function -- 刻意的 no-op 占位
+// eslint-disable-next-line @typescript-eslint/no-empty-function -- intentional no-op placeholder
 export function clearTopicCache(): void {}
 
 export async function preloadHarnessData(): Promise<void> {

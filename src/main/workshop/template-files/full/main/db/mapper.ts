@@ -1,16 +1,18 @@
 import { desc, eq } from 'drizzle-orm'
 import { withOrm } from '@host/main/database/orm'
-import type { ${vars.pascal}Item, ${vars.pascal}ItemInput } from '../../shared/harness/types'
+import type { ${vars.pascal}Item, ${vars.pascal}ItemInput } from '../../shared/types'
 import { schemaReady } from './ddl'
 import { ${vars.itemsToolName}, type ${vars.pascal}ItemRow } from './schema'
 
 /**
- * ${vars.title} 的数据访问层。
+ * Data access layer for ${vars.title}.
  *
- * 规矩（与宿主 mapper 一致）：
- * - **每个函数先 `await schemaReady`**：插件装载即建表，但不保证建表先于第一次查询；
- * - 一律走 `withOrm`：拿到 drizzle 实例、异常统一记日志；
- * - 行类型只在插件内部流转，出这一层就转成 `shared/types.ts` 的 DTO（渲染层不认识 drizzle）。
+ * Rules (same as the host mapper):
+ * - **every function awaits `schemaReady` first**: the table is created when the plugin loads, but
+ *   creation is not guaranteed to happen before the first query;
+ * - always go through `withOrm`: it provides the drizzle instance and logs exceptions uniformly;
+ * - row types only travel inside the plugin; past this layer they become the DTOs from
+ *   `shared/types.ts` (the renderer does not know drizzle).
  */
 function toDto(row: ${vars.pascal}ItemRow): ${vars.pascal}Item {
   return {
@@ -23,7 +25,7 @@ function toDto(row: ${vars.pascal}ItemRow): ${vars.pascal}Item {
   }
 }
 
-/** 全部记录（新的在前） */
+/** All records, newest first */
 export async function listItems(): Promise<${vars.pascal}Item[]> {
   await schemaReady
   const rows = await withOrm('${vars.id}.listItems', async (db) =>
@@ -32,7 +34,7 @@ export async function listItems(): Promise<${vars.pascal}Item[]> {
   return rows.map(toDto)
 }
 
-/** 新建一条 */
+/** Create a record */
 export async function createItem(input: ${vars.pascal}ItemInput): Promise<${vars.pascal}Item> {
   await schemaReady
   const title = String(input?.title ?? '').trim()
@@ -46,7 +48,7 @@ export async function createItem(input: ${vars.pascal}ItemInput): Promise<${vars
   return toDto(rows[0])
 }
 
-/** 改一条（只改传进来的字段；返回 null = 这条不存在） */
+/** Update a record (only the given fields; returns null when the record does not exist) */
 export async function updateItem(
   id: number,
   patch: { title?: string; note?: string; done?: boolean }
@@ -66,7 +68,7 @@ export async function updateItem(
   return rows[0] ? toDto(rows[0]) : null
 }
 
-/** 删一条（返回是否真的删掉了） */
+/** Delete a record (returns whether it was actually removed) */
 export async function deleteItem(id: number): Promise<boolean> {
   await schemaReady
   const rows = await withOrm('${vars.id}.deleteItem', async (db) =>
@@ -75,7 +77,7 @@ export async function deleteItem(id: number): Promise<boolean> {
   return rows.length > 0
 }
 
-/** 删掉本插件的全部记录（卸载清数据用；返回删了几行） */
+/** Delete all records of this plugin (used on uninstall to clear data; returns the row count) */
 export async function deleteAllItems(): Promise<number> {
   await schemaReady
   const rows = await withOrm('${vars.id}.deleteAllItems', async (db) =>

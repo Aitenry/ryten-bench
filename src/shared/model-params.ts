@@ -1,30 +1,34 @@
 /**
- * 模型请求参数预设（主进程与渲染进程共用，避免两处各自维护一份魔法数字）。
+ * Model request parameter presets (shared by the main process and the renderer so neither
+ * side maintains its own copy of the magic numbers).
  *
- * - 渲染层：设置页「高级配置」里的上下文窗口快速填充胶囊、采样参数范围校验；
- * - 主进程：拉取模型列表时，对 models-profile 未收录的模型取每档最低值兜底。
+ * - Renderer: the context-window quick-fill chips and sampling-parameter range validation in
+ *   the settings page's "advanced configuration";
+ * - Main process: when listing models, fall back to the lowest value of each tier for models
+ *   missing from models-profile.
  *
- * 注意：本文件不得引入 electron / node / react 依赖，两侧构建都要能直接打包。
+ * Note: this file must not depend on electron / node / react; both builds have to bundle it directly.
  */
 
-/** 上下文窗口（Token）预设 —— 输入侧（模型能读入的最大上下文） */
+/** Context-window (token) presets — input side (the maximum context the model can read in) */
 export const CONTEXT_WINDOW_PRESETS = [128_000, 256_000, 512_000, 1_000_000] as const
 
-/** 上下文窗口（Token）预设 —— 输出侧（模型单次最大输出，同时作为请求生成上限） */
+/** Context-window (token) presets — output side (max output per response, also the request generation limit) */
 export const MAX_OUTPUT_PRESETS = [4_000, 16_000, 32_000, 128_000] as const
 
-/** 未收录模型的兜底上下文窗口：取预设档位中的最低值 */
+/** Fallback context window for unknown models: the lowest preset tier */
 export const FALLBACK_CONTEXT_WINDOW: number = CONTEXT_WINDOW_PRESETS[0]
 
-/** 未收录模型的兜底最大输出：取预设档位中的最低值 */
+/** Fallback max output for unknown models: the lowest preset tier */
 export const FALLBACK_MAX_OUTPUT_TOKENS: number = MAX_OUTPUT_PRESETS[0]
 
-/** 未收录模型的兜底类型：按语言（对话）模型处理 */
+/** Fallback type for unknown models: treat as a language (chat) model */
 export const FALLBACK_MODEL_TYPE = 'text-generation'
 
 /**
- * 未收录模型的兜底能力：语言模型 + 流式 + 可调用工具；
- * 视觉输入默认关闭（未收录的模型无从判断，交由用户在「支持图片输入」里显式开启）。
+ * Fallback capabilities for unknown models: language model + streaming + tool calling;
+ * vision input is off by default (it cannot be inferred for unknown models, so the user
+ * opts in explicitly via "supports image input").
  */
 export const FALLBACK_MODEL_CAPABILITIES: Record<string, boolean> = {
   supports_text_input: true,
@@ -34,20 +38,20 @@ export const FALLBACK_MODEL_CAPABILITIES: Record<string, boolean> = {
   supports_image_input: false
 }
 
-/** 单次对话工具调用总次数上限的默认值（可在模型「高级配置」里逐模型覆盖） */
+/** Default cap on total tool calls per conversation (overridable per model in "advanced configuration") */
 export const DEFAULT_MAX_TOOL_ROUNDS = 500
 
-/** 思考模式：auto = 跟随模型默认配置（不注入任何参数） */
+/** Thinking mode: auto = follow the model's default configuration (inject no parameter) */
 export type ThinkingMode = 'auto' | 'on' | 'off'
 
-/** 思考模式下拉/单选选项（label 由界面层按当前语言解析） */
+/** Thinking-mode dropdown/radio options (the label is resolved by the UI layer from the current language) */
 export const THINKING_MODE_OPTIONS: ReadonlyArray<{ value: ThinkingMode }> = [
   { value: 'auto' },
   { value: 'on' },
   { value: 'off' }
 ]
 
-/** 采样参数：范围与步进；占位提示由界面层按当前语言解析 */
+/** Sampling parameters: range and step; placeholder text is resolved by the UI layer from the current language */
 export const SAMPLING_PARAM_SPECS = [
   {
     name: 'temperature',
@@ -72,12 +76,13 @@ export const SAMPLING_PARAM_SPECS = [
   }
 ] as const
 
-/** 采样参数名（与 SAMPLING_PARAM_SPECS 同源） */
+/** Sampling parameter name (same source as SAMPLING_PARAM_SPECS) */
 export type SamplingParamName = (typeof SAMPLING_PARAM_SPECS)[number]['name']
 
 /**
- * 接受 Top K 的供应商协议：其余协议的 SDK / 接口没有该参数，
- * 设置值只保存不下发（设置界面据此给出提示，主进程据此决定是否注入）。
+ * Provider protocols that accept Top K: the SDKs / APIs of the other protocols have no such
+ * parameter, so the setting is stored but not sent (the settings UI shows a note and the main
+ * process decides whether to inject it).
  */
 export const TOP_K_PROVIDERS: readonly string[] = [
   'anthropic',
@@ -89,13 +94,14 @@ export const TOP_K_PROVIDERS: readonly string[] = [
 ]
 
 /**
- * 思考模式适配族：各家「开/关思考」的参数名并不统一，按协议族映射；
- * 'none' 表示该协议未适配，选择开启/关闭都不会往请求里塞参数。
+ * Thinking-mode adapter families: the parameter names for "enable/disable thinking" differ
+ * per provider, so they are mapped by protocol family; 'none' means the protocol is not
+ * adapted, and choosing on/off sends no parameter at all.
  */
 export type ThinkingParamFamily =
   'anthropic' | 'ollama' | 'google' | 'thinking-type' | 'openrouter' | 'enable-thinking' | 'none'
 
-/** 协议 → 思考参数族 */
+/** Protocol → thinking parameter family */
 export const THINKING_FAMILY_BY_PROVIDER: Readonly<Record<string, ThinkingParamFamily>> = {
   anthropic: 'anthropic',
   ollama: 'ollama',
@@ -114,7 +120,7 @@ export const THINKING_FAMILY_BY_PROVIDER: Readonly<Record<string, ThinkingParamF
   tencent: 'enable-thinking'
 }
 
-/** 解析协议对应的思考参数族（自定义端点按兼容协议判定；入参大小写不敏感） */
+/** Resolve the thinking parameter family for a protocol (custom endpoints follow their compatible protocol; input is case-insensitive) */
 export function resolveThinkingFamily(
   provider: string,
   anthropicFormat = false
@@ -124,20 +130,22 @@ export function resolveThinkingFamily(
   return THINKING_FAMILY_BY_PROVIDER[key] ?? 'none'
 }
 
-/** 该协议是否支持控制思考模式（设置界面提示 + 主进程注入共用同一判断） */
+/** Whether this protocol supports thinking-mode control (shared by the settings hint and main-process injection) */
 export function supportsThinkingControl(provider: string, anthropicFormat = false): boolean {
   return resolveThinkingFamily(provider, anthropicFormat) !== 'none'
 }
 
-/* ==================== 推理等级（reasoning effort） ==================== */
+/* ==================== Reasoning effort ==================== */
 
 /**
- * 推理等级的标准档位顺序（各协议通用词汇）。
+ * Canonical ordering of reasoning effort levels (vocabulary shared across protocols).
  *
- * 单模型「支持哪些档位」以模型档案 `capabilities.reasoning_effort_levels` 为唯一真源
- * （models-profile.json），这里只负责排序与展示名——档案里给的顺序不保证规范，
- * 各厂商档位集合也不一致（如 DeepSeek 只有 low/high/max，GLM-5.3 只有 low/high/max，
- * GPT-5.x 有 none/low/medium/high/xhigh/max）。档案未收录的档位按字典序排在末尾。
+ * Which levels a single model supports is defined solely by the model profile's
+ * `capabilities.reasoning_effort_levels` (models-profile.json); this list only provides
+ * ordering and display names — the order in the profile isn't guaranteed to be canonical,
+ * and vendors differ in their level sets (e.g. DeepSeek only has low/high/max, GLM-5.3 only
+ * has low/high/max, GPT-5.x has none/low/medium/high/xhigh/max). Levels missing from the
+ * list sort last, in lexicographic order.
  */
 export const REASONING_EFFORT_ORDER = [
   'none',
@@ -150,35 +158,40 @@ export const REASONING_EFFORT_ORDER = [
   'ultra'
 ] as const
 
-/** 推理等级标识（协议原值，小写；档案与请求体里都是这个形态） */
+/** Reasoning effort identifier (protocol original value, lowercase; used both in profiles and request bodies) */
 export type ReasoningEffort = string
 
 /**
- * 设置页快捷胶囊用的档位：标准词汇去掉纯别名 `ultra`
- * （`ultra` 只是 DeepSeek 文档里映射到 `max` 的别名，模型档案里不出现，不单列一个胶囊）。
+ * Levels used by the quick chips in the settings page: the standard vocabulary minus the pure
+ * alias `ultra` (`ultra` is only an alias for `max` in DeepSeek's docs, never appears in model
+ * profiles, and gets no chip of its own).
  */
 export const REASONING_EFFORT_PRESETS: readonly string[] = REASONING_EFFORT_ORDER.filter(
   (level) => level !== 'ultra'
 )
 
 /**
- * 设置页字段**右侧那一排**快捷胶囊（比 PRESETS 窄很多）。
+ * The row of quick chips **to the right of** the settings field (much narrower than PRESETS).
  *
- * 实测：弹窗内容区约 500px，一排 7 个胶囊 + 输入框会撑破整行（胶囊挤掉输入框、前面的档位被裁掉），
- * 所以右侧只放最常用的四档，其余档位（none / minimal / xhigh）在下拉里选或直接输入。
+ * Measured: the modal content area is about 500px, and a row of 7 chips plus the input would
+ * overflow the line (chips squeeze out the input, earlier levels get clipped), so only the four
+ * most-used levels sit on the right; the rest (none / minimal / xhigh) are picked from the
+ * dropdown or typed directly.
  */
 export const REASONING_EFFORT_CHIPS: readonly string[] = ['low', 'medium', 'high', 'max']
 
 /**
- * 未显式选择档位时的**默认思考力度**：优先 `medium`，没有 medium 就取排序后的中间那一档。
+ * The **default thinking effort** when no level is explicitly selected: prefer `medium`,
+ * otherwise take the middle level of the sorted list.
  *
- * 用户口径（2026-09-27）：「不要默认选项，要从已有的选项里面选择……如果有思考等级就选择中等思考」——
- * 也就是说「未设置」不是一个可见状态：模型有哪些档位就从中默认挑「中等思考」，
- * 输入框里显示的就是这个真正会下发的档位。
+ * User's wording (2026-09-27): "no default option should be shown; pick from the available
+ * options… if there is a thinking level, choose medium thinking" — meaning "unset" is not a
+ * visible state: whatever levels the model has, default to "medium thinking" among them, and
+ * the input shows the level that will actually be sent.
  *
  * - `[none, low, medium, high, xhigh, max]` → `medium`
- * - `[low, high, max]`（DeepSeek 那类）→ `high`（中间，也正好是 DeepSeek 自己的默认）
- * - `[low, high]` → `high`；`[low]` → `low`；`[]` → null（没有思考档位，不下发也不显示）
+ * - `[low, high, max]` (the DeepSeek kind) → `high` (middle, and also DeepSeek's own default)
+ * - `[low, high]` → `high`; `[low]` → `low`; `[]` → null (no thinking level, so nothing is sent or shown)
  */
 export function defaultReasoningEffort(
   levels: readonly string[] | null | undefined
@@ -189,7 +202,7 @@ export function defaultReasoningEffort(
   return sorted[Math.floor(sorted.length / 2)]
 }
 
-/** 档位展示名：拉丁原文首字母大写（等宽/拉丁用原文，不译成中文，避免和协议值两套叫法） */
+/** Display name of a level: capitalize the first letter of the Latin original (keep Latin as-is rather than translating, to avoid a second name for the same protocol value) */
 export function reasoningEffortLabel(effort: string): string {
   const key = (effort ?? '').trim()
   if (!key) return ''
@@ -197,7 +210,7 @@ export function reasoningEffortLabel(effort: string): string {
   return key.charAt(0).toUpperCase() + key.slice(1)
 }
 
-/** 按标准档位顺序排列档案给的档位集合（去重、去空、未知档位按字典序收尾） */
+/** Sort the level set from a profile into canonical order (dedupe, drop empties, unknown levels sorted last) */
 export function sortReasoningEfforts(levels: readonly string[] | null | undefined): string[] {
   const list = Array.from(
     new Set((levels ?? []).map((l) => String(l).trim().toLowerCase()).filter(Boolean))
@@ -210,14 +223,16 @@ export function sortReasoningEfforts(levels: readonly string[] | null | undefine
 }
 
 /**
- * 推理等级适配族：各家「调推理力度」的参数形态同样不统一，按协议族映射。
- * - 'reasoning-effort'：OpenAI 兼容请求体里的 `reasoning_effort`（DeepSeek / 智谱官方文档
- *   明确该字段；同族 OpenAI 兼容端点沿用同一字段）
- * - 'openrouter-effort'：OpenRouter 统一的 `reasoning.effort`
- * - 'anthropic-effort'：Anthropic 的 `output_config.effort`（`none` 走关闭思考）
- * - 'google-level'：Gemini 的 `thinkingConfig.thinkingLevel`（LOW/MEDIUM/HIGH）
- * - 'ollama-think'：Ollama 的 `think`（布尔或 low/medium/high）
- * - 'none'：未适配，只记录不下发
+ * Reasoning-effort adapter families: the parameter shape for "adjust reasoning effort" also
+ * differs per provider, so they are mapped by protocol family.
+ * - 'reasoning-effort': the `reasoning_effort` field of OpenAI-compatible request bodies
+ *   (DeepSeek / Zhipu docs state this field explicitly; OpenAI-compatible endpoints in the
+ *   same family reuse it)
+ * - 'openrouter-effort': OpenRouter's unified `reasoning.effort`
+ * - 'anthropic-effort': Anthropic's `output_config.effort` (`none` disables thinking)
+ * - 'google-level': Gemini's `thinkingConfig.thinkingLevel` (LOW/MEDIUM/HIGH)
+ * - 'ollama-think': Ollama's `think` (boolean or low/medium/high)
+ * - 'none': not adapted — recorded but never sent
  */
 export type ReasoningParamFamily =
   | 'reasoning-effort'
@@ -228,9 +243,10 @@ export type ReasoningParamFamily =
   | 'none'
 
 /**
- * 协议 → 推理等级适配族。
- * 未收录的协议（含自定义 OpenAI 兼容端点）一律 'none'：宁可不生效，也不往请求体里
- * 塞对方可能不认识的字段导致 400（与思考模式同一原则）。
+ * Protocol → reasoning-effort adapter family.
+ * Unlisted protocols (including custom OpenAI-compatible endpoints) are always 'none': it is
+ * better for the setting to have no effect than to send a field the other side may not
+ * recognise and trigger a 400 (same principle as thinking mode).
  */
 export const REASONING_FAMILY_BY_PROVIDER: Readonly<Record<string, ReasoningParamFamily>> = {
   openai: 'reasoning-effort',
@@ -252,7 +268,7 @@ export const REASONING_FAMILY_BY_PROVIDER: Readonly<Record<string, ReasoningPara
   ollama: 'ollama-think'
 }
 
-/** 解析协议对应的推理等级适配族（自定义端点按兼容协议判定；入参大小写不敏感） */
+/** Resolve the reasoning-effort adapter family for a protocol (custom endpoints follow their compatible protocol; input is case-insensitive) */
 export function resolveReasoningFamily(
   provider: string,
   anthropicFormat = false
@@ -262,7 +278,7 @@ export function resolveReasoningFamily(
   return REASONING_FAMILY_BY_PROVIDER[key] ?? 'none'
 }
 
-/** 该协议是否会把推理等级真正下发（设置界面提示 + 主进程注入共用同一判断） */
+/** Whether this protocol actually sends the reasoning effort (shared by the settings hint and main-process injection) */
 export function supportsReasoningEffort(provider: string, anthropicFormat = false): boolean {
   return resolveReasoningFamily(provider, anthropicFormat) !== 'none'
 }

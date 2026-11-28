@@ -1,7 +1,7 @@
 /**
- * 会话级运行选择（工具 / 技能 / MCP 工具）的 mapper。
+ * Mapper for the session-level agent selection (tools / skills / MCP tools).
  *
- * 没有行的会话 = 全部维度「不覆盖/不启用」；写入时值为 null 的维度存 null。
+ * A session without a row means every dimension is "no override / not enabled"; dimensions whose value is null are stored as null.
  */
 import { eq } from 'drizzle-orm'
 import { withOrm } from '../orm'
@@ -9,7 +9,7 @@ import { topic_agent_config } from '../schema'
 import type { AgentSelection } from '../../../shared/harness/agent-config'
 import { normalizeAgentSelection } from '../../../shared/harness/agent-config'
 
-/** JSON 列 → 字符串数组（非法按 null） */
+/** JSON column → string array (invalid data becomes null) */
 function parseNames(raw: string | null): string[] | null {
   if (!raw) return null
   try {
@@ -19,7 +19,7 @@ function parseNames(raw: string | null): string[] | null {
   }
 }
 
-/** 读取会话级选择；没有行返回 null */
+/** Read the session-level selection; returns null when there is no row */
 export async function getTopicAgentSelection(topicId: number): Promise<AgentSelection | null> {
   return withOrm('getTopicAgentSelection', async (db) => {
     const rows = await db
@@ -36,7 +36,7 @@ export async function getTopicAgentSelection(topicId: number): Promise<AgentSele
   })
 }
 
-/** 写入会话级选择（三列各写 JSON 或 null） */
+/** Write the session-level selection (each of the three columns stores JSON or null) */
 export async function setTopicAgentSelection(
   topicId: number,
   selection: AgentSelection
@@ -64,7 +64,7 @@ export async function setTopicAgentSelection(
   })
 }
 
-/** 删除会话级选择（回到默认） */
+/** Delete the session-level selection (back to defaults) */
 export async function clearTopicAgentSelection(topicId: number): Promise<void> {
   await withOrm('clearTopicAgentSelection', async (db) => {
     await db.delete(topic_agent_config).where(eq(topic_agent_config.topic_id, topicId))

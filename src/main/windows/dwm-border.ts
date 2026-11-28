@@ -1,19 +1,21 @@
 /**
- * Windows 窗口边框颜色跟随应用主题。
+ * Windows window border color follows the app theme.
  *
- * 背景（用户 2026-11-20 反馈「顶部会出现这种情况」「还是不行」）：
- * 自绘标题栏只覆盖标题区域，窗口最外圈那条 1~2px 的线是 **DWM 画的系统窗口边框**，
- * 颜色由 Windows 主题决定（系统深色时是 #3a3a3a），不跟应用内的亮/暗切换——
- * 于是应用切亮色后，窗口顶部（以及四周）仍压着一条深灰边。
+ * Background: the custom title bar only covers the title area; the 1–2px line around the outer
+ * edge of the window is the **system window border drawn by DWM**, whose color comes from the
+ * Windows theme (#3a3a3a in system dark mode) and does not follow the in-app light/dark switch —
+ * so after the app switches to light, a dark gray edge remains along the top (and around) the
+ * window.
  *
- * Electron 没有暴露 DWMWA_BORDER_COLOR（窗口边框色）；项目里已带 koffi（沙箱 runner
- * 也在用、electron-builder 已 asarUnpack），这里直接调 dwmapi.dll 把边框色设成和
- * 标题栏/背景相同的颜色：亮色下那条深色边就消失了。
+ * Electron does not expose DWMWA_BORDER_COLOR (the window border color); the project already
+ * bundles koffi (also used by the sandbox runner and asarUnpacked by electron-builder), so it calls
+ * dwmapi.dll directly to set the border color to match the title bar/background: in light mode the
+ * dark edge disappears.
  */
 import { BrowserWindow } from 'electron'
 import logger from 'electron-log'
 
-/** DwmSetWindowAttribute 的 DwmWindowAttribute 枚举值（Win11 22000+） */
+/** DwmWindowAttribute enum value for DwmSetWindowAttribute (Win11 22000+) */
 const DWMWA_BORDER_COLOR = 34
 
 type DwmSetWindowAttribute = (
@@ -27,12 +29,12 @@ let setWindowAttribute: DwmSetWindowAttribute | null = null
 let koffiLoadFailed = false
 let notifiedReady = false
 
-/** 懒加载 koffi + dwmapi：只有 Windows 才需要，失败也不影响应用（边框保持系统默认） */
+/** Lazily load koffi + dwmapi: only needed on Windows; a failure does not affect the app (border keeps the system default) */
 function loadDwmSetter(): DwmSetWindowAttribute | null {
   if (setWindowAttribute) return setWindowAttribute
   if (koffiLoadFailed) return null
   try {
-    // 延迟 require：避免某些环境拿不到 koffi 时让主进程启动就崩
+    // Deferred require: keeps the main process from crashing at startup where koffi is unavailable
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const koffi = require('koffi') as typeof import('koffi')
     const dwmapi = koffi.load('dwmapi.dll')
@@ -51,7 +53,7 @@ function loadDwmSetter(): DwmSetWindowAttribute | null {
   }
 }
 
-/** #RRGGBB → COLORREF（0x00BBGGRR） */
+/** #RRGGBB → COLORREF (0x00BBGGRR) */
 function toColorRef(cssColor: string): number | null {
   const hex = cssColor.trim().replace(/^#/, '')
   if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null
@@ -62,8 +64,9 @@ function toColorRef(cssColor: string): number | null {
 }
 
 /**
- * 把窗口的系统边框颜色同步成给定颜色（通常传标题栏底色，亮/暗主题下都与窗口边缘同色）。
- * 非 Windows、koffi 不可用或调用失败时静默跳过。
+ * Sync the window's system border color to the given color (usually the title bar background, so
+ * the window edge matches in both light and dark themes).
+ * Silently skipped on non-Windows, when koffi is unavailable, or when the call fails.
  */
 export function syncWindowBorderColor(win: BrowserWindow, cssColor: string): void {
   if (process.platform !== 'win32' || win.isDestroyed()) return

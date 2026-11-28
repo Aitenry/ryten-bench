@@ -1,8 +1,8 @@
 /**
- * 搜索服务响应映射（纯函数，无网络 / SDK 依赖，可离线测试）。
+ * Search service response mapping (pure functions, no network / SDK dependencies, offline-testable).
  *
- * - DeepSeek：`results[].{rerank_score,title,url,snippet,summary,content,site_name,date}` → 统一结构；
- * - Tavily（官方 SDK 的结果数组）：`{title,url,content,rawContent,score}` → 统一结构。
+ * - DeepSeek: `results[].{rerank_score,title,url,snippet,summary,content,site_name,date}` -> unified structure;
+ * - Tavily (official SDK result array): `{title,url,content,rawContent,score}` -> unified structure.
  */
 import type { SearchRequest, SearchResultItem } from './types'
 import { MAX_SEARCH_RESULTS, clipText } from './types'
@@ -19,7 +19,7 @@ interface DeepSeekSearchResult {
   authority?: number
 }
 
-/** DeepSeek 原始响应 → 统一结果 */
+/** DeepSeek raw response -> unified results */
 export function mapDeepSeekResponse(
   json: unknown,
   request: SearchRequest
@@ -33,7 +33,7 @@ export function mapDeepSeekResponse(
     const row = raw as DeepSeekSearchResult
     const url = typeof row.url === 'string' ? row.url : ''
     if (!url) continue
-    // 长摘要（summary）更适合给模型读；缺失时退回短摘要
+    // The long summary reads better for the model; fall back to the short snippet when missing
     const snippetSource = row.summary || row.snippet || ''
     const item: SearchResultItem = {
       title: typeof row.title === 'string' && row.title ? row.title : url,
@@ -49,7 +49,7 @@ export function mapDeepSeekResponse(
   return { ok: true, items }
 }
 
-/** Tavily SDK 结果数组 → 统一结果 */
+/** Tavily SDK result array -> unified results */
 export function mapTavilyResults(rawResults: unknown, request: SearchRequest): SearchResultItem[] {
   if (!Array.isArray(rawResults)) return []
   const items: SearchResultItem[] = []

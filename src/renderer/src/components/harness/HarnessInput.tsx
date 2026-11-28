@@ -69,7 +69,8 @@ import {
   mcpServerGroupValue
 } from '../../../../shared/harness/mcp'
 
-// TipTap 默认不加载标准键位绑定（退格/删除/回车等），必须显式加载 prosemirror-commands 的 baseKeymap
+// TipTap does not load standard key bindings (backspace/delete/enter, etc.) by default, so load
+// prosemirror-commands' baseKeymap explicitly.
 const BaseKeymap = Extension.create({
   name: 'baseKeymap',
   addProseMirrorPlugins() {
@@ -88,27 +89,28 @@ const providerIconMap: Record<string, React.ComponentType<{ style?: React.CSSPro
     'google-vertexai': GeminiFilled
   }
 
-// 自定义光标高度（px）：ProseMirror 的原生光标高度跟随行高（19px），
-// 与普通输入框（≈字号高度）不一致，故隐藏原生光标、绘制固定高度光标。
-// 与正文/占位符字号一致（14px），保证空内容时与提示文字同高同位。
-// 如需微调高度改这里即可。
+// Custom caret height (px): ProseMirror's native caret height follows the line height (19px),
+// which does not match a normal input (about the font size), so the native caret is hidden and a
+// fixed-height caret is drawn. It matches the body/placeholder font size (14px) so that with empty
+// content it has the same height and position as the placeholder text. Tweak this value to adjust.
 const CARET_HEIGHT = 14
 
 /**
- * 「/」命令面的查询词上限（字符）。
+ * Query length limit (in characters) for the `/` command palette.
  *
- * 超过就当普通文本：用户可能真的想发一条以 `/` 开头的长消息（路径、命令示例），
- * 菜单不能一直压在输入框上方。
+ * Longer queries are treated as plain text: the user may genuinely want to send a long message
+ * starting with `/` (a path, a command example), and the menu must not keep covering the input.
  */
 const SLASH_QUERY_MAX_CHARS = 32
 
 /**
- * 从输入文本解析命令查询词。
+ * Parse the command query from the input text.
  *
- * 用户口径（2026-11-26）：**只有在一开始输入 `/` 才会唤起**命令面。
- * 因此只认「文本以 `/` 开头」这一种形态；`/` 出现在句中/行中一律按普通文字处理。
- * 查询词（`/` 之后的部分）含空白即视为用户开始写正文，菜单收起；
- * 未通过校验返回 null。
+ * Product decision (2026-11-26): the command palette is **only opened when `/` is typed at the
+ * very beginning**. So only the shape "text starts with `/`" is recognized; a `/` in the middle of
+ * a sentence or line is always treated as plain text. A query (the part after `/`) containing
+ * whitespace means the user has started writing the body, so the menu closes. Returns null when
+ * validation fails.
  */
 function parseSlashQuery(text: string): string | null {
   if (!text.startsWith('/')) return null
@@ -119,10 +121,12 @@ function parseSlashQuery(text: string): string | null {
 }
 
 /**
- * 权限档位（沙箱）选项表 —— 与主进程 runtime/permission.ts 的档位一一对应。
+ * Permission mode (sandbox) option table — one-to-one with the modes in the main process's
+ * runtime/permission.ts.
  *
- * 只有三个内置档位、且与 DSH 的预设同名同义（仅可查看 / 工作区内修改 / 完全权限）：
- * 图标沿用盾牌家族，颜色只在「更宽 = 更危险」这一条信息上变化（中性 → 主色 → 警示）。
+ * There are only three built-in modes (read-only / workspace write / full access): icons come from
+ * the shield family, and color encodes only one thing — "broader = more dangerous"
+ * (neutral → primary → warning).
  */
 const PERMISSION_OPTIONS: {
   mode: PermissionMode
@@ -130,10 +134,10 @@ const PERMISSION_OPTIONS: {
     | 'harness.permission.readOnly'
     | 'harness.permission.workspaceWrite'
     | 'harness.permission.fullAccess'
-  /** 面板底部的一句话说明（不给 = 该档位不显示说明行） */
+  /** One-line description at the panel bottom (omit = this mode has no description row) */
   hintKey?: 'harness.permission.readOnlyHint' | 'harness.permission.fullAccessHint'
   icon: React.ComponentType<{ size?: number | string; style?: React.CSSProperties }>
-  /** 颜色令牌名（在组件里按主题 token 取色） */
+  /** Color token name (resolved to a theme token in the component) */
   tone: 'neutral' | 'primary' | 'warning'
 }[] = [
   {
@@ -158,7 +162,7 @@ const PERMISSION_OPTIONS: {
   }
 ]
 
-// 读取粘贴 File 内容为 dataUrl（图片附件走此路径）
+// Read a pasted File as a dataUrl (image attachments take this path)
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -172,13 +176,14 @@ interface HarnessInputProps {
   inputValue: string
   onInputChange: (value: string) => void
   /**
-   * 「外部请求把焦点放进输入框」的计数器（插件行的 ＋ → `harness-focus-input`）。
-   * 变化时聚焦编辑器并**不改内容**——用户点完「新建会话」直接就能打字
-   * （内容一律由用户自己写：用户口径 2026-09-28「不要显示：给插件「…」这个玩意」）。
+   * Counter for "an external request wants focus in the input" (plugin row + → `harness-focus-input`).
+   * On change, focus the editor and **leave the content untouched** — after clicking "new session"
+   * the user can type right away (content is always written by the user themselves; 2026-09-28
+   * decision: do not display anything for the plugin "…" item).
    */
   focusInputToken?: number
   textareaRef: React.RefObject<HTMLDivElement | null>
-  /** 全局输入历史（↑/↓ 键切换浏览，handleSend 记录，localStorage 持久化） */
+  /** Global input history (browse with ↑/↓, recorded by handleSend, persisted to localStorage) */
   inputHistoryRef: { current: string[] }
   attachments: Attachment[]
   onAttachmentsChange: (attachments: Attachment[]) => void
@@ -191,32 +196,42 @@ interface HarnessInputProps {
       value: number
       label: string
       providerType: string
-      /** 当前模型的推理等级（null = 未设置） */
+      /** Reasoning effort of the current model (null = not set) */
       reasoningEffort: string | null
-      /** 该模型档案声明的可选档位（空数组 = 档案未收录） */
+      /** Selectable effort levels declared by the model profile (empty array = none recorded) */
       effortLevels: string[]
-      /** 当前协议是否真的会下发档位参数（未适配时面板里提示「仅记录」） */
+      /** Whether the current protocol really sends the effort parameter (if unsupported the panel notes it is recorded only) */
       effortControllable: boolean
     }[]
   }[]
   modelSupportsTools: boolean
   modelSupportsVision: boolean
   /**
-   * 当前话题 id（权限档位按话题存）：
-   * null = 还没有会话（新对话第一轮），此时切换档位等同于改「新会话默认值」。
+   * Current topic id (permission mode is stored per topic):
+   * null = no conversation yet (first turn of a new chat); switching modes then equals changing the
+   * "new session default".
    */
   currentTopicId: number | null
   /**
-   * 是否显示输入框右上角的助手形象（mascot）。
+   * **Draft** team-collaboration value for a blank session: there is no topic to persist to yet, so
+   * it is kept on the page (`useHarnessHandlers`) and saved together with the INSERT when the first
+   * message creates the topic; once a topic exists this value no longer participates in rendering.
+   */
+  pendingTeamMode?: boolean
+  /** Draft value change callback: the switch in a blank session calls this and no IPC is sent */
+  onPendingTeamModeChange?: (enabled: boolean) => void
+  /**
+   * Whether to show the assistant mascot at the top-right of the input.
    *
-   * 只在空白会话（欢迎页）里显示：那条形象是绝对定位、向上探出输入卡片的，
-   * 有对话内容时会压在消息 / 思考过程上（用户 2026-11-23 报的问题），
-   * 所以由页面按 `messages.length === 0` 传进来。
+   * Only shown in a blank session (welcome page): the mascot is absolutely positioned and sticks
+   * out above the input card, so with conversation content it overlaps messages / reasoning
+   * (reported 2026-11-23). The page therefore passes this based on `messages.length === 0`.
    */
   showMascot?: boolean
   /**
-   * 当前模型的上下文窗口（供应商档案 metadata.context_window）。
-   * 底栏右侧的上下文圆环按它算百分比；null = 档案没填，圆环不画（不猜窗口大小）。
+   * Context window of the current model (provider profile metadata.context_window).
+   * The context ring on the bottom-right computes its percentage from it; null = the profile does
+   * not specify it, so no ring is drawn (the window size is never guessed).
    */
   modelContextWindow?: number | null
   isDarkMode: boolean
@@ -228,26 +243,28 @@ interface HarnessInputProps {
   onStop: () => void
   onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void
   /**
-   * 子代理会话的输入框：复用同一个组件，但隐藏主代理专属控件
-   * （附件 / 权限档位 / 模型选择 / 工具技能 / 用量条）——这些只作用于主代理轮次。
+   * Input for subagent sessions: the same component is reused but main-agent-only controls are
+   * hidden (attachments / permission mode / model picker / tools and skills / usage bar) — these
+   * only apply to main-agent turns.
    */
   simpleMode?: boolean
-  /** 自定义 placeholder（子代理续聊用；缺省用主对话文案） */
+  /** Custom placeholder (used when continuing a subagent chat; defaults to the main chat copy) */
   placeholder?: string
-  /** 目标输入态：输入卡片高亮并显示模式标签（内容仍由当前编辑器承载） */
+  /** Goal compose mode: the input card is highlighted and shows a mode label (content still lives in the editor) */
   goalCompose?: boolean
-  /** 目标轮次上限（null = 用后端默认 256；只在目标输入态可改） */
+  /** Max rounds for a goal (null = backend default 256; editable only in goal compose mode) */
   goalRoundsLimit?: number | null
   onGoalRoundsLimitChange?: (rounds: number | null) => void
-  /** 计划评审挂起时锁住输入框（不发送、不可编辑） */
+  /** Lock the input while plan review is pending (cannot send or edit) */
   locked?: boolean
-  /** 斜杠命令「目标」：由页面打开输入框上方的目标编辑区 */
+  /** Slash command "goal": the page opens the goal editor above the input */
   onGoalCommand?: () => void
-  /** 斜杠命令「计划」：由页面切换输入框上方的计划模式 */
+  /** Slash command "plan": the page toggles plan mode above the input */
   onPlanCommand?: () => void
   /**
-   * 会话级运行选择（工具 / 技能 / MCP）：页面持有，发送时随 agentConfig 下发。
-   * 变化时通过 onAgentSelectionChange 回传，已存在会话由输入框直接落库。
+   * Session-level run selection (tools / skills / MCP): owned by the page and sent with agentConfig.
+   * Changes are reported back via onAgentSelectionChange; for an existing session the input
+   * persists them directly.
    */
   agentSelection?: AgentSelectionView | null
   onAgentSelectionChange?: (selection: AgentSelectionView) => void
@@ -267,6 +284,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   groupedProviderOptions,
   modelSupportsVision,
   currentTopicId,
+  pendingTeamMode = false,
+  onPendingTeamModeChange,
   showMascot = false,
   modelContextWindow = null,
   isDarkMode,
@@ -288,29 +307,34 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   onAgentSelectionChange = () => {}
 }) => {
   const [isDragOver, setIsDragOver] = useState(false)
-  // 自定义光标元素（原生光标已隐藏，见 updateCaret）
+  // Custom caret element (the native caret is hidden, see updateCaret)
   const caretRef = useRef<HTMLSpanElement | null>(null)
   const { message } = App.useApp()
   const { t } = useTranslation()
   const { token } = theme.useToken()
 
-  // ── 模型 / 推理等级面板（输入框左下角的模型选择）──────────────────────────
-  // 展开面板是一层「模型 / 推理等级」两行入口，点进去才是列表：
-  // 两行都带当前值，收起时点一下就能同时看到「当前用的是哪个模型、多深的思考」。
+  // ── Model / reasoning effort panel (model picker at the bottom-left of the input) ──────────
+  // The expanded panel has two entry rows, "model" and "reasoning effort"; the list appears one
+  // level deeper. Both rows show the current value, so one click on the collapsed state reveals
+  // which model is in use and how deep its thinking is.
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuView, setMenuView] = useState<'root' | 'model' | 'effort'>('root')
   const [modelQuery, setModelQuery] = useState('')
-  /** 模型列表的键盘高亮下标（搜索结果扁平化后的下标） */
+  /** Keyboard highlight index in the model list (index into the flattened search results) */
   const [activeIndex, setActiveIndex] = useState(0)
   const [savingEffort, setSavingEffort] = useState(false)
 
-  // ── Agent Teams 团队协作（opt-in，按话题持久化）────────────────────────────
-  // 入口放在「模型 / 推理等级」面板里（用户口径：团队协作开关属于本轮运行配置，
-  // 不再散落在侧栏会话菜单）；关闭时不注入 team_task_* 工具与团队提示词段。
+  // ── Team collaboration (opt-in, persisted per topic) ──────────────────────────────────────
+  // The entry lives in the "model / reasoning effort" panel (the team switch belongs to the
+  // current turn's run configuration rather than the sidebar session menu). When off, the
+  // team_task_* tools and the team prompt section are not injected.
   const [teamModeEnabled, setTeamModeEnabled] = useState(false)
   const [teamModeBusy, setTeamModeBusy] = useState(false)
 
   useEffect(() => {
+    // Blank session (no topic yet): the switch reflects the draft value held by the page; nothing is
+    // read from the database or subscribed to — the value is saved with the INSERT when the first
+    // message creates the topic, see startTurn in useHarnessHandlers.
     if (currentTopicId == null || simpleMode) {
       setTeamModeEnabled(false)
       return
@@ -322,7 +346,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         if (!cancelled) setTeamModeEnabled(view.enabled)
       })
       .catch(() => {
-        /* 读取失败按关闭展示；下一轮 Runtime 仍按后端状态执行 */
+        /* Read failures are shown as off; the next Runtime turn still follows backend state */
       })
     const unsubscribe = harnessApi.harness.onTeamModeUpdated((view) => {
       if (view.topicId === currentTopicId) setTeamModeEnabled(view.enabled)
@@ -352,15 +376,16 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [currentTopicId, message, t]
   )
 
-  // ── 权限档位（沙箱）：仅可查看 / 工作区内修改 / 完全权限 ──────────────────
-  // 档位按话题存在主进程（electron-store），这里只缓存一份用于显示；
-  // 切到「完全权限」要先过一次风险确认（DSH 同款），其余档位即点即生效。
+  // ── Permission mode (sandbox): read-only / workspace write / full access ──────────────────
+  // The mode is stored per topic in the main process (electron-store); the value here is only a
+  // cached copy for display. Switching to "full access" requires a risk confirmation first; the
+  // other modes take effect immediately.
   const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [confirmFullAccess, setConfirmFullAccess] = useState(false)
   const [savingPermission, setSavingPermission] = useState(false)
 
-  // ── 工具 / 技能：主智能体默认配置（设置页移除后放到输入框下方）──────────────
+  // ── Tools / skills: main-agent defaults (moved below the input after leaving settings) ──────
   const [toolsOpen, setToolsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [toolCatalog, setToolCatalog] = useState<HarnessToolInfo[]>([])
@@ -370,12 +395,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [selectedMcp, setSelectedMcp] = useState<string[]>([])
-  /** 可选 MCP 服务器（选择项存服务器分组 mcp@<命名空间>，主进程挂载时展开） */
+  /** Available MCP servers (the selection stores per-server groups mcp@<namespace>, expanded by the main process on mount) */
   const [mcpCatalog, setMcpCatalog] = useState<{ value: string; label: string }[]>([])
   /**
-   * 幽灵选中：技能 / MCP 目录里被删掉或改名的旧选择仍留在会话选择里。
-   * 徽标只统计「目录里还存在」的项，否则会出现「技能 1」但面板里没有任何勾选行、
-   * 也无法取消的情况。选择本身保留——目录恢复同名项时会重新生效（运行时同样按目录过滤）。
+   * Ghost selections: old skill / MCP selections whose entries were deleted or renamed in the
+   * catalog still remain in the session selection. The badge counts only entries still present in
+   * the catalog; otherwise it would read "skills 1" while the panel has no checked row and the
+   * choice cannot be cleared. The selection itself is kept — it takes effect again if the catalog
+   * restores the same name (the runtime also filters by catalog).
    */
   const visibleSelectedSkills = useMemo(
     () => selectedSkills.filter((id) => skillCatalog.some((skill) => skill.id === id)).length,
@@ -393,10 +420,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     const timer = window.setTimeout(() => mcpSearchRef.current?.focus(), 60)
     return () => window.clearTimeout(timer)
   }, [mcpOpen])
-  /** 工具 / 技能面板里的搜索词（只在面板内过滤，关掉清空；不进设置） */
+  /** Search term in the tools / skills panels (filters that panel only, cleared on close, not saved to settings) */
   const [toolQuery, setToolQuery] = useState('')
   const [skillQuery, setSkillQuery] = useState('')
-  /** 面板每次打开都把光标放进搜索框（Popover 的内容挂着不卸载，autoFocus 只有第一次有效） */
+  /** Move the cursor into the search box every time the panel opens (Popover content stays mounted, so autoFocus only works the first time) */
   const toolSearchRef = useRef<InputRef | null>(null)
   const skillSearchRef = useRef<InputRef | null>(null)
   useEffect(() => {
@@ -409,7 +436,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     const timer = window.setTimeout(() => skillSearchRef.current?.focus(), 60)
     return () => window.clearTimeout(timer)
   }, [skillsOpen])
-  /** 选择变化回传页面（发送时随 agentConfig 下发） */
+  /** Report selection changes back to the page (sent with agentConfig) */
   const emitSelection = useCallback(
     (selection: AgentSelectionView): void => {
       onAgentSelectionChange(selection)
@@ -419,7 +446,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const currentTopicIdRef = useRef(currentTopicId)
   currentTopicIdRef.current = currentTopicId
 
-  // 切话题：拉一次该话题的档位（新话题没有记录 → 主进程回落到「新会话默认值」）
+  // Switching topics: fetch the mode for that topic once (a new topic has no record → the main
+  // process falls back to the "new session default")
   useEffect(() => {
     let cancelled = false
     void harnessApi.harness
@@ -428,15 +456,16 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         if (!cancelled) setPermissionMode(state.mode)
       })
       .catch(() => {
-        // 插件停用 / 通道不可用时静默：输入框其余功能不受影响
+        // Silent when the plugin is disabled / the channel is unavailable: the rest of the input works
       })
     return () => {
       cancelled = true
     }
   }, [currentTopicId])
 
-  // 工具 / 技能 / MCP 目录 + 当前会话的选择（切会话时重新读）。
-  // 默认语义：工具跟随主智能体默认；技能与 MCP 默认一个都不启用（用户口径 2026-11-27）。
+  // Tool / skill / MCP catalogs plus the current session's selection (re-read when switching
+  // sessions). Defaults: tools follow the main-agent defaults; skills and MCP start with nothing
+  // enabled (2026-11-27 decision).
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -463,8 +492,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           }))
         )
         /**
-         * 老的「MCP」全选标记（工具面板里曾有一项 `mcp`，2026-11-27 已删掉）→ 迁成
-         * 「当前所有服务器」的按服务器分组值，覆盖范围与原来一致；一台服务器都没有时直接丢。
+         * Legacy "MCP" select-all marker (the tools panel used to have an `mcp` item, removed
+         * 2026-11-27) → migrate to per-server group values for "all current servers", keeping the
+         * same coverage; drop it entirely when there are no servers.
          */
         const migrateLegacyMcp = (names: string[]): string[] =>
           names.includes(MCP_TOOL_GROUP)
@@ -473,8 +503,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         setSelectedTools(
           Array.from(
             new Set(
-              // 旧会话里可能存着合并前的 web_fetch / web_search：先归一到分组项，
-              // 否则面板上勾选态对不上（分组项显示未勾选，但工具其实已经挂上）。
+              // Old sessions may store pre-merge web_fetch / web_search: normalize them to the
+              // group item first, otherwise the panel check state is off (the group shows
+              // unchecked while its tools are actually mounted).
               migrateLegacyMcp(topicSelection?.tools ?? main.tools ?? []).map((name) =>
                 canonicalToolName(name)
               )
@@ -503,14 +534,16 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   }, [currentTopicId, emitSelection])
 
-  // 档位变更广播（设置页改默认值、另一窗口切换）→ 同步当前显示
+  // Permission mode broadcast (default changed in settings, or switched in another window) →
+  // sync the displayed value
   useEffect(() => {
     try {
       return harnessApi.harness.onPermissionUpdated((state) => {
         if (state.topicId === (currentTopicIdRef.current ?? 0)) setPermissionMode(state.mode)
       })
     } catch (err) {
-      // 订阅失败（插件停用 / preload 白名单未放行）不能让异常从 effect 逃逸：会卸载整棵渲染树
+      // A failed subscription (plugin disabled / preload allowlist) must not let the exception
+      // escape the effect: that would unmount the whole render tree
       console.warn('[harness-input] Failed to subscribe to permission mode:', err)
       return
     }
@@ -536,7 +569,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [message, t]
   )
 
-  /** 选中档位：完全权限需要显式确认风险，其余直接切换 */
+  /** Select a mode: full access needs an explicit risk confirmation, others switch directly */
   const selectPermissionMode = useCallback(
     (mode: PermissionMode): void => {
       if (mode === permissionMode) {
@@ -553,7 +586,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [permissionMode, applyPermissionMode]
   )
 
-  /** 会话级选择写回：已存在会话立即落库；新会话由主进程随首轮写入 */
+  /** Persist a session-level selection: saved immediately for an existing session; for a new session the main process writes it with the first turn */
   const persistSelection = (selection: AgentSelectionView): void => {
     emitSelection(selection)
     if (currentTopicId == null) return
@@ -562,7 +595,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       .catch(() => message.error(t('harness.input.pickerSaveFailed')))
   }
 
-  /** 工具：按会话启用（默认跟随主智能体，改动后该会话按新清单运行） */
+  /** Tools: enabled per session (defaults to following the main agent; changes apply to this session's next turn) */
   const toggleTool = (name: string): void => {
     const next = selectedTools.includes(name)
       ? selectedTools.filter((item) => item !== name)
@@ -571,7 +604,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     persistSelection({ tools: next, skills: selectedSkills, mcpTools: selectedMcp })
   }
 
-  /** 技能：按会话启用（新增技能默认不启用，需在这里勾选） */
+  /** Skills: enabled per session (new skills are off by default and must be checked here) */
   const toggleSkill = (id: string): void => {
     const next = selectedSkills.includes(id)
       ? selectedSkills.filter((item) => item !== id)
@@ -580,7 +613,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     persistSelection({ tools: selectedTools, skills: next, mcpTools: selectedMcp })
   }
 
-  /** MCP：按会话勾选服务器（存分组值，主进程挂载时展开成具体工具） */
+  /** MCP: check servers per session (stored as group values, expanded into concrete tools by the main process on mount) */
   const toggleMcp = (value: string): void => {
     const next = selectedMcp.includes(value)
       ? selectedMcp.filter((item) => item !== value)
@@ -589,7 +622,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     persistSelection({ tools: selectedTools, skills: selectedSkills, mcpTools: next })
   }
 
-  /** 扁平化选项：查找当前模型、键盘导航、搜索结果共用一份 */
+  /** Flattened options: shared by current-model lookup, keyboard navigation and search results */
   const flatOptions = useMemo(
     () =>
       groupedProviderOptions.flatMap((group) =>
@@ -603,16 +636,17 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [flatOptions, selectedProviderId]
   )
 
-  /** 当前模型档案声明的推理档位（空 = 没有思考档位，面板里不显示「推理等级」这一行） */
+  /** Effort levels declared by the current model profile (empty = no thinking levels, so the "reasoning effort" row is hidden) */
   const effortLevels = selectedOption?.effortLevels ?? []
   const currentEffort = selectedOption?.reasoningEffort ?? null
   /**
-   * 实际生效的档位：显式选过就用它，没选过就是该模型的「中等思考」默认档
-   * （与主进程 thinking-params 的兜底同一份算法，所以界面显示的就是真正会下发的档位）。
+   * Effectively applied level: the explicitly selected one if any, otherwise the model's default
+   * "medium thinking" level (same algorithm as the fallback in the main process's thinking-params,
+   * so what the UI shows is exactly what gets sent).
    */
   const effectiveEffort = currentEffort ?? defaultReasoningEffort(effortLevels)
 
-  /** 模型搜索：按展示名与协议名过滤，保留分组结构 */
+  /** Model search: filter by display name and protocol name, keeping the grouping */
   const filteredGroups = useMemo(() => {
     const query = modelQuery.trim().toLowerCase()
     if (!query) return groupedProviderOptions
@@ -628,7 +662,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       .filter((group) => group.options.length > 0)
   }, [groupedProviderOptions, modelQuery])
 
-  /** 搜索结果扁平化（键盘下标用它，与渲染顺序一致） */
+  /** Flatten the search results (the keyboard index uses it, matching render order) */
   const filteredOptions = useMemo(
     () => filteredGroups.flatMap((group) => group.options),
     [filteredGroups]
@@ -643,7 +677,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const openModelList = useCallback((): void => {
     setMenuView('model')
     setModelQuery('')
-    // 打开时高亮当前模型（搜索词刚被清空，所以按全量列表定位）
+    // Highlight the current model on open (the query was just cleared, so index into the full list)
     setActiveIndex(
       Math.max(
         0,
@@ -669,9 +703,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   )
 
   /**
-   * 写入推理等级：落到该模型自己的配置列（provider.reasoning_effort），
-   * 由主进程按协议族翻译成各家字段。保存后 providers-changed 广播会让列表刷新。
-   * 档位只来自模型档案（面板里不再有「默认/未设置」项），所以这里只写具体档位。
+   * Write the reasoning effort into the model's own config column (provider.reasoning_effort); the
+   * main process translates it per protocol family. After saving, the providers-changed broadcast
+   * refreshes the list. Levels come only from the model profile (the panel no longer offers a
+   * "default/unset" item), so only concrete levels are written here.
    */
   const selectEffort = useCallback(
     async (level: string): Promise<void> => {
@@ -689,7 +724,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [selectedProviderId, message, t, closeMenu]
   )
 
-  /** 模型列表键盘操作：↑/↓ 移动、Enter 选中、Esc 退回上一级 */
+  /** Model list keyboard handling: ↑/↓ to move, Enter to select, Esc to go back one level */
   const handleModelListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>): void => {
       if (e.key === 'Escape') {
@@ -731,7 +766,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   const SelectedIcon = providerIconMap[selectedProviderType]
   const selectedColor = getProviderColor(selectedProviderType, isDarkMode)
 
-  // 外部回调走 ref：editor 只创建一次，避免 props 变化导致重建
+  // External callbacks go through refs: the editor is created once, so prop changes cannot rebuild it
   const onInputChangeRef = useRef(onInputChange)
   onInputChangeRef.current = onInputChange
   const onKeyDownRef = useRef(onKeyDown)
@@ -739,14 +774,17 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const editorRef = useRef<Editor | null>(null)
 
-  // ── 输入历史（↑/↓ 切换）：全局共享、localStorage 持久化，由 handleSend 记录到 inputHistoryRef ──
-  // historyIndexRef：-1 = 未浏览，0..n-1 = 指向历史条目；
-  // 触发条件：仅当输入内容为空（ed.isEmpty）时才接管 ↑/↓，用户输入内容后保留默认光标移动
+  // ── Input history (↑/↓ to switch): globally shared, persisted in localStorage, recorded into
+  // inputHistoryRef by handleSend ──
+  // historyIndexRef: -1 = not browsing, 0..n-1 = points at a history entry;
+  // Trigger: ↑/↓ are only taken over when the input is empty (ed.isEmpty); once the user has typed
+  // something, the default caret movement is kept.
   const historyIndexRef = useRef(-1)
-  // 浏览切换后刷新自定义光标（updateCaret 定义在下方，经 ref 调用避免声明顺序问题）
+  // Refresh the custom caret after switching entries (updateCaret is defined below; calling it via
+  // ref avoids declaration-order issues)
   const updateCaretRef = useRef<() => void>(() => {})
 
-  /** 与 onUpdate 一致的文本序列化：hardBreak→换行、fileRef→路径 */
+  /** Text serialization matching onUpdate: hardBreak→newline, fileRef→path */
   const getEditorText = useCallback((ed: Editor): string => {
     return ed
       .getText({
@@ -759,27 +797,29 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       .replace(/\n+$/, '')
   }, [])
 
-  /** textarea 风格逐行移动光标。
-   * 输入框全部换行都是 hardBreak，整篇只是一个 textblock，ProseMirror 默认 ↑/↓
-   * 是 block 级移动（直接跳段落开头/结尾），这里按屏幕坐标逐行定位光标。 */
+  /** Move the caret line by line, textarea style.
+   * Every newline in the input is a hardBreak and the whole document is a single textblock, so
+   * ProseMirror's default ↑/↓ is block-level movement (jumping to paragraph start/end); here the
+   * caret is positioned per line using screen coordinates. */
   const moveCursorByLine = useCallback((view: EditorView, dir: -1 | 1): boolean => {
     const { state } = view
     if (!state.selection.empty) return false
     const lineHeight = parseFloat(getComputedStyle(view.dom).lineHeight) || 19
     const coords = view.coordsAtPos(state.selection.$head.pos)
     const hit = view.posAtCoords({ left: coords.left, top: coords.top + dir * lineHeight })
-    if (!hit) return true // 首行 ↑ / 末行 ↓ 越界：接管但不动，避免跳到段落开头/结尾
-    // 目标与当前行高度差小于半行 → 仍是同一行（坐标被 clamp）→ 不移动
+    if (!hit) return true // ↑ on the first line / ↓ on the last: consume but do not move, avoiding a jump to paragraph start/end
+    // Height difference from the current line is under half a line → still the same line (coords
+    // clamped) → do not move
     const hitCoords = view.coordsAtPos(hit.pos)
     if (Math.abs(hitCoords.top - coords.top) < lineHeight * 0.5) return true
-    const bias = dir > 0 ? 1 : -1 // ↓ 到行首、↑ 到行尾（textarea 惯例）
+    const bias = dir > 0 ? 1 : -1 // ↓ to line start, ↑ to line end (textarea convention)
     view.dispatch(
       state.tr.setSelection(TextSelection.near(state.doc.resolve(hit.pos), bias)).scrollIntoView()
     )
     return true
   }, [])
 
-  /** ↑/↓ 切换输入历史（调用方已确保输入内容为空）；返回是否已接管按键 */
+  /** Switch input history with ↑/↓ (caller guarantees the input is empty); returns whether the key was consumed */
   const navigateHistory = useCallback(
     (dir: -1 | 1): boolean => {
       const ed = editorRef.current
@@ -789,8 +829,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
       let next = historyIndexRef.current
       if (dir === -1) {
-        // ↑：空输入时逐条回退（最近一条 → 更早）；
-        // 最旧一条再按 ↑ 循环回空草稿（与 ↓ 越过最新一条回到空草稿对称）
+        // ↑: step back one entry at a time when the input is empty (newest → older);
+        // pressing ↑ again past the oldest entry cycles back to the empty draft (symmetric with ↓
+        // going past the newest entry)
         if (next === -1) {
           next = history.length - 1
         } else {
@@ -799,7 +840,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         }
         if (next === historyIndexRef.current) return false
       } else {
-        // ↓：回到更新的历史；越过最新一条后回到空草稿
+        // ↓: move to a newer history entry; past the newest one, return to the empty draft
         if (next === -1) return false
         next += 1
         if (next >= history.length) next = -1
@@ -807,14 +848,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
       historyIndexRef.current = next
       const text = next === -1 ? '' : history[next]
-      // 恢复为纯文本：按行重建（硬换行用 hardBreak），fileRef 以路径文本还原
+      // Restore as plain text: rebuild line by line (hard breaks as hardBreak), fileRef as its path text
       const lines = text.replace(/\r\n?/g, '\n').split('\n')
       const nodes: ProseMirrorNode[] = []
       lines.forEach((line, i) => {
         if (i > 0) nodes.push(ed.schema.nodes.hardBreak.create())
         if (line) nodes.push(ed.schema.text(line))
       })
-      // emitUpdate:false：避免 onUpdate 把它当成用户编辑而重置浏览态
+      // emitUpdate:false: keeps onUpdate from treating it as a user edit and resetting browse state
       ed.commands.setContent(
         {
           type: 'doc',
@@ -823,7 +864,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         { emitUpdate: false }
       )
       ed.commands.focus('end')
-      // setContent 不触发 onUpdate，手动同步父组件 inputValue
+      // setContent does not trigger onUpdate, so sync the parent's inputValue manually
       onInputChangeRef.current(getEditorText(ed))
       requestAnimationFrame(() => updateCaretRef.current())
       return true
@@ -831,10 +872,12 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [inputHistoryRef, getEditorText]
   )
 
-  // ── 粘贴附件：剪贴板中的文件/图片转为附件（上传按钮同一套 Attachment 结构）──
-  // 图片：读内容为 dataUrl（与 select-image-file 的图片分支一致）
-  // 非图片：取真实磁盘路径（与 select-image-file 的非图片分支一致：dataUrl 即路径），
-  //         取不到路径（如其他应用复制的无磁盘来源文件）时提示改用拖拽/上传
+  // ── Pasted attachments: convert clipboard files/images into attachments (the same Attachment
+  // structure as the upload button) ──
+  // Image: read the content as a dataUrl (matching the image branch of select-image-file)
+  // Non-image: take the real disk path (matching the non-image branch: the dataUrl is the path);
+  //            when no path is available (e.g. a diskless source copied from another app), suggest
+  //            dragging or uploading instead.
   const handlePasteFiles = useCallback(
     async (files: File[]) => {
       const added: Attachment[] = []
@@ -842,7 +885,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         const isImage =
           file.type.startsWith('image/') || /\.(png|jpe?g|gif|bmp|webp|svg|ico)$/i.test(file.name)
         if (isImage) {
-          // 与上传按钮一致：非视觉模型禁止粘贴图片附件
+          // Same as the upload button: image attachments are rejected for non-vision models
           if (!modelSupportsVision) {
             message.warning(t('harness.input.visionUnsupported'))
             continue
@@ -870,23 +913,23 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     },
     [attachments, onAttachmentsChange, modelSupportsVision, message, t]
   )
-  // 同上：editor 只创建一次，handlePaste 经 ref 取最新实现
+  // Same as above: the editor is created once, so handlePaste reads the latest implementation via ref
   const handlePasteFilesRef = useRef(handlePasteFiles)
   handlePasteFilesRef.current = handlePasteFiles
 
-  // ── 「/」命令面（目标 / 计划）────────────────────────────────────────────
-  // 只有输入框开头是 `/` 时才唤起；行内容参考 DSH 的输入框命令菜单。
+  // ── `/` command palette (goal / plan) ─────────────────────────────────────────────────────
+  // Only opened when the input starts with `/`.
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
   const [slashIndex, setSlashIndex] = useState(0)
-  /** 用户按 Esc 关掉后，直到文本不再以 `/` 开头前不自动重新唤起 */
+  /** After the user closes it with Esc, do not reopen it until the text no longer starts with `/` */
   const [slashDismissed, setSlashDismissed] = useState(false)
   const slashMenuRef = useRef<HTMLDivElement | null>(null)
-  /** 输入区外层（判断点击是否落在输入框内部：点输入框不关菜单） */
+  /** Outer composer element (detects whether a click landed inside the input: clicking the input does not close the menu) */
   const composerRef = useRef<HTMLDivElement | null>(null)
 
   const slashRows = useMemo(() => filterSlashCommands((key) => t(key), slashQuery), [slashQuery, t])
-  /** 键盘处理里读最新状态（editor 只创建一次，闭包不会跟着重渲染更新） */
+  /** Read the latest state in key handlers (the editor is created once, so closures do not update on re-render) */
   const slashRef = useRef<{
     open: boolean
     index: number
@@ -894,7 +937,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }>({ open: false, index: 0, rows: [] })
   slashRef.current = { open: slashOpen, index: slashIndex, rows: slashRows }
 
-  /** 上一次的查询词：查询变化时把高亮拉回第一行 */
+  /** Previous query: reset the highlight to the first row when the query changes */
   const previousSlashQueryRef = useRef('')
 
   useEffect(() => {
@@ -902,8 +945,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       setSlashOpen(false)
       return
     }
-    // 编辑器第一个行内节点必须是**以 `/` 开头的文字**：文件引用 chip 的序列化路径
-    // 也以 `/` 开头（`/uploads/...`），只看 inputValue 会把「chip 在开头」误判成命令输入。
+    // The editor's first inline node must be **text starting with `/`**: a file-reference chip's
+    // serialized path also starts with `/` (`/uploads/...`), so looking only at inputValue would
+    // mistake "chip at the start" for command input.
     const ed = editorRef.current
     const firstInline = ed?.state.doc.firstChild?.firstChild
     const startsWithSlashText =
@@ -924,7 +968,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     setSlashOpen(true)
   }, [inputValue, simpleMode, slashDismissed])
 
-  // 点菜单和输入区以外的地方关闭（与 DSH 的命令菜单同一手感）
+  // Close when clicking outside the menu and the composer
   useEffect(() => {
     if (!slashOpen) return
     const onPointerDown = (event: PointerEvent): void => {
@@ -940,10 +984,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }, [slashOpen])
 
   /**
-   * 选中一条命令：先消费掉 `/` + 查询词（命令面不是普通消息），再执行动作。
+   * Pick a command: consume the `/` plus the query first (the palette is not a normal message),
+   * then run the action.
    *
-   * 目标 / 计划都已移到输入框上方的内联区域：这里只把动作交给页面，
-   * 输入框本身不再拥有目标弹窗或计划徽标。
+   * Goal and plan have both moved to the inline area above the input: this only hands the action to
+   * the page, and the input no longer owns a goal dialog or a plan badge.
    */
   const pickSlashCommand = useCallback(
     (id: HarnessSlashCommandId): void => {
@@ -966,7 +1011,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     },
     [message, onGoalCommand, onPlanCommand, t]
   )
-  // editor 的 keydown 只创建一次：经 ref 取最新实现
+  // The editor's keydown handler is created once: read the latest implementation via ref
   const pickSlashRef = useRef(pickSlashCommand)
   pickSlashRef.current = pickSlashCommand
 
@@ -984,11 +1029,12 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       ],
       content: '',
       editorProps: {
-        // Enter 发送（Shift+Enter 由 HardBreak 处理换行）；输入法组合期间不拦截
+        // Enter sends (Shift+Enter inserts a line break via HardBreak); do not intercept during IME composition
         handleKeyDown: (view, event) => {
           if (event.isComposing || event.keyCode === 229) return false
-          // 「/」命令面打开时先接管按键：↑/↓ 移动高亮，回车 / Tab 选中，Esc 收起。
-          // 选中走命令动作而不是发送消息——命令面不是普通文本。
+          // While the `/` palette is open, handle keys first: ↑/↓ move the highlight, Enter / Tab
+          // picks, Esc closes. Picking runs a command action rather than sending a message — the
+          // palette is not plain text.
           if (slashRef.current.open) {
             const rows = slashRef.current.rows
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -1017,10 +1063,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             onKeyDownRef.current(event as unknown as React.KeyboardEvent<HTMLDivElement>)
             return true
           }
-          // ↑/↓ 切换历史输入：空输入可进入浏览（加载最近一条），
-          // 浏览态（内容非空但非用户输入）可继续 ↑/↓ 逐条切换；
-          // 用户手动编辑后退出浏览态；内容非空且不在浏览态时，
-          // 改走 textarea 风格逐行移动光标（避免 PM 单 textblock 直接跳段落开头/结尾）
+          // ↑/↓ switch history: an empty input enters browsing (loads the newest entry), and in
+          // browse state (content non-empty but not typed by the user) ↑/↓ keep stepping through
+          // entries; manual editing leaves browse state. When the content is non-empty and not in
+          // browse state, use textarea-style line-by-line caret movement instead (avoiding PM's
+          // single-textblock jump to paragraph start/end).
           if (
             !event.shiftKey &&
             !event.altKey &&
@@ -1035,8 +1082,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               event.preventDefault()
               return true
             }
-            // 非浏览态（用户输入内容后）：逐行移动光标，不再触发任何历史切换
-            // 视图不可用（编辑器销毁竞态）时放弃接管，退回默认行为
+            // Not in browse state (the user has typed content): move the caret line by line and
+            // never switch history. If the view is unavailable (editor destroy race), give up and
+            // fall back to default behavior.
             if (ed.isDestroyed) return false
             try {
               if (moveCursorByLine(ed.view, dir)) {
@@ -1047,7 +1095,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               return false
             }
           }
-          // 光标紧贴文件引用 chip 时，退格/删除一次删掉（ProseMirror 默认是先选中再删）
+          // With the caret right next to a file-reference chip, Backspace/Delete removes it in one
+          // press (ProseMirror selects it first by default)
           if ((event.key === 'Backspace' || event.key === 'Delete') && view.state.selection.empty) {
             const { $from } = view.state.selection
             const node = event.key === 'Backspace' ? $from.nodeBefore : $from.nodeAfter
@@ -1058,8 +1107,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               return true
             }
           }
-          // 左右方向键直接跨过 chip（ProseMirror 对 selectable atom 默认是先选中再跳，
-          // 需要按两下；这里在光标紧贴 chip 时一次跨过；Shift+方向键保留默认的选区扩展）
+          // Left/Right arrows step straight over a chip (ProseMirror selects a selectable atom
+          // first by default, requiring two presses; here one press crosses it when the caret is
+          // adjacent; Shift+arrow keeps the default selection extension).
           if (
             !event.shiftKey &&
             (event.key === 'ArrowRight' || event.key === 'ArrowLeft') &&
@@ -1080,12 +1130,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           }
           return false
         },
-        // 完全接管 drop：拖入的文件引用统一由容器 onDrop 插入 chip，
-        // 避免 ProseMirror 默认把 text/plain 当文本插入造成双重插入
+        // Fully take over drop: dragged file references are always inserted as chips by the
+        // container's onDrop, avoiding ProseMirror's default text/plain insertion and double inserts.
         handleDrop: () => true,
-        // 剪切板含文件/图片时优先转附件（Ctrl+V 粘贴上传），无文件才走纯文本粘贴
-        // 粘贴纯文本：按 \n 拆行插入（换行用 hardBreak，保持 DOM 扁平）
-        // 注意：不能使用 insertContent(数组)（会丢弃 hardBreak），必须走原生 tr.insert
+        // When the clipboard holds files/images, convert them to attachments first (Ctrl+V paste
+        // upload); only plain text falls through to text paste.
+        // Paste plain text: split on \n and insert line by line (line breaks as hardBreak, keeping
+        // the DOM flat).
+        // Note: do not use insertContent(array) (it drops hardBreak); use the native tr.insert.
         handlePaste: (_view, event) => {
           const pastedFiles = Array.from(event.clipboardData?.files ?? [])
           if (pastedFiles.length > 0) {
@@ -1107,40 +1159,46 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           let tr = ed.state.tr
           if (!ed.state.selection.empty) tr = tr.deleteSelection()
           tr = tr.insert(tr.selection.from, content)
-          // 用事件自带的 view（真实视图）分发，避免绕经可能在销毁竞态中的 editor.view 代理
+          // Dispatch through the event's own view (the real one) to avoid the editor.view proxy,
+          // which may be in a destroy race
           _view.dispatch(tr)
           return true
         }
       },
       onUpdate: ({ editor }) => {
-        // textSerializers：hardBreak 输出换行、fileRef 输出路径，保证发送文本与所见一致
-        // 注意：v3 的 serializer 参数是 { node } 对象，不是节点本身
+        // textSerializers: hardBreak outputs a newline and fileRef outputs its path, so the sent text
+        // matches what is on screen. Note: the v3 serializer argument is a `{ node }` object, not
+        // the node itself.
         const text = getEditorText(editor)
-        // 浏览历史时手动编辑：退出浏览态（编辑后内容非空且不在浏览态，↑/↓ 不再触发）。
-        // 程序化切换走 setContent(emitUpdate:false)，不会进入这里
+        // Manual edit while browsing history: leave browse state (after editing, the content is
+        // non-empty and not in browse state, so ↑/↓ no longer switch). Programmatic switches use
+        // setContent(emitUpdate:false) and never reach here.
         if (historyIndexRef.current !== -1) {
           historyIndexRef.current = -1
         }
         onInputChangeRef.current(text)
       }
-      // deps=[]：编辑器只创建一次。@tiptap/react v3 的 useEditor 每次渲染都会重新挂起
-      // 一个 1ms 延迟销毁定时器（scheduleDestroy），若两次渲染间隔超过 1ms（如切页时
-      // 编辑器 chunk 求值等重活占用主线程），定时器会先于下一次渲染触发把编辑器销毁，
-      // 之后任何 view 访问都会抛「The editor view is not available」→ React 整树卸载崩溃。
-      // 显式传空依赖数组让该定时器只在真正卸载时挂起，从源头消除竞态。
+      // deps=[]: the editor is created only once. @tiptap/react v3's useEditor re-schedules a 1ms
+      // delayed destroy timer (scheduleDestroy) on every render; if two renders are more than 1ms
+      // apart (e.g. heavy work such as evaluating the editor chunk during a page switch occupies the
+      // main thread), the timer fires before the next render and destroys the editor, after which any
+      // view access throws "The editor view is not available" and the whole React tree unmounts and
+      // crashes. Passing an explicit empty dependency array schedules that timer only on real
+      // unmount, removing the race at its source.
     },
     []
   )
   editorRef.current = editor ?? null
 
-  // 计划评审挂起时锁住输入框：不可编辑、不可发送，评审反馈只在计划卡内。
+  // Lock the input while plan review is pending: no editing, no sending; review feedback stays in the plan card.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     editor.setEditable(!locked)
   }, [editor, locked])
 
-  // placeholder 也要跟着外部模式变化（普通对话 ↔ 目标输入）：TipTap 的 Placeholder
-  // 只在创建时取一次字符串，目标选中态切换时需要手动更新并重绘装饰。
+  // The placeholder must follow external mode changes (normal chat ↔ goal compose): TipTap's
+  // Placeholder reads the string only once at creation, so switching into goal mode needs a manual
+  // update plus a decoration redraw.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     const extension = editor.extensionManager.extensions.find(
@@ -1151,9 +1209,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     editor.view.dispatch(editor.state.tr)
   }, [editor, placeholder, t])
   /**
-   * 安全读取编辑器视图 DOM。
-   * TipTap v3.30 的 view 在视图未挂载/编辑器已销毁时返回一个仅含少量桩字段的 Proxy，
-   * 访问 dom 等属性会直接抛错（而非返回 null）；这里统一收敛成「拿不到就返回 null」。
+   * Safely read the editor view DOM.
+   * When the view is not mounted or the editor is destroyed, TipTap v3.30's view returns a Proxy
+   * with only a few stub fields, and accessing properties such as dom throws (rather than returning
+   * null); this uniformly reduces that to "return null when unavailable".
    */
   const getViewDom = useCallback((ed: Editor): HTMLElement | null => {
     if (ed.isDestroyed) return null
@@ -1164,9 +1223,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   }, [])
 
-  // ── 自定义光标：跟随 collapsed selection 的位置，固定 CARET_HEIGHT 高度 ──
-  // 原生 contentEditable 光标高度 = 行高（19px），普通输入框光标 ≈ 字号（14px），
-  // 用 caret-color: transparent 隐藏原生光标后，在此绘制固定高度光标。
+  // ── Custom caret: follows the collapsed selection, fixed CARET_HEIGHT height ──
+  // The native contentEditable caret height equals the line height (19px), while a normal input
+  // caret is about the font size (14px); with the native caret hidden via caret-color: transparent,
+  // a fixed-height caret is drawn here.
   const updateCaret = useCallback(() => {
     const ed = editorRef.current
     const caret = caretRef.current
@@ -1192,17 +1252,18 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     const wrapRect = wrap.getBoundingClientRect()
     const elRect = el.getBoundingClientRect()
     const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 19
-    // 空内容时定位到内容区左上角（首行行首），与占位符文字（同字号、垂直居中于行）对齐
+    // Empty content: position at the top-left of the content area (start of the first line), aligned
+    // with the placeholder text (same font size, vertically centered in the line)
     const caretAtContentStart = (): { top: number; left: number } => ({
       top: elRect.top - wrapRect.top + (lineHeight - CARET_HEIGHT) / 2,
       left: elRect.left - wrapRect.left
     })
 
-    // 真正的"空文档"以 editor.isEmpty 为准
+    // Whether the document is truly "empty" is decided by editor.isEmpty
     const isEmpty = ed.isEmpty
 
-    // 紧贴 inline atom（chip）后的 collapsed range，Chromium 会返回 0 高 rect，
-    // 此时用 selection 前一个可测量元素（chip）的右缘定位光标
+    // For a collapsed range right after an inline atom (chip), Chromium returns a zero-height rect;
+    // in that case locate the caret at the right edge of the previous measurable element (the chip)
     const measurePrev = (r: Range): { right: number; top: number; height: number } | null => {
       const node = r.startContainer
       const offset = r.startOffset
@@ -1236,14 +1297,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       top = p.top
       left = p.left
     } else if (rect.height > 0) {
-      // 正常路径：用 selection rect，短光标垂直居中于行内
+      // Normal path: use the selection rect; the short caret is vertically centered in the line
       top = rect.top - wrapRect.top
       if (rect.height > CARET_HEIGHT) {
         top += (rect.height - CARET_HEIGHT) / 2
       }
       left = rect.left - wrapRect.left
     } else {
-      // rect 失效（紧贴 atom）：用前一个可测量元素（chip）的右缘
+      // rect invalid (right next to an atom): use the right edge of the previous measurable element (the chip)
       const prev = measurePrev(range)
       if (prev) {
         top = prev.top - wrapRect.top + (prev.height - CARET_HEIGHT) / 2
@@ -1260,7 +1321,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }, [getViewDom])
   updateCaretRef.current = updateCaret
 
-  /** 把纯文本恢复到编辑器（行→hardBreak，与 navigateHistory 的恢复方式同构） */
+  /** Restore plain text into the editor (line→hardBreak, same shape as navigateHistory's restore) */
   const restorePlainText = useCallback((ed: Editor, text: string): void => {
     const lines = text.replace(/\r\n?/g, '\n').split('\n')
     const nodes: ProseMirrorNode[] = []
@@ -1277,19 +1338,21 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     )
   }, [])
 
-  // 父组件 inputValue 变化时同步编辑器（修复：此前只做「变空清空编辑器」单方向，
-  // 恢复会话缓存的非空草稿时编辑器仍显示上一话题内容/空白——隐藏草稿不可见且可被盲发）：
-  // - 变空（发送后/切话题清空）：清空编辑器；
-  // - 变非空且与编辑器内容不同（恢复缓存草稿）：恢复编辑器内容
+  // Sync the editor when the parent's inputValue changes (fix: previously only the "became empty →
+  // clear editor" direction was handled, so restoring a non-empty cached draft left the editor
+  // showing the previous topic's content or blank — a hidden draft that could even be sent blindly):
+  // - becomes empty (after sending / on topic switch): clear the editor;
+  // - becomes non-empty and differs from the editor content (restoring a cached draft): restore the
+  //   editor content.
   useEffect(() => {
     const ed = editorRef.current
     if (!ed || ed.isDestroyed) return
     if (inputValue === '') {
       if (!ed.isEmpty) {
-        // emitUpdate: false —— 清空是外部状态驱动的结果，不要再回灌一次 onInputChange
+        // emitUpdate: false — clearing is driven by external state, so do not feed it back through onInputChange
         ed.commands.clearContent(false)
         ed.commands.focus()
-        // 外部清空输入（发送/新对话/切话题）时重置历史浏览位置
+        // Reset the history browse position when the input is cleared externally (send/new chat/topic switch)
         historyIndexRef.current = -1
       }
     } else if (getEditorText(ed) !== inputValue) {
@@ -1300,11 +1363,12 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }, [inputValue, updateCaret, getEditorText, restorePlainText])
 
   /**
-   * 外部请求聚焦（插件行的 ＋「新建会话」）：把光标放进输入框，**不写任何内容**。
+   * External focus request (plugin row + "new session"): put the caret in the input and **write no
+   * content at all**.
    *
-   * 为什么单独一个 effect：上面那个同步 effect 只管「外部值 → 编辑器」的文字同步，
-   * 不会动焦点。这里只调 `focus('end')`——空编辑器上等价于「聚焦并把光标放到开头」，
-   * 用户点完 ＋ 直接敲键盘就能写。
+   * Why a separate effect: the sync effect above only mirrors "external value → editor" text and
+   * never touches focus. This calls only `focus('end')` — on an empty editor that equals "focus and
+   * place the caret at the start", so after clicking + the user can just start typing.
    */
   useEffect(() => {
     if (!focusInputToken) return
@@ -1315,7 +1379,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     updateCaret()
   }, [focusInputToken, updateCaret])
 
-  // 光标位置随选区/窗口尺寸变化而更新
+  // Update the caret position when the selection or window size changes
   useEffect(() => {
     const onSelectionChange = (): void => updateCaret()
     const onResize = (): void => updateCaret()
@@ -1328,7 +1392,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   }, [updateCaret])
 
-  // 编辑器内部滚动时更新光标位置
+  // Update the caret position when the editor scrolls internally
   useEffect(() => {
     const ed = editor
     if (!ed) return
@@ -1338,7 +1402,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     return () => dom.removeEventListener('scroll', updateCaret)
   }, [editor, updateCaret, getViewDom])
 
-  // ── 在光标位置插入文件引用 chip ──
+  // ── Insert a file-reference chip at the caret ──
   const insertFileRef = useCallback(
     (path: string) => {
       const ed = editorRef.current
@@ -1348,10 +1412,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       const label = cleanPath.split('/').filter(Boolean).pop() || path
       const pos = ed.state.selection.from
       ed.commands.insertContent({ type: 'fileRef', attrs: { path, label } })
-      // 显式把光标放到 chip 之后（inline atom 的 nodeSize 为 1）
+      // Explicitly place the caret after the chip (an inline atom has nodeSize 1)
       ed.commands.setTextSelection(pos + 1)
-      // 刷新自定义光标：chip 是 React NodeView 异步渲染的，插入后立即读 rect
-      // 会拿到占位宽度（0）导致光标位置偏前，必须等渲染完成（双 rAF）再刷新
+      // Refresh the custom caret: the chip is rendered asynchronously by a React NodeView, so
+      // reading the rect immediately after insertion yields the placeholder width (0) and puts the
+      // caret too far left; wait for rendering to finish (double rAF) before refreshing.
       updateCaret()
       requestAnimationFrame(() => {
         updateCaret()
@@ -1361,7 +1426,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [updateCaret]
   )
 
-  // ── 拖拽处理 ──
+  // ── Drag and drop handling ──
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
@@ -1384,7 +1449,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [insertFileRef]
   )
 
-  // ── 点击输入区空白处聚焦并移光标到末尾（与普通输入框一致）──
+  // ── Clicking blank space in the input focuses it and moves the caret to the end (like a normal input) ──
   const handleContainerClick = useCallback(
     (e: React.MouseEvent) => {
       const ed = editorRef.current
@@ -1399,8 +1464,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const hasContent = inputValue.trim().length > 0
 
-  // 主按钮语义：生成中且输入框为空 → 停止；其余（含生成中已输入内容）→ 发送。
-  // 生成中输入的这条会进入输入框上方的插话队列，不打断当前回合。
+  // Primary button semantics: generating and the input is empty → stop; otherwise (including text
+  // typed while generating) → send. Text typed while generating joins the interjection queue above
+  // the input and does not interrupt the current turn.
   const primaryStops = isLoading && !hasContent
   const onPrimary = primaryStops ? onStop : onSend
   const primaryHint = primaryStops
@@ -1409,16 +1475,18 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       ? t('harness.input.queueTooltip')
       : ''
   /**
-   * 主按钮什么时候不可点：**只有「发送」需要内容**。
+   * When the primary button is disabled: **only "send" requires content**.
    *
-   * 停止不依赖输入框内容——生成中把输入框清空，恰恰是用户想叫停的那一刻。
-   * 这里曾经写成 `disabled={!hasContent}`，于是「生成中 + 输入框为空」时停止按钮自己也被禁掉，
-   * 变成一个点了没反应的按钮（用户 2026-09-29 报的「会话进行中时，输入框里面没有内容，
-   * 但是不能暂停」）。生成中带内容的那一档仍然是发送（进插话队列），不受影响。
+   * Stop does not depend on the input content — clearing the input while generating is exactly the
+   * moment the user wants to stop. This used to be `disabled={!hasContent}`, so "generating + empty
+   * input" disabled the stop button itself, making it a button that does nothing when clicked
+   * (reported 2026-09-29: "while a conversation is running and the input is empty, it cannot be
+   * paused"). The "generating with content" case is still send (into the interjection queue) and is
+   * unaffected.
    */
   const primaryDisabled = locked || (!primaryStops && !hasContent)
 
-  // chip 主题色经 CSS 变量注入 FileRef NodeView
+  // Chip theme colors are injected into the FileRef NodeView via CSS variables
   const chipCssVars = useMemo(
     () =>
       ({
@@ -1429,8 +1497,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     [isDarkMode]
   )
 
-  // ── 模型 / 推理等级面板 ─────────────────────────────────────────────────
-  // 面板挂在 Popover 的浮层里（portal，不在输入框容器内），主题变量直接写在面板根节点上。
+  // ── Model / reasoning effort panel ───────────────────────────────────────────────────────
+  // The panel lives in the Popover layer (a portal, outside the input container), so theme
+  // variables are written directly on the panel root node.
   const menuVars = {
     '--hmm-bg': token.colorBgElevated,
     '--hmm-border': token.colorBorderSecondary,
@@ -1443,7 +1512,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const providerOptionIcon = (providerType: string, size: number): React.ReactNode => {
     const Icon = providerIconMap[providerType]
-    // 品牌图标才吃品牌色；没有图标的降级走 ProviderMark 自己的「自定义端点」主色阶
+    // Only brand icons take the brand color; without an icon, fall back to ProviderMark's own custom-endpoint primary scale
     const color = getProviderColor(providerType, isDarkMode)
     return Icon ? (
       <Icon style={{ fontSize: size, color: color ?? '#888888' }} />
@@ -1453,9 +1522,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   }
 
   /**
-   * 面板标题行（二级页：返回 + 标题）。
-   * **整行都是返回热区**（用户 2026-09-27：不要只有前面那个小箭头能点），
-   * 所以这里是一个占满整行的 button，箭头只是它里面的图标。
+   * Panel header row (subpage: back + title).
+   * **The whole row is the back hit area** (2026-09-27 request: do not make only the small arrow
+   * clickable), so this is a full-width button and the arrow is just an icon inside it.
    */
   const menuHeader = (title: string, onBack: () => void): React.ReactNode => (
     <button
@@ -1469,7 +1538,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     </button>
   )
 
-  /** 推理等级一行（档位表里的某一档；「默认」不再是可选项——有档位就必有一档在用） */
+  /** One reasoning effort row (a level from the table; "default" is no longer an option — whenever levels exist, one is always in effect) */
   const effortItem = (value: string, label: string): React.ReactNode => {
     const active = effectiveEffort === value
     return (
@@ -1497,7 +1566,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             </span>
             <RiArrowRightSLine size={16} className="hmm-row-chev" />
           </button>
-          {/* 有思考档位才给这一行：模型没有档位表时整行不存在（不是灰掉、也不是显示「—」） */}
+          {/* This row exists only when thinking levels do: with no level table the whole row is absent (not greyed out, no "—") */}
           {effortLevels.length > 0 ? (
             <button type="button" className="hmm-row" onClick={() => setMenuView('effort')}>
               <span className="hmm-row-label">{t('harness.input.effortLabel')}</span>
@@ -1507,8 +1576,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               <RiArrowRightSLine size={16} className="hmm-row-chev" />
             </button>
           ) : null}
-          {/* Agent Teams opt-in：按话题持久化，关闭时不注入团队工具/提示词 */}
-          {currentTopicId != null ? (
+          {/* Team collaboration opt-in: with a topic, read and write the topic's value; a blank
+              session keeps a draft that is saved when the first message creates the topic. Both
+              states look identical (no badge, no extra emphasis). */}
+          {simpleMode ? null : (
             <div className="hmm-row hmm-row-switch">
               <span className="hmm-row-label">
                 {t('harness.input.teamModeLabel')}
@@ -1519,14 +1590,22 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               <span className="hmm-row-control">
                 <Switch
                   size="small"
-                  checked={teamModeEnabled}
-                  loading={teamModeBusy}
-                  disabled={teamModeBusy}
-                  onChange={(checked) => void handleToggleTeamMode(checked)}
+                  checked={currentTopicId == null ? pendingTeamMode : teamModeEnabled}
+                  loading={currentTopicId == null ? false : teamModeBusy}
+                  disabled={currentTopicId == null ? false : teamModeBusy}
+                  aria-label={t('harness.input.teamModeLabel')}
+                  onChange={(checked) => {
+                    // Blank session with no topic to write yet: only update the draft (no delay, no IPC)
+                    if (currentTopicId == null) {
+                      onPendingTeamModeChange?.(checked)
+                      return
+                    }
+                    void handleToggleTeamMode(checked)
+                  }}
                 />
               </span>
             </div>
-          ) : null}
+          )}
         </>
       )}
 
@@ -1595,7 +1674,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
 
   const effortTriggerText = effectiveEffort ? reasoningEffortLabel(effectiveEffort) : ''
 
-  /** 档位图标配色：中性 → 主色 → 警示，颜色只承载「更宽 = 风险更高」这一条信息 */
+  /** Mode icon coloring: neutral → primary → warning; color carries only the "broader = riskier" signal */
   const permissionToneColor = (tone: 'neutral' | 'primary' | 'warning'): string =>
     tone === 'primary'
       ? token.colorPrimary
@@ -1607,7 +1686,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     PERMISSION_OPTIONS.find((option) => option.mode === permissionMode) ?? PERMISSION_OPTIONS[1]
   const ActivePermissionIcon = activePermission.icon
 
-  /** 权限档位面板：三项 + 当前档位的一句话说明（不加分组标题、不加徽章） */
+  /** Permission mode panel: three items plus a one-line description of the current mode (no group title, no badges) */
   const permissionMenu = (
     <div className="harness-model-menu harness-permission-menu" style={menuVars}>
       <div className="hmm-list">
@@ -1636,11 +1715,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   )
 
   /**
-   * 工具 / 技能的多选面板：顶部搜索框 + 一行一项（右侧打勾表示已选，点完不收起，方便连续勾）。
+   * Multi-select panel for tools / skills: a search box on top and one row per item (a check on the
+   * right means selected; picking does not close the panel so several can be picked in a row).
    *
-   * 搜索只过滤当前面板（展示名和真实 id 都认：工具名是 `read_file` 这种英文标识、展示名是
-   * 「读取文件」，两种输入都能命中），关掉面板即清空。清单可能有几十项，没有搜索框找一项很难。
-   * 回车 = 勾/取消勾第一个命中项（键盘连续勾选时不用来回换手）。
+   * Search filters the current panel only (both the display name and the real id match: a tool's
+   * name may be an English identifier such as `read_file` while its label is localized, and either
+   * input hits), and is cleared when the panel closes. The list can hold dozens of items, so finding
+   * one without a search box is hard. Enter = toggle the first match (no need to move hands while
+   * checking items with the keyboard).
    */
   const pickerMenu = (
     items: {
@@ -1648,7 +1730,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
       label: string
       active: boolean
       onToggle: () => void
-      /** 行尾展示位（工具清单用它摆「系统 / 插件 / MCP」来源标签；技能与 MCP 面板不用） */
+      /** Trailing slot (the tools list uses it for the "system / plugin / MCP" source tag; the skills and MCP panels do not) */
       tag?: React.ReactNode
     }[],
     options: {
@@ -1680,7 +1762,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             placeholder={options.placeholder}
             aria-label={options.placeholder}
             onKeyDown={(e) => {
-              // 中文输入法选词时的回车 / Esc 是给输入法的，不能当成「勾选 / 清空」
+              // Enter / Esc while choosing candidates in an IME belong to the IME, not to "toggle / clear"
               if (e.nativeEvent.isComposing) return
               if (e.key === 'Escape') {
                 e.stopPropagation()
@@ -1718,7 +1800,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     toolCatalog.map((tool) => ({
       key: tool.name,
       label: tool.label || tool.name,
-      // 名称最右：系统 / 插件 / MCP（用户口径 2026-11-27「加一个标签区分系统工具还是插件工具」）
+      // Source tag after the name: system / plugin / MCP (2026-11-27 request: add a tag to tell system tools apart from plugin tools)
       tag: <ToolSourceTag source={tool.source} />,
       active: selectedTools.includes(tool.name),
       onToggle: () => toggleTool(tool.name)
@@ -1767,12 +1849,13 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     }
   )
 
-  /** 输入卡片下方的选择器：权限 / 工具 / 技能（用户口径：这些都放在输入框底部） */
-  /** 权限档位留在输入卡片内（用户口径：权限不要放到下面那排） */
+  /** Selectors below the input card: permission / tools / skills */
+  /** Permission mode stays inside the input card (it should not go into the bottom row) */
   const permissionSelector = (
     <>
-      {/* 权限档位：模型能在多大范围里动手（沙箱拦截与审批弹窗都按它判定）。
-              排在模型选择前面：先定「能动多大范围」，再看「用哪个模型」。 */}
+      {/* Permission mode: how far the model may act (sandbox blocking and approval dialogs are
+              decided by it). Placed before the model picker: decide the scope of action first, then
+              the model. */}
       <Popover
         open={permissionOpen}
         onOpenChange={setPermissionOpen}
@@ -1807,15 +1890,15 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
     </>
   )
 
-  /** 输入卡片下方的选择器：工具 / 技能 */
+  /** Selectors below the input card: tools / skills */
   const inputSelectors = (
     <>
-      {/* 工具 / 技能：主智能体的默认选择（设置页移除后搬到这里，选完下一轮即生效） */}
+      {/* Tools / skills: main-agent defaults (moved here after leaving settings; a pick takes effect next turn) */}
       <Popover
         open={toolsOpen}
         onOpenChange={(open) => {
           setToolsOpen(open)
-          // 关掉就清空搜索词：下次打开是完整清单
+          // Clear the search term on close: the next open shows the full list
           if (!open) setToolQuery('')
         }}
         trigger="click"
@@ -1917,7 +2000,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
   return (
     <div
       ref={composerRef}
-      /* 外层托底：把输入卡片和下面那排选择器包成一块（参考形态：卡片浮在浅一档的底上） */
+      /* Outer backing: wraps the input card and the selector row below into one block (the card
+      floats on a slightly lighter background) */
       style={{
         ...menuVars,
         position: 'relative',
@@ -1927,8 +2011,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)'
       }}
     >
-      {/* 「/」命令面：贴着输入卡片上沿弹出（左侧/右侧与卡片对齐）。
-          只在输入框开头输入 `/` 时出现；Esc / 点击外部收起。 */}
+      {/* `/` command palette: pops up flush with the top edge of the input card (left/right aligned
+          with it). Only appears when `/` is typed at the start of the input; closes on Esc or an
+          outside click. */}
       {!simpleMode && slashOpen ? (
         <div
           style={{
@@ -1948,8 +2033,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           />
         </div>
       ) : null}
-      {/* 助手形象：只在空白会话里趴在输入框右上角；有对话内容就收起，
-          免得压在消息 / 思考过程上（不拦截鼠标，纯装饰） */}
+      {/* Assistant mascot: sits at the top-right of the input only in a blank session; hidden once
+          there is conversation content so it does not cover messages / reasoning (decoration only,
+          does not intercept the mouse). */}
       {showMascot && (
         <img
           src={mascot}
@@ -1980,14 +2066,14 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             : undefined,
           transition: 'border-color 0.2s, box-shadow 0.2s',
           ...chipCssVars,
-          // 触发条在容器内、面板在 portal 里，两边共用同一套 --hmm-* 主题变量
+          // The trigger is inside the container and the panel is in a portal; both share the same --hmm-* theme variables
           ...menuVars
         }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {/* overflow hidden：光标滚出编辑区可视范围时被裁切 */}
+        {/* overflow hidden: clips the caret when it scrolls outside the visible editor area */}
         <div
           className={`p-4 relative overflow-hidden${goalCompose ? ' is-goal-compose' : ''}`}
           onClick={handleContainerClick}
@@ -2012,7 +2098,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               {t('harness.goalInline.composePlaceholder')}
             </span>
           ) : null}
-          {/* 自定义光标：固定高度、随光标位置移动、闪烁动画 */}
+          {/* Custom caret: fixed height, moves with the caret position, blinking animation */}
           <span
             ref={caretRef}
             className="harness-input-caret"
@@ -2096,7 +2182,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           .harness-input-caret {
             animation: harness-input-caret-blink 1.06s steps(1) infinite;
           }
-          /* ── 模型 / 推理等级：收起态一行触发条 ── */
+          /* ── Model / reasoning effort: collapsed single-row trigger ── */
           .harness-model-trigger {
             display: inline-flex;
             align-items: center;
@@ -2119,10 +2205,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             background: var(--hmm-hover);
             border-color: var(--hmm-border);
           }
-          /* 13px 文本的行盒按字体 ascent/descent 居中后，字面仍比图标 / 徽章低约 1px
-             （Segoe UI 的 ascent 明显大于 descent，中文回退字形也跟着偏下）。
-             补 1px 下内边距，flex 居中时整块上移 0.5px：不缩放字形、不触发重绘模糊，
-             在 125% 缩放下正好把用户看到的那 1 个设备像素抵消掉。 */
+          /* After the 13px line box is centered by font ascent/descent, the glyphs still sit about
+             1px lower than the icons / badges (Segoe UI's ascent is noticeably larger than its
+             descent, and the CJK fallback glyphs follow it down). Adding 1px of bottom padding moves
+             the whole block up 0.5px when flex-centered: no glyph scaling, no re-render blur, and at
+             125% scaling it exactly cancels the one device pixel the user sees. */
           .harness-model-trigger-name,
           .harness-permission-trigger-name,
           .harness-model-trigger-effort {
@@ -2137,7 +2224,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           .harness-model-trigger-effort { color: var(--hmm-tertiary); }
           .harness-model-trigger-chev { color: var(--hmm-tertiary); flex-shrink: 0; }
 
-          /* ── 权限档位（沙箱）：与模型触发条同形，收起时只显示当前档位 ── */
+          /* ── Permission mode (sandbox): same shape as the model trigger; collapsed it shows only the current mode ── */
           .harness-permission-trigger {
             display: inline-flex;
             align-items: center;
@@ -2170,7 +2257,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           .harness-permission-trigger-chev { color: var(--hmm-tertiary); flex-shrink: 0; }
           .harness-permission-menu .hmm-list { max-height: none; }
 
-          /* ── 模型 / 推理等级：展开面板 ── */
+          /* ── Model / reasoning effort: expanded panel ── */
           .harness-model-menu {
             min-width: 260px;
             padding: 6px;
@@ -2180,8 +2267,9 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
             font-size: 13px;
           }
-          /* 权限面板不跟着模型面板走 260px：三项都是短标签，固定 160px，
-             说明行在面板内换行（宽度不随档位变化而跳） */
+          /* The permission panel does not follow the model panel's 260px: all three labels are
+             short, so it is fixed at 160px, and the description wraps inside the panel (width does
+             not jump with the mode) */
           .harness-model-menu.harness-permission-menu {
             width: 160px;
             min-width: 160px;
@@ -2201,7 +2289,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             cursor: pointer;
           }
           .harness-model-menu .hmm-row:hover { background: var(--hmm-hover); }
-          /* 团队协作开关行是配置项不是可点入口：不显示 hover 高亮，开关自己承担交互 */
+          /* The team switch row is a config item, not a clickable entry: no hover highlight; the switch handles interaction itself */
           .harness-model-menu .hmm-row.hmm-row-switch { cursor: default; }
           .harness-model-menu .hmm-row.hmm-row-switch:hover { background: transparent; }
           .harness-model-menu .hmm-row-switch .hmm-row-label {
@@ -2224,7 +2312,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            /* 值比标签低一档：同一行里靠明度分主次（对齐参考设计稿） */
+            /* The value is one step dimmer than the label: hierarchy in one row is shown by lightness */
             color: var(--hmm-tertiary);
           }
           .harness-model-menu .hmm-row-chev { flex-shrink: 0; color: var(--hmm-tertiary); }
@@ -2234,7 +2322,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             gap: 4px;
             width: 100%;
             height: 30px;
-            /* 与下面的列表留 3px（用户指定；列表首项自身有圆角高亮，贴太紧会连成一片） */
+            /* Leave 3px above the list below (requested; the list's first item has a rounded highlight that would merge if too close) */
             margin: 0 0 3px;
             padding: 0 8px 0 4px;
             border: 0;
@@ -2242,7 +2330,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             background: transparent;
             text-align: left;
             cursor: pointer;
-            /* 整行可点返回：悬停给整行底色，而不是只亮那个小箭头 */
+            /* The whole row is clickable to go back: hover tints the whole row instead of only the small arrow */
           }
           .harness-model-menu .hmm-head:hover { background: var(--hmm-hover); }
           .harness-model-menu .hmm-back-icon { flex-shrink: 0; color: var(--hmm-secondary); }
@@ -2284,7 +2372,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           .harness-model-menu .hmm-item.is-focused { background: var(--hmm-hover); }
           .harness-model-menu .hmm-item.is-active { color: var(--hmm-accent); }
           .harness-model-menu .hmm-item-label {
-            /* 名称后面紧跟来源标签，所以不抢剩余宽度；剩下的空间留给行尾勾选 */
+            /* A source tag follows the name, so do not claim the remaining width; leave the rest for the trailing check */
             flex: 0 1 auto;
             min-width: 0;
             overflow: hidden;
@@ -2293,7 +2381,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           }
           .harness-model-menu .hmm-item-check {
             flex-shrink: 0;
-            /* 行尾勾选贴右：名称 + 标签是左对齐的一组（用户口径 2026-11-27「标签要放到名称后面」） */
+            /* The trailing check hugs the right: name + tag form one left-aligned group (2026-11-27 request: put the tag after the name) */
             margin-left: auto;
             color: var(--hmm-accent);
           }
@@ -2358,9 +2446,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           >
             <span>{t('harness.goalInline.composeHint')}</span>
             {/*
-             * 目标轮次上限（用户 2026-11-27 已选）：README 一直承诺「目标弹窗可设轮次上限」，
-             * 此前只有后端/词条、没有输入控件。目标输入态顺手给一个数字框，空 = 默认 256。
-             * 停止点击冒泡，避免点数字框时把焦点抢回编辑器。
+             * Goal max rounds (chosen 2026-11-27): a rounds limit for goals was promised, but until
+             * now only the backend and i18n entries existed, with no input control. Goal compose
+             * mode now offers a number field; empty = default 256. Clicks are stopped from bubbling
+             * so clicking the field does not pull focus back to the editor.
              */}
             <span
               className="flex items-center gap-1.5"
@@ -2407,8 +2496,10 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
               </Tooltip>
             )}
             {simpleMode ? null : permissionSelector}
-            {/* 模型选择：收起时一行（模型名 + 推理等级），点开是「模型 / 推理等级」两行入口。
-              推理等级直接写进该模型的配置列，下一轮请求即按协议族翻译成各家字段。 */}
+            {/* Model picker: collapsed it is one row (model name + reasoning effort); expanded it is
+              the two entry rows "model / reasoning effort". The effort is written into the model's
+              own config column, and the next request translates it per protocol family into
+              provider fields. */}
             {simpleMode ? null : (
               <Popover
                 open={menuOpen}
@@ -2453,10 +2544,11 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* 主按钮只有一个，语义随状态切换（与参考项目 deepseek-harness 的 InputBar 同款）：
-              生成中且输入框为空 → 「停止」；生成中但已经打了字 → 「发送」（这条进插话队列）。
-              这样生成中既能继续发消息，也不会丢掉随时叫停的能力。
-              「停止」档不能禁用（见 primaryDisabled）：生成中清空输入框正是要叫停。 */}
+            {/* There is a single primary button whose semantics follow the state: generating with an
+              empty input → "stop"; generating with text already typed → "send" (that message joins
+              the interjection queue). This way the user can keep sending while generating without
+              losing the ability to stop at any moment. The stop case must not be disabled (see
+              primaryDisabled): clearing the input while generating is exactly a request to stop. */}
             <Tooltip title={primaryHint}>
               <Button
                 type="primary"
@@ -2470,7 +2562,7 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
           </div>
         </div>
 
-        {/* 完全权限：档位本身没有拦截，切换前必须过一次显式风险确认（DSH 同款） */}
+        {/* Full access: the mode itself has no interception, so switching requires an explicit risk confirmation first */}
         <Modal
           open={confirmFullAccess}
           title={t('harness.permission.confirmTitle')}
@@ -2499,8 +2591,8 @@ const HarnessInput: React.FC<HarnessInputProps> = ({
         {simpleMode ? null : (
           <>
             {inputSelectors}
-            {/* 会话用量状态条：靠右（与工具 / 技能同一行，右侧留白与左侧对称）。
-            数据全部来自 harness_dialogue_usage，拿不到的项目不画。 */}
+            {/* Session usage meter: right-aligned (same row as tools / skills, with symmetrical
+            padding). All data comes from harness_dialogue_usage; unavailable items are not drawn. */}
             <HarnessUsageMeter
               topicId={currentTopicId}
               contextWindow={modelContextWindow}

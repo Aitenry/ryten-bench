@@ -9,13 +9,16 @@ import { useTheme } from '@renderer/hooks/useTheme'
 import type { JobOutputView, JobSnapshot } from '../../../../shared/harness/types'
 
 /**
- * 后台任务内联托盘（顶部栏下方，不弹独立窗口）。
+ * Inline background job tray (below the top bar, no separate window).
  *
- * 用户 2026-11-26 确认的样式：
- * - 每行左侧折叠按钮、右侧停止按钮；运行中才显示停止；
- * - 输出在任务行下面就地展开（单开：打开一条自动收起其他条），不打开 Modal；
- * - 完成后停止按钮消失，但保留列宽，状态/耗时不跳动；
- * - 托盘整体把消息区往下推，不覆盖对话内容。
+ * Style confirmed on 2026-11-26:
+ * - Each row has a collapse button on the left and a stop button on the right; stop only shows
+ *   while running;
+ * - Output expands in place under the job row (single-open: opening one collapses the others),
+ *   never in a modal;
+ * - Once finished the stop button disappears but its column width is kept, so status/duration do
+ *   not shift;
+ * - The tray pushes the message area down instead of covering the conversation.
  */
 interface BackgroundJobsTrayProps {
   jobs: JobSnapshot[]
@@ -23,21 +26,21 @@ interface BackgroundJobsTrayProps {
   peekOutput: (jobId: string) => Promise<JobOutputView>
 }
 
-/** 一条任务的输出快照（按 job id 缓存，收起后再展开先显示缓存、随后刷新） */
+/** Output snapshot for one job (cached by job id; reopening shows the cache first, then refreshes) */
 interface OutputState {
   text: string
   truncated: boolean
   loading: boolean
 }
 
-/** 命令/输出用等宽字形（与工具详情同一套） */
+/** Monospace typeface for commands/output (same set as the tool detail view) */
 const MONO_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
 
-/** 任务是否还活着（stopping 时停止按钮变成转圈并禁用） */
+/** Whether a job is still alive (while stopping the stop button turns into a spinner and is disabled) */
 const isActive = (job: JobSnapshot): boolean =>
   job.status === 'running' || job.status === 'stopping'
 
-/** 状态文案与语义色（暗色用亮档、亮色用深档，小字也能读清） */
+/** Status label and semantic color (brighter shades in dark mode, deeper ones in light mode) */
 const statusMeta = (
   t: TFunction,
   job: JobSnapshot,
@@ -73,8 +76,8 @@ const statusMeta = (
 }
 
 /**
- * 耗时文案：0 秒级显示 <1 秒，避免刚启动的任务看起来像卡住了；
- * 分钟/小时按设计稿显示「1 分 12 秒」「1 小时 2 分」。
+ * Duration text: sub-second values show "<1s" so a freshly started job doesn't look stuck;
+ * minutes/hours use compact forms such as "1m 12s" and "1h 2m".
  */
 function formatDuration(ms: number, t: TFunction): string {
   if (!Number.isFinite(ms) || ms < 1000) {
@@ -106,7 +109,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
   const outputRef = useRef<HTMLPreElement | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
-  // 运行中的任务每秒刷新一次耗时（全部结束后停表）
+  // Tick elapsed time once per second while any job is running (stop the clock when all finish)
   const hasActive = jobs.some(isActive)
   useEffect(() => {
     if (!hasActive) return
@@ -114,7 +117,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
     return () => clearInterval(timer)
   }, [hasActive])
 
-  // 运行中的任务优先，其余按启动时间倒序——用户先看到「还在跑」的
+  // Running jobs first, then by start time descending — the user sees what is still running first
   const sortedJobs = [...jobs].sort((a, b) => {
     const rank = (job: JobSnapshot): number => (isActive(job) ? 0 : 1)
     const byRank = rank(a) - rank(b)
@@ -126,12 +129,12 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
   const expandedExists = expandedJob != null
   const expandedOutput = expandedId ? outputs[expandedId] : undefined
 
-  // 任务被清理（话题删除 / 终态裁剪）后，展开态自动收起
+  // Collapse the expanded row automatically when its job is cleaned up (topic deletion / terminal pruning)
   useEffect(() => {
     if (expandedId && !jobs.some((job) => job.id === expandedId)) setExpandedId(null)
   }, [jobs, expandedId])
 
-  // 展开某一行：立刻拉一次输出；运行中每秒刷新，终态只拉最后一份
+  // Expanding a row: fetch output immediately; refresh every second while running, once for terminal states
   useEffect(() => {
     if (!expandedId || !expandedExists) return
     let cancelled = false
@@ -169,7 +172,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
     }
   }, [expandedActive, expandedExists, expandedId, peekOutput, t])
 
-  // 输出更新时贴底；用户主动往上翻后停止自动跟随（显示「回到底部」）
+  // Stick to the bottom on output updates; stop following once the user scrolls up (shows "back to bottom")
   useEffect(() => {
     if (!following) return
     const el = outputRef.current
@@ -184,7 +187,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
     setExpandedId(job.id)
     followRef.current = true
     setFollowing(true)
-    // 首次展开先占位，避免闪一下「暂无输出」
+    // Seed a placeholder on first expand to avoid a flash of "no output"
     setOutputs((prev) =>
       prev[job.id] ? prev : { ...prev, [job.id]: { text: '', truncated: false, loading: true } }
     )
@@ -257,7 +260,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
               title={rowTitle}
               onClick={() => toggleRow(job)}
               onKeyDown={(event) => {
-                // 停止按钮是行内子元素：它自己的键盘事件不能触发展开/收起
+                // The stop button is an inline child: its own keyboard events must not toggle the row
                 if (event.target !== event.currentTarget) return
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
@@ -273,7 +276,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
                 cursor: 'pointer'
               }}
             >
-              {/* 左侧折叠按钮：控制这一条任务的输出展开 */}
+              {/* Left collapse button: toggles the output of this job */}
               <span
                 aria-hidden="true"
                 className="harness-bg-chevron"
@@ -319,7 +322,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
                 {job.label || job.id}
               </span>
 
-              {/* 状态：彩色圆点 + 小字，避免大色块抢命令的注意力 */}
+              {/* Status: colored dot + small text, so a large color block doesn't steal focus from the command */}
               <span
                 style={{
                   display: 'inline-flex',
@@ -357,7 +360,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
                 {duration}
               </span>
 
-              {/* 停止槽位固定 26px：结束按钮消失后各列不跳动 */}
+              {/* Stop slot is a fixed 26px so columns don't shift when the button disappears */}
               <span
                 onClick={(event) => event.stopPropagation()}
                 style={{
@@ -378,7 +381,7 @@ const BackgroundJobsTray: React.FC<BackgroundJobsTrayProps> = ({ jobs, onStop, p
                     aria-label={t('harness.backgroundJobs.stop')}
                     disabled={job.status === 'stopping'}
                     onClick={(event) => {
-                      // 行本身是折叠区：停止不能顺带展开/收起
+                      // The row itself is the collapse area: stopping must not also expand/collapse it
                       event.stopPropagation()
                       void onStop(job)
                     }}

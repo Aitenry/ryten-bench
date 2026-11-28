@@ -1,27 +1,30 @@
 /**
- * 图像规范化决策（纯逻辑，无 electron 依赖，可离线测试）。
+ * Image normalization decisions (pure logic, no electron dependency, testable offline).
  *
- * 对照 DSH 的附件规范化（normalized attachment）：DSH 会把上传/读取的图片按像素预算
- * 等比缩放、必要时重编码，再按路由预算生成请求版本。本项目当前没有附件存储，先在
- * `read_image` 这一层做**最小规范化**：
+ * Current minimal normalization at the `read_image` layer (this project has no attachment storage
+ * yet):
  *
- * - 长边超过 {@link DEFAULT_IMAGE_LIMITS.maxDimension} → 等比缩到上限；
- * - 尺寸不大但编码字节超预算 → 同尺寸重编码（通常是截图存成 BMP/PNG 的情况）；
- * - GIF 一律保持原样（重编码会丢动画）；其它不确定情况（解码失败等）也保持原样。
+ * - longest side above {@link DEFAULT_IMAGE_LIMITS.maxDimension} → scale down proportionally to the
+ *   limit;
+ * - dimensions are within limits but encoded bytes exceed the budget → re-encode at the same size
+ *   (usually screenshots saved as BMP/PNG);
+ * - GIF always stays as-is (re-encoding would lose animation); other uncertain cases (decode failure
+ *   etc.) also stay as-is.
  *
- * 决策与执行分离：本模块只回答「要不要缩放/重编码、目标尺寸多少」，真正的解码/编码
- * 由 fs-backend 用 Electron `nativeImage` 完成。
+ * Decisions and execution are separated: this module only answers "should this be scaled/re-encoded
+ * and what is the target size", while the actual decoding/encoding is done by fs-backend with
+ * Electron `nativeImage`.
  */
 
-/** 单边像素上限（与 DSH 的 normalizedImageMaxDimension 默认值一致） */
+/** Single-side pixel limit (same default as normalizedImageMaxDimension) */
 export const DEFAULT_MAX_DIMENSION = 2048
-/** 规范化后编码字节的目标上限 */
+/** Target byte cap for the normalized encoding */
 export const DEFAULT_MAX_BYTES = 1_500_000
 
 export interface ImageFacts {
   width: number
   height: number
-  /** 原始编码字节数（不是解码后的像素内存） */
+  /** Original encoded byte count (not decoded pixel memory) */
   bytes: number
   mimeType: string
 }
@@ -45,7 +48,7 @@ export type NormalizeDecision =
       reason: 'dimension' | 'bytes'
     }
 
-/** 等比缩放后的像素尺寸（向内取整，至少 1px；不放大） */
+/** Pixel dimensions after proportional scaling (rounded down, at least 1px; never upscales) */
 export function scaleToFit(
   width: number,
   height: number,
@@ -64,9 +67,10 @@ export function scaleToFit(
 }
 
 /**
- * 决定这张图是否需要处理。
+ * Decide whether this image needs processing.
  *
- * 注意：不认识的尺寸（解码失败时 width=0）一律 keep，由调用方退回原图。
+ * Note: unknown dimensions (width=0 when decoding fails) always keep, letting the caller fall back
+ * to the original image.
  */
 export function planImageNormalization(
   facts: ImageFacts,
@@ -89,7 +93,7 @@ export function planImageNormalization(
   return { action: 'keep' }
 }
 
-/** 从 data URL 中解析出 MIME 与原始字节（失败返回 null） */
+/** Parse the MIME and raw bytes out of a data URL (returns null on failure) */
 export function parseImageDataUrl(
   dataUrl: string
 ): { mimeType: string; bytes: Buffer } | null {

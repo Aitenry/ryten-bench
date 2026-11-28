@@ -1,8 +1,10 @@
 /**
- * 定时任务规则的「一句话描述」（每天 09:00 / 每 30 分钟 / 一次性 12-05 14:00）。
+ * One-line description of a schedule rule (every day at 09:00 / every 30 minutes / one-off
+ * 12-05 14:00).
  *
- * 从 `ScheduleCard.tsx` 拆出来：组件文件只导出组件，才能让
- * react-refresh（HMR）对卡片生效；纯格式化函数放在同目录的 .ts 文件里。
+ * Extracted from `ScheduleCard.tsx`: a component file must only export components for
+ * react-refresh (HMR) to apply to the card; pure formatting functions live in a .ts file in the
+ * same directory.
  */
 import type { TFunction } from 'i18next'
 import type { ScheduleView } from '../../../api/harness'

@@ -1,29 +1,31 @@
 /**
- * `apply_patch` 的纯解析与应用逻辑（无 electron / 无文件系统依赖，可离线测试）。
+ * Pure parsing and application logic for `apply_patch` (no electron / no filesystem
+ * dependencies, so it is testable offline).
  *
- * 格式与 DSH / OpenAI 的 apply_patch 一致：
+ * The format matches OpenAI's apply_patch:
  *
  * ```
  * *** Begin Patch
  * *** Add File: docs/new.md
- * +第一行
+ * +first line
  * *** Update File: src/a.ts
  * @@ optional context
- *  上下文行
- * -旧行
- * +新行
+ *  context line
+ * -old line
+ * +new line
  * *** Delete File: old.txt
  * *** End Patch
  * ```
  *
- * 设计取舍：
- * - 更新块按「连续上下文 + 删除行」的**精确序列**匹配（空白与换行必须一致），
- *   不做模糊匹配——补丁失败时宁可报错让模型重读文件，也不要在错误位置改代码；
- * - 每个 hunk 的匹配从上一个 hunk 之后开始，保证多 hunk 自上而下应用；
- * - CRLF 输入统一按 LF 解析/输出（本项目所有文本工具都按 UTF-8 文本处理）。
+ * Design trade-offs:
+ * - Update hunks match the **exact sequence** of "consecutive context + removed lines"
+ *   (whitespace and newlines must match), with no fuzzy matching: when a patch fails, erroring
+ *   out so the model re-reads the file is better than editing the wrong place;
+ * - Each hunk is matched starting after the previous one, so multiple hunks apply top to bottom;
+ * - CRLF input is parsed and emitted as LF uniformly (all text tools here treat text as UTF-8).
  */
 
-/** 一个更新块：old 是上下文 + 删除行，new 是上下文 + 新增行 */
+/** One update hunk: old is the context + removed lines, new is the context + added lines */
 export interface PatchHunk {
   oldLines: string[]
   newLines: string[]
@@ -38,7 +40,7 @@ export type ParsePatchResult =
   | { ok: true; operations: PatchOperation[] }
   | { ok: false; error: string }
 
-/** 解析失败/应用失败的结构化原因（上层负责本地化文案） */
+/** Structured reason for a parse/apply failure (the caller localizes the message) */
 export type PatchFailure =
   | { code: 'missing-begin' }
   | { code: 'missing-end' }
@@ -48,18 +50,19 @@ export type PatchFailure =
   | { code: 'hunk-not-found'; path: string; hunk: number }
   | { code: 'empty-hunk'; path: string; hunk: number }
 
-/** 去掉行尾 \r，统一按 LF 处理 */
+/** Strip trailing \r and treat the text as LF uniformly */
 function normalizeLines(text: string): string[] {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
 }
 
 /**
- * 解析补丁文本。失败返回结构化错误（不抛异常），由工具层翻译成界面语言。
+ * Parse patch text. Failures return a structured error (no exception); the tool layer
+ * translates it into the UI language.
  */
 export function parsePatch(input: string): ParsePatchResult {
   const lines = normalizeLines(input)
   let index = 0
-  // 允许补丁前有空行/说明文字，但第一条指令必须是 Begin Patch
+  // Blank lines or prose may precede the patch, but the first directive must be Begin Patch
   while (index < lines.length && lines[index].trim() === '') index++
   if (index >= lines.length || !/^\*\*\* Begin Patch\s*$/.test(lines[index].trim())) {
     return { ok: false, error: 'missing-begin' }
@@ -93,7 +96,7 @@ export function parsePatch(input: string): ParsePatchResult {
       while (index < lines.length && !/^\*\*\* /.test(lines[index].trimStart())) {
         const body = lines[index]
         if (body.startsWith('+')) added.push(body.slice(1))
-        else if (body.trim() !== '') added.push(body) // 容错：Add File 里未加 + 的行按字面加入
+        else if (body.trim() !== '') added.push(body) // tolerance: unprefixed Add File lines are added literally
         index++
       }
       operations.push({ kind: 'add', path, lines: added })
@@ -145,11 +148,11 @@ export function parsePatch(input: string): ParsePatchResult {
           current.oldLines.push(body.slice(1))
           current.newLines.push(body.slice(1))
         } else if (marker === '@') {
-          // 以 @ 开头的上下文行（非 @@ 指令）：按上下文处理
+          // Context line starting with @ (not an @@ directive): treat as context
           current.oldLines.push(body)
           current.newLines.push(body)
         } else {
-          // 无前缀的行按上下文处理（宽松但不破坏匹配语义）
+          // Unprefixed lines are treated as context (lenient without breaking match semantics)
           current.oldLines.push(body)
           current.newLines.push(body)
         }
@@ -176,11 +179,11 @@ export type ApplyHunksResult =
   | { ok: false; failure: PatchFailure }
 
 /**
- * 把若干 hunk 依次应用到文本内容。
+ * Apply hunks to text content one after another.
  *
- * @param content 原文（LF 或 CRLF 均可）
- * @param hunks 解析出的更新块
- * @param path 仅用于错误信息（哪个文件的第几个 hunk 没匹配上）
+ * @param content original text (LF or CRLF)
+ * @param hunks parsed update hunks
+ * @param path used only in error messages (which file's which hunk failed to match)
  */
 export function applyHunks(content: string, hunks: PatchHunk[], path = ''): ApplyHunksResult {
   const hasTrailingNewline = /\n$/.test(content)
@@ -204,16 +207,17 @@ export function applyHunks(content: string, hunks: PatchHunk[], path = ''): Appl
   return { ok: true, content: lines.join('\n') + (hasTrailingNewline ? '\n' : '') }
 }
 
-/** 在 lines 中从 from 开始查找一段连续序列，返回起始下标；找不到返回 -1 */
+/** Find a contiguous sequence in lines starting at from; return its start index, or -1 */
 function findSequence(lines: string[], sequence: string[], from: number): number {
   const exact = findSequenceWith(lines, sequence, from, (line, expected) => line === expected)
   if (exact >= 0) return exact
-  // 容错回退：只忽略**行尾**空白（模型从编辑器复制时常见）。行首缩进仍然严格匹配——
-  // 代码里前导空白有语义，宽容它会把补丁打到错误的分支/缩进层级上。
+  // Tolerant fallback: ignore **trailing** whitespace only (common when the model copies from an
+  // editor). Leading indentation still matches strictly -- leading whitespace is semantic in code,
+  // and being lenient would apply the patch at the wrong branch or nesting level.
   return findSequenceWith(lines, sequence, from, (line, expected) => line.trimEnd() === expected.trimEnd())
 }
 
-/** 按给定的行比较器查找连续序列 */
+/** Find a contiguous sequence using the given line comparator */
 function findSequenceWith(
   lines: string[],
   sequence: string[],

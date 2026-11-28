@@ -1,11 +1,11 @@
 import type { AppLanguage } from './settings'
 
-/** 界面语言（只有简体中文 / English 两项） */
+/** UI language (only Simplified Chinese / English) */
 export type ResolvedLanguage = AppLanguage
 
 export interface LanguageContextType {
-  /** 当前界面语言，同时也是下拉框的选中值 */
+  /** Current UI language, which is also the selected value of the dropdown */
   language: ResolvedLanguage
-  /** 切换界面语言：立即生效并落盘 */
+  /** Switch the UI language: takes effect immediately and is persisted */
   setLanguage: (language: ResolvedLanguage) => Promise<void>
 }

@@ -48,18 +48,20 @@ import type {
 } from '../../services/harness/types'
 
 /**
- * AgentRuntime — 声明式组件组装入口（对应论文 §5.2 声明式配置 + 协调）
+ * AgentRuntime — declarative component assembly entry point (declarative configuration plus
+ * coordination)
  *
- * 组件依赖声明（inject）：
- * - 文件工具集 ← workspacePath / memoryPath（无挂载则不激活）
- * - 记忆 ← memoryPath + workspaceId（未配置则不注入）
- * - 技能 ← skillsPath + enabledSkills（未配置则不注入）
- * - 子代理 ← subAgents + 模型解析器（task 工具始终挂载；无配置时描述引导 agent_create 构建）
+ * Component dependencies (inject):
+ * - file toolset <- workspacePath / memoryPath (not active without a mount)
+ * - memory <- memoryPath + workspaceId (not injected when unconfigured)
+ * - skills <- skillsPath + enabledSkills (not injected when unconfigured)
+ * - subagents <- subAgents + model resolver (the task tool is always mounted; without config its
+ *   description guides the agent to build one with agent_create)
  *
- * 每个请求一个 Runtime 实例（与旧 HarnessService 每次构建 agent 一致），隔离性好。
+ * One Runtime instance per request (good isolation).
  */
 
-/** Rita 基础人设（与旧版保持一致） */
+/** Rita base persona (unchanged from the previous version) */
 const RITA_BASE_PROMPT = `Your name is Rita. You are a helpful assistant.
 
 You are in a continuous conversation with the user. All messages in the harness history are genuine prior exchanges between you and this same user — treat them as real conversation context.
@@ -70,41 +72,44 @@ You are in a continuous conversation with the user. All messages in the harness 
 - Reply in the same language the user writes in, and keep responses concise and natural.`
 
 export interface AgentRuntimeOptions {
-  /** 已创建的 BaseChatModel 实例（由 ProviderService 提供） */
+  /** An already created BaseChatModel instance (provided by ProviderService) */
   model: BaseChatModel
-  /** 业务工具列表（8 个内置 AI 工具） */
+  /** Business tool list (the 8 built-in AI tools) */
   tools: StructuredToolInterface[]
-  /** 智能体定义列表 */
+  /** Agent definition list */
   subAgents: SubAgentConfig[]
-  /** 技能目录（含 SKILL.md 的子目录即技能），空表示不启用 */
+  /** Skills directory (a subdirectory containing SKILL.md is a skill); empty disables skills */
   skillsPath?: string
-  /** 启用的技能 ID 列表，undefined 表示全部启用 */
+  /** Enabled skill ids; undefined means all are enabled */
   enabledSkills?: string[]
-  /** AI 工作区目录（挂载为虚拟 /） */
+  /** AI workspace directory (mounted as the virtual /) */
   workspacePath?: string
-  /** 记忆存储根目录，空表示不启用 */
+  /** Memory storage root; empty disables memory */
   memoryPath?: string
-  /** 当前工作区 ID */
+  /** Current workspace id */
   workspaceId: number
-  /** spawn 时主模型描述符（后台子代理会话持久化、冷恢复用；缺省 = 当前默认供应商） */
+  /** Main model descriptor at spawn time (persisting background subagent sessions, cold resume; default = current default provider) */
   modelDescriptor?: SubAgentMainModelDescriptor
-  /** 目标自动续跑轮：忽略计划模式（计划只用于用户主动启动的首轮，避免每轮弹评审） */
+  /** Goal auto-continuation round: ignore plan mode (planning is only for the first user-started round, to avoid a review prompt every round) */
   suppressPlanMode?: boolean
-  /** Mnemon 记忆组件（进程级单例，由 HarnessService 注入） */
+  /** Mnemon memory component (process-level singleton, injected by HarnessService) */
   mnemon?: MnemonComponent
-  /** 工具调用总次数上限（模型级「工具调用轮数」；缺省用工程默认值） */
+  /** Total tool-call cap (the model-level "tool call rounds"; defaults to the built-in value) */
   maxToolCalls?: number
   /**
-   * 本轮路由的模型是否声明支持图片输入（models-profile 的 supports_image_input）。
-   * 传给文件工具集，作为 read_image 的执行期门禁（false = 拒绝）。
+   * Whether the model routed for this turn declares image input support (models-profile's
+   * supports_image_input).
+   * Passed to the file toolset as the runtime gate for read_image (false = refuse).
    */
   supportsImageInput?: boolean
   /**
-   * 生成中每采到一次真实用量就回调（整轮累计的记录数组）。
+   * Called every time real usage is sampled during generation (the accumulated records of the
+   * turn).
    *
-   * 与流结束时的 `onUsage`（落库用）不是一回事：这里每发生一次模型往返就调一次，
-   * IPC 层据此把「本轮已跑 N 次调用 / X token」推给输入框底栏实时显示；
-   * 不配置就只采集不推送（非流式路径、后台子代理等）。
+   * Not the same as `onUsage` at stream end (used for persistence): this fires once per model
+   * round-trip, and the IPC layer uses it to push "N calls / X tokens so far this turn" to the
+   * input footer for live display; without it usage is collected but not pushed (non-streaming
+   * paths, background subagents, etc.).
    */
   onUsageRecord?: (records: ModelUsageRecord[]) => void
 }
@@ -113,28 +118,30 @@ export class Runtime {
   private readonly opts: AgentRuntimeOptions
   private readonly fsTools: StructuredToolInterface[]
   private readonly queueRef: QueueRef = {}
-  /** 溢出存储引用：stream/invoke 时按 topicId 创建（子代理图通过引用共享同一次请求的实例） */
+  /** Spill-store reference: created per topicId on stream/invoke (subagent graphs share the same request's instance through it) */
   private readonly spillRef: { current?: SpillStore } = {}
-  /** 本轮模型用量采集（每次模型调用 push 一条真实 usage_metadata） */
+  /** This turn's model usage collection (one real usage_metadata pushed per model call) */
   private usageRecords: ModelUsageRecord[] = []
   private readonly taskTool?: StructuredToolInterface
-  /** 主代理专属的作者化工具：委派构建可复用子代理配置（子代理图不挂） */
+  /** Authoring tool exclusive to the main agent: delegates building reusable subagent configs (not mounted in subagent graphs) */
   private readonly authoringTool?: StructuredToolInterface
   private readonly workflowTool: StructuredToolInterface
   private readonly systemPrompt: string
-  /** 本轮启用的技能（系统提示词只放索引，正文由 skill 工具按需加载） */
+  /** Skills enabled this turn (the system prompt only indexes them; the skill tool loads bodies on demand) */
   private readonly skills: SkillInfo[]
   private readonly mnemon?: MnemonComponent
-  /** 图递归上限：远宽于工具调用次数护栏（每轮约 2 个节点步 + 收尾余量），
-   *  工具护栏先触发；即使触顶也有 graph.ts 的优雅收尾兜底（不报错）。 */
+  /** Graph recursion cap: far wider than the tool-call guard (about 2 node steps per round plus
+   *  wrap-up headroom), so the tool guard fires first; even if it is hit, graph.ts wraps up
+   *  gracefully (no error). */
   private readonly recursionLimit: number
-  /** 工具调用总次数上限（模型级「工具调用轮数」） */
+  /** Total tool-call cap (the model-level "tool call rounds") */
   private readonly maxToolCalls: number
   /**
-   * 本轮话题 id（每次 stream/invoke 重新赋值）。
+   * Topic id for this turn (reassigned on every stream/invoke).
    *
-   * 为什么要在 Runtime 上留一份：工具包装（权限闸门）在组装期就需要一个话题兜底值——
-   * 子代理子图不带 configurable，工具调用拿不到 topicId，只能回落到这里。
+   * Why keep a copy on Runtime: tool wrapping (the permission gate) needs a fallback topic at
+   * assembly time — subagent subgraphs carry no configurable, so tool calls cannot see topicId and
+   * must fall back to this.
    */
   private currentTopicId = 0
 
@@ -146,9 +153,10 @@ export class Runtime {
     this.fsTools = buildFsTools({
       workspacePath: opts.workspacePath,
       memoryPath: opts.memoryPath,
-      // 文件改动史按工作区归属（模型每次写文件都要留下可追溯 / 可回溯的记录）
+      // File change history is owned by the workspace (every model write leaves a traceable,
+      // revertible record)
       workspaceId: opts.workspaceId,
-      // 视觉门禁：read_image 只在模型声明支持图片输入时执行
+      // Vision gate: read_image only runs when the model declares image input support
       supportsImageInput: opts.supportsImageInput
     })
     this.skills = loadSkills({
@@ -157,8 +165,9 @@ export class Runtime {
     })
     this.systemPrompt = this.buildSystemPrompt()
 
-    // task 工具始终挂载：没有已配置子代理时，描述会引导主智能体用 agent_create 构建；
-    // reloadSubAgents 在**调用期**重新解析配置，保证同一轮内 agent_create 之后能立刻派发。
+    // The task tool is always mounted: with no configured subagents its description guides the
+    // main agent to build one with agent_create; reloadSubAgents re-resolves the config **at call
+    // time**, so a just-created agent can be dispatched immediately within the same turn.
     this.taskTool = createTaskTool({
       subAgents: opts.subAgents,
       mainModel: opts.model,
@@ -169,15 +178,17 @@ export class Runtime {
       recursionLimit: this.recursionLimit,
       maxToolCalls: this.maxToolCalls,
       mainModelDescriptor: opts.modelDescriptor,
-      // 子代理专属记忆根（<memoryPath>/workspace-<wsId>/ 下 sub-agents/<name>/memories/AGENTS.md）
+      // Per-subagent memory root:
+      // <memoryPath>/workspace-<wsId>/sub-agents/<name>/memories/AGENTS.md
       memoryPath: opts.memoryPath,
-      // 技能目录：子代理按声明的 skills 过滤注入
+      // Skills directory: subagents get skills filtered by their declared list
       skillsPath: opts.skillsPath,
       reloadSubAgents: () => listEnabledSubAgents(opts.workspaceId)
     })
 
-    // 作者化工具只给主代理：把「新建子代理配置」做成可委派的工具调用（设置页同一服务层）。
-    // 没有工作区时 agent_config 无归属，不挂载。
+    // The authoring tool is main-agent only: it turns "create a subagent config" into a delegable
+    // tool call (same service layer as the settings page). Without a workspace, agent_config has
+    // no owner, so it is not mounted.
     if (opts.workspaceId > 0) {
       this.authoringTool = createAgentAuthoringTool({
         workspaceId: opts.workspaceId,
@@ -185,11 +196,13 @@ export class Runtime {
       })
     }
 
-    // 工作流工具：脚本编排多代理 fan-out（子代理 = 业务工具 + 文件工具，防递归嵌套）
+    // Workflow tool: script-driven multi-agent fan-out (subagents get business + file tools, which
+    // prevents recursive nesting)
     this.workflowTool = buildWorkflowTool({
       mainModel: opts.model,
       resolveModel: (spec) => this.resolveSubAgentModel(spec),
-      // 工作流里的子代理同样受权限闸门约束（工具在真正被调用时才组装，话题取当时的 this.currentTopicId）
+      // Workflow subagents are also gated by the permission gate (tools are assembled only when
+      // actually invoked, using the current this.currentTopicId as the topic)
       buildAgentTools: () => this.guard([...this.opts.tools, ...this.fsTools]),
       recursionLimit: this.recursionLimit,
       maxToolCalls: this.maxToolCalls,
@@ -202,60 +215,67 @@ export class Runtime {
   }
 
   /**
-   * 组装主代理工具集
-   * （业务工具 + 文件工具 + 待办 + 目标 + 后台任务 + 提问 + 子代理续接控制 + 工作流 + Mnemon + task）
+   * Assemble the main agent toolset
+   * (business tools + file tools + todo + goal + background jobs + ask + subagent resume control
+   * + workflow + Mnemon + task)
    *
-   * 全部工具统一过权限闸门：任何一次调用（含 MCP / 插件贡献 / 后续新增的工具）都必须在
-   * 组装处就被包住，否则「新加一个工具」就会悄悄绕过沙箱。
+   * All tools go through the permission gate: every call (including MCP / plugin-contributed /
+   * future tools) must be wrapped at the assembly point, otherwise "adding one tool" would
+   * silently bypass the sandbox.
    */
   private buildAllTools(topicId: number): StructuredToolInterface[] {
     const tools: StructuredToolInterface[] = [
       ...this.opts.tools,
       ...this.fsTools,
-      // 历史会话检索（跨话题搜索 + 按话题读取）：只在有工作区的会话里挂载
+      // Session history search (cross-topic search + read by topic): mounted only with a workspace
       ...(this.opts.workspaceId > 0 ? buildSessionSearchTools(this.opts.workspaceId) : []),
-      // 持久终端：只在有工作区时挂载；open/send 由工具层限制在 danger-full-access 档
+      // Persistent terminal: mounted only with a workspace; open/send are restricted to the
+      // danger-full-access mode by the tool layer
       ...buildTerminalTools({ workspacePath: this.opts.workspacePath }),
       ...buildTodoTools(todoStore, topicId),
       ...buildGoalTools(goalStore, topicId),
-      // 计划模式：退出工具只在激活时披露（与规划指引同时出现）
+      // Plan mode: the exit tool is only exposed while active (it appears with the planning guidance)
       ...(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)
         ? [buildExitPlanModeTool(topicId)]
         : []),
       ...buildJobTools(jobsRegistry, topicId),
       buildAskUserTool(topicId),
       ...buildSubagentControlTools(subagentSessions, topicId),
-      // 共享任务板（opt-in）：仅在话题开启团队协作时注入
+      // Shared task board (opt-in): injected only when team collaboration is enabled for the topic
       ...(teamModeStore.isEnabled(topicId) ? buildTeamTools(teamStore, topicId) : []),
       this.workflowTool,
       ...(this.mnemon ? this.mnemon.tools : []),
-      // 技能：系统提示词只放索引，正文由 skill 工具按需加载（没有技能时不挂）
+      // Skills: the system prompt only indexes them, the skill tool loads bodies on demand (not
+      // mounted when there are none)
       ...(this.skills.length > 0 ? [buildSkillTool(this.skills)] : []),
       ...(this.taskTool ? [this.taskTool] : []),
       ...(this.authoringTool ? [this.authoringTool] : []),
-      // 模型路由清单：agent_create 的 `model` 字段只能填已启用的 provider:model，
-      // 有工作区（能创建子代理）时才挂载
+      // Model route list: agent_create's `model` field only accepts enabled provider:model values,
+      // so it is mounted only with a workspace (where subagents can be created)
       ...(this.opts.workspaceId > 0 ? [buildModelRoutesTool()] : []),
-      // 动作卡：回答下方渲染可点选动作，点选即回传一条消息（无副作用，始终挂载）
+      // Action cards: renders clickable actions under the reply; clicking sends one message back
+      // (no side effects, always mounted)
       buildProposeActionTool()
     ]
-    // PTC（run_code）要在**全部工具装配完成之后**再建：它把只读工具桥接给模型代码，
-    // 必须能看到最终列表（且排除自身）。只在有工作区时挂载，与 terminal 一致。
+    // PTC (run_code) must be built **after all tools are assembled**: it bridges read-only tools
+    // to model code and must see the final list (excluding itself). Mounted only with a workspace,
+    // same as terminal.
     if (this.opts.workspacePath) {
       tools.push(buildRunCodeTool({ availableTools: tools }))
     }
     return this.guard(tools, topicId)
   }
 
-  /** 子代理工具（按声明的工具名从系统工具注册表独立构建）——同样过闸门 */
+  /** Subagent tools (built independently from the system tool registry by declared names) — gated too */
   private buildSubAgentTools(subAgent: SubAgentConfig): StructuredToolInterface[] {
-    // 子代理的技能同样按需加载：提示词里只有索引，因此必须带上 skill 工具，
-    // 否则子代理能看到技能列表却读不到正文。
+    // Subagent skills are also loaded on demand: the prompt only has the index, so the skill tool
+    // must be included, otherwise the subagent sees the list but cannot read the bodies.
     const subAgentSkills =
       subAgent.skills && subAgent.skills.length > 0
         ? loadSkills({ skillsPath: this.opts.skillsPath, enabledSkills: subAgent.skills })
         : []
-    // 子代理同样是团队一员（仅团队模式开启时）：带上共享任务板工具（身份由 configurable.teamAgent 提供）
+    // Subagents are team members too (only when team mode is on): include the shared task board
+    // tools (identity comes from configurable.teamAgent)
     return this.guard([
       ...buildSubAgentToolsFromRegistry(subAgent),
       ...(subAgentSkills.length > 0 ? [buildSkillTool(subAgentSkills)] : []),
@@ -266,9 +286,10 @@ export class Runtime {
   }
 
   /**
-   * 套上权限闸门（沙箱：仅可查看 / 工作区内修改 / 完全权限）。
+   * Wrap with the permission gate (sandbox: view only / workspace write / full access).
    *
-   * @param topicId 话题 id；缺省用本轮话题（子代理/工作流在调用期组装工具，取当时的 currentTopicId）
+   * @param topicId topic id; defaults to this turn's topic (subagents/workflow assemble tools at
+   *   call time and use the current currentTopicId)
    */
   private guard(tools: StructuredToolInterface[], topicId?: number): StructuredToolInterface[] {
     return guardTools(tools, {
@@ -277,17 +298,19 @@ export class Runtime {
     })
   }
 
-  /** 解析 'provider:model' → 模型实例；失败返回 undefined（回退主模型） */
+  /** Resolve 'provider:model' -> model instance; undefined on failure (falls back to the main model) */
   private async resolveSubAgentModel(spec: string | undefined): Promise<BaseChatModel | undefined> {
     return resolveSubAgentModelSpec(spec)
   }
 
   /**
-   * 构建系统提示词：Rita 人设 + 子智能体引导 + 技能段 + Mnemon sections（热记忆由 Mnemon 统一注入）。
+   * Build the system prompt: Rita persona + subagent guidance + skills section + Mnemon sections
+   * (hot memory is injected by Mnemon).
    */
   private buildSystemPrompt(): string {
     let prompt = RITA_BASE_PROMPT
-    // 工作区已配置时才有委派能力：task 工具始终挂载，没有子代理时引导 agent_create 构建
+    // Delegation needs a workspace: the task tool is always mounted and, with no subagents, guides
+    // the model toward agent_create
     if (this.opts.workspaceId > 0) {
       const list =
         this.opts.subAgents.length > 0
@@ -318,35 +341,38 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   }
 
   /**
-   * 本轮系统提示词 = 基础提示词 + 当前权限档位说明段。
+   * System prompt for this turn = base prompt + the section describing the current permission
+   * mode.
    *
-   * 为什么在请求期拼而不是构造期：档位是**按话题**的，同一份 Runtime 配置在
-   * 不同话题下会用不同档位；档位说明必须与真正生效的拦截行为逐字对应。
+   * Why assemble it per request instead of per construction: the mode is **per topic**, so the
+   * same Runtime config uses different modes in different topics; the mode description must match
+   * the interception behavior that actually applies, word for word.
    */
   private promptFor(topicId: number): string {
     return (
       this.systemPrompt +
       sandboxPromptSection(permissionGate.modeFor(topicId)) +
-      // 计划模式：只在激活时追加规划指引（未激活不增加任何 token）
+      // Plan mode: append planning guidance only while active (no extra tokens when inactive)
       planModePromptSection(!this.opts.suppressPlanMode && planModeStore.isActive(topicId)) +
-      // 团队协作：opt-in（按话题持久化）；关闭时不追加任何团队提示词
+      // Team collaboration: opt-in (persisted per topic); nothing is appended when off
       teamModePromptSection(teamModeStore.isEnabled(topicId))
     )
   }
 
-  /** 图执行配置（递归上限触顶时由 graph 层优雅收尾，不再报错） */
+  /** Graph execution options (when the recursion cap is hit, the graph layer wraps up gracefully) */
   private graphOptions(signal?: AbortSignal, turnMeta?: TurnMeta, topicId = 0): GraphRunOptions {
     return {
       recursionLimit: this.recursionLimit,
       signal,
-      // 本轮来源与话题归属：工具层经 config.configurable 读取
-      //（目标工具 authority 校验、后台任务的 owner 隔离）
+      // Turn source and topic ownership: read by the tool layer from config.configurable
+      // (goal-tool authority checks, background-job owner isolation)
       configurable: {
         topicId,
         turnSource: turnMeta?.source ?? 'user',
-        // 工作区根：present 等工具据此校验「交付物必须在工作区内」
+        // Workspace root: present and others use it to check that deliverables stay in the workspace
         workspaceRoot: this.opts.workspacePath,
-        // 团队身份：主图即 lead；子代理图会在自己的 stream 配置里覆盖成 member 身份
+        // Team identity: the main graph is lead; subagent graphs override it to member in their
+        // own stream config
         teamAgent: { id: 'lead', name: 'lead', isLead: true },
         goalRound:
           turnMeta?.source === 'goal-round'
@@ -361,19 +387,22 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   }
 
   /**
-   * 本轮注入系统提示词的热记忆内容（USER / MEMORY 条目）。
-   * Mnemon 未启用或热记忆为空时返回 null——前端据此决定是否显示「注入记忆」标识。
+   * Hot memory (USER / MEMORY entries) injected into the system prompt this turn.
+   * Returns null when Mnemon is disabled or hot memory is empty — the frontend uses that to decide
+   * whether to show the "injected memory" badge.
    */
-  /** 本轮各次模型调用回传的真实用量（每次 stream/invoke 开始时清空，结束时读取） */
+  /** Real usage reported by each model call this turn (cleared at the start of stream/invoke, read at the end) */
   get usage(): ModelUsageRecord[] {
     return this.usageRecords
   }
 
   /**
-   * 记一条真实用量：先归入本轮账本，再在配置了监听时把**累计快照**交出去。
+   * Record one real usage entry: add it to this turn's ledger, then hand out a **cumulative
+   * snapshot** when a listener is configured.
    *
-   * 传副本而不是 `this.usageRecords` 本身：监听方（IPC 广播）可能在异步路径上读它，
-   * 而本轮后续还会继续 push——不能让它读到半路变长的同一个数组。
+   * A copy is passed instead of `this.usageRecords` itself: the listener (IPC broadcast) may read
+   * it on an async path while this turn keeps pushing — it must not see the same array grow
+   * mid-read.
    */
   private recordUsage(record: ModelUsageRecord): void {
     this.usageRecords.push(record)
@@ -397,28 +426,32 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   }
 
   /**
-   * 流式执行：注入记录队列 → 构建主代理图 → 启动后台消费 → 返回三路流。
+   * Streaming execution: inject the record queue -> build the main agent graph -> start the
+   * background consumer -> return the three streams.
    *
-   * topicId 用于把对话计划（write_todos 清单）归属到当前话题并广播到前端。
-   * 清单跨请求/跨轮次保留（进程级单例），模型可在后续轮次继续维护；
-   * 取消/结束时仅关闭记录队列，不清空清单（中断的任务可继续追问）。
+   * topicId attributes the conversation plan (write_todos list) to the current topic and broadcasts
+   * it to the frontend. The list survives across requests/turns (a process-level singleton) and the
+   * model may keep maintaining it in later turns; cancel/end only closes the record queue and never
+   * clears the list (an interrupted task can still be followed up).
    */
   stream(
     messages: BaseMessage[],
     signal?: AbortSignal,
     topicId = 0,
     turnMeta?: TurnMeta,
-    /** 回合内插话：工具节点执行前排空待注入插话（未配置则关闭注入） */
+    /** In-turn interjections: drain pending interjections before the tool node runs (injection off when unset) */
     drainInjections?: () => Promise<AgentInjection[] | null>
   ): RuntimeStream {
     const queue = new RecordQueue()
     this.queueRef.current = queue
     this.currentTopicId = topicId
-    // 本轮用量采集容器（每次 stream/invoke 重新开始）
+    // Usage collection container for this turn (restarted on every stream/invoke)
     this.usageRecords = []
-    // 拒绝凭据按轮清零：上一轮用户拒绝过的调用，这一轮可以重新问（否则同签名会被永远静默拒绝）
+    // Denial credentials reset per turn: a call the user refused last turn may ask again this turn
+    // (otherwise the same signature would be silently refused forever)
     permissionGate.reset()
-    // 按话题创建溢出存储（工作区 .spill 优先，其次记忆目录；均无则禁用溢出）
+    // Create the spill store per topic (workspace .spill first, then the memory dir; neither =
+    // spill disabled)
     this.spillRef.current = new SpillStore(this.opts.workspacePath, this.opts.memoryPath, topicId)
     const graph = buildAgentGraph({
       model: this.opts.model,
@@ -438,7 +471,7 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   }
 
   /**
-   * 非流式执行：返回最终消息列表。
+   * Non-streaming execution: returns the final message list.
    */
   async invoke(
     messages: BaseMessage[],
@@ -448,9 +481,9 @@ Once a delegation finishes, the subagent's full output is shown to the user dire
   ): Promise<BaseMessage[]> {
     this.queueRef.current = undefined
     this.currentTopicId = topicId
-    // 本轮用量采集容器（每次 stream/invoke 重新开始）
+    // Usage collection container for this turn (restarted on every stream/invoke)
     this.usageRecords = []
-    // 与流式路径同一处理：拒绝凭据按轮清零
+    // Same handling as the streaming path: denial credentials reset per turn
     permissionGate.reset()
     this.spillRef.current = new SpillStore(this.opts.workspacePath, this.opts.memoryPath, topicId)
     const graph = buildAgentGraph({

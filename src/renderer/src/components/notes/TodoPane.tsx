@@ -21,17 +21,17 @@ import type { TodoItem } from '../../types/notes'
 
 interface TodoPaneProps {
   todoId: number
-  /** 父级令牌：树行「⋯」改了状态/元信息后自增，页面据此重新读库 */
+  /** Parent token: bumped after the tree row "⋯" changes status/metadata, so this page re-reads the store */
   reloadToken?: number
-  /** 状态流转：与树行「⋯」共用同一套逻辑（写库 + 刷新树 + 让本页重新读库） */
+  /** Status transition: shares one implementation with the tree row "⋯" (write to store + refresh tree + make this page re-read) */
   onSetStatus: (todo: TodoItem, status: number) => void | Promise<void>
-  /** 打开属性弹窗（标题 / 截止日期 / 优先级 / 状态 / 分类） */
+  /** Open the properties modal (title / due date / priority / status / category) */
   onOpenProperties: (todo: TodoItem) => void
-  /** 标题保存成功后回传，用于就地更新树行与面包屑（省一次全量刷新） */
+  /** Called back after the title saves, to update the tree row and breadcrumb in place (saves a full refresh) */
   onTitleSaved: (todoId: number, title: string) => void
 }
 
-/** 状态 → 词条键 / 配色（词条键在组件内 t() 求值，模块级常量表不调 hook） */
+/** Status → i18n key / color (the key is resolved by t() in the component; a module-level table calls no hooks) */
 type TodoStatusKey = 'notes.status.pending' | 'notes.status.doing' | 'notes.status.done'
 
 const STATUS_META: Record<number, { labelKey: TodoStatusKey; color: string; bg: string }> = {
@@ -53,7 +53,7 @@ const PRIORITY_COLORS: Record<number, string> = {
 
 type SaveState = 'saved' | 'saving' | 'dirty' | 'error'
 
-/** 标题 / 正文自动保存延迟（与文档编辑器同款节奏） */
+/** Auto-save delay for title / body, matching the document editor's cadence */
 const AUTO_SAVE_DELAY = 1500
 
 const TodoPane: React.FC<TodoPaneProps> = ({
@@ -70,7 +70,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
-  /* ── 标题 + 正文（Markdown）：与文档页同源，都在这页里内联编辑 ── */
+  /* ── Title + body (Markdown): same source as the document page, both edited inline here ── */
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [saveState, setSaveState] = useState<SaveState>('saved')
@@ -81,13 +81,14 @@ const TodoPane: React.FC<TodoPaneProps> = ({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savingRef = useRef(false)
 
-  /* 父级回调走 ref，避免保存闭包过期 */
+  /* Parent callbacks go through a ref so save closures never go stale */
   const onTitleSavedRef = useRef(onTitleSaved)
   onTitleSavedRef.current = onTitleSaved
 
   /**
-   * 立即落库（标题 + 正文一起写）。仅在确有改动时写；保存期间产生的新编辑在结束后补排一次
-   * （照搬文档编辑器的修复：否则这批编辑会被静默吞掉，界面还显示「已保存」）
+   * Persist immediately (title + body written together). Writes only when something actually
+   * changed; edits made while a save is in flight are re-scheduled once it finishes
+   * (otherwise those edits are silently dropped while the UI still says "saved")
    */
   const saveNow = useCallback(async (): Promise<void> => {
     const nextTitle = titleRef.current
@@ -107,7 +108,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
       lastSavedRef.current = { title: nextTitle, content: nextContent }
       setSaveState('saved')
       setLastSavedAt(new Date())
-      // 标题变了才回传（正文每次自动保存都刷父级没必要）
+      // Notify only when the title changed (no need to refresh the parent on every body save)
       if (titleChanged) onTitleSavedRef.current(todoId, dbTitle)
     } catch (error) {
       console.error('Failed to save todo:', error)
@@ -124,7 +125,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
     }
   }, [todoId, t])
 
-  /** 有未落库编辑时先冲刷：状态流转 / 打开属性 / 重新加载前调用，避免本地编辑被库里的旧值覆盖 */
+  /** Flush unsaved edits first: called before a status transition / opening properties / reloading, so local edits are not overwritten by stale stored values */
   const flushPending = useCallback(async (): Promise<void> => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
@@ -186,7 +187,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
     load().then()
   }, [load])
 
-  /* 卸载（切换待办 / 离开页面）时冲刷未保存的标题与正文 */
+  /* Flush unsaved title and body on unmount (switching todo / leaving the page) */
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -211,8 +212,9 @@ const TodoPane: React.FC<TodoPaneProps> = ({
     }
   }, [todoId, t])
 
-  /* 树行「⋯」改了状态 / 元信息后由父级令牌触发重新读库：
-   *  先冲刷未保存编辑（避免用库里的旧值覆盖本地编辑），静默刷新不闪 loading */
+  /* After the tree row "⋯" changes status / metadata, the parent token triggers a re-read:
+   *  flush unsaved edits first (so stale stored values do not overwrite them), then refresh
+   *  silently without flashing the loading state */
   const firstReloadRef = useRef(true)
   useEffect(() => {
     if (firstReloadRef.current) {
@@ -246,7 +248,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
   if (loading) {
     return (
       <PaneShell>
-        {/* 勾选位 / 标题 / 字段胶囊 / 正文先铺出来，待办到位后原地替换 */}
+        {/* Lay out the checkbox / title / field pills / body first, then swap them in place once the todo arrives */}
         <SkeletonTodoPane />
       </PaneShell>
     )
@@ -260,15 +262,16 @@ const TodoPane: React.FC<TodoPaneProps> = ({
     )
   }
 
-  // status/priority 库列为可空（DEFAULT 0），null 按默认值处理
+  // status/priority columns are nullable in the store (DEFAULT 0); null falls back to the default
   const status = STATUS_META[todo.status ?? 0] ?? STATUS_META[0]
   const priorityColor = PRIORITY_COLORS[todo.priority ?? 0] ?? token.colorTextTertiary
   const overdue =
     todo.status !== 2 && todo.due_date && dayjs(todo.due_date).isBefore(dayjs(), 'day')
 
-  /** 状态切换（标题行最右，纯图标）：待办 —▶→ 进行中 —✓→ 已完成 —↻→ 待办。
-   *  用目标状态的色系做成常驻浅底圆角块——三个状态的图标形状各不相同，
-   *  靠这层底把它固定成「同一个按钮」，颜色顺带说明会推进到哪个状态 */
+  /** Status switch (far right of the title row, icon only): pending —▶→ doing —✓→ done —↻→ pending.
+   *  A persistent tinted rounded block in the target status's color — the three statuses use
+   *  different icon shapes, so this backing fixes them as "one button", and the color also
+   *  shows which status it advances to */
   const step =
     (todo.status ?? 0) === 0
       ? {
@@ -301,11 +304,12 @@ const TodoPane: React.FC<TodoPaneProps> = ({
 
   const handleOpenProperties = async (): Promise<void> => {
     await flushPending()
-    // 带上刚冲刷的标题，弹窗不会显示旧值
+    // Include the just-flushed title so the modal does not show the old value
     onOpenProperties({ ...todo, title: titleRef.current || todo.title })
   }
 
-  /* 底部状态条右侧的时间轴（原元信息网格：字段不变，压成一行，格式统一为 YYYY-MM-DD HH:mm） */
+  /* Timeline on the right of the bottom status bar (formerly a metadata grid: same fields,
+     collapsed into one line, all formatted as YYYY-MM-DD HH:mm) */
   const metaParts: string[] = []
   if (todo.created_at)
     metaParts.push(
@@ -374,9 +378,9 @@ const TodoPane: React.FC<TodoPaneProps> = ({
           margin: '0 auto'
         }}
       >
-        {/* 固定头部：标题（可编辑）+ 状态切换 + 状态标签 + 属性（不随正文滚动） */}
+        {/* Fixed header: title (editable) + status switch + status tags + properties (does not scroll with the body) */}
         <div style={{ padding: '17px 17px 0', flexShrink: 0 }}>
-          {/* 标题行：标题直接改，最右是纯图标的状态切换 */}
+          {/* Title row: the title is edited directly; the far right is the icon-only status switch */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Input
               variant="borderless"
@@ -415,7 +419,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
                   transition: 'background 0.15s'
                 }}
                 onMouseEnter={(e) => {
-                  // 8 位 hex 末两位是 alpha：悬停把同色底提亮一档
+                  // The last two digits of an 8-digit hex are alpha: brighten the tinted background on hover
                   e.currentTarget.style.background = `${step.color}2e`
                 }}
                 onMouseLeave={(e) => {
@@ -427,7 +431,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
             </Tooltip>
           </div>
 
-          {/* 状态标签行 */}
+          {/* Status tag row */}
           <div
             style={{
               display: 'flex',
@@ -507,8 +511,9 @@ const TodoPane: React.FC<TodoPaneProps> = ({
                 {dayjs(todo.due_date).format('YYYY-MM-DD')}
               </Tag>
             )}
-            {/* 属性：标题 / 截止日期 / 优先级 / 状态 / 分类（与文档页的「属性」同位）。
-                做成描边小胶囊：同排的标签是信息（实底），它是入口（描边） */}
+            {/* Properties: title / due date / priority / status / category (same spot as "Properties"
+                on the document page). Rendered as an outlined pill: the tags beside it are information
+                (solid), this one is an entry point (outlined) */}
             <span
               onClick={() => {
                 void handleOpenProperties()
@@ -543,7 +548,8 @@ const TodoPane: React.FC<TodoPaneProps> = ({
           </div>
         </div>
 
-        {/* 正文内容：与文档同款 TipTap Markdown 编辑器，占满剩余高度并自带滚动 */}
+        {/* Body content: the same TipTap Markdown editor as the document page, filling the remaining
+            height and scrolling on its own */}
         <div
           style={{
             flex: 1,
@@ -565,7 +571,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
           />
         </div>
 
-        {/* 底部状态条：保存状态 + 时间信息 */}
+        {/* Bottom status bar: save state + time info */}
         <div
           style={{
             display: 'flex',
@@ -597,7 +603,7 @@ const TodoPane: React.FC<TodoPaneProps> = ({
   )
 }
 
-/* ──────────── 通用 ──────────── */
+/* ──────────── Shared ──────────── */
 
 const PaneShell: React.FC<{
   children: React.ReactNode
@@ -608,7 +614,7 @@ const PaneShell: React.FC<{
       minWidth: 0,
       minHeight: 0,
       display: 'flex',
-      /* 卡片外壳已由中间主区容器提供，这里只承担布局 */
+      /* The card shell is provided by the central main-area container; this only handles layout */
       overflow: 'hidden'
     }}
   >
