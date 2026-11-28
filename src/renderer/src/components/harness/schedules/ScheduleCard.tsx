@@ -220,26 +220,62 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
           marginTop: 11,
           fontSize: 12.5,
           color: token.colorTextSecondary,
-          flexWrap: 'wrap'
+          // Single line: the rule + next-run text may truncate, the countdown on the right stays
+          flexWrap: 'nowrap',
+          minWidth: 0
         }}
       >
-        <RiTimeLine size={13} style={{ color: token.colorTextTertiary }} />
-        <span>{describeScheduleRule(task, t)}</span>
+        <RiTimeLine size={13} style={{ color: token.colorTextTertiary, flex: '0 0 auto' }} />
+        <span style={{ flex: '0 0 auto' }}>{describeScheduleRule(task, t)}</span>
         <span
-          style={{ width: 3, height: 3, borderRadius: '50%', background: token.colorTextTertiary }}
+          style={{
+            width: 3,
+            height: 3,
+            borderRadius: '50%',
+            background: token.colorTextTertiary,
+            flex: '0 0 auto'
+          }}
         />
-        <span>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
           {t('schedulesPage.nextPrefix')}{' '}
           <span style={{ color: token.colorText, fontWeight: 550 }}>{nextText}</span>
         </span>
         {remainingText && (
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: token.colorTextTertiary }}>
+          <span
+            style={{
+              marginLeft: 'auto',
+              fontSize: 11,
+              color: token.colorTextTertiary,
+              flex: '0 0 auto',
+              whiteSpace: 'nowrap'
+            }}
+          >
             {remainingText}
           </span>
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+      {/* One line only: the conversation chip absorbs the missing width (ellipsis), while the
+          run-selection chip and the last-run text never wrap (they used to break onto a second
+          row in a narrow card, which read as a layout bug). */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 10,
+          flexWrap: 'nowrap',
+          minWidth: 0,
+          overflow: 'hidden'
+        }}
+      >
         <span
           style={{
             display: 'inline-flex',
@@ -251,16 +287,20 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
             background: token.colorFillQuaternary,
             color: token.colorTextSecondary,
             fontSize: 11,
+            flex: '1 1 auto',
+            minWidth: 0,
             maxWidth: '100%'
           }}
         >
-          <span style={{ color: token.colorTextTertiary }}>{t('schedulesPage.conversationLabel')}</span>
+          <span style={{ color: token.colorTextTertiary, flex: '0 0 auto' }}>
+            {t('schedulesPage.conversationLabel')}
+          </span>
           <span
             style={{
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              maxWidth: 220
+              minWidth: 0
             }}
           >
             {task.topicId != null
@@ -278,7 +318,9 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
             borderRadius: 6,
             background: token.colorFillQuaternary,
             color: token.colorTextSecondary,
-            fontSize: 11
+            fontSize: 11,
+            flex: '0 0 auto',
+            whiteSpace: 'nowrap'
           }}
         >
           <span style={{ color: token.colorTextTertiary }}>{t('schedulesPage.runLabel')}</span>
@@ -290,7 +332,9 @@ const ScheduleCard: React.FC<{ task: ScheduleView; topicTitle?: string } & Sched
             alignItems: 'center',
             gap: 4,
             fontSize: 11,
-            color: token.colorTextTertiary
+            color: token.colorTextTertiary,
+            flex: '0 0 auto',
+            whiteSpace: 'nowrap'
           }}
         >
           {task.lastRunAt ? (
