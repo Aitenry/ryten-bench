@@ -48,7 +48,7 @@ export const zhCNScheduleToolTexts = {
     'invalid-at': 'once.at 不是合法的 ISO 时间',
     'at-in-past': 'once.at 必须晚于当前时间（至少 30 秒后）',
     'invalid-minutes': 'every.minutes 必须是 5-10080 之间的整数',
-    'invalid-time': 'daily.time 必须是 HH:MM（本地时间）'
+    'invalid-time': 'daily.time 必须是 HH:MM（本地时间，24 小时制；午夜写 00:00，24:00 不合法）'
   }
 }
 
@@ -90,7 +90,8 @@ export const enUSScheduleToolTexts: typeof zhCNScheduleToolTexts = {
     'invalid-at': 'once.at is not a valid ISO timestamp',
     'at-in-past': 'once.at must be at least 30 seconds in the future',
     'invalid-minutes': 'every.minutes must be an integer between 5 and 10080',
-    'invalid-time': 'daily.time must be HH:MM (local time)'
+    'invalid-time':
+      'daily.time must be HH:MM on a 24-hour clock (midnight is 00:00; 24:00 is not valid)'
   }
 }
 

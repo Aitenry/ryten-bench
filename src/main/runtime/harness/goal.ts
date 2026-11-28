@@ -413,7 +413,7 @@ export function buildGoalTools(store: GoalStore, topicId: number): StructuredToo
       {
         name: 'create_goal',
         description:
-          'Create a long-running goal that advances automatically across turns: each round auto-continues until the goal is completed, blocked, or the round limit is reached. Only one goal may be in progress at a time; an existing goal must first be complete or blocked before a new one can be created. Use only when the user expresses a clear long-horizon intent; do not create a goal for simple Q&A.',
+          'Create a long-running goal that advances automatically across turns: each round auto-continues until the goal is completed, blocked, or the round limit is reached. Only one goal may be in progress at a time; an existing goal must first be complete or blocked before a new one can be created. Use only when the user expresses a clear long-horizon intent; do not create a goal for simple Q&A. Not for periodic work: when the user wants something to happen every day / every week / at a fixed time ("每天/每晚/每周/定时"), that is a scheduled task — use schedule_create instead (when that tool is available; never emulate a schedule with goal rounds).',
         schema: z.object({
           objective: z
             .string()

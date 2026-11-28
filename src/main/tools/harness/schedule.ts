@@ -137,7 +137,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     {
       name: 'schedule_create',
       description:
-        'Create a scheduled task for THIS conversation: at the given time(s) a message containing your prompt is delivered as a new user turn, so you can do recurring work (reminders, periodic checks, daily summaries). Rules: {kind:"once", at: ISO time}, {kind:"every", minutes: 5-10080}, or {kind:"daily", time: "HH:MM" local}. Tasks run while the app is running; missed runs are skipped, not replayed.',
+        'Create a scheduled task for THIS conversation: at the given time(s) a message containing your prompt is delivered as a new user turn, so you can do recurring work (reminders, periodic checks, daily summaries). Rules: {kind:"once", at: ISO time}, {kind:"every", minutes: 5-10080}, or {kind:"daily", time: "HH:MM"} in local 24-hour time (midnight is "00:00"; "24:00" is rejected). Use this whenever the user asks to do something repeatedly, periodically, "every day at…" or "每天/每晚/每周" — do not turn such requests into a long-running goal. Tasks run while the app is running; missed runs are skipped, not replayed.',
       schema: z.object({
         title: z.string().describe('Short title shown in the task list (<=120 chars)'),
         prompt: z

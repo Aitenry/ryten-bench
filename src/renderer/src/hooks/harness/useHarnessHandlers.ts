@@ -239,6 +239,21 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
   // Session-level run selection (tools/skills/MCP): maintained by the selector row below the input and sent with each message
   const [agentSelection, setAgentSelection] = useState<AgentSelectionView | null>(null)
   /**
+   * The same selection, mirrored into a ref so the **send path reads the value as of the click**.
+   *
+   * Why a ref: `startTurn` is a `useCallback`, so reading `agentSelection` directly freezes the
+   * value at the last render in which one of its dependencies changed. In a **blank session** the
+   * input does not persist the selection at all (there is no topic yet — see `persistSelection` in
+   * HarnessInput), so the closure was the only carrier: after ticking tools and sending, the turn
+   * still went out with `agentConfig: undefined` and the main process logged
+   * `Tools for this turn: count=0 []`. The model then only had the always-mounted tools (goal /
+   * memory) and, for a "summarize my spending every day" request, created a goal instead of a
+   * scheduled task. A ref is assigned on every render, so it cannot go stale; the callback itself
+   * keeps a stable identity (no extra re-renders, no dependency churn).
+   */
+  const agentSelectionRef = useRef<AgentSelectionView | null>(agentSelection)
+  agentSelectionRef.current = agentSelection
+  /**
    * Team collaboration draft value in a blank session (see `UseHarnessHandlersReturn.pendingTeamMode`).
    * Only meaningful while there is no topic: it is written into `team_mode` when the first
    * message creates the topic, then discarded.
@@ -1412,6 +1427,9 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
       const currentDocuments = turnAttachments
         .filter((a) => !a.isImage)
         .map((a) => ({ fileName: a.fileName, filePath: a.dataUrl }))
+      // Selection as of this send (see agentSelectionRef): tools/skills/MCP ticked in the blank
+      // session must reach the turn even though no topic existed when they were ticked.
+      const agentSelectionNow = agentSelectionRef.current
 
       const aiMessageId = `${Date.now()}_${currentTopicIdRef.current ?? 'new'}_${Math.random().toString(36).slice(2, 8)}`
       const initialAiMessage: Message = {
@@ -1487,10 +1505,14 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
            * defaults (usually empty) → the just-checked tools are visually cleared and
            * `agentSelection` is overwritten with null; checking one more item afterwards then
            * overwrites the database with "only this one item" — the selection appears swallowed.
+           *
+           * The value must also be the one **as of this send** (`agentSelectionNow`), not the one
+           * captured by the callback: the whole point of this write is to make the topic carry the
+           * selection that the turn is about to use.
            */
-          if (agentSelection) {
+          if (agentSelectionNow) {
             await harnessApi.harness
-              .setTopicAgentSelection(topicId, agentSelection)
+              .setTopicAgentSelection(topicId, agentSelectionNow)
               .catch(() => undefined)
           }
           currentTopicIdRef.current = topicId
@@ -1567,7 +1589,7 @@ export const useHarnessHandlers = (): UseHarnessHandlersReturn => {
           topicId,
           providerId: selectedProviderId ?? undefined,
           // Tools/skills/MCP selected below the input: the main process assembles this turn from it and writes it back to the session config
-          agentConfig: agentSelection ?? undefined,
+          agentConfig: agentSelectionNow ?? undefined,
           // Frontend temporary id of the first assistant segment: steering can split segments, and the main process returns the DB row id per segment
           messageId: aiMessageId,
           // Edit-and-resend: have the main process update this existing user message row instead
