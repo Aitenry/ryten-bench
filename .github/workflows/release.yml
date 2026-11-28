@@ -101,7 +101,6 @@ jobs:
               dist/*.AppImage
               dist/*.deb
               dist/latest-linux.yml
-              dist/*.blockmap
 
     steps:
       - name: Checkout
@@ -277,7 +276,9 @@ jobs:
             release/linux/*.AppImage
             release/linux/*.deb
             release/linux/latest-linux.yml
-            release/linux/*.blockmap
+          # Linux targets (AppImage/deb) produce no `.blockmap`, so demanding one here would fail
+          # `fail_on_unmatched_files` even though every installable asset is present. Windows (NSIS)
+          # and macOS (zip) do emit blockmaps and keep them alongside their manifests.
           # Don't publish if any platform's artifact is missing: better to fail this run than ship a stable release with only half the files
           fail_on_unmatched_files: true
           # Same-version republish replaces the existing assets in place; the content hash in
