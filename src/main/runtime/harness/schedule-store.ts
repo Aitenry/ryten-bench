@@ -1,4 +1,4 @@
-﻿/**
+/**
  * **Facade** for scheduled-task storage: the business layer (tool / runner / IPC) depends only on
  * this interface.
  *
@@ -12,13 +12,17 @@
  */
 import type {
   ScheduleCreateInput,
+  ScheduleRunArtifact,
   ScheduleRunRecord,
   ScheduleRunStatus,
+  ScheduleRunStep,
+  ScheduleRunUsage,
   ScheduledTask,
   ScheduledTaskPatch
 } from './schedule-types'
 
 export type { ScheduleCreateInput, ScheduleRunRecord, ScheduleRunStatus, ScheduledTask, ScheduledTaskPatch }
+export type { ScheduleRunArtifact, ScheduleRunStep, ScheduleRunUsage }
 export { MAX_SCHEDULED_TASKS, DEFAULT_RUNS_PAGE_SIZE } from './schedule-types'
 
 /** Storage backend (async; shared by the database and in-memory implementations) */
@@ -36,6 +40,12 @@ export interface ScheduleStore {
       nextRunAt: string | null
       enabled?: boolean
       detail?: string | null
+      /** Run detail for the "execution details" panel (all optional: old runs have none) */
+      topicId?: number | null
+      dialogueId?: number | null
+      usage?: ScheduleRunUsage | null
+      steps?: ScheduleRunStep[] | null
+      artifacts?: ScheduleRunArtifact[] | null
     }
   ): Promise<ScheduledTask | undefined>
   /** Permanent run records (paginated, newest first) */

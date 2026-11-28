@@ -16,7 +16,12 @@
 import logger from 'electron-log'
 import { nextRunAfterRun, selectDueTaskIds } from './schedule-core'
 import { scheduleStore, type ScheduleStore } from './schedule-store'
-import type { ScheduledTask } from './schedule-types'
+import type {
+  ScheduledTask,
+  ScheduleRunArtifact,
+  ScheduleRunStep,
+  ScheduleRunUsage
+} from './schedule-types'
 
 /** One trigger request */
 export interface ScheduledTurnRequest {
@@ -25,10 +30,28 @@ export interface ScheduledTurnRequest {
   question: string
 }
 
+/**
+ * Result of one triggered turn.
+ *
+ * `cancelled` is the only field the scheduler itself acts on; everything else is **run detail**
+ * stored with the run record so the UI can show "what actually happened" (which conversation, which
+ * reply, how many tokens, which files). All optional: an older wiring layer returns nothing.
+ */
+export interface ScheduledTurnResult {
+  cancelled?: boolean
+  /** Failure reason / short summary stored on the run record */
+  detail?: string
+  /** Conversation the run executed in (new-session tasks create one per run) */
+  topicId?: number | null
+  /** Assistant dialogue row produced by the run */
+  dialogueId?: number | null
+  usage?: ScheduleRunUsage | null
+  steps?: ScheduleRunStep[] | null
+  artifacts?: ScheduleRunArtifact[] | null
+}
+
 /** Start a turn; cancelled=true means it did not run (e.g. the topic already has a turn running) */
-export type ScheduleDriveFn = (
-  request: ScheduledTurnRequest
-) => Promise<{ cancelled?: boolean } | void>
+export type ScheduleDriveFn = (request: ScheduledTurnRequest) => Promise<ScheduledTurnResult | void>
 
 /** Default delivery text (English; the wiring layer can inject a localized version) */
 export function defaultScheduleQuestion(task: ScheduledTask): string {
@@ -117,11 +140,17 @@ export class ScheduleRunner {
     for (const task of due) {
       this.running.add(task.id)
       let status: 'completed' | 'cancelled' | 'failed' = 'completed'
+      /** Run detail reported by the wiring layer (empty for older wiring / early failures) */
+      let run: ScheduledTurnResult = {}
       try {
         const result = await drive({ task, question: this.buildQuestion(task) })
-        if (result && result.cancelled) status = 'cancelled'
+        if (result) {
+          run = result
+          if (result.cancelled) status = 'cancelled'
+        }
       } catch (err) {
         status = 'failed'
+        run = { detail: err instanceof Error ? err.message : String(err) }
         logger.error(`[Schedule] Task #${task.id} (${task.title}) failed:`, err)
       } finally {
         this.running.delete(task.id)
@@ -135,7 +164,13 @@ export class ScheduleRunner {
           status,
           ranAt: now.toISOString(),
           nextRunAt,
-          enabled: status === 'cancelled' ? true : nextRunAt !== null
+          enabled: status === 'cancelled' ? true : nextRunAt !== null,
+          detail: run.detail ?? null,
+          topicId: run.topicId ?? null,
+          dialogueId: run.dialogueId ?? null,
+          usage: run.usage ?? null,
+          steps: run.steps ?? null,
+          artifacts: run.artifacts ?? null
         })
       } catch (err) {
         // A recording failure does not undo the turn just executed, but a stale schedule would

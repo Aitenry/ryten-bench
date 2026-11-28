@@ -12,12 +12,30 @@ import { scheduled_task_runs, scheduled_tasks } from '../schema'
 import { normalizeAgentSelection, type AgentSelection } from '../../../shared/harness/agent-config'
 import type {
   ScheduleCreateInput,
+  ScheduleRunArtifact,
   ScheduleRunRecord,
   ScheduleRunStatus,
+  ScheduleRunStep,
+  ScheduleRunUsage,
   ScheduledTask,
   ScheduledTaskPatch
 } from '../../runtime/harness/schedule-types'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
+
+/** JSON column write (null/undefined → null) */
+function serializeJson(value: unknown): string | null {
+  return value === null || value === undefined ? null : JSON.stringify(value)
+}
+
+/** JSON column read: anything malformed degrades to null instead of breaking the run list */
+function parseJson<T>(raw: string | null | undefined): T | null {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
 
 /** Time column → ISO (accepts PG's 'YYYY-MM-DD HH:MM:SS+00' as well as existing ISO strings) */
 function toIso(value: string | null | undefined): string | null {
@@ -210,6 +228,11 @@ export async function markScheduledTaskRun(args: {
   nextRunAt: string | null
   enabled?: boolean
   detail?: string | null
+  topicId?: number | null
+  dialogueId?: number | null
+  usage?: ScheduleRunUsage | null
+  steps?: ScheduleRunStep[] | null
+  artifacts?: ScheduleRunArtifact[] | null
 }): Promise<ScheduledTask | undefined> {
   return withOrm('markScheduledTaskRun', async (db) => {
     await db.transaction(async (tx) => {
@@ -227,7 +250,12 @@ export async function markScheduledTaskRun(args: {
         task_id: args.taskId,
         status: args.status,
         ran_at: args.ranAt,
-        detail: args.detail ?? null
+        detail: args.detail ?? null,
+        topic_id: args.topicId ?? null,
+        dialogue_id: args.dialogueId ?? null,
+        usage_json: serializeJson(args.usage),
+        steps_json: serializeJson(args.steps),
+        artifacts_json: serializeJson(args.artifacts)
       })
     })
     const rows = await db.select().from(scheduled_tasks).where(eq(scheduled_tasks.id, args.taskId))
@@ -253,7 +281,12 @@ export async function listScheduledTaskRuns(
     return rows.map((row: RunRow) => ({
       at: toIso(row.ran_at) ?? new Date().toISOString(),
       status: row.status,
-      detail: row.detail
+      detail: row.detail,
+      topicId: row.topic_id ?? null,
+      dialogueId: row.dialogue_id ?? null,
+      usage: parseJson<ScheduleRunUsage>(row.usage_json),
+      steps: parseJson<ScheduleRunStep[]>(row.steps_json),
+      artifacts: parseJson<ScheduleRunArtifact[]>(row.artifacts_json)
     }))
   })
 }

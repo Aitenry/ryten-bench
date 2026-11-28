@@ -46,6 +46,27 @@ export function formatRelativeDay(iso: string | null, now = new Date()): string 
   return `${formatDateTime(iso)}`
 }
 
+/**
+ * Remaining time until `iso`, split into whole days / hours / minutes (for the "还有 3 小时 12 分"
+ * chip on the card). `overdue` is true when the instant has already passed.
+ */
+export function remainingParts(
+  iso: string | null | undefined,
+  now = new Date()
+): { days: number; hours: number; minutes: number; overdue: boolean } | null {
+  if (!iso) return null
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  const diff = date.getTime() - now.getTime()
+  const totalMinutes = Math.max(0, Math.floor(Math.abs(diff) / 60_000))
+  return {
+    days: Math.floor(totalMinutes / 1440),
+    hours: Math.floor((totalMinutes % 1440) / 60),
+    minutes: totalMinutes % 60,
+    overdue: diff <= 0
+  }
+}
+
 /** Next trigger (for preview only; same semantics as the main process, but never persisted) */
 export function computeNextRunPreview(
   when: ScheduleView['when'],

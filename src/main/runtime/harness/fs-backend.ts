@@ -331,6 +331,18 @@ export function buildFsMounts(options: FsBackendOptions): FsMount[] {
   return mounts
 }
 
+/**
+ * Resolve a virtual path to a real path from outside the tool layer (IPC: "open file with the
+ * system app"). Same mounts and the same boundary checks as the fs tools — a renderer-supplied
+ * path can never reach outside the workspace / memory roots.
+ */
+export function resolveVirtualFilePath(
+  options: FsBackendOptions,
+  virtualPath: string
+): { realPath: string } | { error: string } {
+  return resolveVirtualPath(virtualPath, buildFsMounts(options))
+}
+
 /** Resolve a virtual path to a real path; returns an error when out of bounds or unmounted */
 function resolveVirtualPath(
   vp: string,

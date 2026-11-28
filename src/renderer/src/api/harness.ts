@@ -191,10 +191,37 @@ export interface AgentSelectionView {
 export type ScheduleWhenView = ScheduleView['when']
 
 /** One run record (persisted permanently) */
+/** One row of the "open with" menu (see main/services/harness/file-open.ts) */
+export interface FileOpenTargetView {
+  /** `default` or `app:<exe>` */
+  id: string
+  /** App label; the `default` row carries a placeholder and is localized by the UI */
+  label: string
+  /** System icon as a PNG data URL */
+  icon?: string
+  kind: 'default' | 'app'
+}
+
 export interface ScheduleRunView {
   at: string
   status: 'completed' | 'cancelled' | 'failed'
   detail?: string | null
+  /** Conversation this run executed in (null for old runs / early failures) */
+  topicId?: number | null
+  /** Assistant dialogue row produced by this run */
+  dialogueId?: number | null
+  usage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+    totalTokens: number | null
+    durationMs: number | null
+  } | null
+  steps?: { name: string; path: string | null; status: 'ok' | 'error' }[] | null
+  artifacts?: {
+    kind: 'file' | 'deliverable'
+    path: string
+    description: string | null
+  }[] | null
 }
 
 /** Create/edit result: expected failures don't throw, `error` is a stable code (translated by
@@ -944,7 +971,19 @@ export const harnessApi = {
     readVirtualFile: (virtualPath: string, memoryScope?: string | null) =>
       invoke('harness:harness-vfs-read', virtualPath, memoryScope ?? null) as Promise<
         { content: string } | { error: string }
-      >
+      >,
+    /** Apps that can open this workspace file ("open with" menu): system default first */
+    getFileOpenTargets: (virtualPath: string, memoryScope?: string | null) =>
+      invoke('harness:harness-file-open-targets', virtualPath, memoryScope ?? null) as Promise<{
+        targets: FileOpenTargetView[]
+        error?: string
+      }>,
+    /** Open a workspace file with a system app (`default` or `app:<exe>` from the targets call) */
+    openFileWith: (virtualPath: string, targetId: string, memoryScope?: string | null) =>
+      invoke('harness:harness-file-open-with', virtualPath, targetId, memoryScope ?? null) as Promise<{
+        ok: boolean
+        error?: string
+      }>
   },
 
   /* ── Agent configs (subagents, attached under a workspace) ── */

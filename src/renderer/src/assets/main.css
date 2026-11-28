@@ -104,6 +104,78 @@ body {
   background: transparent;
 }
 
+/* ======== "What this reply changed" rows (MessageWorkSummary) ======== */
+/*
+ * The row is a <button> so it is keyboard reachable; hover/focus only lift the surface and reveal
+ * the chevron (rgba works on both light and dark, so no theme class is needed).
+ */
+.ryt-work-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 37px;
+  padding: 0 14px;
+  border: none;
+  border-top: 1px solid rgba(127, 127, 127, 0.16);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.ryt-work-row:hover,
+.ryt-work-row:focus-visible {
+  background: rgba(127, 127, 127, 0.1);
+  outline: none;
+}
+
+.ryt-work-row__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace;
+  font-size: 11.8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ryt-work-row__stat {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ryt-work-row__kind {
+  flex: 0 0 auto;
+  display: flex;
+}
+
+.ryt-work-chev {
+  flex: 0 0 auto;
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ryt-work-row:hover .ryt-work-chev,
+.ryt-work-row:focus-visible .ryt-work-chev {
+  opacity: 1;
+}
+
+.ryt-work-row--more {
+  gap: 6px;
+  height: 32px;
+  justify-content: flex-start;
+}
+
+.ryt-work-open:hover {
+  filter: brightness(1.15);
+}
+
 /* Regular scroll containers (modal bodies, page content areas…): same size as the global default, declared explicitly for readability */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;

@@ -20,7 +20,16 @@ import {
   isScheduleStoreConfigured,
   scheduleStore
 } from '../../runtime/harness/schedule-store'
-import type { ScheduledTask } from '../../runtime/harness/schedule-types'
+import type { ScheduledTurnResult } from '../../runtime/harness/schedule-runner'
+import type {
+  ScheduledTask,
+  ScheduleRunArtifact,
+  ScheduleRunStep,
+  ScheduleRunUsage
+} from '../../runtime/harness/schedule-types'
+import { extractRunSteps } from '../../runtime/harness/schedule-run-info'
+import { resolveVirtualFilePath } from '../../runtime/harness/fs-backend'
+import { listFileOpenTargets, openFileWithTarget } from '../../services/harness/file-open'
 import { validateScheduleWhen } from '../../runtime/harness/schedule-core'
 import type { ScheduleWhen } from '../../runtime/harness/schedule-core'
 import { normalizeImageDataUrl } from '../../runtime/harness/image-encode'
@@ -105,6 +114,7 @@ import {
   updateDialogueContent,
   addDialogueUsage,
   getDialoguesByTopicId,
+  getUsageByTopic,
   getAllTopics,
   getTopicById,
   getWorkspaceById,
@@ -259,10 +269,82 @@ async function resolveScheduledTarget(task: ScheduledTask): Promise<{
  * - New topic: create a topic from the task's target mode/workspace first, then run in it;
  * - No concurrency when a turn is already running in the same topic (returns cancelled; the runner retries next cycle).
  */
+/**
+ * Collect what one scheduled run actually did, right after the turn finished: the assistant
+ * dialogue it produced, the token usage of that dialogue, and the tool steps / artifacts derived
+ * from its blocks.
+ *
+ * Best effort: a failed lookup must not turn a successful run into a failure, so the caller wraps
+ * this and the panel simply shows less.
+ */
+async function collectScheduledRunInfo(
+  topicId: number,
+  startedAtMs: number
+): Promise<{
+  dialogueId: number | null
+  usage: ScheduleRunUsage | null
+  steps: ScheduleRunStep[]
+  artifacts: ScheduleRunArtifact[]
+}> {
+  const dialogues = await getDialoguesByTopicId(topicId)
+  const lastAssistant = [...dialogues].reverse().find((row) => row.role === 'assistant')
+  const { steps, artifacts } = extractRunSteps(lastAssistant?.blocks ?? null)
+  const durationMs = Date.now() - startedAtMs
+  let usage: ScheduleRunUsage = {
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    durationMs
+  }
+  if (lastAssistant) {
+    try {
+      const rows = await getUsageByTopic(topicId)
+      const row = rows.find((item) => item.dialogue_id === lastAssistant.id)
+      if (row) {
+        usage = {
+          inputTokens: row.input_tokens ?? null,
+          outputTokens: row.output_tokens ?? null,
+          totalTokens: row.total_tokens ?? null,
+          durationMs
+        }
+      }
+    } catch {
+      // Usage is decorative; keep the duration we measured
+    }
+  }
+  return {
+    dialogueId: lastAssistant?.id ?? null,
+    usage,
+    steps,
+    artifacts
+  }
+}
+
+/**
+ * Mount roots for virtual-path resolution outside the tool layer (file open / read by the UI).
+ *
+ * Same convention as the tool runtime: the workspace root is `/`, the memory root is
+ * `/memories/` and follows the topic's memory scope (`plugin:<id>` / chat).
+ */
+function virtualFileRoots(scope?: string | null): {
+  workspacePath?: string
+  memoryPath?: string
+} {
+  const harnessSettings = settingsStore.get('harness') as HarnessSettings | undefined
+  return {
+    workspacePath: harnessSettings?.workspacePath || undefined,
+    memoryPath:
+      memoryScopeRoot(
+        harnessSettings?.memoryPath || undefined,
+        parseMemoryScope(scope, harnessSettings?.activeWorkspaceId ?? 0)
+      ) ?? (harnessSettings?.memoryPath || undefined)
+  }
+}
+
 async function runScheduledTurn(
   task: ScheduledTask,
   question: string
-): Promise<{ cancelled: boolean }> {
+): Promise<ScheduledTurnResult> {
   let target: Awaited<ReturnType<typeof resolveScheduledTarget>>
   try {
     target = await resolveScheduledTarget(task)
@@ -272,12 +354,13 @@ async function runScheduledTurn(
   }
   if (!target) {
     logger.warn('[Schedule] Target conversation/workspace is gone, skipping this run:', task.id)
-    return { cancelled: true }
+    return { cancelled: true, detail: 'target-missing' }
   }
   const { topicId, workspaceContext } = target
-  if (harnessQueue.isTurnActive(topicId)) return { cancelled: true }
+  if (harnessQueue.isTurnActive(topicId)) return { cancelled: true, topicId }
   const sender = primarySender() ?? headlessSender()
   const turnId = harnessQueue.beginTurn(topicId)
+  const startedAtMs = Date.now()
   try {
     const result = await runHarnessTurn({
       event: { sender },
@@ -296,10 +379,27 @@ async function runScheduledTurn(
         }
       }
     })
-    return { cancelled: result.cancelled }
+    // The run detail is derived **after** the turn: the reply row, its tool steps and artifacts
+    // only exist once the turn has been persisted.
+    const info = await collectScheduledRunInfo(topicId, startedAtMs).catch((err) => {
+      logger.warn('[Schedule] Failed to collect run detail:', err)
+      return null
+    })
+    return {
+      cancelled: result.cancelled,
+      topicId,
+      dialogueId: info?.dialogueId ?? null,
+      usage: info?.usage ?? null,
+      steps: info?.steps ?? null,
+      artifacts: info?.artifacts ?? null
+    }
   } catch (err) {
     logger.warn('[Schedule] Scheduled turn failed:', err)
-    return { cancelled: false }
+    return {
+      cancelled: false,
+      topicId,
+      detail: err instanceof Error ? err.message : String(err)
+    }
   } finally {
     harnessQueue.endTurn(topicId, turnId)
   }
@@ -2676,6 +2776,43 @@ export function registerHarnessIpc(scope: EffectScope): () => void {
       return null
     }
   })
+
+  // Open a workspace file with a **system app** (deliverables / run artifacts): the menu lists the
+  // system default plus (Windows) the apps registered for that extension, with real icons.
+  // The virtual path is resolved through the same mounts as the fs tools, so a renderer cannot ask
+  // the OS to open an arbitrary path.
+  handle(
+    'harness-file-open-targets',
+    async (virtualPath: string, scope?: string | null) => {
+      try {
+        const roots = virtualFileRoots(scope)
+        const resolved = resolveVirtualFilePath(roots, virtualPath)
+        if ('error' in resolved) return { targets: [], error: resolved.error }
+        const targets = await listFileOpenTargets(resolved.realPath)
+        return { targets }
+      } catch (err) {
+        logger.error('Error in harness-file-open-targets:', err)
+        return { targets: [], error: (err as Error).message }
+      }
+    }
+  )
+
+  handle(
+    'harness-file-open-with',
+    async (virtualPath: string, targetId: string, scope?: string | null) => {
+      try {
+        const roots = virtualFileRoots(scope)
+        const resolved = resolveVirtualFilePath(roots, virtualPath)
+        if ('error' in resolved) return { ok: false, error: resolved.error }
+        const result = await openFileWithTarget(resolved.realPath, String(targetId))
+        if (result.ok) logger.info(`[FileOpen] Opened ${resolved.realPath} with "${targetId}"`)
+        return result
+      } catch (err) {
+        logger.error('Error in harness-file-open-with:', err)
+        return { ok: false, error: (err as Error).message }
+      }
+    }
+  )
 
   // Read a text file by virtual path (for the tool card open-file action):
   // unlike workspace-read-file, this resolves by mount (workspace + memory directory),

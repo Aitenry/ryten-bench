@@ -4,6 +4,15 @@
  * Recurrence rules use an explicit subset (once / every / daily) instead of RFC 5545 rrules; a
  * task belongs to the conversation in which it was created. Actual firing is handled by the main
  * process's `schedule-runner` (starts a turn with a headless sender while the window exists).
+ *
+ * The tool surface mirrors the Schedules page one-for-one (2026-11-28 redesign):
+ * - create: title / prompt / rule / target (this conversation or a new one per run) / run
+ *   selection (tools, skills, MCP);
+ * - edit: **partial** — only the fields passed are written; `null` clears a value.
+ *
+ * The "pure" mapping (args → store input / patch, target derivation rules) lives in
+ * `runtime/harness/schedule-tool-core.ts` and `schedule-target.ts` so it can be tested without
+ * electron; this file only does validation, wiring and result text.
  */
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '../../ai/tools'
@@ -22,6 +31,18 @@ import {
   type ScheduleValidationFailure,
   type ScheduleWhen
 } from '../../runtime/harness/schedule-core'
+import {
+  buildCreateInput,
+  buildUpdatePatch,
+  type ScheduleCreateFailure,
+  type ScheduleEditField,
+  type ScheduleEditFailure,
+  type TargetSession
+} from '../../runtime/harness/schedule-tool-core'
+import {
+  isScheduleConversationResolverConfigured,
+  resolveScheduleConversation
+} from '../../runtime/harness/schedule-target'
 
 /** Only topicId is needed from the tool invoke config */
 interface ScheduleToolConfig {
@@ -39,11 +60,31 @@ const whenSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('daily'),
-    time: z.string().describe('Run every day at this local time, HH:MM')
+    time: z.string().describe('Run every day at this local time, HH:MM (24h; midnight is "00:00")')
   })
 ])
 
-/** Current conversation id (used as task ownership at creation; <=0 means no conversation) */
+/** Where the task runs (mirrors the page's "conversation" field) */
+const targetSessionSchema = z
+  .enum(['this', 'new'])
+  .describe(
+    '"this" (default) = keep running in this conversation; "new" = open a brand-new conversation on every run (same mode / workspace / memory as this one)'
+  )
+
+/** Task-level run selection (mirrors the page's tools / skills / MCP fields) */
+const selectionSchema = z.object({
+  tools: z
+    .array(z.string())
+    .nullish()
+    .describe('Tool names exactly as listed in the tool selector (e.g. "personal_ledger", "schedule-tasks")'),
+  skills: z.array(z.string()).nullish().describe('Skill ids (omit / null = no skills)'),
+  mcpTools: z
+    .array(z.string())
+    .nullish()
+    .describe('MCP server group values such as "mcp@filesystem" (omit / null = no MCP)')
+})
+
+/** Current conversation id (used as task ownership at creation and as the "this" target; <=0 = none) */
 function topicIdOf(config: unknown): number {
   const cfg = config as ScheduleToolConfig | undefined
   const id = cfg?.configurable?.topicId
@@ -57,6 +98,21 @@ function invalidWhenText(reason: ScheduleValidationFailure): string {
   return mainFormat(texts.invalidWhen, { reason: detail })
 }
 
+/** Create failure → readable text */
+function createFailureText(reason: ScheduleCreateFailure): string {
+  const texts = getScheduleToolTexts()
+  if (reason === 'no-topic') return texts.noTopic
+  return texts.noTargetResolved
+}
+
+/** Edit failure → readable text */
+function editFailureText(reason: ScheduleEditFailure): string {
+  const texts = getScheduleToolTexts()
+  if (reason === 'no-topic') return texts.noTopic
+  if (reason === 'no-target') return texts.noTargetResolved
+  return texts.nothingChanged
+}
+
 /** Run state → localized label */
 function runStatusText(
   texts: ReturnType<typeof getScheduleToolTexts>,
@@ -66,6 +122,27 @@ function runStatusText(
   if (status === 'cancelled') return texts.runStatusCancelled
   if (status === 'failed') return texts.runStatusFailed
   return texts.none
+}
+
+/** Human-readable target for list/detail views */
+function describeTarget(texts: ReturnType<typeof getScheduleToolTexts>, task: ScheduledTask): string {
+  if (task.topicId != null) return mainFormat(texts.targetThis, { topicId: String(task.topicId) })
+  return mainFormat(texts.targetNew, { mode: task.targetMode ?? texts.targetModeWork })
+}
+
+/** Human-readable task-level selection: "—" everywhere means "follow the conversation" */
+function describeSelection(
+  texts: ReturnType<typeof getScheduleToolTexts>,
+  task: ScheduledTask
+): string {
+  const selection = task.agentConfig
+  const join = (names: string[] | null | undefined): string =>
+    names && names.length > 0 ? names.join(', ') : texts.selectionNone
+  return mainFormat(texts.viewSelection, {
+    tools: join(selection?.tools),
+    skills: join(selection?.skills),
+    mcp: join(selection?.mcpTools)
+  })
 }
 
 /** Detail text for one task (run records are read by the caller as needed) */
@@ -78,7 +155,9 @@ function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
       state: task.enabled ? texts.stateEnabled : texts.statePaused
     }),
     mainFormat(texts.viewNext, { next: task.nextRunAt ?? texts.none }),
-    mainFormat(texts.viewTopic, { topicId: String(task.topicId) }),
+    mainFormat(texts.viewTarget, { target: describeTarget(texts, task) }),
+    describeSelection(texts, task),
+    mainFormat(texts.viewTopic, { topicId: String(task.topicId ?? texts.none) }),
     mainFormat(texts.viewPrompt, { prompt: task.prompt })
   ]
   if (task.lastRunAt) {
@@ -102,24 +181,54 @@ function viewText(task: ScheduledTask, runs: ScheduleRunRecord[]): string {
   return lines.join('\n')
 }
 
+/** Changed-field list → readable labels ("标题、触发规则") */
+function describeFields(
+  texts: ReturnType<typeof getScheduleToolTexts>,
+  fields: ScheduleEditField[]
+): string {
+  const labels: Record<ScheduleEditField, string> = {
+    title: texts.fieldTitle,
+    prompt: texts.fieldPrompt,
+    when: texts.fieldWhen,
+    target: texts.fieldTarget,
+    agentConfig: texts.fieldSelection,
+    enabled: texts.fieldEnabled
+  }
+  return fields.map((field) => labels[field]).join(texts.fieldSeparator)
+}
+
 /** Build the four scheduled-task tools */
 export function buildScheduleTools(): StructuredToolInterface[] {
   const create = tool(
-    async ({ title, prompt, when }, config) => {
+    async ({ title, prompt, when, targetSession, targetConversationId, agentConfig }, config) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
-      const topicId = topicIdOf(config)
-      if (topicId <= 0) return texts.noTopic
+      const callerTopicId = topicIdOf(config)
+      if (callerTopicId <= 0) return texts.noTopic
       const validated = validateScheduleWhen(when as ScheduleWhen)
       if (!validated.ok) return invalidWhenText(validated.reason)
-      try {
-        const task = await scheduleStore.create({
-          title: title.trim(),
-          prompt: prompt.trim(),
+      // Explicit conversation wins over "this"; "new" still inherits from the caller's conversation
+      const topicId = targetConversationId ?? callerTopicId
+      // Needed for the "this" target's workspace columns and for the "new" target's mode /
+      // workspace / memory scope (null when the resolver is not wired)
+      const conversation = isScheduleConversationResolverConfigured()
+        ? await resolveScheduleConversation(topicId)
+        : null
+      const built = buildCreateInput(
+        {
+          title,
+          prompt,
           when: when as ScheduleWhen,
-          topicId,
-          nextRunAt: validated.nextRunAt
-        })
+          targetSession: (targetConversationId != null
+            ? 'this'
+            : (targetSession ?? 'this')) as TargetSession,
+          agentConfig
+        },
+        { topicId, conversation, nextRunAt: validated.nextRunAt }
+      )
+      if (!built.ok) return createFailureText(built.reason)
+      try {
+        const task = await scheduleStore.create(built.input)
         return mainFormat(texts.created, {
           id: task.id,
           title: task.title,
@@ -137,13 +246,28 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     {
       name: 'schedule_create',
       description:
-        'Create a scheduled task for THIS conversation: at the given time(s) a message containing your prompt is delivered as a new user turn, so you can do recurring work (reminders, periodic checks, daily summaries). Rules: {kind:"once", at: ISO time}, {kind:"every", minutes: 5-10080}, or {kind:"daily", time: "HH:MM"} in local 24-hour time (midnight is "00:00"; "24:00" is rejected). Use this whenever the user asks to do something repeatedly, periodically, "every day at…" or "每天/每晚/每周" — do not turn such requests into a long-running goal. Tasks run while the app is running; missed runs are skipped, not replayed.',
+        'Create a scheduled task (same fields as the Schedules page): a message containing your prompt is delivered as a new user turn at the given time(s), so you can do recurring work (reminders, periodic checks, daily summaries). ' +
+        '`when`: {kind:"once", at: ISO time} | {kind:"every", minutes: 5-10080} | {kind:"daily", time: "HH:MM"} in local 24-hour time (midnight is "00:00"; "24:00" is rejected). ' +
+        '`targetSession`: "this" (default) keeps running in this conversation, "new" opens a brand-new conversation on every run (inheriting this conversation\'s mode, workspace and memory). ' +
+        '`targetConversationId`: run in another existing conversation instead (id from conversation_list). ' +
+        '`agentConfig`: the tools / skills / MCP servers used on every run; omit it to follow this conversation\'s own selection. ' +
+        'Use this whenever the user asks for something recurring or at a fixed time ("every day / every week", 每天/每晚/每周/定时) — do not turn such requests into a long-running goal. Tasks fire while the app is running; missed runs are skipped, not replayed.',
       schema: z.object({
         title: z.string().describe('Short title shown in the task list (<=120 chars)'),
         prompt: z
           .string()
           .describe('The message to deliver when the task fires; write it as a complete instruction'),
-        when: whenSchema
+        when: whenSchema,
+        targetSession: targetSessionSchema.optional(),
+        targetConversationId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Run in that existing conversation instead of this one (id from conversation_list). Ignored when targetSession is "new".'
+          ),
+        agentConfig: selectionSchema.nullish()
       })
     }
   )
@@ -175,7 +299,7 @@ export function buildScheduleTools(): StructuredToolInterface[] {
       name: 'schedule_list',
       isConcurrencySafe: () => true,
       description:
-        'List the scheduled tasks of this app (id, title, rule, state, next run). Use schedule_view for the full prompt of one task.',
+        'List the scheduled tasks of this app (id, title, rule, state, next run). Use schedule_view for the full prompt, target and run selection of one task.',
       schema: z.object({})
     }
   )
@@ -192,13 +316,17 @@ export function buildScheduleTools(): StructuredToolInterface[] {
     {
       name: 'schedule_view',
       isConcurrencySafe: () => true,
-      description: 'Read one scheduled task in full (rule, state, next run, conversation, prompt).',
+      description:
+        'Read one scheduled task in full: rule, state, next run, target conversation, run selection (tools / skills / MCP) and prompt.',
       schema: z.object({ id: z.string().describe('Task id from schedule_list') })
     }
   )
 
   const edit = tool(
-    async ({ id, action, title, prompt, when }) => {
+    async (
+      { id, action, title, prompt, when, agentConfig, targetSession, targetConversationId, enabled },
+      config
+    ) => {
       const texts = getScheduleToolTexts()
       if (!isScheduleStoreConfigured()) return texts.notConfigured
       const task = await scheduleStore.get(id)
@@ -208,52 +336,80 @@ export function buildScheduleTools(): StructuredToolInterface[] {
         await scheduleStore.remove(id)
         return mainFormat(texts.deleted, { id })
       }
-      if (action === 'pause') {
-        await scheduleStore.update(id, { enabled: false, nextRunAt: null })
-        return mainFormat(texts.paused, { id, title: task.title })
-      }
-      if (action === 'resume') {
-        const validated = validateScheduleWhen(task.when)
-        if (!validated.ok) return invalidWhenText(validated.reason)
-        await scheduleStore.update(id, { enabled: true, nextRunAt: validated.nextRunAt })
-        return mainFormat(texts.resumed, { id, title: task.title, next: validated.nextRunAt })
-      }
 
-      // update
-      const nextWhen = (when as ScheduleWhen | undefined) ?? task.when
-      let nextRunAt = task.nextRunAt
-      if (when) {
-        const validated = validateScheduleWhen(nextWhen)
+      const callerTopicId = topicIdOf(config)
+      const normalizedWhen = when as ScheduleWhen | undefined
+      let nextRunAt: string | null | undefined
+      if (normalizedWhen !== undefined) {
+        const validated = validateScheduleWhen(normalizedWhen)
         if (!validated.ok) return invalidWhenText(validated.reason)
         nextRunAt = validated.nextRunAt
-      } else if (task.enabled) {
-        const next = computeNextRun(task.when, new Date())
+      }
+      // An explicit conversation points the task at that topic ("this" semantics); otherwise the
+      // target change applies to the conversation the tool was called from
+      const topicId = targetConversationId ?? callerTopicId
+      const effectiveTargetSession: TargetSession | undefined =
+        targetConversationId != null ? 'this' : targetSession
+      const conversation =
+        effectiveTargetSession !== undefined && isScheduleConversationResolverConfigured()
+          ? await resolveScheduleConversation(topicId)
+          : null
+      const built = buildUpdatePatch(
+        { title, prompt, when: normalizedWhen, agentConfig, targetSession: effectiveTargetSession, enabled },
+        task,
+        { topicId, conversation }
+      )
+      if (!built.ok) return editFailureText(built.reason)
+
+      // Paused tasks have no next run; re-enabling recomputes it from "now" (a missed run is not
+      // replayed, see schedule-core)
+      if (built.patch.enabled === false) nextRunAt = null
+      if (built.patch.enabled === true && nextRunAt === undefined) {
+        const next = computeNextRun(built.patch.when ?? task.when, new Date())
         nextRunAt = next ? next.toISOString() : null
       }
-      const updated = await scheduleStore.update(id, {
-        title: title?.trim() || task.title,
-        prompt: prompt?.trim() || task.prompt,
-        when: nextWhen,
-        nextRunAt,
-        enabled: nextRunAt !== null
-      })
-      return mainFormat(texts.updated, {
+      if (nextRunAt !== undefined) built.patch.nextRunAt = nextRunAt
+      const updated = await scheduleStore.update(id, built.patch)
+      if (!updated) return mainFormat(texts.notFound, { id })
+
+      const nextText =
+        updated.nextRunAt && updated.enabled
+          ? mainFormat(texts.nextSuffixInResult, { next: updated.nextRunAt })
+          : ''
+      return mainFormat(texts.updatedFields, {
         id,
-        title: updated?.title ?? task.title,
-        when: describeScheduleWhen(nextWhen),
-        next: updated?.nextRunAt ?? texts.none
+        title: updated.title,
+        fields: describeFields(texts, built.changed),
+        next: nextText
       })
     },
     {
       name: 'schedule_edit',
       description:
-        'Change a scheduled task: action "update" (optionally new title/prompt/when), "pause", "resume" or "delete". Pausing keeps the rule; resuming recomputes the next run from now.',
+        'Update a scheduled task. Only the fields you pass are written — everything else stays as it is (undefined = keep, null = clear). ' +
+        'Fields: title, prompt, when (same rules as schedule_create), targetSession ("this" conversation or "new" conversation per run), targetConversationId (move the task to that existing conversation), ' +
+        'agentConfig (tools / skills / MCP for every run; pass null to clear it and follow the conversation again), enabled (false = pause, true = resume). ' +
+        'Use action:"delete" to delete the task.',
       schema: z.object({
         id: z.string().describe('Task id from schedule_list'),
-        action: z.enum(['update', 'pause', 'resume', 'delete']),
-        title: z.string().optional().describe('update: new title'),
-        prompt: z.string().optional().describe('update: new delivered prompt'),
-        when: whenSchema.optional().describe('update: new schedule rule')
+        action: z
+          .enum(['update', 'delete'])
+          .optional()
+          .describe('"update" (default) or "delete"'),
+        title: z.string().optional().describe('New title'),
+        prompt: z.string().optional().describe('New delivered prompt'),
+        when: whenSchema.optional().describe('New schedule rule'),
+        targetSession: targetSessionSchema.optional(),
+        targetConversationId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Move the task to that existing conversation (id from conversation_list); ignored when targetSession is "new"'
+          ),
+        agentConfig: selectionSchema.nullish(),
+        enabled: z.boolean().optional().describe('false = pause, true = resume')
       })
     }
   )

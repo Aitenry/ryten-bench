@@ -31,8 +31,11 @@ import {
 import { parseLegacySchedules } from '../runtime/harness/schedule-legacy'
 import type {
   ScheduleCreateInput,
+  ScheduleRunArtifact,
   ScheduleRunRecord,
   ScheduleRunStatus,
+  ScheduleRunStep,
+  ScheduleRunUsage,
   ScheduledTask,
   ScheduledTaskPatch
 } from '../runtime/harness/schedule-types'
@@ -71,6 +74,11 @@ export class DbScheduleStore implements ScheduleStore {
       nextRunAt: string | null
       enabled?: boolean
       detail?: string | null
+      topicId?: number | null
+      dialogueId?: number | null
+      usage?: ScheduleRunUsage | null
+      steps?: ScheduleRunStep[] | null
+      artifacts?: ScheduleRunArtifact[] | null
     }
   ): Promise<ScheduledTask | undefined> {
     return markScheduledTaskRun({
@@ -79,7 +87,12 @@ export class DbScheduleStore implements ScheduleStore {
       ranAt: result.ranAt,
       nextRunAt: result.nextRunAt,
       enabled: result.enabled,
-      detail: result.detail ?? null
+      detail: result.detail ?? null,
+      topicId: result.topicId ?? null,
+      dialogueId: result.dialogueId ?? null,
+      usage: result.usage ?? null,
+      steps: result.steps ?? null,
+      artifacts: result.artifacts ?? null
     })
   }
 

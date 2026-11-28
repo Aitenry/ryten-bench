@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Schedule "run history" modal.
  *
  * Run records are **kept forever** (the database table is never pruned); they are listed here in
@@ -7,6 +7,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { Button, Modal, theme } from 'antd'
+import { RiArrowRightSLine } from '@remixicon/react'
 import { useTranslation } from '@renderer/i18n'
 import { harnessApi, type ScheduleRunView, type ScheduleView } from '../../../api/harness'
 import { formatDateTime } from '../../../utils/schedules/format'
@@ -17,9 +18,11 @@ interface Props {
   open: boolean
   task: ScheduleView | null
   onClose: () => void
+  /** Open the floating run-detail panel for one record */
+  onOpenRun?: (run: ScheduleRunView) => void
 }
 
-const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
+const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose, onOpenRun }) => {
   const { t } = useTranslation()
   const { token } = theme.useToken()
   const [runs, setRuns] = useState<ScheduleRunView[]>([])
@@ -67,12 +70,29 @@ const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
         ? token.colorTextTertiary
         : token.colorError
 
+  /**
+   * One-line summary under the status row ("3 步 · 2 个产物 · 19 秒") so the history itself shows
+   * what a run did; older runs have no detail and render nothing.
+   */
+  const runMeta = (run: ScheduleRunView): string => {
+    const parts: string[] = []
+    if (run.steps && run.steps.length > 0) {
+      parts.push(t('schedulesPage.runStepsCount', { count: String(run.steps.length) }))
+    }
+    if (run.artifacts && run.artifacts.length > 0) {
+      parts.push(t('schedulesPage.runArtifactsCount', { count: String(run.artifacts.length) }))
+    }
+    const seconds = run.usage?.durationMs ? Math.max(1, Math.round(run.usage.durationMs / 1000)) : 0
+    if (seconds > 0) {
+      parts.push(t('schedulesPage.runPanelDuration', { seconds: String(seconds) }))
+    }
+    return parts.join(' · ')
+  }
+
   return (
     <Modal open={open} onCancel={onClose} footer={null} width={520} title={t('schedulesPage.runsTitle')}>
       <div style={{ fontSize: 12.3, color: token.colorTextSecondary, marginBottom: 12 }}>
         {task ? `${task.title} · ` : ''}
-        {t('schedulesPage.runsDesc')}
-        {' · '}
         {t('schedulesPage.runsCount', { count: total })}
       </div>
       {runs.length === 0 && !loading ? (
@@ -91,15 +111,23 @@ const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
           }}
         >
           {runs.map((run, index) => (
-            <div
+            <button
               key={`${run.at}-${index}`}
+              type="button"
+              onClick={() => onOpenRun?.(run)}
+              title={t('schedulesPage.runRowHint')}
+              className="ryt-run-row"
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: 8,
                 padding: '7px 10px',
                 borderRadius: 8,
-                background: token.colorFillQuaternary
+                border: 'none',
+                textAlign: 'left',
+                width: '100%',
+                background: token.colorFillQuaternary,
+                cursor: onOpenRun ? 'pointer' : 'default'
               }}
             >
               <span
@@ -111,7 +139,7 @@ const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
                   background: statusColor(run.status)
                 }}
               />
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: '1 1 auto' }}>
                 <div style={{ fontSize: 12.5, color: token.colorText }}>
                   {statusText(run.status)}
                   <span style={{ marginLeft: 8, color: token.colorTextTertiary, fontSize: 11.5 }}>
@@ -123,8 +151,25 @@ const ScheduleRunsModal: React.FC<Props> = ({ open, task, onClose }) => {
                     {run.detail}
                   </div>
                 )}
+                {runMeta(run) ? (
+                  <div style={{ marginTop: 3, fontSize: 11, color: token.colorTextTertiary }}>
+                    {runMeta(run)}
+                  </div>
+                ) : null}
               </div>
-            </div>
+              {onOpenRun ? (
+                <span
+                  style={{
+                    flex: '0 0 auto',
+                    alignSelf: 'center',
+                    color: token.colorTextTertiary,
+                    display: 'flex'
+                  }}
+                >
+                  <RiArrowRightSLine size={14} />
+                </span>
+              ) : null}
+            </button>
           ))}
         </div>
       )}

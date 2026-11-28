@@ -7,8 +7,10 @@ import { onAppEvent } from '../plugins/app-events'
 import { configureFileHistory } from '../workspace/file-history'
 import { configureToolOutputStore } from '../runtime/harness/tool-output-store'
 import { configureScheduleStoreBackend } from '../runtime/harness/schedule-store'
+import { configureScheduleConversationResolver } from '../runtime/harness/schedule-target'
 import { scheduleRunner } from '../runtime/harness/schedule-runner'
 import { DbScheduleStore, migrateLegacySchedules } from '../database/schedule-db'
+import { getTopicById, getWorkspaceById } from '../database/mapper/harness/harness'
 import { terminalSessions } from '../runtime/harness/terminal-sessions'
 import { preloadHarnessData } from '../services/harness/preload-cache'
 import { clearSubAgentCache } from '../services/harness/subagents'
@@ -246,6 +248,21 @@ export function startHarness(): void {
       // Scheduled task assembly: storage backend + legacy JSON import + timers
       try {
         configureScheduleStoreBackend(new DbScheduleStore())
+        // Schedule tools need "where does this conversation live" to implement the page's
+        // "open a new conversation on every run" target (mode / workspace / memory scope); the
+        // tool layer stays storage-agnostic, so the lookup is injected here.
+        configureScheduleConversationResolver(async (topicId) => {
+          const topic = (await getTopicById(topicId))[0]
+          if (!topic) return null
+          const workspaceId = topic.workspace_id ?? null
+          const workspace = workspaceId ? await getWorkspaceById(workspaceId) : null
+          return {
+            topicId,
+            workspaceId,
+            workspaceKind: workspace?.kind ?? null,
+            memoryScope: topic.memory_scope ?? null
+          }
+        })
         const migrated = await migrateLegacySchedules(join(app.getPath('userData'), 'schedules'))
         if (!migrated.skipped) {
           logger.info(`[Harness] Legacy scheduled tasks imported: ${migrated.imported}`)
@@ -298,6 +315,7 @@ export function startHarness(): void {
       setMcpResourceOps(undefined)
       scheduleRunner.stop()
       configureScheduleStoreBackend(undefined)
+      configureScheduleConversationResolver(undefined)
       setWebSearchImplementation(undefined)
       // Close all persistent terminals before quit (kill the whole tree, leaving no orphan shells)
       terminalSessions.closeAll()

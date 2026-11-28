@@ -20,11 +20,11 @@ import LoadingMessage from './LoadingMessage'
 import ToolTextPreview from './ToolTextPreview'
 import StreamTextWindow from './StreamTextWindow'
 import FoldBody from './FoldBody'
+import MessageWorkSummary from './MessageWorkSummary'
 import {
   ToolProgressCard,
   ToolResultCard,
   ToolImageStrip,
-  PresentedFilesCard,
   type ToolCardStyle
 } from './ToolResultCard'
 import { toolIconFor } from '../../../utils/harness/toolIcons'
@@ -476,24 +476,6 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
           <ToolImageStrip images={images} isNested={isNested} style={style} />
         </div>
       )
-    }
-
-    /** present: delivered-files card (the list comes from the tool input and is persisted with the
-     * conversation) */
-    const renderPresentCard = (
-      tool: ToolCall,
-      key: string | number,
-      isNested = false
-    ): React.ReactNode => {
-      const style: ToolCardStyle = {
-        isDarkMode,
-        colorText,
-        colorTextSecondary,
-        colorTextTertiary,
-        colorFillAlter,
-        colorBorderSecondary
-      }
-      return <PresentedFilesCard key={key} tool={tool} isNested={isNested} style={style} />
     }
 
     // ── Mnemon memory tool custom cards ──────────────────────────────────
@@ -1414,10 +1396,11 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
             }
             if (phase) return renderMemoryInProgressCard(block.tool, blockIndex, false, phase)
           }
-          // Delivered files (present): the final artifacts declared by the model; clicking opens
-          // them on the right
-          if (toolName === 'present' && block.tool.status === 'completed') {
-            return renderPresentCard(block.tool, blockIndex, false)
+          // Delivered files (present): **rendered by MessageWorkSummary under the reply**, not
+          // inline here. Keeping both would show the same files twice (once in the fold, once in
+          // the summary) — the artifacts belong next to the answer, not at the tool-call position.
+          if (toolName === 'present') {
+            return null
           }
           // propose_action leaves no trace in the message stream (user decision, 2026-11-27):
           // confirmation only appears in the input prefill bar
@@ -1692,9 +1675,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
                   }
                   if (phase) return renderMemoryInProgressCard(child.tool, ci, true, phase)
                 }
-                // Delivered files (present, nested): as above
-                if (toolName === 'present' && child.tool.status === 'completed') {
-                  return renderPresentCard(child.tool, ci, true)
+                // Delivered files (present, nested): also owned by MessageWorkSummary
+                if (toolName === 'present') {
+                  return null
                 }
                 // propose_action (nested): likewise leaves no trace in the message stream
                 if (toolName === 'propose_action') {
@@ -2597,6 +2580,9 @@ const AssistantMessage: React.FC<AssistantMessageProps> = React.memo(
       <div className="flex harness-message-body">
         <div className="w-full">
           {renderBlocks()}
+          {/* What this reply changed / delivered: stays outside the task fold, so it survives
+              folding and does not unmount with the tool cards (see MessageWorkSummary). */}
+          {!message.loading && <MessageWorkSummary blocks={mergedBlocks} />}
           {/* Streaming silence hint: the body is already on screen but no new chunk arrived past the
               threshold (the model is still generating large arguments etc.).
               It carries its own wall clock, so a tick does not re-render the whole message. */}

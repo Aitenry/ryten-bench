@@ -19,6 +19,7 @@ import AskQuestionPanel from '../components/harness/AskQuestionPanel'
 import ProposalPrefillBar from '../components/harness/ProposalPrefillBar'
 import { useTopicPending } from '../hooks/harness/useTopicPending'
 import { findPendingProposal } from '../utils/harness/proposal'
+import { consumePendingFile } from '../utils/harness/pending-file'
 import WelcomeIntro from '../components/harness/WelcomeIntro'
 import QueueDock from '../components/harness/QueueDock'
 import TaskProgressCard from '../components/harness/TaskProgressCard'
@@ -521,6 +522,17 @@ const Harness: React.FC = () => {
     pendingPanelActionRef.current = null
     action(handle)
   }, [panelOpen, panelHasEditor])
+
+  /**
+   * Cross-page file open (schedules → run detail → "open artifact"): the conversation has already
+   * been selected by the schedules page; this page only needs to open the file once its workspace
+   * panel is ready (runOnPanel defers the action until the handle exists).
+   */
+  useEffect(() => {
+    const file = consumePendingFile()
+    if (!file) return
+    runOnPanel((handle) => handle.openVirtualFile(file, file))
+  }, [runOnPanel])
 
   /** Terminal panel toggle: mutually exclusive with workspace/browser/start panels */
   const toggleTerminalPanel = useCallback((): void => {

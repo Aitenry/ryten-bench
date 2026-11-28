@@ -1,4 +1,4 @@
-﻿import {
+import {
   boolean,
   check,
   foreignKey,
@@ -60,12 +60,12 @@ export const scheduled_tasks = pgTable(
     when_json: text().notNull(),
     enabled: boolean().notNull().default(true),
     /** Next trigger (UTC ISO); null = no longer triggers */
-    next_run_at: timestamp({ mode: 'string' }),
-    last_run_at: timestamp({ mode: 'string' }),
+    next_run_at: timestamp({ withTimezone: true, mode: 'string' }),
+    last_run_at: timestamp({ withTimezone: true, mode: 'string' }),
     /** completed / cancelled / failed (null = never run) */
     last_status: text().$type<ScheduleRunStatusDb>(),
-    created_at: timestamp({ mode: 'string' }).defaultNow(),
-    updated_at: timestamp({ mode: 'string' }).defaultNow()
+    created_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow(),
+    updated_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow()
   },
   (table) => [
     index('idx_scheduled_tasks_topic').using(
@@ -109,9 +109,19 @@ export const scheduled_task_runs = pgTable(
     task_id: text().notNull(),
     /** completed / cancelled / failed */
     status: text().$type<ScheduleRunStatusDb>().notNull(),
-    ran_at: timestamp({ mode: 'string' }).notNull(),
+    ran_at: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
     /** Extra information such as the failure reason (usually empty for success/cancel) */
-    detail: text()
+    detail: text(),
+    /** Conversation this run executed in (new-session tasks create a fresh topic per run) */
+    topic_id: integer(),
+    /** Assistant dialogue row produced by this run (null when it produced no reply) */
+    dialogue_id: integer(),
+    /** Token usage of the turn (JSON: {inputTokens,outputTokens,totalTokens,durationMs}) */
+    usage_json: text(),
+    /** Tool steps of the turn in order (JSON: [{name,path,status}]) */
+    steps_json: text(),
+    /** Files this run wrote / delivered (JSON: [{kind,path,description}]) */
+    artifacts_json: text()
   },
   (table) => [
     index('idx_scheduled_task_runs_task').using(

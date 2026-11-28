@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Standalone scheduled-tasks page (below "Plugin repository" in the sidebar) — replaces the old "Scheduled tasks" page hidden in settings.
  *
  * Layout follows the mockup: page header (title/description/refresh/new) → segmented filter + search → summary row →
@@ -7,17 +7,23 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Empty, Input, Segmented, Spin, theme } from 'antd'
-import { RiAddLine, RiRefreshLine, RiSearchLine, RiTimeLine } from '@remixicon/react'
+import { RiAddLine, RiRefreshLine, RiSearchLine } from '@remixicon/react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from '@renderer/i18n'
 import {
   harnessApi,
+  type ScheduleRunView,
   type ScheduleView,
   type ScheduleWhenView
 } from '../api/harness'
 import ScheduleCard from '../components/harness/schedules/ScheduleCard'
 import ScheduleEditorModal from '../components/harness/schedules/ScheduleEditorModal'
+import ScheduleRunPanel from '../components/harness/schedules/ScheduleRunPanel'
 import ScheduleRunsModal from '../components/harness/schedules/ScheduleRunsModal'
 import { formatRelativeDay } from '../utils/schedules/format'
+import { requestOpenFile } from '../utils/harness/pending-file'
+import { useHarness } from '../contexts/harness/HarnessContextCore'
+import type { HarnessTopicRow } from '../../../shared/harness/types'
 
 type Filter = 'all' | 'enabled' | 'paused'
 
@@ -25,9 +31,14 @@ const Schedules: React.FC = () => {
   const { t } = useTranslation()
   const { token } = theme.useToken()
   const { message, modal } = App.useApp()
+  const navigate = useNavigate()
+  /** Conversation selection lives in the app-level harness context (shared with the shell sidebar) */
+  const { handleSelectTopic } = useHarness()
 
   const [tasks, setTasks] = useState<ScheduleView[]>([])
   const [topicTitles, setTopicTitles] = useState<Record<number, string>>({})
+  /** Full topic rows: needed by the run panel's "open conversation" (it needs the real row) */
+  const [topicRows, setTopicRows] = useState<Map<number, HarnessTopicRow>>(new Map())
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
@@ -35,6 +46,8 @@ const Schedules: React.FC = () => {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<ScheduleView | null>(null)
   const [runsTask, setRunsTask] = useState<ScheduleView | null>(null)
+  /** Floating run-detail panel (opened from one row of the run history) */
+  const [runPanel, setRunPanel] = useState<{ task: ScheduleView; run: ScheduleRunView } | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -55,11 +68,16 @@ const Schedules: React.FC = () => {
         )
       )
       const titles: Record<number, string> = {}
+      const rowsById = new Map<number, HarnessTopicRow>()
       for (const rows of topicLists) {
-        for (const row of rows) titles[row.id] = row.title ?? ''
+        for (const row of rows) {
+          titles[row.id] = row.title ?? ''
+          rowsById.set(row.id, row)
+        }
       }
       setTasks(scheduleRows)
       setTopicTitles(titles)
+      setTopicRows(rowsById)
     } catch (error) {
       message.error(t('schedulesPage.loadFailed', { reason: String(error) }))
       setTasks([])
@@ -78,6 +96,30 @@ const Schedules: React.FC = () => {
       return title ? title : undefined
     },
     [topicTitles]
+  )
+
+  /** Run panel → select the conversation that run executed in, then show it */
+  const openConversation = useCallback(
+    (topicId: number): void => {
+      const row = topicRows.get(topicId)
+      if (!row) return
+      // Selection lives in the app-level harness context, so it can be triggered from this page
+      void handleSelectTopic(row).catch(() => undefined)
+      navigate('/harness')
+    },
+    [handleSelectTopic, navigate, topicRows]
+  )
+
+  /** Run panel → open one artifact: select the run's conversation, then open the file there */
+  const openArtifact = useCallback(
+    (path: string): void => {
+      const topicId = runPanel?.run?.topicId ?? 0
+      const row = topicId ? topicRows.get(topicId) : undefined
+      if (row) void handleSelectTopic(row).catch(() => undefined)
+      requestOpenFile(path)
+      navigate('/harness')
+    },
+    [handleSelectTopic, navigate, runPanel, topicRows]
   )
 
   /** Filter + search, with enabled tasks sorted first by next run */
@@ -245,17 +287,31 @@ const Schedules: React.FC = () => {
             }
           ]}
         />
+        {/* Summary sits right after the tabs (same row as the search box): it belongs to the
+            filter context, not to the card list. */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 11.5,
+            color: token.colorTextTertiary,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+          title={summary}
+        >
+          {summary}
+        </div>
         <Input
           allowClear
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           prefix={<RiSearchLine size={13} style={{ color: token.colorTextTertiary }} />}
           placeholder={t('schedulesPage.searchPlaceholder')}
-          style={{ width: 260, marginLeft: 'auto' }}
+          style={{ width: 240, flex: '0 0 auto' }}
         />
       </div>
-
-      <div style={{ marginTop: 14, fontSize: 12, color: token.colorTextTertiary }}>{summary}</div>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
@@ -313,22 +369,6 @@ const Schedules: React.FC = () => {
         </div>
       )}
 
-      {tasks.length > 0 && !loading && (
-        <div
-          style={{
-            marginTop: 18,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11.5,
-            color: token.colorTextTertiary
-          }}
-        >
-          <RiTimeLine size={12} />
-          {t('schedulesPage.runsDesc')}
-        </div>
-      )}
-
       <ScheduleEditorModal
         open={editorOpen}
         task={editingTask}
@@ -339,6 +379,25 @@ const Schedules: React.FC = () => {
         open={runsTask !== null}
         task={runsTask}
         onClose={() => setRunsTask(null)}
+        onOpenRun={(run) => {
+          // One click from the history list straight into the floating detail panel: the list
+          // closes so the two layers never stack.
+          if (!runsTask) return
+          setRunPanel({ task: runsTask, run })
+          setRunsTask(null)
+        }}
+      />
+      <ScheduleRunPanel
+        open={runPanel !== null}
+        task={runPanel?.task ?? null}
+        run={runPanel?.run ?? null}
+        onClose={() => setRunPanel(null)}
+        onOpenConversation={openConversation}
+        onSelectRun={(next) => {
+          // Keep the panel open and swap the record; the history list stays closed
+          setRunPanel((prev) => (prev ? { ...prev, run: next } : prev))
+        }}
+        onOpenArtifact={openArtifact}
       />
     </div>
   )
